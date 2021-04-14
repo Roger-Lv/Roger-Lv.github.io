@@ -1,37 +1,49 @@
-## Welcome to GitHub Pages
+###个人信息
 
-You can use the [editor on GitHub](https://github.com/Roger-Lv/Roger-Lv.github.io/edit/main/index.md) to maintain and preview the content for your website in Markdown files.
+Hello,这里是Roger-Lv的个人博客
 
-Whenever you commit to this repository, GitHub Pages will run [Jekyll](https://jekyllrb.com/) to rebuild the pages in your site, from the content in your Markdown files.
+本名吕钟仁杰，来自中国重庆，这是一座非常特别的城市，这里的雾总会让人想起某些久远的故事……
+![1618316105694.jpg](https://i.loli.net/2021/04/15/hAFRSMQvT7DbLE3.jpg)
 
-### Markdown
+爱好不少
+看过 D-Low 大神的 B-BOX 集锦，想学张泽的变态拉链音，奈何天赋不够只好放弃
 
-Markdown is a lightweight and easy-to-use syntax for styling your writing. It includes conventions for
+喜欢吉他，喜欢指弹，曾翻弹过Revolution和Like a star,啊这真的算是我坚持过最久的爱好之一了……只是现在，家和吉他都不在身边 😢
+![吉他.jpg](https://i.loli.net/2021/04/15/B8xOv5Yzcd7I4jV.jpg)
 
-```markdown
-Syntax highlighted code block
+喜欢滑板，街头文化，嘻哈，有着随性的生活态度，但最近好像把自己搞得很紧张 😆
+![滑板.jpg](https://i.loli.net/2021/04/15/Yv5cIBNpbnuoLH2.jpg)
 
-# Header 1
-## Header 2
-### Header 3
+喜欢摄影，会一些后期处理,我觉得陈奕迅的一首沙龙完美的符合我的心理
+![重庆.jpg](https://i.loli.net/2021/04/15/ujsLCBEfKmUMFrG.jpg)
 
-- Bulleted
-- List
+还喜欢潮牌和球鞋，只是喜欢而已，也并没有其他意思
 
-1. Numbered
-2. List
+哦，最喜欢的还是电子音乐，从 Progressive House 再到 Future Bass, 再到dubstep 进而迷上 Trance，上万首的听歌量已经让我的耳朵都带电
+曾经做过DJMAG前一百名DJ的代表作的 mush up , 在元旦晚会邀请了上百人来我们班蹦迪 😄, 哇，那是真的爽的一批
+![电音.jpg](https://i.loli.net/2021/04/15/BoxpGwiX9W3AZhL.jpg)
 
-**Bold** and _Italic_ and `Code` text
+时至今日，要是遇到能听电音的朋友，我依然会高兴许久
 
-[Link](url) and ![Image](src)
-```
+###学习经历
 
-For more details see [GitHub Flavored Markdown](https://guides.github.com/features/mastering-markdown/).
+老实说，我也并没有什么成就之类的。
 
-### Jekyll Themes
+我高中就读于重庆最好的高中之一——重庆市南开中学，是南开系列学校之一。
 
-Your Pages site will use the layout and styles from the Jekyll theme you have selected in your [repository settings](https://github.com/Roger-Lv/Roger-Lv.github.io/settings/pages). The name of this theme is saved in the Jekyll `_config.yml` configuration file.
+长话短说，在这所学校里面，我觉得我学会了怎么去做人做事，虽然在这所好的变态的高中里面我成绩确实不咋样，也经常被当做反面教材，但我觉
+得，人的活法并不是一定要去做那个最耀眼最夺目的，每个人都有选择自己活法的权利。我对我的定位就是，一定要成为一个有趣的人，一个不枯燥
+有话聊的人……
 
-### Support or Contact
+然后我来到了电子科大，笑死，原来真没几个女生 😆
 
-Having trouble with Pages? Check out our [documentation](https://docs.github.com/categories/github-pages-basics/) or [contact support](https://support.github.com/contact) and we’ll help you sort it out.
+emmmm，目前在这所学校，也不能算是一事无成，我还是认识了很多很多朋友，也完成了一些我之前想都不敢想的目标……
+
+但唯一能拿得出手的数据，可能就是上学期期末排名前百分之八这件事了，但真的，这不算什么，我是真的没啥成绩才把这个拿出来说的
+
+###目前最想做的事
+
+当然就是加入焦糖啦！！！！！
+
+冲冲冲！！！！！！
+
