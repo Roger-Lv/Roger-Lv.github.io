@@ -1,0 +1,304 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>并发：Java的Future和FutureTask | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="并发：Java的Future和FutureTaskFuture类的作用Future 类是异步思想的典型运用，主要用在一些需要执行耗时任务的场景，避免程序一直原地等待耗时任务执行完成，执行效率太低。具体来说是这样的：当我们执行某一耗时的任务时，可以将这个耗时任务交给一个子线程去异步执行，同时我们可以干点其他事情，不用傻傻等待耗时任务执行完成。等我们的事情干完后，我们再通过 Future 类获取到耗时">
+<meta property="og:type" content="article">
+<meta property="og:title" content="并发：Java的Future和FutureTask">
+<meta property="og:url" content="http://example.com/2024/08/08/2024-08-08-%E5%B9%B6%E5%8F%91%EF%BC%9AJava%E7%9A%84Future%E5%92%8CFutureTask/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="并发：Java的Future和FutureTaskFuture类的作用Future 类是异步思想的典型运用，主要用在一些需要执行耗时任务的场景，避免程序一直原地等待耗时任务执行完成，执行效率太低。具体来说是这样的：当我们执行某一耗时的任务时，可以将这个耗时任务交给一个子线程去异步执行，同时我们可以干点其他事情，不用傻傻等待耗时任务执行完成。等我们的事情干完后，我们再通过 Future 类获取到耗时">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/java.gif">
+<meta property="article:published_time" content="2024-08-07T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-07-27T02:18:18.125Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Java">
+<meta property="article:tag" content="后端">
+<meta property="article:tag" content="Future">
+<meta property="article:tag" content="FutureTask">
+<meta property="article:tag" content="并发">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/java.gif"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "并发：Java的Future和FutureTask",
+  "url": "http://example.com/2024/08/08/2024-08-08-%E5%B9%B6%E5%8F%91%EF%BC%9AJava%E7%9A%84Future%E5%92%8CFutureTask/",
+  "image": "http://example.com/img/cover/java.gif",
+  "datePublished": "2024-08-07T16:00:00.000Z",
+  "dateModified": "2025-07-27T02:18:18.125Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2024/08/08/2024-08-08-%E5%B9%B6%E5%8F%91%EF%BC%9AJava%E7%9A%84Future%E5%92%8CFutureTask/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '并发：Java的Future和FutureTask',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">83</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">106</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">25</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">并发：Java的Future和FutureTask</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">并发：Java的Future和FutureTask</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2024-08-07T16:00:00.000Z" title="发表于 2024-08-08 00:00:00">2024-08-08</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-07-27T02:18:18.125Z" title="更新于 2025-07-27 10:18:18">2025-07-27</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%90%8E%E7%AB%AF/">后端</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2024/08/08/2024-08-08-%E5%B9%B6%E5%8F%91%EF%BC%9AJava%E7%9A%84Future%E5%92%8CFutureTask/" data-flag-title="并发：Java的Future和FutureTask"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1 id="并发：Java的Future和FutureTask"><a href="#并发：Java的Future和FutureTask" class="headerlink" title="并发：Java的Future和FutureTask"></a>并发：Java的Future和FutureTask</h1><h2 id="Future类的作用"><a href="#Future类的作用" class="headerlink" title="Future类的作用"></a>Future类的作用</h2><p><code>Future </code>类是异步思想的典型运用，主要用在一些需要执行耗时任务的场景，避免程序一直原地等待耗时任务执行完成，执行效率太低。具体来说是这样的：当我们执行某一耗时的任务时，可以将这个耗时任务交给一个子线程去异步执行，同时我们可以干点其他事情，不用傻傻等待耗时任务执行完成。等我们的事情干完后，我们再通过 Future 类获取到耗时任务的执行结果。这样一来，程序的执行效率就明显提高了。</p>
+<p>这其实就是多线程中经典的 <code>Future</code> 模式，你可以将其看作是一种设计模式，核心思想是异步调用，主要用在多线程领域，并非 Java 语言独有。</p>
+<p>在 <code>Java </code>中，<code>Future</code> 类只是一个泛型接口，位于<code>java.util.concurrent</code>包下，其中定义了 5 个方法，主要包括下面这 4 个功能：</p>
+<ol>
+<li>取消任务；</li>
+<li>判断任务是否被取消;</li>
+<li>判断任务是否已经执行完成;</li>
+<li>获取任务执行结果。</li>
+</ol>
+<h3 id="源码"><a href="#源码" class="headerlink" title="源码"></a>源码</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// V 代表了Future执行的任务返回值的类型</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">interface</span> <span class="title class_">Future</span>&lt;V&gt; &#123;</span><br><span class="line">    <span class="comment">// 取消任务执行</span></span><br><span class="line">    <span class="comment">// 成功取消返回 true，否则返回 false</span></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">cancel</span><span class="params">(<span class="type">boolean</span> mayInterruptIfRunning)</span>;</span><br><span class="line">    <span class="comment">// 判断任务是否被取消</span></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">isCancelled</span><span class="params">()</span>;</span><br><span class="line">    <span class="comment">// 判断任务是否已经执行完成</span></span><br><span class="line">    <span class="type">boolean</span> <span class="title function_">isDone</span><span class="params">()</span>;</span><br><span class="line">    <span class="comment">// 获取任务执行结果</span></span><br><span class="line">    V <span class="title function_">get</span><span class="params">()</span> <span class="keyword">throws</span> InterruptedException, ExecutionException;</span><br><span class="line">    <span class="comment">// 指定时间内没有返回计算结果就抛出 TimeOutException 异常</span></span><br><span class="line">    V <span class="title function_">get</span><span class="params">(<span class="type">long</span> timeout, TimeUnit unit)</span></span><br><span class="line">        <span class="keyword">throws</span> InterruptedException, ExecutionException, TimeoutExceptio</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<h2 id="FutureTask的作用"><a href="#FutureTask的作用" class="headerlink" title="FutureTask的作用"></a>FutureTask的作用</h2><p><code>FutureTask</code>是<code>Future</code>的具体实现。</p>
+<p><code>FutureTask</code>实现了<code>RunnableFuture</code>接口。<code>RunnableFuture</code>接口又同时继承了<code>Future </code>和 <code>Runnable</code> 接口。所以<code>FutureTask</code>既可以作为<code>Runnable</code>被线程执行，又可以作为<code>Future</code>得到<code>Callable</code>的返回值，可以作为任务直接被线程执行。</p>
+<h3 id="构造函数"><a href="#构造函数" class="headerlink" title="构造函数"></a>构造函数</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="title function_">FutureTask</span><span class="params">(Callable&lt;V&gt; callable)</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> (callable == <span class="literal">null</span>)</span><br><span class="line">        <span class="keyword">throw</span> <span class="keyword">new</span> <span class="title class_">NullPointerException</span>();</span><br><span class="line">    <span class="built_in">this</span>.callable = callable;</span><br><span class="line">    <span class="built_in">this</span>.state = NEW;       <span class="comment">// ensure visibility of callable</span></span><br><span class="line">&#125;</span><br><span class="line">    </span><br><span class="line"><span class="keyword">public</span> <span class="title function_">FutureTask</span><span class="params">(Runnable runnable, V result)</span> &#123;</span><br><span class="line">    <span class="built_in">this</span>.callable = Executors.callable(runnable, result);</span><br><span class="line">    <span class="built_in">this</span>.state = NEW;       <span class="comment">// ensure visibility of callable</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="例子"><a href="#例子" class="headerlink" title="例子"></a>例子</h3><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> java.util.concurrent.Callable;</span><br><span class="line"><span class="keyword">import</span> java.util.concurrent.ExecutionException;</span><br><span class="line"><span class="keyword">import</span> java.util.concurrent.FutureTask;</span><br><span class="line"></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">class</span> <span class="title class_">FutureTaskTest</span> &#123;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title function_">main</span><span class="params">(String[] args)</span> <span class="keyword">throws</span> InterruptedException, ExecutionException &#123;</span><br><span class="line"></span><br><span class="line">        <span class="type">long</span> <span class="variable">starttime</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line"></span><br><span class="line">        <span class="comment">//input2生成， 需要耗费3秒</span></span><br><span class="line">        FutureTask&lt;Integer&gt; input2_futuretask = <span class="keyword">new</span> <span class="title class_">FutureTask</span>&lt;&gt;(<span class="keyword">new</span> <span class="title class_">Callable</span>&lt;Integer&gt;() &#123;</span><br><span class="line"></span><br><span class="line">            <span class="meta">@Override</span></span><br><span class="line">            <span class="keyword">public</span> Integer <span class="title function_">call</span><span class="params">()</span> <span class="keyword">throws</span> Exception &#123;</span><br><span class="line">                Thread.sleep(<span class="number">3000</span>);</span><br><span class="line">                <span class="keyword">return</span> <span class="number">5</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">new</span> <span class="title class_">Thread</span>(input2_futuretask).start();</span><br><span class="line"></span><br><span class="line">        <span class="comment">//input1生成，需要耗费2秒</span></span><br><span class="line">        FutureTask&lt;Integer&gt; input1_futuretask = <span class="keyword">new</span> <span class="title class_">FutureTask</span>&lt;&gt;(<span class="keyword">new</span> <span class="title class_">Callable</span>&lt;Integer&gt;() &#123;</span><br><span class="line"></span><br><span class="line">            <span class="meta">@Override</span></span><br><span class="line">            <span class="keyword">public</span> Integer <span class="title function_">call</span><span class="params">()</span> <span class="keyword">throws</span> Exception &#123;</span><br><span class="line">                Thread.sleep(<span class="number">2000</span>);</span><br><span class="line">                <span class="keyword">return</span> <span class="number">3</span>;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;);</span><br><span class="line">        <span class="keyword">new</span> <span class="title class_">Thread</span>(input1_futuretask).start();</span><br><span class="line">        <span class="type">Integer</span> <span class="variable">integer1</span> <span class="operator">=</span> input1_futuretask.get();</span><br><span class="line">        <span class="type">Integer</span> <span class="variable">integer2</span> <span class="operator">=</span> input2_futuretask.get();</span><br><span class="line">        System.out.println(algorithm(integer1, integer2));</span><br><span class="line">        <span class="type">long</span> <span class="variable">endtime</span> <span class="operator">=</span> System.currentTimeMillis();</span><br><span class="line">        System.out.println(<span class="string">&quot;用时：&quot;</span> + String.valueOf(endtime - starttime)+<span class="string">&quot;ms&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">//这是我们要执行的算法</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">static</span> <span class="type">int</span> <span class="title function_">algorithm</span><span class="params">(<span class="type">int</span> input, <span class="type">int</span> input2)</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> input + input2;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/08/08/LZ8uTfUOjQ7dMlP.png" alt="image-20240808152922034.png"></p>
+<p>这里用时仅仅只有3013ms，”input2生成， 需要耗费3秒”，这一步占了主要时间。由此观之，整个过程是异步的（不然时间将会是&gt;3+2&#x3D;5s的）。</p>
+<h2 id="CompletableFuture类"><a href="#CompletableFuture类" class="headerlink" title="CompletableFuture类"></a>CompletableFuture类</h2><p><code>Future</code> 在实际使用过程中存在一些局限性，比如不支持异步任务的编排组合、获取计算结果的 get() 方法为阻塞调用。</p>
+<p>Java 8 才被引入<code>CompletableFuture</code> 类可以解决<code>Future</code> 的这些缺陷。<code>CompletableFuture</code> 除了提供了更为好用和强大的 <code>Future</code> 特性之外，还提供了函数式编程、异步任务编排组合（可以将多个异步任务串联起来，组成一个完整的链式调用）等能力。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">//programmer-club中的例子 </span></span><br><span class="line"><span class="comment">//对于每个category，调用异步的CompletableFuture.supplyAsync()执行getLabelBOList方法和ThreadPoolExecutor作为Executor去多线程+异步的获取labelBOList</span></span><br><span class="line">List&lt;CompletableFuture&lt;Map&lt;Long, List&lt;SubjectLabelBO&gt;&gt;&gt;&gt; completableFutureList = categoryBOList.stream().map(category -&gt;</span><br><span class="line">                CompletableFuture.supplyAsync(() -&gt; getLabelBOList(category), labelThreadPool).collect(Collectors.toList());</span><br><span class="line">                                                                                                     </span><br></pre></td></tr></table></figure>
+
+<p><code>CompletableFuture</code>是对<code>Future</code>的扩展和增强。<code>CompletableFuture</code>实现了<code>Future</code>接口，并在此基础上进行了丰富的扩展，完美弥补了<code>Future</code>的局限性，<strong>同时<code>CompletableFuture</code>实现了对任务编排的能力</strong>(重点)。</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="C:\Users\11505\AppData\Roaming\Typora\typora-user-images\image-20240826221248525.png" alt="image-20240826221248525"></p>
+<p><code>CompletionStage</code>接口定义了任务编排的方法，执行某一阶段，可以向下执行后续阶段。<strong>异步执行的，默认线程池是<code>ForkJoinPool.commonPool()</code>，但为了业务之间互不影响，且便于定位问题，强烈推荐使用自定义线程池</strong>。</p>
+<h3 id="功能"><a href="#功能" class="headerlink" title="功能"></a>功能</h3><h4 id="常用方法"><a href="#常用方法" class="headerlink" title="常用方法"></a>常用方法</h4><p><strong>依赖关系</strong></p>
+<ul>
+<li>thenApply()：把前面任务的执行结果，交给后面的Function。</li>
+<li>thenCompose()：用来连接两个有依赖关系的任务，结果由第二个任务返回。</li>
+</ul>
+<p><strong>and集合关系</strong></p>
+<ul>
+<li>thenCombine()：合并任务，有返回值。</li>
+<li>thenAccepetBoth()：两个任务执行完成后，将结果交给thenAccepetBoth处理，无返回值。</li>
+<li>runAfterBoth()：两个任务都执行完成后，执行下一步操作(Runnable类型任务)。</li>
+</ul>
+<p><strong>or聚合关系</strong></p>
+<ul>
+<li>applyToEither()：两个任务哪个执行的快，就使用哪一个结果，有返回值。</li>
+<li>acceptEither()：两个任务哪个执行的快，就消费哪一个结果，无返回值。</li>
+<li>runAfterEither()：任意一个任务执行完成，进行下一步操作(Runnable类型任务)。</li>
+</ul>
+<p><strong>并行执行</strong></p>
+<ul>
+<li>allOf()：当所有给定的 CompletableFuture 完成时，返回一个新的 CompletableFuture。</li>
+<li>anyOf()：当任何一个给定的CompletablFuture完成时，返回一个新的CompletableFuture。</li>
+</ul>
+<p><strong>结果处理</strong></p>
+<ul>
+<li>whenComplete：当任务完成时，将使用结果(或 null)和此阶段的异常(或 null如果没有)执行给定操作。</li>
+<li>exceptionally：返回一个新的CompletableFuture，当前面的CompletableFuture完成时，它也完成，当它异常完成时，给定函数的异常触发这个CompletableFuture的完成。</li>
+</ul>
+<h4 id="异步操作"><a href="#异步操作" class="headerlink" title="异步操作"></a>异步操作</h4><p>提供了四个静态方法来创建一个异步操作：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> CompletableFuture&lt;Void&gt; <span class="title function_">runAsync</span><span class="params">(Runnable runnable)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> CompletableFuture&lt;Void&gt; <span class="title function_">runAsync</span><span class="params">(Runnable runnable, Executor executor)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> &lt;U&gt; CompletableFuture&lt;U&gt; <span class="title function_">supplyAsync</span><span class="params">(Supplier&lt;U&gt; supplier)</span></span><br><span class="line"><span class="keyword">public</span> <span class="keyword">static</span> &lt;U&gt; CompletableFuture&lt;U&gt; <span class="title function_">supplyAsync</span><span class="params">(Supplier&lt;U&gt; supplier, Executor executor)</span></span><br></pre></td></tr></table></figure>
+
+<p>这四个方法的区别：</p>
+<ul>
+<li><p><code>runAsync()</code> 以<code>Runnable</code>函数式接口类型为参数，没有返回结果，<code>supplyAsync() </code>以<code>Supplier</code>函数式接口类型为参数，返回结果类型为<code>U</code>；<code>Supplier</code>接口的 <code>get()</code>是有返回值的(会阻塞)</p>
+</li>
+<li><p>使用没有指定<code>Executor</code>的方法时，内部使用<code>ForkJoinPool.commonPool() </code>作为它的线程池执行异步代码。如果指定线程池，则使用指定的线程池运行。</p>
+</li>
+<li><p>默认情况下<code>CompletableFuture</code>会使用公共的<code>ForkJoinPool</code>线程池，这个线程池默认创建的线程数是 CPU 的核数（也可以通过<code> JVM option</code>:</p>
+<p><code>-Djava.util.concurrent.ForkJoinPool.common.parallelism </code>来设置<code>ForkJoinPool</code>线程池的线程数）。如果所有<code>CompletableFuture</code>共享一个线程池，那么一旦有任务执行一些很慢的 I&#x2F;O 操作，就会导致线程池中所有线程都阻塞在 I&#x2F;O 操作上，从而造成线程饥饿，进而影响整个系统的性能。所以，强烈建议你要根据不同的业务类型创建不同的线程池，以避免互相干扰</p>
+</li>
+</ul>
+<p><strong>异步操作</strong></p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">Runnable</span> <span class="variable">runnable</span> <span class="operator">=</span> () -&gt; System.out.println(<span class="string">&quot;无返回结果异步任务&quot;</span>);</span><br><span class="line">CompletableFuture.runAsync(runnable);</span><br><span class="line"></span><br><span class="line">CompletableFuture&lt;String&gt; future = CompletableFuture.supplyAsync(() -&gt; &#123;</span><br><span class="line">    System.out.println(<span class="string">&quot;有返回值的异步任务&quot;</span>);</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        Thread.sleep(<span class="number">5000</span>);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">        e.printStackTrace();</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="string">&quot;Hello World&quot;</span>;</span><br><span class="line">&#125;);</span><br><span class="line"><span class="type">String</span> <span class="variable">result</span> <span class="operator">=</span> future.get();</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p><strong>获取结果（join&amp;get）</strong></p>
+<p><code>join()</code>和<code>get()</code>方法都是用来获取<code>CompletableFuture</code>异步之后的返回值。<code>join()</code>方法抛出的是<code>uncheck</code>异常（即未经检查的异常),不会强制开发者抛出。<code>get()</code>方法抛出的是经过检查的异常，<code>ExecutionException, InterruptedException </code>需要用户手动处理（抛出或者 <code>try catch</code>）</p>
+<p><strong>结果处理</strong></p>
+<p>当CompletableFuture的计算结果完成，或者抛出异常的时候，我们可以执行特定的 Action。主要是下面的方法：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> CompletableFuture&lt;T&gt; <span class="title function_">whenComplete</span><span class="params">(BiConsumer&lt;? <span class="built_in">super</span> T,? <span class="built_in">super</span> Throwable&gt; action)</span></span><br><span class="line"><span class="keyword">public</span> CompletableFuture&lt;T&gt; <span class="title function_">whenCompleteAsync</span><span class="params">(BiConsumer&lt;? <span class="built_in">super</span> T,? <span class="built_in">super</span> Throwable&gt; action)</span></span><br><span class="line"><span class="keyword">public</span> CompletableFuture&lt;T&gt; <span class="title function_">whenCompleteAsync</span><span class="params">(BiConsumer&lt;? <span class="built_in">super</span> T,? <span class="built_in">super</span> Throwable&gt; action, Executor executor)</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p><code>Action</code>的类型是<code>BiConsumer&lt;? super T,? super Throwable&gt;</code>，它可以处理正常的计算结果，或者异常情况。<br>方法不以<code>Async</code>结尾，意味着<code>Action</code>使用相同的线程执行，而<code>Async</code>可能会使用其它的线程去执行(如果使用相同的线程池，也可能会被同一个线程选中执行)。<br>这几个方法都会返回<code>CompletableFuture</code>，当<code>Action</code>执行完毕后它的结果返回原始的<code>CompletableFuture</code>的计算结果或者返回异常。</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">CompletableFuture&lt;String&gt; future = CompletableFuture.supplyAsync(() -&gt; &#123;</span><br><span class="line">    <span class="keyword">try</span> &#123;</span><br><span class="line">        TimeUnit.SECONDS.sleep(<span class="number">1</span>);</span><br><span class="line">    &#125; <span class="keyword">catch</span> (InterruptedException e) &#123;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> (<span class="keyword">new</span> <span class="title class_">Random</span>().nextInt(<span class="number">10</span>) % <span class="number">2</span> == <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="type">int</span> <span class="variable">i</span> <span class="operator">=</span> <span class="number">12</span> / <span class="number">0</span>;</span><br><span class="line">    &#125;</span><br><span class="line">    System.out.println(<span class="string">&quot;执行结束！&quot;</span>);</span><br><span class="line">    <span class="keyword">return</span> <span class="string">&quot;test&quot;</span>;</span><br><span class="line">&#125;);</span><br><span class="line"><span class="comment">// 任务完成或异常方法完成时执行该方法</span></span><br><span class="line"><span class="comment">// 如果出现了异常,任务结果为null</span></span><br><span class="line">future.whenComplete(<span class="keyword">new</span> <span class="title class_">BiConsumer</span>&lt;String, Throwable&gt;() &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> <span class="keyword">void</span> <span class="title function_">accept</span><span class="params">(String t, Throwable action)</span> &#123;</span><br><span class="line">        System.out.println(t+<span class="string">&quot; 执行完成！&quot;</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;);</span><br><span class="line"><span class="comment">// 出现异常时先执行该方法</span></span><br><span class="line">future.exceptionally(<span class="keyword">new</span> <span class="title class_">Function</span>&lt;Throwable, String&gt;() &#123;</span><br><span class="line">    <span class="meta">@Override</span></span><br><span class="line">    <span class="keyword">public</span> String <span class="title function_">apply</span><span class="params">(Throwable t)</span> &#123;</span><br><span class="line">        System.out.println(<span class="string">&quot;执行失败：&quot;</span> + t.getMessage());</span><br><span class="line">        <span class="keyword">return</span> <span class="string">&quot;异常xxxx&quot;</span>;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;);</span><br><span class="line"></span><br><span class="line">future.get();</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>上面的代码当出现异常时，输出结果如下:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">执行失败：java.lang.ArithmeticException: / by zero</span><br><span class="line">null 执行完成！</span><br></pre></td></tr></table></figure>
+
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2024/08/08/2024-08-08-%E5%B9%B6%E5%8F%91%EF%BC%9AJava%E7%9A%84Future%E5%92%8CFutureTask/">http://example.com/2024/08/08/2024-08-08-%E5%B9%B6%E5%8F%91%EF%BC%9AJava%E7%9A%84Future%E5%92%8CFutureTask/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Java/">Java</a><a class="post-meta__tags" href="/tags/%E5%90%8E%E7%AB%AF/">后端</a><a class="post-meta__tags" href="/tags/Future/">Future</a><a class="post-meta__tags" href="/tags/FutureTask/">FutureTask</a><a class="post-meta__tags" href="/tags/%E5%B9%B6%E5%8F%91/">并发</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/java.gif" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2024/08/11/2024-08-11-Redis%E5%AE%9E%E7%8E%B0%E5%88%86%E5%B8%83%E5%BC%8F%E9%94%81%E5%8F%8ARedisson/" title="Redis实现分布式锁及Redisson"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Redis.webp" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Redis实现分布式锁及Redisson</div></div><div class="info-2"><div class="info-item-1">Redis实现分布式锁及Redisson​	分布式锁是控制分布式系统之间同步访问共享资源的一种方式。 ​	在分布式系统中，常常需要协调他们的动作，若不同的系统或是同一个系统的不同主机之间共享了一个或一组资源，那么访问这些资源的时候，往往需要互斥来防止彼此干扰来保证一致性，这个时候，便需要使用到分布式锁。  例子：商品秒杀超卖1. 无锁 这是一个订单库存的例子，库存stock为1，这里很容易会发现容易造成多次下单成功的错误。 2. 加同步锁 这里在单机情况下确实能够满足不出现超卖的问题。 缺点：如果作Nginx进行负载均衡+分布式集群部署，依然会出现超卖问题。  原因是同步锁synchronized是JVM级别的，每台服务器在并发情况下，只能锁住一个线程。   所以，如何处理这种分布式的情况呢？ 3. Redis or Zookeeper由于系统已经使用到了Redis，为了系统的轻量避免冗余引入新组件，选择通过Redis来进行实现分布式锁。 Redis实现分布式锁1. SETNX和SET NX命令[Windows版Docker安装Redis教程(保姆级)，适合开发环境快速提供Red...</div></div></div></a><a class="pagination-related" href="/2024/08/08/2024-08-08-Java%E7%9A%84Stream%E6%B5%81/" title="Java的Stream流"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/java.gif" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Java的Stream流</div></div><div class="info-2"><div class="info-item-1">Java的Stream流[讲透JAVA Stream的collect用法与原理，远比你想象的更强大_stream.collection-CSDN博客](https://blog.csdn.net/veezean/article/details/125857074?ops_request_misc=%7B%22request%5Fid%22%3A%22172258578116800227423214%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&amp;request_id=172258578116800227423214&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~top_positive~default-1-125857074-null-null.142^v100^pc_search_result_base8&amp;utm_term=Java stream collect&amp;spm&#x3D;1018.2226.3...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/07/21/2024-07-21-%E5%90%8E%E7%AB%AF%E5%BE%AE%E6%9C%8D%E5%8A%A1-programmer-club%E9%A1%B9%E7%9B%AE%E7%9A%84%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%E5%BF%83%E5%BE%97/" title="后端微服务-programmer-club项目的设计与实现心得"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/java.gif" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-21</div><div class="info-item-2">后端微服务-programmer-club项目的设计与实现心得</div></div><div class="info-2"><div class="info-item-1">后端微服务-programmer-club项目的设计与实现心得开发工具后端：IDEA 前端：VSCode 项目管理：git 包依赖管理：Maven3.6.0 数据库：Mysql5.7 数据库连接池和监控库：Druid 框架：Springboot 2.4.2 数据库图形化：Navicat 接口管理工具：APIPost7 Redis桌面工具：RedisDesktop 表建模：PDManager 原型设计：axure8 原型组件库: antdesign 代码生成器：easycode（idea的plugin市场） 一些插件：mybatis（类-&gt;dao-&gt;数据库），easycode（由数据库表生成相应代码）, preconditions（参数校验） node.js 阿里云脚手架用于组件&#x2F;版本的选择兼容，非常方便: start.aliyun.com 架构设计传统项目[SpringMVC框架（详解）-CSDN博客](https://blog.csdn.net/H20031011/article/details/131511482?ops_request_misc=%7B...</div></div></div></a><a class="pagination-related" href="/2024/07/10/2024-07-10-%E7%A8%8B%E5%BA%8F%E5%91%98%E7%A4%BE%E5%8C%BA%E9%A1%B9%E7%9B%AE%E7%9A%84%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/" title="后端微服务-programmer-club项目的设计与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/java.gif" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-10</div><div class="info-item-2">后端微服务-programmer-club项目的设计与实现</div></div><div class="info-2"><div class="info-item-1">程序员社区项目 开发模式前后端分离，后端负责所有的设计、接口的定义，后端先行，前端协同，通过接口文档，采用apifox的文档进行对接。 敏捷开发，版本上线迭代，需求分析-&gt;功能设计-&gt;详细设计-&gt;编码实现。 开发工具后端：IDEA 前端：VSCode 项目管理：giteazycode 包依赖管理：Maven3.6.0 数据库：Mysql5.7 数据库连接池和监控库：Druid 框架：Springboot 2.4.2 数据库图形化：Navicat 接口管理工具：APIPost7 Redis桌面工具：RedisDesktop 表建模：PDManager 原型设计：axure8 原型组件库: antdesign 代码生成器：easycode（idea的plugin市场） 一些插件：mybatis（类-&gt;dao-&gt;数据库），easycode（由数据库表生成相应代码）, preconditions（参数校验） node.js 架构设计传统项目[SpringMVC框架（详解）-CSDN博客](https://blog.csdn.net/H20031011/art...</div></div></div></a><a class="pagination-related" href="/2024/08/06/2024-08-06-%E7%BA%BF%E7%A8%8B%E6%B1%A0%E6%95%B0%E9%87%8F%E5%88%B0%E5%BA%95%E5%A6%82%E4%BD%95%E9%85%8D%E7%BD%AE%EF%BC%9F/" title="线程池数量到底如何配置？"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/java.gif" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-06</div><div class="info-item-2">线程池数量到底如何配置？</div></div><div class="info-2"><div class="info-item-1">线程池数量到底如何配置？可能很多人都看到过一个线程数设置的理论:  CPU 密集型的程序-核心数 +1 1&#x2F;0 密集型的程序-核心数*2  不会吧，不会吧，真的有人按照这个理论规划线程数? 线程数和CPU利用率的小测试抛开一些操作系统，计算机原理不谈，说一个基本的理论(不用纠结是否严谨，只为好理解)： 一个CPU核心，单位时间内只能执行一个线程的指令那么理论上，我一个线程只需要不停的执行指令，就可以跑满一个核心的利用率。 来写个死循环空跑的例子验证一下： 1234567public class CPUUtilizationTest&#123;	public static void main(String[] args)&#123;//死循环，什么都不做		while(true)&#123;			&#125;	&#125;&#125;    测试CPU：6核心12线程 现在的CPU利用率：  从图上可以看到，3号核心利用率已经被跑满了 基于上面的理论，多开几个线程试试呢? 123456789101112public class CPUUtilizationTest&#12...</div></div></div></a><a class="pagination-related" href="/2024/08/06/2024-08-06-Java%E9%9D%A2%E8%AF%95%E6%B1%87%E6%80%BB/" title="Java面试汇总"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/java.gif" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-06</div><div class="info-item-2">Java面试汇总</div></div><div class="info-2"><div class="info-item-1">Java面试汇总项目问题数联网交换机Netty核心面试题20连问，由浅入深 助你轻松吊打面试官_netty面试题-CSDN博客 Tomcat与Netty比较_netty和tomcat-CSDN博客 programmer club后端微服务-programmer-club项目的设计与实现心得 | Roger-Lv’s space 项目介绍​	大家在求职的过程中，免不了要进行面试题的学习，网上的pdf 很多，大家一般都是基于此来进行背诵或者收集，重复的题目及答案的质量参差不齐，这个个人项目，做一个线上化的面试题网站，来进行资源整合。学习面试的同时，将所学习的技术结合到一起。我们采用的是主流的微服务架构 alibaba，配合主流的中间件，前端主要是以 react 配合 antdesiqn 来进行，以C端为主的一个网站形式。叫他programmer_club，整体为一个社区的形式，主要实现的功能有刷题，练题，交流群，模拟面试。我在这里面设计技术选型，架构设计，功能的设计及落地。其中刷题模块、登录注册鉴权等模块以及优化等是我来进行主要落地实现的。 使用DDD（领域驱动设计)的原因主要有以下...</div></div></div></a><a class="pagination-related" href="/2024/08/07/2024-08-07-Java%E7%BA%BF%E7%A8%8B%E3%80%81%E5%A4%9A%E7%BA%BF%E7%A8%8B%E4%B8%8E%E7%BA%BF%E7%A8%8B%E6%B1%A0%E6%80%BB%E7%BB%93/" title="Java线程、多线程与线程池总结"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/java.gif" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-07</div><div class="info-item-2">Java线程、多线程与线程池总结</div></div><div class="info-2"><div class="info-item-1">Java线程、多线程与线程池总结Java创建线程的三种方法 继承Thread类创建线程类 （extends）  定义Thread类的子类，并重写该类的run方法，该run方法的方法体就代表了线程要完成的任务。因此把run()方法称为执行体(线程体)。  创建Thread子类的实例，即创建了线程对象。  调用线程对象的start()方法来启动该线程。  123456789101112131415public class CreateThreadByExtendThread extends Thread&#123;    int i = 0;    @Override    public void run()&#123;        for (;i&lt;100;i++)&#123;            System.out.println(Thread.currentThread().getName()+&quot;:&quot;+i); //获取本线程的名称        &#125;    &#125;    public static void main(String[]...</div></div></div></a><a class="pagination-related" href="/2024/08/08/2024-08-08-Java%E7%9A%84Stream%E6%B5%81/" title="Java的Stream流"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/java.gif" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-08</div><div class="info-item-2">Java的Stream流</div></div><div class="info-2"><div class="info-item-1">Java的Stream流[讲透JAVA Stream的collect用法与原理，远比你想象的更强大_stream.collection-CSDN博客](https://blog.csdn.net/veezean/article/details/125857074?ops_request_misc=%7B%22request%5Fid%22%3A%22172258578116800227423214%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&amp;request_id=172258578116800227423214&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~top_positive~default-1-125857074-null-null.142^v100^pc_search_result_base8&amp;utm_term=Java stream collect&amp;spm&#x3D;1018.2226.3...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">83</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">106</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">25</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#%E5%B9%B6%E5%8F%91%EF%BC%9AJava%E7%9A%84Future%E5%92%8CFutureTask"><span class="toc-number">1.</span> <span class="toc-text">并发：Java的Future和FutureTask</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Future%E7%B1%BB%E7%9A%84%E4%BD%9C%E7%94%A8"><span class="toc-number">1.1.</span> <span class="toc-text">Future类的作用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%BA%90%E7%A0%81"><span class="toc-number">1.1.1.</span> <span class="toc-text">源码</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#FutureTask%E7%9A%84%E4%BD%9C%E7%94%A8"><span class="toc-number">1.2.</span> <span class="toc-text">FutureTask的作用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9E%84%E9%80%A0%E5%87%BD%E6%95%B0"><span class="toc-number">1.2.1.</span> <span class="toc-text">构造函数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BE%8B%E5%AD%90"><span class="toc-number">1.2.2.</span> <span class="toc-text">例子</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#CompletableFuture%E7%B1%BB"><span class="toc-number">1.3.</span> <span class="toc-text">CompletableFuture类</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8A%9F%E8%83%BD"><span class="toc-number">1.3.1.</span> <span class="toc-text">功能</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B8%B8%E7%94%A8%E6%96%B9%E6%B3%95"><span class="toc-number">1.3.1.1.</span> <span class="toc-text">常用方法</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%BC%82%E6%AD%A5%E6%93%8D%E4%BD%9C"><span class="toc-number">1.3.1.2.</span> <span class="toc-text">异步操作</span></a></li></ol></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/08/13/Linux%E4%B8%AD%E8%AF%BB%E5%8F%96%E6%96%87%E4%BB%B6%EF%BC%8C%E8%BD%AF%E7%A1%AC%E4%BB%B6%E5%88%86%E5%88%AB%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88%EF%BC%9F/" title="Linux中读取文件,软硬件分别发生什么"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E5%B9%B6%E8%A1%8C%E8%AE%A1%E7%AE%97.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Linux中读取文件,软硬件分别发生什么"/></a><div class="content"><a class="title" href="/2025/08/13/Linux%E4%B8%AD%E8%AF%BB%E5%8F%96%E6%96%87%E4%BB%B6%EF%BC%8C%E8%BD%AF%E7%A1%AC%E4%BB%B6%E5%88%86%E5%88%AB%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88%EF%BC%9F/" title="Linux中读取文件,软硬件分别发生什么">Linux中读取文件,软硬件分别发生什么</a><time datetime="2025-08-12T16:00:00.000Z" title="发表于 2025-08-13 00:00:00">2025-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/13/2025-08-13-Shall-We-Pretrain-Autoregressive-Language-Models-with-Retrieval/" title="Shall We Pretrain Autoregressive Language Models with Retrieval"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Shall We Pretrain Autoregressive Language Models with Retrieval"/></a><div class="content"><a class="title" href="/2025/08/13/2025-08-13-Shall-We-Pretrain-Autoregressive-Language-Models-with-Retrieval/" title="Shall We Pretrain Autoregressive Language Models with Retrieval">Shall We Pretrain Autoregressive Language Models with Retrieval</a><time datetime="2025-08-12T16:00:00.000Z" title="发表于 2025-08-13 00:00:00">2025-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/12/Mem0%20Building%20Production-Ready%20AI%20Agents%20with%20Scalable%20Long-Term%20Memory/" title="Mem0 Building Production-Ready AI Agents with Scalable Long-Term Memory"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Mem0 Building Production-Ready AI Agents with Scalable Long-Term Memory"/></a><div class="content"><a class="title" href="/2025/08/12/Mem0%20Building%20Production-Ready%20AI%20Agents%20with%20Scalable%20Long-Term%20Memory/" title="Mem0 Building Production-Ready AI Agents with Scalable Long-Term Memory">Mem0 Building Production-Ready AI Agents with Scalable Long-Term Memory</a><time datetime="2025-08-11T16:00:00.000Z" title="发表于 2025-08-12 00:00:00">2025-08-12</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/03/TCP%E8%BF%9E%E6%8E%A5%E4%B8%ADACK,SEQ%E5%8F%98%E5%8C%96/" title="TCP连接中ACK,SEQ变化"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E5%B9%B6%E8%A1%8C%E8%AE%A1%E7%AE%97.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="TCP连接中ACK,SEQ变化"/></a><div class="content"><a class="title" href="/2025/08/03/TCP%E8%BF%9E%E6%8E%A5%E4%B8%ADACK,SEQ%E5%8F%98%E5%8C%96/" title="TCP连接中ACK,SEQ变化">TCP连接中ACK,SEQ变化</a><time datetime="2025-08-02T16:00:00.000Z" title="发表于 2025-08-03 00:00:00">2025-08-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/07/27/2025-07-27-github%E5%8D%9A%E5%AE%A2%E6%8D%A2%E6%9C%BA%E6%97%A0%E7%BC%9D%E8%BF%81%E7%A7%BB%E6%95%99%E7%A8%8B/" title="github博客换机无缝迁移教程"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/PKU.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="github博客换机无缝迁移教程"/></a><div class="content"><a class="title" href="/2025/07/27/2025-07-27-github%E5%8D%9A%E5%AE%A2%E6%8D%A2%E6%9C%BA%E6%97%A0%E7%BC%9D%E8%BF%81%E7%A7%BB%E6%95%99%E7%A8%8B/" title="github博客换机无缝迁移教程">github博客换机无缝迁移教程</a><time datetime="2025-07-26T16:00:00.000Z" title="发表于 2025-07-27 00:00:00">2025-07-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2020 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>
