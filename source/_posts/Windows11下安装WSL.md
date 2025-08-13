@@ -8,7 +8,7 @@ keywords:
 description:
 top_img: /img/default_top_img.jpg
 comments:
-cover: /img/cover/WSL.webp
+cover: /img/cover/WSL.png
 toc:
 toc_number:
 toc_style_simple:
@@ -148,5 +148,4 @@ abcjs:
    5. 再次运行导入好的系统
 
       ![image-20240719175427475.png](https://s2.loli.net/2024/07/19/Tx1PuMZdCLiYVEf.png)
-
 

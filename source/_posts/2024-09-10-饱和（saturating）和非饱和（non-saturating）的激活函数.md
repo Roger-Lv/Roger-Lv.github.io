@@ -8,7 +8,7 @@ keywords:
 description:
 top_img: /img/default_top_img.jpg
 comments:
-cover: /img/cover/激活函数.webp
+cover: /img/cover/激活函数.jpeg
 toc:
 toc_number:
 toc_style_simple:

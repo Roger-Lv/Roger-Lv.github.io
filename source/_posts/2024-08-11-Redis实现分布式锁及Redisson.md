@@ -8,7 +8,7 @@ keywords:
 description:
 top_img: /img/default_top_img.jpg
 comments:
-cover: /img/cover/Redis.webp
+cover: /img/cover/redis.jpeg
 toc:
 toc_number:
 toc_style_simple:

@@ -8,7 +8,7 @@ keywords:
 description:
 top_img: /img/default_top_img.jpg
 comments:
-cover: /img/cover/java.gif
+cover: /img/cover/java.png
 toc:
 toc_number:
 toc_style_simple:
@@ -42,8 +42,6 @@ abcjs:
 - `getDeclaredFields()`： 该方法用于获取某个类中声明的所有字段，包括公有、私有、受保护的字段，但不包括继承的字段。
 
   这个方法对于需要获取类的所有字段时很有用，尤其是在进行一些高级的操作时。
-
-![image-20240817170953470](C:\Users\11505\AppData\Roaming\Typora\typora-user-images\image-20240817170953470.png)
 
 
 
