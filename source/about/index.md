@@ -32,6 +32,26 @@ comments: false
 
 ## 3. Work Experience
 
+- **Canlah.ai（2025.06-）**
+
+  ![canlah.jpeg](https://s2.loli.net/2025/08/20/DzsFBCgcn6N1SKw.jpg)
+
+  **Silicon Valley (Remote)**
+
+  **Intern**
+
+  - Agent.
+
+- **Peking University Changsha Institute of Computing and Digital Economy（2025.04-2025.07）**
+
+  ![pkucs.jpeg](https://s2.loli.net/2025/08/20/Uun4MfXB2Cr5ySp.jpg)
+
+  **Beijing**
+
+  **Intern**
+
+  - Computing power scheduling, containerization research, container networks.
+
 - **Infinigence-AI（2024.09-）**
 
   ![无问芯穹.png](https://s2.loli.net/2024/09/20/eT1fOs54oDlIPUW.jpg)
