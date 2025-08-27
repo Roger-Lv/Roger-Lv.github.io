@@ -1,0 +1,497 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Megatron &amp; Swift监督微调Qwen3-8B | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Megatron &amp; Swift监督微调Qwen3-8B因为纯Megatron的example中没有对于Qwen的支持，且在社区中没有找到对应封装好的实现。这里Swift已经封装好了对于微调&#x2F;预训练&#x2F;强化学习&#x2F;多种模型&#x2F;dataloader的各种支持，同时也包含训练结果的图像绘制，可以自主选择Megatron的后端路径（如果要进行修改，就对开源的co">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Megatron &amp; Swift监督微调Qwen3-8B">
+<meta property="og:url" content="http://example.com/2025/08/27/2025-08-27-Megatron-&-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="Megatron &amp; Swift监督微调Qwen3-8B因为纯Megatron的example中没有对于Qwen的支持，且在社区中没有找到对应封装好的实现。这里Swift已经封装好了对于微调&#x2F;预训练&#x2F;强化学习&#x2F;多种模型&#x2F;dataloader的各种支持，同时也包含训练结果的图像绘制，可以自主选择Megatron的后端路径（如果要进行修改，就对开源的co">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/megatron-lm.png">
+<meta property="article:published_time" content="2025-08-26T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-08-27T06:24:29.669Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="SFT">
+<meta property="article:tag" content="Megatron">
+<meta property="article:tag" content="Qwen">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/megatron-lm.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Megatron & Swift监督微调Qwen3-8B",
+  "url": "http://example.com/2025/08/27/2025-08-27-Megatron-&-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/",
+  "image": "http://example.com/img/cover/megatron-lm.png",
+  "datePublished": "2025-08-26T16:00:00.000Z",
+  "dateModified": "2025-08-27T06:24:29.669Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Megatron & Swift监督微调Qwen3-8B',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">104</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">114</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">30</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Megatron &amp; Swift监督微调Qwen3-8B</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Megatron &amp; Swift监督微调Qwen3-8B</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-08-26T16:00:00.000Z" title="发表于 2025-08-27 00:00:00">2025-08-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-08-27T06:24:29.669Z" title="更新于 2025-08-27 14:24:29">2025-08-27</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/SFT/">SFT</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/" data-flag-title="Megatron &amp; Swift监督微调Qwen3-8B"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1 id="Megatron-Swift监督微调Qwen3-8B"><a href="#Megatron-Swift监督微调Qwen3-8B" class="headerlink" title="Megatron &amp; Swift监督微调Qwen3-8B"></a>Megatron &amp; Swift监督微调Qwen3-8B</h1><p>因为纯Megatron的example中没有对于Qwen的支持，且在社区中没有找到对应封装好的实现。这里Swift已经封装好了对于微调&#x2F;预训练&#x2F;强化学习&#x2F;多种模型&#x2F;dataloader的各种支持，同时也包含训练结果的图像绘制，可以自主选择Megatron的后端路径（如果要进行修改，就对开源的core_r0.13.0分支的代码进行修改就行，运行时指定该路径）。</p>
+<p>平台是选用的无问芯穹的开发机进行实验</p>
+<p>注：也可以用llama-factory去做，后续可以试一试</p>
+<h2 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h2><p><a target="_blank" rel="noopener" href="https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html">Megatron-SWIFT训练：https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html</a></p>
+<p>千问3最佳实践：<a target="_blank" rel="noopener" href="https://swift.readthedocs.io/zh-cn/latest/BestPractices/Qwen3%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5.html#megatron-swift">https://swift.readthedocs.io/zh-cn/latest/BestPractices/Qwen3%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5.html#megatron-swift</a></p>
+<p>注意参数：<a target="_blank" rel="noopener" href="https://swift.readthedocs.io/zh-cn/latest/Instruction/%E5%91%BD%E4%BB%A4%E8%A1%8C%E5%8F%82%E6%95%B0.html">https://swift.readthedocs.io/zh-cn/latest/Instruction/%E5%91%BD%E4%BB%A4%E8%A1%8C%E5%8F%82%E6%95%B0.html</a></p>
+<p>hf上甚至有swift完整教程：<a target="_blank" rel="noopener" href="https://huggingface.co/Qwen/Qwen3-235B-A22B/discussions/6">https://huggingface.co/Qwen/Qwen3-235B-A22B/discussions/6</a></p>
+<p>且自带评测，但是没找到纯megatron的例子</p>
+<h2 id="模型支持"><a href="#模型支持" class="headerlink" title="模型支持"></a>模型支持</h2><p>支持Qwen3-8B</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/NxFjmQr9SGuky5n.png" alt="image.png"></p>
+<h2 id="常见问题"><a href="#常见问题" class="headerlink" title="常见问题"></a>常见问题</h2><p><a target="_blank" rel="noopener" href="https://swift.readthedocs.io/zh-cn/latest/Instruction/%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98%E6%95%B4%E7%90%86.html">https://swift.readthedocs.io/zh-cn/latest/Instruction/%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98%E6%95%B4%E7%90%86.html</a></p>
+<h2 id="自定义数据集"><a href="#自定义数据集" class="headerlink" title="自定义数据集"></a>自定义数据集</h2><p>数据集支持自定义：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/41d3DQE2YShLB8b.png" alt="image.png"></p>
+<p>监督微调的数据格式如下（<strong>单轮</strong>&#x2F;<strong>多轮对话的形式</strong>）：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span><span class="attr">&quot;messages&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;system&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;你是个有用无害的助手&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">,</span> <span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;user&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;告诉我明天的天气&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">,</span> <span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;assistant&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;明天天气晴朗&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">]</span><span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">&#123;</span><span class="attr">&quot;messages&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;system&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;你是个有用无害的数学计算器&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">,</span> <span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;user&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;1+1等于几&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">,</span> <span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;assistant&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;等于2&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">,</span> <span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;user&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;再加1呢&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">,</span> <span class="punctuation">&#123;</span><span class="attr">&quot;role&quot;</span><span class="punctuation">:</span> <span class="string">&quot;assistant&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;等于3&quot;</span><span class="punctuation">&#125;</span><span class="punctuation">]</span><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+
+<p>导入：</p>
+<p>直接使用命令行传参的方式接入，即<code>--dataset &lt;dataset_path1&gt; &lt;dataset_path2&gt;</code>。这将使用AutoPreprocessor将数据集转换为标准格式。</p>
+<p>数据集准备：<a target="_blank" rel="noopener" href="https://infinigence.feishu.cn/wiki/UWOewpBRfib5nRkSuoNc0RBFnuh">Megatron &amp; Swift监督微调：数据集准备</a></p>
+<h2 id="推荐环境-环境准备"><a href="#推荐环境-环境准备" class="headerlink" title="推荐环境 &amp; 环境准备"></a>推荐环境 &amp; 环境准备</h2><p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/DN1wWGnXULMI4lm.png" alt="image.png"></p>
+<p>镜像：cr.infini-ai.com&#x2F;infini-ai&#x2F;llm-demo:pytorch-24.03-py3-v25.04</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line">ln -s /usr/bin/python3 /usr/bin/python</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">推荐</span></span><br><span class="line">pip install &#x27;ms-swift&#x27; -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">推荐torch版本：2.5 / 2.6</span></span><br><span class="line">pip install pybind11 -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line"></span><br><span class="line">pip install deepspeed -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">如果没有cudnn</span></span><br><span class="line">sudo apt install libcudnn8 libcudnn8-dev</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">transformer_engine</span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">若出现安装错误，可以参考该issue解决: https://github.com/modelscope/ms-swift/issues/3793</span></span><br><span class="line">NVTE_FRAMEWORK=pytorch pip install --no-build-isolation transformer_engine[pytorch] -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line"><span class="meta prompt_">#</span><span class="language-bash">如果有问题  ⭐️（建议直接用这个）</span></span><br><span class="line">pip install transformer-engine[pytorch]==1.13.0 --no-build-isolation -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">或使用以下方式安装</span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">pip install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.5#egg=transformer_engine[pytorch]</span></span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">apex</span></span><br><span class="line">git clone https://github.com/NVIDIA/apex</span><br><span class="line">cd apex</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">https://github.com/modelscope/ms-swift/issues/4176</span></span><br><span class="line">git checkout e13873debc4699d39c6861074b9a3b2a02327f92</span><br><span class="line">pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings &quot;--build-option=--cpp_ext&quot; --config-settings &quot;--build-option=--cuda_ext&quot; ./</span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">megatron-core。不过如果后端用的是自己的/pip下不下来，可以git <span class="built_in">clone</span>的方式 然后chekcout过去</span></span><br><span class="line">pip install git+https://github.com/NVIDIA/Megatron-LM.git@core_r0.13.0</span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">若使用多机训练，请额外设置`MODELSCOPE_CACHE`环境变量为共享存储路径</span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">这将确保数据集缓存共享，而加速预处理速度</span></span><br><span class="line">export MODELSCOPE_CACHE=&#x27;/xxx/shared&#x27;</span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">Megatron-LM</span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">依赖库Megatron-LM中的训练模块将由swift进行git <span class="built_in">clone</span>并安装。你也可以通过环境变量`MEGATRON_LM_PATH`指向已经下载好的repo路径（断网环境，[core_r0.13.0分支](https://github.com/NVIDIA/Megatron-LM/tree/core_r0.13.0)）。</span></span><br><span class="line">export MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27;</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">注意如果这里用自己的路径，记得进入到Megatron目录下面</span></span><br><span class="line">cd Megatron-LM</span><br><span class="line">git checkout core_r0.13.0</span><br><span class="line">pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">因为是Qwen3，这里装一个flash-attention</span>  </span><br><span class="line">pip install flash-attn==2.6.2  -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">注意这里经过反复测试，是2.6.2的版本是好的</span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">如果这里卡了，直接https://github.com/Dao-AILab/flash-attention/releases/tag/v2.6.2，下载下来，然后</span></span><br><span class="line">pip install flash-attnxxxxxx-linux-_x86_64.whl --no-build-isolation</span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">数据集放到/root/dataset下面，jsonl格式</span></span><br></pre></td></tr></table></figure>
+
+<p>检验环境</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">python -c &quot;</span><br><span class="line">import torch</span><br><span class="line">print(&#x27;PyTorch:&#x27;, torch.__version__)</span><br><span class="line"></span><br><span class="line">import transformer_engine</span><br><span class="line">print(&#x27;TransformerEngine:&#x27;, transformer_engine.__version__)</span><br><span class="line"></span><br><span class="line">from transformer_engine.pytorch import LayerNorm, Linear</span><br><span class="line">print(&#x27;Success: transformer_engine loaded correctly.&#x27;)</span><br><span class="line">&quot;</span><br></pre></td></tr></table></figure>
+
+<p>预期输出：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">PyTorch: 2.6.0+cu124</span><br><span class="line">TransformerEngine: 1.13.0</span><br><span class="line">Success: transformer_engine loaded correctly.</span><br></pre></td></tr></table></figure>
+
+<p>检验环境</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">python -c &quot;</span><br><span class="line">import transformer_engine</span><br><span class="line">print(&#x27;transformer_engine version:&#x27;, transformer_engine.__version__)</span><br><span class="line">print(&#x27;Submodules:&#x27;, dir(transformer_engine))</span><br><span class="line">print(&#x27;Has pytorch module:&#x27;, hasattr(transformer_engine, &#x27;pytorch&#x27;))</span><br><span class="line"></span><br><span class="line">from transformer_engine.pytorch import Linear</span><br><span class="line">print(&#x27;Success: TELinear can be imported.&#x27;)</span><br><span class="line">&quot;</span><br></pre></td></tr></table></figure>
+
+<p>预期输出：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">transformer_engine version: 1.13.0</span><br><span class="line">Submodules: [&#x27;__builtins__&#x27;, &#x27;__cached__&#x27;, &#x27;__doc__&#x27;, &#x27;__file__&#x27;, &#x27;__loader__&#x27;, &#x27;__name__&#x27;, &#x27;__package__&#x27;, &#x27;__path__&#x27;, &#x27;__spec__&#x27;, &#x27;__version__&#x27;, &#x27;common&#x27;, &#x27;metadata&#x27;, &#x27;pytorch&#x27;, &#x27;transformer_engine&#x27;]</span><br><span class="line">Has pytorch module: True</span><br><span class="line">Success: TELinear can be imported.</span><br></pre></td></tr></table></figure>
+
+<h2 id="模型下载"><a href="#模型下载" class="headerlink" title="模型下载"></a>模型下载</h2><figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">cd ~</span><br><span class="line">pip install huggingface_hub[cli] -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line">export HF_ENDPOINT=https://hf-mirror.com </span><br><span class="line">HF_ENDPOINT=https://hf-mirror.com  huggingcface-cli download Qwen/Qwen3-8B --local-dir Qwen3-8B</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">根据环境不同，当然也可以是 HF_ENDPOINT=https://hf-mirror.com  hf download Qwen/Qwen3-8B --local-dir Qwen3-8B</span></span><br><span class="line"><span class="meta prompt_"></span></span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">当然也可以多线程下载</span></span><br><span class="line">wget https://hf-mirror.com/hfd/hfd.sh</span><br><span class="line">chmod +x hfd.sh</span><br><span class="line">export HF_ENDPOINT=https://hf-mirror.com</span><br><span class="line">apt-get update &amp;&amp; apt-get install -y aria2</span><br><span class="line">HF_ENDPOINT=https://hf-mirror.com ./hfd.sh Qwen/Qwen3-8B --local-dir Qwen3-8B -x 10 -j 5</span><br></pre></td></tr></table></figure>
+
+<h2 id="模型格式转换"><a href="#模型格式转换" class="headerlink" title="模型格式转换"></a>模型格式转换</h2><p>这里要将HF的格式–&gt;Megatron的格式</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27; CUDA_VISIBLE_DEVICES=0 \</span><br><span class="line">swift export \</span><br><span class="line">    --model Qwen3-8B \</span><br><span class="line">    --to_mcore true \</span><br><span class="line">    --torch_dtype bfloat16 \</span><br><span class="line">    --output_dir Qwen3-8B-mcore --test_convert_precision true</span><br></pre></td></tr></table></figure>
+
+<p>训练完后再转回来</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">CUDA_VISIBLE_DEVICES=0 \</span><br><span class="line">swift export \    --mcore_model megatron_output/Qwen3-8B/vx-xxx \    --to_hf true \    --torch_dtype bfloat16 \    --output_dir megatron_output/Qwen3-8B/vx-xxx-hf \    --test_convert_precision true</span><br></pre></td></tr></table></figure>
+
+<h2 id="微调指令"><a href="#微调指令" class="headerlink" title="微调指令"></a>微调指令</h2><figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br></pre></td><td class="code"><pre><span class="line">cd ~</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">下载好模型后，转换格式</span></span><br><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27; CUDA_VISIBLE_DEVICES=0 \</span><br><span class="line">swift export \</span><br><span class="line">    --model Qwen3-8B \</span><br><span class="line">    --to_mcore true \</span><br><span class="line">    --torch_dtype bfloat16 \</span><br><span class="line">    --output_dir Qwen3-8B-mcore --test_convert_precision true</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">开训(两卡)</span></span><br><span class="line">NVTE_DEBUG=1 NVTE_DEBUG_LEVEL=2 \</span><br><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27; PYTORCH_CUDA_ALLOC_CONF=&#x27;expandable_segments:True&#x27; \</span><br><span class="line">NPROC_PER_NODE=2 \</span><br><span class="line">CUDA_VISIBLE_DEVICES=0,1 \</span><br><span class="line">megatron sft \</span><br><span class="line">--load Qwen3-8B-mcore \</span><br><span class="line">--dataset &#x27;/root/dataset/multi_round_output.jsonl&#x27; &#x27;/root/dataset/output_messages.jsonl&#x27; \</span><br><span class="line">--tensor_model_parallel_size 2 \</span><br><span class="line">--sequence_parallel \</span><br><span class="line">--micro_batch_size 2 \</span><br><span class="line">--global_batch_size 16 \</span><br><span class="line">--recompute_granularity full \</span><br><span class="line">--recompute_method uniform \</span><br><span class="line">--recompute_num_layers 3 \</span><br><span class="line">--finetune \</span><br><span class="line">--cross_entropy_loss_fusion \</span><br><span class="line">--lr 1e-5 \</span><br><span class="line">--lr_warmup_fraction 0.05 \</span><br><span class="line">--min_lr 1e-6 \</span><br><span class="line">--max_epochs 1 \</span><br><span class="line">--save /dev/shm/Qwen3-8B-sft \</span><br><span class="line">--save_interval 50 \</span><br><span class="line">--max_length 2048 \</span><br><span class="line">--add_version false \</span><br><span class="line">--system &#x27;You are a helpful assistant.&#x27; \</span><br><span class="line">--num_workers 2 \</span><br><span class="line">--dataset_num_proc 4 \</span><br><span class="line">--model_author swift \</span><br><span class="line">--model_name swift-robot</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">四卡</span></span><br><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27; PYTORCH_CUDA_ALLOC_CONF=&#x27;expandable_segments:True&#x27; \</span><br><span class="line">NPROC_PER_NODE=4 \</span><br><span class="line">CUDA_VISIBLE_DEVICES=0,1,2,3 \</span><br><span class="line">megatron sft \</span><br><span class="line">--load Qwen3-8B-mcore \</span><br><span class="line">--dataset &#x27;/root/dataset/multi_round_output.jsonl&#x27; &#x27;/root/dataset/output_messages.jsonl&#x27; \</span><br><span class="line">--tensor_model_parallel_size 2 \</span><br><span class="line">--sequence_parallel \</span><br><span class="line">--micro_batch_size 1 \</span><br><span class="line">--global_batch_size 16 \</span><br><span class="line">--recompute_granularity full \</span><br><span class="line">--recompute_method uniform \</span><br><span class="line">--recompute_num_layers 3 \</span><br><span class="line">--finetune \</span><br><span class="line">--cross_entropy_loss_fusion \</span><br><span class="line">--lr 1e-5 \</span><br><span class="line">--lr_warmup_fraction 0.05 \</span><br><span class="line">--min_lr 1e-6 \</span><br><span class="line">--max_epochs 3 \</span><br><span class="line">--save /dev/shm/Qwen3-8B-sft \</span><br><span class="line">--save_interval 900 \</span><br><span class="line">--max_length 2048 \</span><br><span class="line">--add_version false \</span><br><span class="line">--system &#x27;You are a helpful assistant.&#x27; \</span><br><span class="line">--num_workers 4 \</span><br><span class="line">--dataset_num_proc 4 \</span><br><span class="line">--model_author swift \</span><br><span class="line">--model_name swift-robot</span><br></pre></td></tr></table></figure>
+
+<p>类型选择是这一部分：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/qL9MDem7vOVdKQI.png" alt="image.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/3b5Kcnf8tglwLBH.png" alt="image.png"></p>
+<p>这里训练的时候，flash-attn会有问题，社区解决方案不奏效</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">attributeerror: module &#x27;transformer_engine&#x27; has no attribute &#x27;pytorch&#x27;</span><br></pre></td></tr></table></figure>
+
+<p>社区：</p>
+<p><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/TransformerEngine/issues/1014">https://github.com/NVIDIA/TransformerEngine/issues/1014</a></p>
+<p><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/Megatron-LM/issues/696">https://github.com/NVIDIA/Megatron-LM/issues/696</a></p>
+<p><a target="_blank" rel="noopener" href="https://github.com/Dao-AILab/flash-attention/issues/1816">https://github.com/Dao-AILab/flash-attention/issues/1816</a></p>
+<p>跑起来了。重点是按照前面的镜像的环境，按照下面的方式去设置（这部分内容移到之前的环境配置中了，不会再出现此问题）：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta prompt_">#</span><span class="language-bash">镜像</span></span><br><span class="line">cr.infini-ai.com/infini-ai/inference-distributed:vllm0.8.4-torch2.8-cuda12.4.0-python3.12-ubuntu22.04</span><br><span class="line">pip install flash-attn==2.6.2  -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br><span class="line">pip install transformer-engine[pytorch]==1.13.0 --no-build-isolation -i https://pypi.tuna.tsinghua.edu.cn/simple</span><br></pre></td></tr></table></figure>
+
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/gz4rXvBL3R2Tdck.png" alt="1.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/GkR2noHa9x4XAvY.png" alt="2.png"></p>
+<p>训练完成</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/RDLFcdMsSrpQifY.png" alt="3.png"></p>
+<p>这里还有训练的结果：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/NhwGCWSUKXF5loc.png" alt="4.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/tPmpG7uWEs4rIxa.png" alt="6.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/Qb5DGvVqeW7YgFJ.png" alt="5.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/6IMl1wWFvVSL5CQ.png" alt="7.png"></p>
+<h2 id="多机多卡"><a href="#多机多卡" class="headerlink" title="多机多卡"></a>多机多卡</h2><p>Megatron swift 多机的例子:<a target="_blank" rel="noopener" href="https://github.com/modelscope/ms-swift/blob/main/examples/train/megatron/multi-node">https://github.com/modelscope/ms-swift/blob/main/examples/train/megatron/multi-node</a></p>
+<p>node1.sh（master node）</p>
+<p>两卡A100</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27;  PYTORCH_CUDA_ALLOC_CONF=&#x27;expandable_segments:True&#x27; \</span><br><span class="line">CUDA_VISIBLE_DEVICES=0,1 \</span><br><span class="line">NNODES=2 \</span><br><span class="line">NODE_RANK=0 \</span><br><span class="line">MASTER_ADDR=127.0.0.1 \</span><br><span class="line">MASTER_PORT=29500 \</span><br><span class="line">NPROC_PER_NODE=2 \</span><br><span class="line">nohup megatron sft \</span><br><span class="line">    --load Qwen3-8B-mcore \</span><br><span class="line">    --dataset &#x27;/mnt/lvzhongrenjie/dataset/multi_round_output.jsonl&#x27; &#x27;/mnt/lvzhongrenjie/dataset/output_messages.jsonl&#x27; \</span><br><span class="line">    --split_dataset_ratio 0.01 \</span><br><span class="line">    --tensor_model_parallel_size 2 \</span><br><span class="line">    --sequence_parallel \</span><br><span class="line">    --micro_batch_size 2 \</span><br><span class="line">    --global_batch_size 16 \</span><br><span class="line">    --recompute_granularity full \</span><br><span class="line">    --recompute_method uniform \</span><br><span class="line">    --recompute_num_layers 3 \</span><br><span class="line">    --finetune \</span><br><span class="line">    --cross_entropy_loss_fusion \</span><br><span class="line">    --lr 1e-5 \</span><br><span class="line">    --lr_warmup_fraction 0.05 \</span><br><span class="line">    --min_lr 1e-6 \</span><br><span class="line">    --max_epochs 3 \</span><br><span class="line">    --save /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft \</span><br><span class="line">    --save_interval 50 \</span><br><span class="line">    --max_length 2048 \</span><br><span class="line">    --add_version false \</span><br><span class="line">    --system &#x27;You are a helpful assistant.&#x27; \</span><br><span class="line">    --num_workers 4 \</span><br><span class="line">    --dataset_num_proc 4 \</span><br><span class="line">    --model_author swift \</span><br><span class="line">    --model_name swift-robot &gt;run.log 2&gt;&amp;1 &amp;</span><br></pre></td></tr></table></figure>
+
+<p>node2.sh</p>
+<p>两卡A100</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27;  PYTORCH_CUDA_ALLOC_CONF=&#x27;expandable_segments:True&#x27; \</span><br><span class="line">CUDA_VISIBLE_DEVICES=0,1 \</span><br><span class="line">NNODES=2 \</span><br><span class="line">NODE_RANK=1 \</span><br><span class="line">MASTER_ADDR=10.208.24.97 \</span><br><span class="line">MASTER_PORT=29500 \</span><br><span class="line">NPROC_PER_NODE=2 \</span><br><span class="line">nohup  megatron sft \</span><br><span class="line">    --load Qwen3-8B-mcore \</span><br><span class="line">    --dataset &#x27;/mnt/lvzhongrenjie/dataset/multi_round_output.jsonl&#x27; &#x27;/mnt/lvzhongrenjie/dataset/output_messages.jsonl&#x27; \</span><br><span class="line">    --split_dataset_ratio 0.01 \</span><br><span class="line">    --tensor_model_parallel_size 2 \</span><br><span class="line">    --sequence_parallel \</span><br><span class="line">    --micro_batch_size 2 \</span><br><span class="line">    --global_batch_size 16 \</span><br><span class="line">    --recompute_granularity full \</span><br><span class="line">    --recompute_method uniform \</span><br><span class="line">    --recompute_num_layers 3 \</span><br><span class="line">    --finetune \</span><br><span class="line">    --cross_entropy_loss_fusion \</span><br><span class="line">    --lr 1e-5 \</span><br><span class="line">    --lr_warmup_fraction 0.05 \</span><br><span class="line">    --min_lr 1e-6 \</span><br><span class="line">    --max_epochs 3 \</span><br><span class="line">    --save /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft \</span><br><span class="line">    --save_interval 50 \</span><br><span class="line">    --max_length 2048 \</span><br><span class="line">    --add_version false \</span><br><span class="line">    --system &#x27;You are a helpful assistant.&#x27; \</span><br><span class="line">    --num_workers 4 \</span><br><span class="line">    --dataset_num_proc 4 \</span><br><span class="line">    --model_author swift \</span><br><span class="line">    --model_name swift-robot &gt;run.log 2&gt;&amp;1 &amp;</span><br></pre></td></tr></table></figure>
+
+<p>Ok:</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/cqDt5Tm9jFwgnLp.png" alt="8.png"></p>
+<h2 id="推理-微调前后的简单对比"><a href="#推理-微调前后的简单对比" class="headerlink" title="推理+微调前后的简单对比"></a>推理+微调前后的简单对比</h2><p>先把训好的转回来</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27; CUDA_VISIBLE_DEVICES=0 \</span><br><span class="line">swift export \</span><br><span class="line">--mcore_model /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft \</span><br><span class="line">--to_hf true \</span><br><span class="line">--torch_dtype bfloat16 \</span><br><span class="line">--output_dir /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft/00001024-hf \</span><br><span class="line">--test_convert_precision true</span><br></pre></td></tr></table></figure>
+
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/wT7DIHtvpWn6yz1.png" alt="9.png"></p>
+<p>推理的命令：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">CUDA_VISIBLE_DEVICES=0 \</span><br><span class="line">swift infer \</span><br><span class="line">--model /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft/00001024-hf \</span><br><span class="line">--stream true \</span><br><span class="line">--temperature 0 \</span><br><span class="line">--max_new_tokens 2048</span><br></pre></td></tr></table></figure>
+
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/cGqlsM5uohTXVv7.png" alt="10.png"></p>
+<p>至此完成整个流程</p>
+<p>不过可以发现，对于微调前后的模型，对于不在数据集内的其他问题的回答，微调后的数据集的回答内容倾向于变短。这是因为微调数据集中，单轮短对话的占比较多（95%,另外多对对话每轮的也很短），导致微调后模型在decode阶段倾向于输出较短的回答。</p>
+<p>对于数据集之外的QA测试，看看通用能力的变化：</p>
+<p>微调前，数据集之外的回答：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/6gLetlZXm1naqBY.png" alt="11.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/vd4exaX6ApW51bg.png" alt="12.png"></p>
+<p>微调后，数据集之外的回答（通用能力）：：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/WUoqeDwlnPba2xF.png" alt="13.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/d569UM8PbELqThn.png" alt="14.png"></p>
+<p>这里输出就变得非常短，信息量是不够的。</p>
+<p><strong>可以看出这里的数据集的质量对于其影响是非常大的，甚至影响了其在通用能力上的问题的回答。</strong></p>
+<p>另外微调场景下，发现通过<strong>多轮对话的数据集+回答质量+现有产品文档</strong>之间似乎存在一个不可能三角：</p>
+<ol>
+<li>我们希望用户在进行一个问题的输入时，微调后的模型能够准确的回答出所有的答案，输出的长度是有保证的，而不是用户反复的去询问；但现有的文档对应一个网页，也对应一个&#x2F;一系列固定的问题，如果将这个文档拆成多轮对话的形式，其单个子问题的回答一定是简短的，也就意味着微调完后的模型的一次回答注定也只会吐出少量的token（如果问的问题是很具体的，那么这种挤牙膏式的回答能够回答的很简短和具体，是符合要求的；<strong>如果问的问题是很宽泛的，涉及到多个步骤，那么这种挤牙膏的回答就是很不好的，信息量就很低），回答质量堪忧</strong></li>
+<li>我们希望通过微调的形式-&gt;产生对应产品文档的准确的回答，但微调后本身产生的<strong>回答相比较原文档就是有出入的</strong>（如果RAG的形式通过检索找回重排后这种情况就会好很多）</li>
+<li><strong>模型的通用能力会受影响</strong>，对于官方文档之外的内容——比如回答的风格发生变化，Qwen原有的风格的输出是很详细的且带有思维链的过程，这里做的数据集并没有think这一步，且数据集本身的回答导致“挤牙膏”进而会影响到数据集之外的回答，比如截图中的对于TCP重复的理解的回答就很不好，这也是微调（无论是Lora还是全量）的风险之一（依赖于高质量的数据集）</li>
+</ol>
+<p><strong>混合数据集？长短结合？</strong></p>
+<p>这里直接用原有官方文档的清洗后的数据集去微调（摒弃掉多轮对话的形式,即一个QA对应一个网页的内容去试一把）</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta prompt_"># </span><span class="language-bash">finetune</span></span><br><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27; PYTORCH_CUDA_ALLOC_CONF=&#x27;expandable_segments:True&#x27; \</span><br><span class="line">NPROC_PER_NODE=4 \</span><br><span class="line">CUDA_VISIBLE_DEVICES=0,1,2,3 \</span><br><span class="line">megatron sft \</span><br><span class="line">--load Qwen3-8B-mcore \</span><br><span class="line">--dataset &#x27;/root/dataset/dataset_original.jsonl&#x27; \</span><br><span class="line">--tensor_model_parallel_size 2 \</span><br><span class="line">--sequence_parallel \</span><br><span class="line">--micro_batch_size 1 \</span><br><span class="line">--global_batch_size 16 \</span><br><span class="line">--recompute_granularity full \</span><br><span class="line">--recompute_method uniform \</span><br><span class="line">--recompute_num_layers 3 \</span><br><span class="line">--finetune \</span><br><span class="line">--cross_entropy_loss_fusion \</span><br><span class="line">--lr 1e-5 \</span><br><span class="line">--lr_warmup_fraction 0.05 \</span><br><span class="line">--min_lr 1e-6 \</span><br><span class="line">--max_epochs 3 \</span><br><span class="line">--save /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft-original \</span><br><span class="line">--save_interval 50 \</span><br><span class="line">--max_length 2048 \</span><br><span class="line">--add_version false \</span><br><span class="line">--system &#x27;You are a helpful assistant.&#x27; \</span><br><span class="line">--num_workers 4 \</span><br><span class="line">--dataset_num_proc 4 \</span><br><span class="line">--model_author swift \</span><br><span class="line">--model_name swift-robot</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">transfer</span></span><br><span class="line">MEGATRON_LM_PATH=&#x27;/root/Megatron-LM&#x27; CUDA_VISIBLE_DEVICES=0 \</span><br><span class="line">swift export \</span><br><span class="line">--mcore_model /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft-original \</span><br><span class="line">--to_hf true \</span><br><span class="line">--torch_dtype bfloat16 \</span><br><span class="line">--output_dir /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft-original/original-hf \</span><br><span class="line">--test_convert_precision true</span><br><span class="line"><span class="meta prompt_"># </span><span class="language-bash">infer</span></span><br><span class="line">CUDA_VISIBLE_DEVICES=0 \</span><br><span class="line">swift infer \</span><br><span class="line">--model /mnt/lvzhongrenjie/megatron_output/Qwen3-8B-sft-original/original-hf \</span><br><span class="line">--stream true \</span><br><span class="line">--temperature 0 \</span><br><span class="line">--max_new_tokens 2048</span><br></pre></td></tr></table></figure>
+
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/Yez583UWNPxvmi6.png" alt="15.png"></p>
+<p>结果如下：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/OQBouGlSZgCMXyr.png" alt="16.png"></p>
+<p>感觉回答的也还行</p>
+<p>有时会抽风（不知道为什么）：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/nSaqJQ1rtXi2ZwF.png" alt="17.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/AB7iDzgLv9O3ER1.png" alt="18.png"></p>
+<p>因此这种方式似乎也不行。</p>
+<p>公司内容的问答机器人感觉就是用RAG实现的。</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/3rnTtMm8WLqCbdH.png" alt="19.png"></p>
+<p>相对应的，微调后的回答就依旧挤牙膏：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/C4sxtHl9vjiAR1r.png" alt="20.png"></p>
+<h2 id="RAG？"><a href="#RAG？" class="headerlink" title="RAG？"></a>RAG？</h2><p>PS：微调的数据集的质量太重要了（Qwen倾向于think）。保险起见还是RAG更有效些。</p>
+<p><strong>为什么RAG是更好的选择（来自Qwen的回答）</strong></p>
+<p>1️⃣ 知识准确性与可验证性（最关键因素）</p>
+<ul>
+<li>RAG：回答严格基于检索到的产品文档片段，可提供引用来源<ul>
+<li>客户可以验证答案来源：”根据[产品手册第5章]…”</li>
+<li>避免模型编造不存在的功能或错误信息</li>
+</ul>
+</li>
+<li>微调：模型内化知识后难以验证准确性<ul>
+<li>产品更新后，模型可能提供过时信息而不自知</li>
+<li>无法向客户证明答案来源，降低可信度</li>
+</ul>
+</li>
+</ul>
+<p>2️⃣ 知识更新效率</p>
+<ul>
+<li>RAG：产品文档更新后，只需更新向量数据库<ul>
+<li>即时生效，无需重新训练</li>
+<li>适合产品迭代频繁的场景（多数SaaS产品每周&#x2F;每月更新）</li>
+</ul>
+</li>
+<li>微调：每次产品更新都需要<ul>
+<li>重新收集&#x2F;生成训练数据</li>
+<li>重新训练模型（成本高、耗时长）</li>
+<li>风险：新训练可能破坏已有知识</li>
+</ul>
+</li>
+</ul>
+<p>3️⃣ 避免能力退化风险</p>
+<p>正如您敏锐指出的：</p>
+<blockquote>
+<p>“微调非常依赖制作出来数据集的质量，质量不好很容易导致模型的相关能力下降；但是RAG就不存在这个问题，会保留原模型的能力” </p>
+</blockquote>
+<ul>
+<li>RAG：完全保留Qwen3-8B的原始能力<ul>
+<li>通用语言理解、多轮对话、基础推理能力不受影响</li>
+<li>对于文档未覆盖的问题，能诚实回答”我不知道”</li>
+</ul>
+</li>
+<li>微调：存在严重风险<ul>
+<li>低质量数据集会污染模型的基础能力</li>
+<li>可能导致灾难性遗忘（catastrophic forgetting）</li>
+<li>评估困难：很难全面测试模型是否”变笨了”</li>
+</ul>
+</li>
+</ul>
+<p>4️⃣ 实施成本与维护</p>
+<ul>
+<li>RAG：<ul>
+<li>初期需搭建检索系统（但有成熟开源方案如LangChain、LlamaIndex）</li>
+<li>文档处理自动化后，维护成本低</li>
+<li>可轻松扩展多语言、多产品线支持</li>
+</ul>
+</li>
+<li>微调：<ul>
+<li>需要专业团队构建高质量SFT数据集</li>
+<li>持续的训练基础设施投入</li>
+<li>每次更新都需要完整评估流程</li>
+</ul>
+</li>
+</ul>
+<h2 id="评测打分：TODO"><a href="#评测打分：TODO" class="headerlink" title="评测打分：TODO"></a>评测打分：TODO</h2><p>两机四卡，按照上述数据集进行微调后的相关指标。</p>
+<h3 id="运行结果"><a href="#运行结果" class="headerlink" title="运行结果"></a>运行结果</h3><p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/HgEurfpcv4XWo9S.png" alt="grad-norm vs samples.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/WTbHUyVYkcAaOKi.png" alt="grad-norm.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/qzINKmGsTrCAJQc.png" alt="learning-rate.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/3WNgZP5A7oD9sYL.png" alt="learning-rate vs samples.png"></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2025/08/27/rcyOuVQmw4hn1s3.png" alt="iteration-time.png"></p>
+<h3 id="标准数据集：TODO"><a href="#标准数据集：TODO" class="headerlink" title="标准数据集：TODO"></a>标准数据集：TODO</h3><p>对微调前后的数据集在benchmark上进行评测，查看是否有通用能力上的性能损失（似乎不用看了，损失太明显了）</p>
+<p>Qwen3-8B微调前在相关评测数据集上的指标：</p>
+<p>Qwen3-8B微调后在相关评测数据集上的指标：</p>
+<h2 id="Swift对应到Megatron后端"><a href="#Swift对应到Megatron后端" class="headerlink" title="Swift对应到Megatron后端"></a>Swift对应到Megatron后端</h2><h3 id="命令行解析代码位置："><a href="#命令行解析代码位置：" class="headerlink" title="命令行解析代码位置："></a>命令行解析代码位置：</h3><ol>
+<li><strong>主入口点</strong>: <code>[swift/cli/main.py](swift/cli/main.py:56)</code> - <code>[cli_main()](swift/cli/main.py:56)</code> 函数处理所有命令路由<br>1. </li>
+<li><strong>Megatron特定入口</strong>: <code>[swift/cli/_megatron/main.py](swift/cli/_megatron/main.py:16)</code> - <code>[cli_main()](swift/cli/_megatron/main.py:16)</code> 函数处理megatron命令路由<br>1. </li>
+<li><strong>SFT命令处理</strong>: <code>[swift/cli/_megatron/sft.py](swift/cli/_megatron/sft.py:5)</code> - 调用 <code>[megatron_sft_main()](swift/megatron/train/sft.py:71)</code><br>1. </li>
+<li><strong>参数解析核心</strong>: <code>[swift/utils/utils.py](swift/utils/utils.py:143)</code> - <code>[parse_args()](swift/utils/utils.py:143)</code> 函数使用HuggingFace的HfArgumentParser进行参数解析<br>1. </li>
+<li><h2 id="参数类定义-1-swift-megatron-argument-megatron-args-py-swift-megatron-argument-megatron-args-py-98-MegatronArguments-swift-megatron-argument-megatron-args-py-98-类包含所有megatron特定参数2-swift-megatron-argument-train-args-py-swift-megatron-argument-train-args-py-16-MegatronTrainArguments-swift-megatron-argument-train-args-py-16-类继承BaseArguments和MegatronArguments3-swift-llm-argument-base-args-base-args-py-swift-llm-argument-base-args-base-args-py-54-BaseArguments-swift-llm-argument-base-args-base-args-py-54-类包含基础参数"><a href="#参数类定义-1-swift-megatron-argument-megatron-args-py-swift-megatron-argument-megatron-args-py-98-MegatronArguments-swift-megatron-argument-megatron-args-py-98-类包含所有megatron特定参数2-swift-megatron-argument-train-args-py-swift-megatron-argument-train-args-py-16-MegatronTrainArguments-swift-megatron-argument-train-args-py-16-类继承BaseArguments和MegatronArguments3-swift-llm-argument-base-args-base-args-py-swift-llm-argument-base-args-base-args-py-54-BaseArguments-swift-llm-argument-base-args-base-args-py-54-类包含基础参数" class="headerlink" title="参数类定义:1. [swift/megatron/argument/megatron_args.py](swift/megatron/argument/megatron_args.py:98) - [MegatronArguments](swift/megatron/argument/megatron_args.py:98) 类包含所有megatron特定参数2. [swift/megatron/argument/train_args.py](swift/megatron/argument/train_args.py:16) - [MegatronTrainArguments](swift/megatron/argument/train_args.py:16) 类继承BaseArguments和MegatronArguments3. [swift/llm/argument/base_args/base_args.py](swift/llm/argument/base_args/base_args.py:54) - [BaseArguments](swift/llm/argument/base_args/base_args.py:54) 类包含基础参数"></a><strong>参数类定义</strong>:<br>1. <code>[swift/megatron/argument/megatron_args.py](swift/megatron/argument/megatron_args.py:98)</code> - <code>[MegatronArguments](swift/megatron/argument/megatron_args.py:98)</code> 类包含所有megatron特定参数<br>2. <code>[swift/megatron/argument/train_args.py](swift/megatron/argument/train_args.py:16)</code> - <code>[MegatronTrainArguments](swift/megatron/argument/train_args.py:16)</code> 类继承BaseArguments和MegatronArguments<br>3. <code>[swift/llm/argument/base_args/base_args.py](swift/llm/argument/base_args/base_args.py:54)</code> - <code>[BaseArguments](swift/llm/argument/base_args/base_args.py:54)</code> 类包含基础参数</h2></li>
+</ol>
+<h3 id="后端执行逻辑位置："><a href="#后端执行逻辑位置：" class="headerlink" title="后端执行逻辑位置："></a>后端执行逻辑位置：</h3><ol>
+<li><strong>训练流程入口</strong>: <code>[swift/megatron/train/sft.py](swift/megatron/train/sft.py:71)</code> - <code>[megatron_sft_main()](swift/megatron/train/sft.py:71)</code> 函数<br>1. </li>
+<li><strong>训练器实现</strong>: <code>[swift/megatron/trainers/base.py](swift/megatron/trainers/base.py:29)</code> - <code>[BaseMegatronTrainer](swift/megatron/trainers/base.py:29)</code> 类包含完整的训练逻辑<br>1. </li>
+<li><strong>具体训练步骤</strong>: <code>[swift/megatron/trainers/trainer.py](swift/megatron/trainers/trainer.py:22)</code> - <code>[MegatronTrainer](swift/megatron/trainers/trainer.py:22)</code> 类实现forward_step和loss_func<br>1. </li>
+<li><strong>训练执行</strong>: <code>[swift/megatron/trainers/base.py](swift/megatron/trainers/base.py:441)</code> - <code>[train()](swift/megatron/trainers/base.py:441)</code> 方法启动训练流程<ol>
+<li></li>
+</ol>
+</li>
+</ol>
+<p>整个流程是：命令行参数通过HfArgumentParser解析到对应的dataclass中，然后传递给训练器进行模型训练。Megatron相关的参数在MegatronArguments类中定义，训练逻辑在BaseMegatronTrainer中实现。</p>
+<h2 id="纯Megatron"><a href="#纯Megatron" class="headerlink" title="纯Megatron"></a>纯Megatron</h2><p><a target="_blank" rel="noopener" href="https://huggingface.co/blog/zh/megatron-training">https://huggingface.co/blog/zh/megatron-training</a></p>
+<p>megatron里微调一个大模型基本上可以分为以下几个步骤：</p>
+<p>1）从huggingface下载大模型的权重；</p>
+<p>2）使用大模型转换脚本将该权重从Huggingface格式转换为megatron格式；</p>
+<p>3）基于这个转换后的权重设置微调参数，然后开始微调；</p>
+<p>4）最后保存微调好的权重。</p>
+<p>这里转换：</p>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">python tools/checkpoint/convert.py \</span><br><span class="line">   --model-type GPT \</span><br><span class="line">   --loader qwen \</span><br><span class="line">   --saver megatron \</span><br><span class="line">   --checkpoint-type hf \</span><br><span class="line">   --load-dir /path/to/qwen/hf/model \</span><br><span class="line">   --save-dir /path/to/megatron/checkpoint \</span><br><span class="line">   --target-tensor-parallel-size 2 \</span><br><span class="line">   --target-pipeline-parallel-size 2 \</span><br><span class="line">   --tokenizer_type /path/to/qwen/tokenizer </span><br></pre></td></tr></table></figure>
+
+<ol>
+<li>数据集的转换：格式是？</li>
+<li>模型格式的转换：就用swift去转换</li>
+<li>训练的指令</li>
+</ol>
+<p>参考llama的例子：<a target="_blank" rel="noopener" href="https://github.com/NVIDIA/Megatron-LM/tree/main/examples/llama%EF%BC%88%E9%80%82%E7%94%A8%EF%BC%9F">https://github.com/NVIDIA/Megatron-LM/tree/main/examples/llama（适用？</a></p>
+<p>好像没看到有纯megatron去跑的例子</p>
+<p>千问的例子：<a target="_blank" rel="noopener" href="https://gitee.com/ascend/MindSpeed-LLM/blob/4c537a909d3334f5afc5fbf18f1192b42c124421/examples/qwen/README.md">https://gitee.com/ascend/MindSpeed-LLM/blob/4c537a909d3334f5afc5fbf18f1192b42c124421/examples/qwen/README.md</a></p>
+<p>只不过是昇腾的</p>
+<p>这里工作量有点大，没必要</p>
+<p>放弃，专用swifit or llama-factory</p>
+<h2 id="评测基建"><a href="#评测基建" class="headerlink" title="评测基建"></a>评测基建</h2><p>对于微调过程，需要进行评测</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/">http://example.com/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/SFT/">SFT</a><a class="post-meta__tags" href="/tags/Megatron/">Megatron</a><a class="post-meta__tags" href="/tags/Qwen/">Qwen</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/megatron-lm.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2025/08/21/2025-08-21-%E4%BD%BF%E7%94%A8-Flowise-%E6%9E%84%E5%BB%BA%E5%9F%BA%E4%BA%8E%E7%A7%81%E6%9C%89%E7%9F%A5%E8%AF%86%E5%BA%93%E7%9A%84%E6%99%BA%E8%83%BD%E5%AE%A2%E6%9C%8D-Agent(%E5%9B%BE%E6%96%87%E6%95%99%E7%A8%8B)/" title="使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Flowise.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)</div></div><div class="info-2"><div class="info-item-1">使用 Flowise 构建基于私有知识库的智能客服 Agent（图文教程）https://blog.csdn.net/hejiahao_/article/details/147902607?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=147902607&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link </div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/08/18/2025-08-18-%E6%9E%81%E7%AE%80-Megatron-LM-%E6%A8%A1%E5%9E%8B%E5%B9%B6%E8%A1%8C%E5%88%87%E5%88%86%E4%BB%8B%E7%BB%8D/" title="极简 Megatron-LM 模型并行切分介绍"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Megatron.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">极简 Megatron-LM 模型并行切分介绍</div></div><div class="info-2"><div class="info-item-1">极简 Megatron-LM 模型并行切分介绍转自：https://zhuanlan.zhihu.com/p/498422407 在大模型流行的年代，我经常需要给同事解释 Megatron-LM 是怎么做的模型并行，自己也经常记不清从头推。而现有大多数的文章都是算法向或者历史向的，信息浓度比较低。为了节省大家的时间，在这里记录一下 Megatron-LM 的切分方式。由于只考虑切分，所以本文忽略 transformer 模型中的各种 elementwise 运算和 layernorm。 下文中，我们规定 b 为 batch size，s 为 sequence length，h 为 hidden size，n 为 num head，p 为切分数，用中括号表示 tensor 形状，例如 [b, s, h] 为常规的 transformer encoder 输入。这种表示方法参考了尤洋老师的 An Efficient 2D Method for Training Super-Large Deep Learning Models。 transformer encoder 结构transf...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-SFT%E4%B8%93%E6%94%BBPass@k%EF%BC%8CRL%E5%BC%BA%E5%8C%96Pass@1/" title="SFT专攻Pass@k，RL强化Pass@1?"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/RLVR.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">SFT专攻Pass@k，RL强化Pass@1?</div></div><div class="info-2"><div class="info-item-1">深挖RLVR探索机制：SFT专攻Pass@k，RL强化Pass@1转自：https://mp.weixin.qq.com/s/QSi580SJ2RFewyFirAe65A 先前的工作已经证明了 RLVR 在实践中的成功，但其背后的根本机制，特别是模型在训练过程中的探索行为，仍有待深入研究。来自中国人民大学高瓴人工智能学院的研究者们发表了一篇题为《From Trial-and-Error to Improvement: A Systematic Analysis of LLM Exploration Mechanisms in RLVR》的技术报告，系统性地研究了RLVR 中的探索机制。   论文题目：From Trial-and-Error to Improvement: A Systematic Analysis of LLM Exploration Mechanisms in RLVR 论文链接：https://arxiv.org/pdf/2508.07534  这篇报告结合了详尽的文献回顾和创新的实证分析，围绕探索空间塑造、熵与性能的相互作用以及强化学习性能优化这三个维度展...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-%E4%B8%80%E8%A1%8C%E4%BB%A3%E7%A0%81%EF%BC%8C%E8%A7%A3%E9%94%81SFT%E6%B3%9B%E5%8C%96%E8%83%BD%E5%8A%9B%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BBDFT%E5%A6%82%E4%BD%95%E5%AE%8C%E8%83%9C%E4%BC%A0%E7%BB%9F%E5%BE%AE%E8%B0%83/" title="一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DFT.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调</div></div><div class="info-2"><div class="info-item-1">一行代码，解锁SFT泛化能力：深度解读DFT如何完胜传统微调转自：https://mp.weixin.qq.com/s/XXGxRk-p5LahtqdYNnbKaA 在大型语言模型 (LLM) 的世界里，如何让模型更好地理解并遵循人类的指令，即所谓的“对齐”，始终是核心议题。目前，主流的技术路线分为两条：监督微调（Supervised Fine-Tuning, SFT）和基于人类反馈的强化学习 （Reinforcement Learning from Human Feedback, RLHF）。 SFT 简单直接，就像教一个学生做题，直接给他看大量的“问题-标准答案”对，让他去模仿。 这种方法易于实现，能让模型快速学会特定任务的“套路”。然而，它的弊病也十分明显——模型容易“死记硬背”，学到的知识很“脆”，泛化能力差，遇到没见过的题型就可能“翻车”。 相比之下，RLHF 更像是请一位教练来指导学生。它不直接给出答案，而是对模型的不同回答给出评分（奖励），让模型在不断的尝试和反馈中，自己探索出更好的策略。但它的问题在于，训练过程极其复杂，需要耗费大量的计算资源，对超参数敏感，且依赖...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AgenticRL.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">Agentic RL</div></div><div class="info-2"><div class="info-item-1">转自：https://zhuanlan.zhihu.com/p/1913905349284591240 通过蒙特卡洛树搜索、过程监督与结果监督、强化学习来提高 LLM 的推理能力，从本质上来说，都是尽可能榨取 LLM 本身的能力，区别可能在于多次尝试、反馈信号、训练方法而已，这类方法可称之为“求诸内”。而由 scaling law 可知，模型的能力是有限的，那么该如何进一步提高LLM在具体问题上的表现呢？近期的答案是，类似 RAG，Multi-Agent 系统，让 LLM 学会使用工具，毕竟人与动物的关键区别也只是“能制造并使用工具”，这种方式则是“求诸外”。那么本篇就以此为中心，重点讨论以下问题：  Agentic LLM 的算法逻辑、具体方法与实际表现？ RL 如何训练 Agentic LLM，其与 tool using 的 SFT 的差异在哪？ Agentic RL 的工程化问题  一、Agentic RL 的算法设计Agent 和 RL 都并非新鲜事物，而使用 RL 训练基于 LLM 的 agent 则是近期的研究的热点，那么，从算法角度来说，如何理解二者结合的动机、场景...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-%E4%BD%BF%E7%94%A8-Flowise-%E6%9E%84%E5%BB%BA%E5%9F%BA%E4%BA%8E%E7%A7%81%E6%9C%89%E7%9F%A5%E8%AF%86%E5%BA%93%E7%9A%84%E6%99%BA%E8%83%BD%E5%AE%A2%E6%9C%8D-Agent(%E5%9B%BE%E6%96%87%E6%95%99%E7%A8%8B)/" title="使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Flowise.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)</div></div><div class="info-2"><div class="info-item-1">使用 Flowise 构建基于私有知识库的智能客服 Agent（图文教程）https://blog.csdn.net/hejiahao_/article/details/147902607?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=147902607&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link </div></div></div></a><a class="pagination-related" href="/2024/08/06/2024-08-06-WiNGPT2%E7%9A%84%E9%83%A8%E7%BD%B2%E5%92%8C%E6%80%A7%E8%83%BD%E5%AF%B9%E6%AF%94/" title="医疗垂直领域大模型WiNGPT2的部署和性能对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-06</div><div class="info-item-2">医疗垂直领域大模型WiNGPT2的部署和性能对比</div></div><div class="info-2"><div class="info-item-1">医疗垂直领域大模型WiNGPT2的部署和性能对比WiNGPT2部署和运行123456git clone https://github.com/winninghealth/WiNGPT2.gitcd WiNGPT2mkdir winninghealthcd winninghealthgit clone https://hf-mirror.com/winninghealth/WiNGPT2-7B-Chatcd ..  若没有以下这三个库，则安装gradio、tiktoken、pip install einops flash_attn 123pip install gradiopip install tiktokenpip install einops flash_attn  选一个目录作为cache（前提是这个目录已经存在且有权限读写） 12# 遇到报错 [Errno 13] Permission denied: &#x27;/data/.cache/huggingface/modules/transformers_modules/WiNGPT2-7B-Chat&#x27;expor...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">104</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">114</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">30</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Megatron-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B"><span class="toc-number">1.</span> <span class="toc-text">Megatron &amp; Swift监督微调Qwen3-8B</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.1.</span> <span class="toc-text">参考</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A8%A1%E5%9E%8B%E6%94%AF%E6%8C%81"><span class="toc-number">1.2.</span> <span class="toc-text">模型支持</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98"><span class="toc-number">1.3.</span> <span class="toc-text">常见问题</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%87%AA%E5%AE%9A%E4%B9%89%E6%95%B0%E6%8D%AE%E9%9B%86"><span class="toc-number">1.4.</span> <span class="toc-text">自定义数据集</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8E%A8%E8%8D%90%E7%8E%AF%E5%A2%83-%E7%8E%AF%E5%A2%83%E5%87%86%E5%A4%87"><span class="toc-number">1.5.</span> <span class="toc-text">推荐环境 &amp; 环境准备</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A8%A1%E5%9E%8B%E4%B8%8B%E8%BD%BD"><span class="toc-number">1.6.</span> <span class="toc-text">模型下载</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A8%A1%E5%9E%8B%E6%A0%BC%E5%BC%8F%E8%BD%AC%E6%8D%A2"><span class="toc-number">1.7.</span> <span class="toc-text">模型格式转换</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BE%AE%E8%B0%83%E6%8C%87%E4%BB%A4"><span class="toc-number">1.8.</span> <span class="toc-text">微调指令</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%A4%9A%E6%9C%BA%E5%A4%9A%E5%8D%A1"><span class="toc-number">1.9.</span> <span class="toc-text">多机多卡</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8E%A8%E7%90%86-%E5%BE%AE%E8%B0%83%E5%89%8D%E5%90%8E%E7%9A%84%E7%AE%80%E5%8D%95%E5%AF%B9%E6%AF%94"><span class="toc-number">1.10.</span> <span class="toc-text">推理+微调前后的简单对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#RAG%EF%BC%9F"><span class="toc-number">1.11.</span> <span class="toc-text">RAG？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%AF%84%E6%B5%8B%E6%89%93%E5%88%86%EF%BC%9ATODO"><span class="toc-number">1.12.</span> <span class="toc-text">评测打分：TODO</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%90%E8%A1%8C%E7%BB%93%E6%9E%9C"><span class="toc-number">1.12.1.</span> <span class="toc-text">运行结果</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%87%E5%87%86%E6%95%B0%E6%8D%AE%E9%9B%86%EF%BC%9ATODO"><span class="toc-number">1.12.2.</span> <span class="toc-text">标准数据集：TODO</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Swift%E5%AF%B9%E5%BA%94%E5%88%B0Megatron%E5%90%8E%E7%AB%AF"><span class="toc-number">1.13.</span> <span class="toc-text">Swift对应到Megatron后端</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%91%BD%E4%BB%A4%E8%A1%8C%E8%A7%A3%E6%9E%90%E4%BB%A3%E7%A0%81%E4%BD%8D%E7%BD%AE%EF%BC%9A"><span class="toc-number">1.13.1.</span> <span class="toc-text">命令行解析代码位置：</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E6%95%B0%E7%B1%BB%E5%AE%9A%E4%B9%89-1-swift-megatron-argument-megatron-args-py-swift-megatron-argument-megatron-args-py-98-MegatronArguments-swift-megatron-argument-megatron-args-py-98-%E7%B1%BB%E5%8C%85%E5%90%AB%E6%89%80%E6%9C%89megatron%E7%89%B9%E5%AE%9A%E5%8F%82%E6%95%B02-swift-megatron-argument-train-args-py-swift-megatron-argument-train-args-py-16-MegatronTrainArguments-swift-megatron-argument-train-args-py-16-%E7%B1%BB%E7%BB%A7%E6%89%BFBaseArguments%E5%92%8CMegatronArguments3-swift-llm-argument-base-args-base-args-py-swift-llm-argument-base-args-base-args-py-54-BaseArguments-swift-llm-argument-base-args-base-args-py-54-%E7%B1%BB%E5%8C%85%E5%90%AB%E5%9F%BA%E7%A1%80%E5%8F%82%E6%95%B0"><span class="toc-number">1.14.</span> <span class="toc-text">参数类定义:1. [swift&#x2F;megatron&#x2F;argument&#x2F;megatron_args.py](swift&#x2F;megatron&#x2F;argument&#x2F;megatron_args.py:98) - [MegatronArguments](swift&#x2F;megatron&#x2F;argument&#x2F;megatron_args.py:98) 类包含所有megatron特定参数2. [swift&#x2F;megatron&#x2F;argument&#x2F;train_args.py](swift&#x2F;megatron&#x2F;argument&#x2F;train_args.py:16) - [MegatronTrainArguments](swift&#x2F;megatron&#x2F;argument&#x2F;train_args.py:16) 类继承BaseArguments和MegatronArguments3. [swift&#x2F;llm&#x2F;argument&#x2F;base_args&#x2F;base_args.py](swift&#x2F;llm&#x2F;argument&#x2F;base_args&#x2F;base_args.py:54) - [BaseArguments](swift&#x2F;llm&#x2F;argument&#x2F;base_args&#x2F;base_args.py:54) 类包含基础参数</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%90%8E%E7%AB%AF%E6%89%A7%E8%A1%8C%E9%80%BB%E8%BE%91%E4%BD%8D%E7%BD%AE%EF%BC%9A"><span class="toc-number">1.14.1.</span> <span class="toc-text">后端执行逻辑位置：</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BA%AFMegatron"><span class="toc-number">1.15.</span> <span class="toc-text">纯Megatron</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%AF%84%E6%B5%8B%E5%9F%BA%E5%BB%BA"><span class="toc-number">1.16.</span> <span class="toc-text">评测基建</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/" title="Megatron &amp; Swift监督微调Qwen3-8B"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/megatron-lm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Megatron &amp; Swift监督微调Qwen3-8B"/></a><div class="content"><a class="title" href="/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/" title="Megatron &amp; Swift监督微调Qwen3-8B">Megatron &amp; Swift监督微调Qwen3-8B</a><time datetime="2025-08-26T16:00:00.000Z" title="发表于 2025-08-27 00:00:00">2025-08-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/21/2025-08-21-SFT%E4%B8%93%E6%94%BBPass@k%EF%BC%8CRL%E5%BC%BA%E5%8C%96Pass@1/" title="SFT专攻Pass@k，RL强化Pass@1?"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/RLVR.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="SFT专攻Pass@k，RL强化Pass@1?"/></a><div class="content"><a class="title" href="/2025/08/21/2025-08-21-SFT%E4%B8%93%E6%94%BBPass@k%EF%BC%8CRL%E5%BC%BA%E5%8C%96Pass@1/" title="SFT专攻Pass@k，RL强化Pass@1?">SFT专攻Pass@k，RL强化Pass@1?</a><time datetime="2025-08-20T16:00:00.000Z" title="发表于 2025-08-21 00:00:00">2025-08-21</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/21/2025-08-21-%E4%B8%80%E8%A1%8C%E4%BB%A3%E7%A0%81%EF%BC%8C%E8%A7%A3%E9%94%81SFT%E6%B3%9B%E5%8C%96%E8%83%BD%E5%8A%9B%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BBDFT%E5%A6%82%E4%BD%95%E5%AE%8C%E8%83%9C%E4%BC%A0%E7%BB%9F%E5%BE%AE%E8%B0%83/" title="一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DFT.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调"/></a><div class="content"><a class="title" href="/2025/08/21/2025-08-21-%E4%B8%80%E8%A1%8C%E4%BB%A3%E7%A0%81%EF%BC%8C%E8%A7%A3%E9%94%81SFT%E6%B3%9B%E5%8C%96%E8%83%BD%E5%8A%9B%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BBDFT%E5%A6%82%E4%BD%95%E5%AE%8C%E8%83%9C%E4%BC%A0%E7%BB%9F%E5%BE%AE%E8%B0%83/" title="一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调">一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调</a><time datetime="2025-08-20T16:00:00.000Z" title="发表于 2025-08-21 00:00:00">2025-08-21</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AgenticRL.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Agentic RL"/></a><div class="content"><a class="title" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL">Agentic RL</a><time datetime="2025-08-20T16:00:00.000Z" title="发表于 2025-08-21 00:00:00">2025-08-21</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/21/2025-08-21-%E4%BD%BF%E7%94%A8-Flowise-%E6%9E%84%E5%BB%BA%E5%9F%BA%E4%BA%8E%E7%A7%81%E6%9C%89%E7%9F%A5%E8%AF%86%E5%BA%93%E7%9A%84%E6%99%BA%E8%83%BD%E5%AE%A2%E6%9C%8D-Agent(%E5%9B%BE%E6%96%87%E6%95%99%E7%A8%8B)/" title="使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Flowise.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)"/></a><div class="content"><a class="title" href="/2025/08/21/2025-08-21-%E4%BD%BF%E7%94%A8-Flowise-%E6%9E%84%E5%BB%BA%E5%9F%BA%E4%BA%8E%E7%A7%81%E6%9C%89%E7%9F%A5%E8%AF%86%E5%BA%93%E7%9A%84%E6%99%BA%E8%83%BD%E5%AE%A2%E6%9C%8D-Agent(%E5%9B%BE%E6%96%87%E6%95%99%E7%A8%8B)/" title="使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)">使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)</a><time datetime="2025-08-20T16:00:00.000Z" title="发表于 2025-08-21 00:00:00">2025-08-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
