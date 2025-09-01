@@ -1,0 +1,328 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Linux 云服务器根分区扩容流程(ext4 示例) | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Linux 云服务器根分区扩容流程（ext4 示例）1. 云厂商控制台扩容磁盘 登录云服务商（AWS、阿里云、腾讯云等） 找到对应实例的 系统盘 &#x2F; 数据盘 修改磁盘大小，例如从 40G → 80G 这一步完成后，虚拟磁盘 &#x2F;dev&#x2F;vda 就会变大，但分区和文件系统不会自动变大   2. 确认磁盘和分区情况12lsblkdf -h   lsblk 会显示磁盘和分区大小 df -h 会显">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Linux 云服务器根分区扩容流程(ext4 示例)">
+<meta property="og:url" content="http://example.com/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="Linux 云服务器根分区扩容流程（ext4 示例）1. 云厂商控制台扩容磁盘 登录云服务商（AWS、阿里云、腾讯云等） 找到对应实例的 系统盘 &#x2F; 数据盘 修改磁盘大小，例如从 40G → 80G 这一步完成后，虚拟磁盘 &#x2F;dev&#x2F;vda 就会变大，但分区和文件系统不会自动变大   2. 确认磁盘和分区情况12lsblkdf -h   lsblk 会显示磁盘和分区大小 df -h 会显">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/df.png">
+<meta property="article:published_time" content="2025-08-31T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-09-01T03:11:19.045Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Linux">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/df.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Linux 云服务器根分区扩容流程(ext4 示例)",
+  "url": "http://example.com/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/",
+  "image": "http://example.com/img/cover/df.png",
+  "datePublished": "2025-08-31T16:00:00.000Z",
+  "dateModified": "2025-09-01T03:11:19.045Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Linux 云服务器根分区扩容流程(ext4 示例)',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">111</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">114</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">32</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Linux 云服务器根分区扩容流程(ext4 示例)</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Linux 云服务器根分区扩容流程(ext4 示例)</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-08-31T16:00:00.000Z" title="发表于 2025-09-01 00:00:00">2025-09-01</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-09-01T03:11:19.045Z" title="更新于 2025-09-01 11:11:19">2025-09-01</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/Linux/">Linux</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/" data-flag-title="Linux 云服务器根分区扩容流程(ext4 示例)"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1 id="Linux-云服务器根分区扩容流程（ext4-示例）"><a href="#Linux-云服务器根分区扩容流程（ext4-示例）" class="headerlink" title="Linux 云服务器根分区扩容流程（ext4 示例）"></a>Linux 云服务器根分区扩容流程（ext4 示例）</h1><h3 id="1-云厂商控制台扩容磁盘"><a href="#1-云厂商控制台扩容磁盘" class="headerlink" title="1. 云厂商控制台扩容磁盘"></a>1. <strong>云厂商控制台扩容磁盘</strong></h3><ul>
+<li>登录云服务商（AWS、阿里云、腾讯云等）</li>
+<li>找到对应实例的 <strong>系统盘 &#x2F; 数据盘</strong></li>
+<li>修改磁盘大小，例如从 <strong>40G → 80G</strong></li>
+<li>这一步完成后，虚拟磁盘 <code>/dev/vda</code> 就会变大，但分区和文件系统不会自动变大</li>
+</ul>
+<hr>
+<h3 id="2-确认磁盘和分区情况"><a href="#2-确认磁盘和分区情况" class="headerlink" title="2. 确认磁盘和分区情况"></a>2. <strong>确认磁盘和分区情况</strong></h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">lsblk</span><br><span class="line"><span class="built_in">df</span> -h</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><code>lsblk</code> 会显示磁盘和分区大小</li>
+<li><code>df -h</code> 会显示文件系统挂载的空间大小</li>
+</ul>
+<p>例子：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">vda    80G</span><br><span class="line">└─vda1 40G   /</span><br></pre></td></tr></table></figure>
+
+<p>👉 说明磁盘是 80G，但分区还只有 40G</p>
+<hr>
+<h3 id="3-安装扩容工具"><a href="#3-安装扩容工具" class="headerlink" title="3. 安装扩容工具"></a>3. <strong>安装扩容工具</strong></h3><p>（Ubuntu&#x2F;Debian）</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> apt update</span><br><span class="line"><span class="built_in">sudo</span> apt install -y cloud-guest-utils</span><br></pre></td></tr></table></figure>
+
+<p>（CentOS&#x2F;RHEL）</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> yum install -y cloud-utils-growpart</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="4-扩展分区"><a href="#4-扩展分区" class="headerlink" title="4. 扩展分区"></a>4. <strong>扩展分区</strong></h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> growpart /dev/vda 1</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><code>/dev/vda</code> → 磁盘名</li>
+<li><code>1</code> → 分区号（即 <code>/dev/vda1</code>）</li>
+</ul>
+<p>执行后再看：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">lsblk</span><br></pre></td></tr></table></figure>
+
+<p>应该变成：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">vda    80G</span><br><span class="line">└─vda1 80G   /</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="5-确认文件系统类型"><a href="#5-确认文件系统类型" class="headerlink" title="5. 确认文件系统类型"></a>5. <strong>确认文件系统类型</strong></h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">df</span> -T /</span><br></pre></td></tr></table></figure>
+
+<p>可能是：</p>
+<ul>
+<li><code>ext4</code> → 用 <code>resize2fs</code></li>
+<li><code>xfs</code> → 用 <code>xfs_growfs</code></li>
+</ul>
+<hr>
+<h3 id="6-扩展文件系统"><a href="#6-扩展文件系统" class="headerlink" title="6. 扩展文件系统"></a>6. <strong>扩展文件系统</strong></h3><h4 id="如果是-ext4："><a href="#如果是-ext4：" class="headerlink" title="如果是 ext4："></a>如果是 ext4：</h4><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> resize2fs /dev/vda1</span><br></pre></td></tr></table></figure>
+
+<h4 id="如果是-xfs："><a href="#如果是-xfs：" class="headerlink" title="如果是 xfs："></a>如果是 xfs：</h4><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> xfs_growfs /</span><br></pre></td></tr></table></figure>
+
+<hr>
+<h3 id="7-验证结果"><a href="#7-验证结果" class="headerlink" title="7. 验证结果"></a>7. <strong>验证结果</strong></h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">df</span> -h</span><br></pre></td></tr></table></figure>
+
+<p>应该能看到 <code>/</code> 从 <strong>40G → 80G</strong> ✅</p>
+<hr>
+<h1 id="🔑-总结"><a href="#🔑-总结" class="headerlink" title="🔑 总结"></a>🔑 总结</h1><ol>
+<li>控制台扩容磁盘</li>
+<li><code>lsblk</code> 看分区大小</li>
+<li><code>growpart</code> 扩容分区</li>
+<li><code>resize2fs</code>（ext4）或 <code>xfs_growfs</code>（xfs）扩容文件系统</li>
+<li><code>df -h</code> 验证</li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/">http://example.com/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Linux/">Linux</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/df.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2025/08/29/2025-08-29-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%B7%B7%E5%90%88%E5%B9%B6%E8%A1%8CDPTPPP%EF%BC%8C%E5%A6%82%E4%BD%95%E5%88%92%E5%88%86%E6%9C%BA%E5%99%A8%EF%BC%9F/" title="大模型混合并行DP/TP/PP，如何划分机器？"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/3d.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">大模型混合并行DP/TP/PP，如何划分机器？</div></div><div class="info-2"><div class="info-item-1">大模型混合并行DP&#x2F;TP&#x2F;PP，如何划分机器？1 DP&#x2F;TP&#x2F;PP的通信量比较在大规模深度学习模型的训练过程中，为了加速训练和减少单个计算节点的压力，通常会使用分布式训练技术。分布式训练涉及到几种并行策略，其中最常提到的是数据并行（Data Parallelism, DP）、模型并行（Model Parallelism, MP）和流水线并行（Pipeline Parallelism, PP）。另外，模型并行中还有一种称为张量并行（Tensor Parallelism, TP）的方式，它是指将模型的张量（如权重矩阵）分割到不同的设备上进行计算。  数据并行（DP）：解决计算墙的问题。每个设备上都会有一个模型的完整副本，每个设备独立地处理一部分数据集，然后将各自的梯度汇总起来（通常是通过AllReduce操作）。因此，DP的通信主要发生在训练的每个epoch结束时，各个设备之间需要交换梯度信息。这种通信通常量较大，因为它涉及到模型所有参数的同步。 张量并行（TP）：解决内存墙的问题。模型的权重矩阵被分割成多个部分，每个部分由不同的设备负责计算。...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/07/19/2024-07-19-Linux%E7%B3%BB%E7%BB%9F%E4%B8%AD%E5%8D%B8%E8%BD%BDanaconda/" title="Linux系统中卸载anaconda"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Linux.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-19</div><div class="info-item-2">Linux系统中卸载anaconda</div></div><div class="info-2"><div class="info-item-1">Linux系统中卸载anaconda要在Linux系统中卸载Anaconda，你需要执行一系列的命令。这里是一个通用的步骤指南：  找到Anaconda安装脚本：在安装Anaconda时，它会在你的主目录中创建一个名为anaconda3的文件夹（默认情况下，如果你在安装时选择了不同的名称或位置，请确保使用正确的路径）。  运行Anaconda卸载程序：Anaconda提供了一个卸载程序anaconda-clean，可以帮助你删除Anaconda的配置文件。在终端中运行以下命令： 12conda install anaconda-cleananaconda-clean --yes  这个命令将删除Anaconda的配置文件，并且可以选择创建一个备份。使用–yes选项可以避免在删除每个项目时都要求确认。  删除Anaconda安装目录：接下来，你需要手动删除Anaconda的安装目录。如果你的安装目录是默认的~&#x2F;anaconda3，你可以使用以下命令： 1rm -rf ~/anaconda3  如果你的安装目录不是默认的，请确保使用正确的路径。  编辑.bashrc或其他启...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">111</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">114</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">32</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B%EF%BC%88ext4-%E7%A4%BA%E4%BE%8B%EF%BC%89"><span class="toc-number">1.</span> <span class="toc-text">Linux 云服务器根分区扩容流程（ext4 示例）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E4%BA%91%E5%8E%82%E5%95%86%E6%8E%A7%E5%88%B6%E5%8F%B0%E6%89%A9%E5%AE%B9%E7%A3%81%E7%9B%98"><span class="toc-number">1.0.1.</span> <span class="toc-text">1. 云厂商控制台扩容磁盘</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E7%A1%AE%E8%AE%A4%E7%A3%81%E7%9B%98%E5%92%8C%E5%88%86%E5%8C%BA%E6%83%85%E5%86%B5"><span class="toc-number">1.0.2.</span> <span class="toc-text">2. 确认磁盘和分区情况</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E5%AE%89%E8%A3%85%E6%89%A9%E5%AE%B9%E5%B7%A5%E5%85%B7"><span class="toc-number">1.0.3.</span> <span class="toc-text">3. 安装扩容工具</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E6%89%A9%E5%B1%95%E5%88%86%E5%8C%BA"><span class="toc-number">1.0.4.</span> <span class="toc-text">4. 扩展分区</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E7%A1%AE%E8%AE%A4%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E7%B1%BB%E5%9E%8B"><span class="toc-number">1.0.5.</span> <span class="toc-text">5. 确认文件系统类型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-%E6%89%A9%E5%B1%95%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F"><span class="toc-number">1.0.6.</span> <span class="toc-text">6. 扩展文件系统</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%A6%82%E6%9E%9C%E6%98%AF-ext4%EF%BC%9A"><span class="toc-number">1.0.6.1.</span> <span class="toc-text">如果是 ext4：</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%A6%82%E6%9E%9C%E6%98%AF-xfs%EF%BC%9A"><span class="toc-number">1.0.6.2.</span> <span class="toc-text">如果是 xfs：</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-%E9%AA%8C%E8%AF%81%E7%BB%93%E6%9E%9C"><span class="toc-number">1.0.7.</span> <span class="toc-text">7. 验证结果</span></a></li></ol></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link" href="#%F0%9F%94%91-%E6%80%BB%E7%BB%93"><span class="toc-number">2.</span> <span class="toc-text">🔑 总结</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/" title="Linux 云服务器根分区扩容流程(ext4 示例)"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/df.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Linux 云服务器根分区扩容流程(ext4 示例)"/></a><div class="content"><a class="title" href="/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/" title="Linux 云服务器根分区扩容流程(ext4 示例)">Linux 云服务器根分区扩容流程(ext4 示例)</a><time datetime="2025-08-31T16:00:00.000Z" title="发表于 2025-09-01 00:00:00">2025-09-01</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/29/2025-08-29-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%B7%B7%E5%90%88%E5%B9%B6%E8%A1%8CDPTPPP%EF%BC%8C%E5%A6%82%E4%BD%95%E5%88%92%E5%88%86%E6%9C%BA%E5%99%A8%EF%BC%9F/" title="大模型混合并行DP/TP/PP，如何划分机器？"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/3d.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="大模型混合并行DP/TP/PP，如何划分机器？"/></a><div class="content"><a class="title" href="/2025/08/29/2025-08-29-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%B7%B7%E5%90%88%E5%B9%B6%E8%A1%8CDPTPPP%EF%BC%8C%E5%A6%82%E4%BD%95%E5%88%92%E5%88%86%E6%9C%BA%E5%99%A8%EF%BC%9F/" title="大模型混合并行DP/TP/PP，如何划分机器？">大模型混合并行DP/TP/PP，如何划分机器？</a><time datetime="2025-08-28T16:00:00.000Z" title="发表于 2025-08-29 00:00:00">2025-08-29</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/" title="Megatron &amp; Swift监督微调Qwen3-8B"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/megatron-lm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Megatron &amp; Swift监督微调Qwen3-8B"/></a><div class="content"><a class="title" href="/2025/08/27/2025-08-27-Megatron-&amp;-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/" title="Megatron &amp; Swift监督微调Qwen3-8B">Megatron &amp; Swift监督微调Qwen3-8B</a><time datetime="2025-08-26T16:00:00.000Z" title="发表于 2025-08-27 00:00:00">2025-08-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/27/2025-08-27-UFOA-UI-Focused-Agent-for-Windows-OS-Interaction/" title="UFO:A UI-Focused Agent for Windows OS Interaction"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/UFO.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="UFO:A UI-Focused Agent for Windows OS Interaction"/></a><div class="content"><a class="title" href="/2025/08/27/2025-08-27-UFOA-UI-Focused-Agent-for-Windows-OS-Interaction/" title="UFO:A UI-Focused Agent for Windows OS Interaction">UFO:A UI-Focused Agent for Windows OS Interaction</a><time datetime="2025-08-26T16:00:00.000Z" title="发表于 2025-08-27 00:00:00">2025-08-27</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/08/27/2025-08-27-GUI-Agent%E7%BB%BC%E8%BF%B0/" title="GUI Agent综述"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/agent.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="GUI Agent综述"/></a><div class="content"><a class="title" href="/2025/08/27/2025-08-27-GUI-Agent%E7%BB%BC%E8%BF%B0/" title="GUI Agent综述">GUI Agent综述</a><time datetime="2025-08-26T16:00:00.000Z" title="发表于 2025-08-27 00:00:00">2025-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
