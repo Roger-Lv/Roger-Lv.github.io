@@ -1,0 +1,390 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Policy Gradient公式推导与举例 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Policy Gradient公式推导与举例1. 优化目标我们要最大化强化学习的期望回报（Expected Return）：$${R}\theta &#x3D; \mathbb{E}{\tau \sim p_\theta(\tau)}[R(\tau)] &#x3D; \sum_\tau R(\tau) p_\theta(\tau)$$  $$τ\tau$$  表示一条轨迹（trajectory），">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Policy Gradient公式推导与举例">
+<meta property="og:url" content="http://example.com/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="Policy Gradient公式推导与举例1. 优化目标我们要最大化强化学习的期望回报（Expected Return）：$${R}\theta &#x3D; \mathbb{E}{\tau \sim p_\theta(\tau)}[R(\tau)] &#x3D; \sum_\tau R(\tau) p_\theta(\tau)$$  $$τ\tau$$  表示一条轨迹（trajectory），">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/policygradient.png">
+<meta property="article:published_time" content="2025-09-05T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-09-06T03:10:58.397Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="RL">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/policygradient.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Policy Gradient公式推导与举例",
+  "url": "http://example.com/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/",
+  "image": "http://example.com/img/cover/policygradient.png",
+  "datePublished": "2025-09-05T16:00:00.000Z",
+  "dateModified": "2025-09-06T03:10:58.397Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Policy Gradient公式推导与举例',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">122</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">115</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">33</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Policy Gradient公式推导与举例</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Policy Gradient公式推导与举例</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-09-05T16:00:00.000Z" title="发表于 2025-09-06 00:00:00">2025-09-06</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-09-06T03:10:58.397Z" title="更新于 2025-09-06 11:10:58">2025-09-06</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/RL/">RL</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/" data-flag-title="Policy Gradient公式推导与举例"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1 id="Policy-Gradient公式推导与举例"><a href="#Policy-Gradient公式推导与举例" class="headerlink" title="Policy Gradient公式推导与举例"></a>Policy Gradient公式推导与举例</h1><h3 id="1-优化目标"><a href="#1-优化目标" class="headerlink" title="1. 优化目标"></a>1. 优化目标</h3><p>我们要最大化强化学习的期望回报（Expected Return）：<br>$$<br>{R}<em>\theta &#x3D; \mathbb{E}</em>{\tau \sim p_\theta(\tau)}[R(\tau)] &#x3D; \sum_\tau R(\tau) p_\theta(\tau)<br>$$</p>
+<ul>
+<li><p>$$<br>τ\tau<br>$$</p>
+<p> 表示一条轨迹（trajectory），即从初始状态到结束的一系列<br>$$<br>(s_1, a_1, s_2, a_2, \dots)<br>$$<br>。</p>
+</li>
+<li><p>$$<br>p_\theta(\tau)<br>$$</p>
+<p>表示策略<br>$$<br>\pi_\theta<br>$$<br>产生轨迹<br>$$<br>\tau<br>$$<br>的概率。</p>
+</li>
+<li><p>$$<br>R(\tau)<br>$$</p>
+<p>是轨迹的总回报。</p>
+</li>
+</ul>
+<hr>
+<h3 id="2-对参数-θ-theta-求梯度"><a href="#2-对参数-θ-theta-求梯度" class="headerlink" title="2. 对参数 θ\theta 求梯度"></a>2. 对参数 θ\theta 求梯度</h3><p>$$<br>\nabla_\theta \bar{R}_\theta  &#x3D; \sum_\tau R(\tau) \nabla_\theta p_\theta(\tau)<br>$$</p>
+<p>直接对概率 pθ(τ)p_\theta(\tau) 求导不方便。</p>
+<hr>
+<h3 id="3-使用-log-trick-对数技巧"><a href="#3-使用-log-trick-对数技巧" class="headerlink" title="3. 使用 log trick (对数技巧)"></a>3. 使用 <strong>log trick (对数技巧)</strong></h3><p>$$<br>\nabla_\theta p_\theta(\tau)  &#x3D; p_\theta(\tau) \nabla_\theta \log p_\theta(\tau)<br>$$</p>
+<p>这是右边小蓝框里的公式：<br>$$<br>\nabla f(x) &#x3D; f(x) \nabla \log f(x)<br>$$</p>
+<hr>
+<h3 id="4-替换进目标函数"><a href="#4-替换进目标函数" class="headerlink" title="4. 替换进目标函数"></a>4. 替换进目标函数</h3><p>$$<br>\nabla_\theta \bar{R}_\theta &#x3D; \sum_\tau R(\tau) p_\theta(\tau) \nabla_\theta \log p_\theta(\tau)<br>$$</p>
+<p>这一步就是图中红框标出来的地方。</p>
+<hr>
+<h3 id="5-期望形式"><a href="#5-期望形式" class="headerlink" title="5. 期望形式"></a>5. 期望形式</h3><p>上式其实是 <strong>在轨迹分布 pθ(τ)p_\theta(\tau) 下的期望</strong>：<br>$$<br>\nabla_\theta \bar{R}<em>\theta &#x3D; \mathbb{E}</em>{\tau \sim p_\theta(\tau)} [R(\tau) \nabla_\theta \log p_\theta(\tau)]<br>$$</p>
+<hr>
+<h3 id="6-蒙特卡洛近似"><a href="#6-蒙特卡洛近似" class="headerlink" title="6. 蒙特卡洛近似"></a>6. 蒙特卡洛近似</h3><p>我们用采样得到的轨迹来估计期望：<br>$$<br>\nabla_\theta \bar{R}<em>\theta \approx \frac{1}{N} \sum</em>{n&#x3D;1}^N R(\tau^n) \nabla_\theta \log p_\theta(\tau^n)<br>$$<br>其中 NN 是采样的轨迹数。</p>
+<hr>
+<h3 id="7-分解轨迹概率"><a href="#7-分解轨迹概率" class="headerlink" title="7. 分解轨迹概率"></a>7. 分解轨迹概率</h3><p>轨迹概率<br>$$<br>\theta(\tau)<br>$$<br> 可以写成一连串动作选择概率的乘积：<br>$$<br><em>\theta(\tau) &#x3D; \prod</em>{t&#x3D;1}^{T} \pi_\theta(a_t|s_t) \cdot P(s_{t+1}|s_t, a_t)<br>$$<br>因为环境转移<br>$$<br>P(s_{t+1}|s_t, a_t)<br>$$<br>不依赖 θ(对数求导后，环境转移与θ无关，所以这部分值被舍弃了)，所以：<br>$$<br>\nabla_\theta \log p_\theta(\tau)  &#x3D; \sum_{t&#x3D;1}^T \nabla_\theta \log \pi_\theta(a_t|s_t)<br>$$</p>
+<hr>
+<h3 id="8-最终公式"><a href="#8-最终公式" class="headerlink" title="8. 最终公式"></a>8. 最终公式</h3><p>所以得到：<br>$$<br>\nabla_\theta \bar{R}<em>\theta \approx \frac{1}{N} \sum</em>{n&#x3D;1}^N \sum_{t&#x3D;1}^{T_n} R(\tau^n) \nabla_\theta \log \pi_\theta(a_t^n | s_t^n)<br>$$<br>这就是 <strong>REINFORCE 算法</strong> 的核心更新规则。</p>
+<hr>
+<p>✅ <strong>直观理解</strong>：</p>
+<ul>
+<li><p>$$<br>R(\tau)<br>$$</p>
+<p>：告诉我们这条轨迹有多好。</p>
+</li>
+<li><p>$$<br>\nabla_\theta \log \pi_\theta(a_t|s_t)<br>$$</p>
+<p>：告诉我们如何调整参数 θ 让动作更可能出现。</p>
+</li>
+<li><p>两者相乘：如果回报大，就增加这条轨迹上动作的概率；如果回报小，就减少概率。</p>
+</li>
+</ul>
+<hr>
+<p>用一个<strong>非常简单的两步决策问题</strong>来举例</p>
+<hr>
+<h2 id="🎯-环境设定"><a href="#🎯-环境设定" class="headerlink" title="🎯 环境设定"></a>🎯 环境设定</h2><ul>
+<li><p>每条轨迹<br>$$<br>\tau &#x3D; (a_1, a_2)<br>$$<br>，一共两步。</p>
+</li>
+<li><p>动作空间：{L, R}。</p>
+</li>
+<li><p>策略：<br>$$<br>\pi_\theta(a|s)<br>$$<br>（假设每一步状态相同，为了简单）。</p>
+</li>
+<li><p>回报：</p>
+<ul>
+<li><p>如果轨迹是 (L, L)，回报<br>$$<br>R(\tau)&#x3D;+1<br>$$<br>。</p>
+</li>
+<li><p>其他轨迹回报<br>$$<br>R(\tau)&#x3D;0<br>$$<br>。</p>
+</li>
+</ul>
+</li>
+</ul>
+<p>也就是说，智能体必须 <strong>连续两步选 L</strong> 才有奖励。</p>
+<hr>
+<h2 id="1-轨迹概率"><a href="#1-轨迹概率" class="headerlink" title="1. 轨迹概率"></a>1. 轨迹概率</h2><p>假设策略是一个伯努利分布，</p>
+<ul>
+<li><p>$$<br>\pi_\theta(L) &#x3D; p<br>$$</p>
+</li>
+<li><p>$$<br>\pi_\theta(R) &#x3D; 1-p<br>$$</p>
+<p>。</p>
+</li>
+</ul>
+<p>那么轨迹概率：</p>
+<ul>
+<li><p>$$<br>p_\theta(L,L) &#x3D; p \cdot p &#x3D; p^2<br>$$</p>
+</li>
+<li><p>$$<br>p_\theta(L,R) &#x3D; p(1-p)<br>$$</p>
+</li>
+<li><p>$$<br>p_\theta(R,L) &#x3D; (1-p)p<br>$$</p>
+</li>
+<li><p>$$<br>p_\theta(R,R) &#x3D; (1-p)^2<br>$$</p>
+</li>
+</ul>
+<hr>
+<h2 id="2-期望回报"><a href="#2-期望回报" class="headerlink" title="2. 期望回报"></a>2. 期望回报</h2><p>$$<br>\bar{R}_\theta &#x3D; \sum_\tau R(\tau)p_\theta(\tau) &#x3D; 1 \cdot p^2 + 0 \cdot (其他) &#x3D; p^2<br>$$</p>
+<p>很直观：只有 (L,L)(L,L) 有奖励。</p>
+<hr>
+<h2 id="3-用-log-trick-求梯度"><a href="#3-用-log-trick-求梯度" class="headerlink" title="3. 用 log-trick 求梯度"></a>3. 用 log-trick 求梯度</h2><p>目标函数：<br>$$<br>\nabla_\theta \bar{R}<em>\theta  &#x3D; \mathbb{E}</em>{\tau \sim p_\theta(\tau)} \Big[ R(\tau)\nabla_\theta \log p_\theta(\tau)\Big]<br>$$<br>（求和转化成期望的形式）</p>
+<hr>
+<h2 id="4-展开公式"><a href="#4-展开公式" class="headerlink" title="4. 展开公式"></a>4. 展开公式</h2><p>采样一条轨迹，比如 (L,L)，</p>
+<ul>
+<li><p>回报<br>$$<br>R(\tau)&#x3D;1<br>$$<br>。</p>
+</li>
+<li><p>轨迹概率<br>$$<br>p_\theta(\tau)&#x3D;p^2<br>$$<br>。</p>
+</li>
+<li><p>$$<br>\log p_\theta(\tau) &#x3D; \log(p^2) &#x3D; 2\log p<br>$$</p>
+<p>。</p>
+</li>
+<li><p>$$<br>\nabla_\theta \log p_\theta(\tau) &#x3D; \frac{2}{p} \nabla_\theta p<br>$$</p>
+<p>。</p>
+</li>
+</ul>
+<p>所以：<br>$$<br>\nabla_\theta \log p_\theta(\tau) &#x3D; 1 \cdot \frac{2}{p} \nabla_\theta p<br>$$<br>如果轨迹是 (R,R)，则回报 00，更新量为 00。</p>
+<hr>
+<h2 id="5-蒙特卡洛估计"><a href="#5-蒙特卡洛估计" class="headerlink" title="5. 蒙特卡洛估计"></a>5. 蒙特卡洛估计</h2><p>如果我们从策略中采样 N&#x3D;3 条轨迹：</p>
+<ul>
+<li><p>$$<br>\tau^1 &#x3D; (L,L)<br>$$</p>
+<p>，R&#x3D;1。</p>
+</li>
+<li><p>$$<br>\tau^2 &#x3D; (L,R)<br>$$</p>
+<p>，R&#x3D;0。</p>
+</li>
+<li><p>$$<br>\tau^3 &#x3D; (R,L)<br>$$</p>
+<p>，R&#x3D;0。</p>
+</li>
+</ul>
+<p>那么梯度估计：<br>$$<br>\nabla_\theta \bar{R}_\theta \approx \frac{1}{3} \Big[ 1 \cdot \nabla_\theta \log p^2 + 0 + 0 \Big] &#x3D; \frac{1}{3} \cdot 2 \cdot \frac{1}{p}\nabla_\theta p<br>$$</p>
+<hr>
+<h2 id="✅-直观解释"><a href="#✅-直观解释" class="headerlink" title="✅ 直观解释"></a>✅ 直观解释</h2><ul>
+<li><p>当采样到奖励高的轨迹(L,L)）时，更新会推动 <strong>提高动作 LL 的概率</strong>。</p>
+</li>
+<li><p>当采样到没有奖励的轨迹时，更新为 0。</p>
+</li>
+<li><p>随着采样越来越多，估计会收敛到真实梯度<br>$$<br>\nabla_\theta p^2<br>$$</p>
+</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/">http://example.com/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/RL/">RL</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/policygradient.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2025/09/04/2025-09-04-Memory-OS-of-AI-Agent/" title="Memory OS of AI Agent"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/memos.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Memory OS of AI Agent</div></div><div class="info-2"><div class="info-item-1">Memory OS of AI Agent初读-1 北邮和腾讯nlpAI  受传统操作系统内存管理机制的启发，MemoryOS 构建了一套分层存储体系，由四个核心模块组成：记忆存储、更新、检索与生成。 该体系架构包括三个层级的记忆单元：短期记忆（STM）、中期记忆（MTM） 和 长期个性记忆（LPM） MemoryOS 支持关键的动态迁移操作： 短期向中期的更新遵循基于对话链的 FIFO 策略，而中期向长期的迁移则采用分段分页的组织方式，以提升记忆的可维护性和检索效率。 分4个模块： memory storage：将信息组织成短期、中期和长期存储单元 memory updating：通过基于对话链和基于热度的机制的分段分页体系结构动态刷新 memory retrieval：利用语义分段来查询这些层 response generation：将检索到的内存信息集成起来，以生成一致的个性化响应   现有技术分类：1.knowledge-organization： 这类方法关注的是如何组织和保留模型的中间推理状态。更关注记忆的“结构”和“语义关系”，让模型能追踪自己是怎么想的，而不是单次...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/08/21/2025-08-21-SFT%E4%B8%93%E6%94%BBPass@k%EF%BC%8CRL%E5%BC%BA%E5%8C%96Pass@1/" title="SFT专攻Pass@k，RL强化Pass@1?"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/RLVR.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">SFT专攻Pass@k，RL强化Pass@1?</div></div><div class="info-2"><div class="info-item-1">深挖RLVR探索机制：SFT专攻Pass@k，RL强化Pass@1转自：https://mp.weixin.qq.com/s/QSi580SJ2RFewyFirAe65A 先前的工作已经证明了 RLVR 在实践中的成功，但其背后的根本机制，特别是模型在训练过程中的探索行为，仍有待深入研究。来自中国人民大学高瓴人工智能学院的研究者们发表了一篇题为《From Trial-and-Error to Improvement: A Systematic Analysis of LLM Exploration Mechanisms in RLVR》的技术报告，系统性地研究了RLVR 中的探索机制。   论文题目：From Trial-and-Error to Improvement: A Systematic Analysis of LLM Exploration Mechanisms in RLVR 论文链接：https://arxiv.org/pdf/2508.07534  这篇报告结合了详尽的文献回顾和创新的实证分析，围绕探索空间塑造、熵与性能的相互作用以及强化学习性能优化这三个维度展...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-%E4%B8%80%E8%A1%8C%E4%BB%A3%E7%A0%81%EF%BC%8C%E8%A7%A3%E9%94%81SFT%E6%B3%9B%E5%8C%96%E8%83%BD%E5%8A%9B%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BBDFT%E5%A6%82%E4%BD%95%E5%AE%8C%E8%83%9C%E4%BC%A0%E7%BB%9F%E5%BE%AE%E8%B0%83/" title="一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DFT.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">一行代码，解锁SFT泛化能力:深度解读DFT如何完胜传统微调</div></div><div class="info-2"><div class="info-item-1">一行代码，解锁SFT泛化能力：深度解读DFT如何完胜传统微调转自：https://mp.weixin.qq.com/s/XXGxRk-p5LahtqdYNnbKaA 在大型语言模型 (LLM) 的世界里，如何让模型更好地理解并遵循人类的指令，即所谓的“对齐”，始终是核心议题。目前，主流的技术路线分为两条：监督微调（Supervised Fine-Tuning, SFT）和基于人类反馈的强化学习 （Reinforcement Learning from Human Feedback, RLHF）。 SFT 简单直接，就像教一个学生做题，直接给他看大量的“问题-标准答案”对，让他去模仿。 这种方法易于实现，能让模型快速学会特定任务的“套路”。然而，它的弊病也十分明显——模型容易“死记硬背”，学到的知识很“脆”，泛化能力差，遇到没见过的题型就可能“翻车”。 相比之下，RLHF 更像是请一位教练来指导学生。它不直接给出答案，而是对模型的不同回答给出评分（奖励），让模型在不断的尝试和反馈中，自己探索出更好的策略。但它的问题在于，训练过程极其复杂，需要耗费大量的计算资源，对超参数敏感，且依赖...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AgenticRL.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">Agentic RL</div></div><div class="info-2"><div class="info-item-1">转自：https://zhuanlan.zhihu.com/p/1913905349284591240 通过蒙特卡洛树搜索、过程监督与结果监督、强化学习来提高 LLM 的推理能力，从本质上来说，都是尽可能榨取 LLM 本身的能力，区别可能在于多次尝试、反馈信号、训练方法而已，这类方法可称之为“求诸内”。而由 scaling law 可知，模型的能力是有限的，那么该如何进一步提高LLM在具体问题上的表现呢？近期的答案是，类似 RAG，Multi-Agent 系统，让 LLM 学会使用工具，毕竟人与动物的关键区别也只是“能制造并使用工具”，这种方式则是“求诸外”。那么本篇就以此为中心，重点讨论以下问题：  Agentic LLM 的算法逻辑、具体方法与实际表现？ RL 如何训练 Agentic LLM，其与 tool using 的 SFT 的差异在哪？ Agentic RL 的工程化问题  一、Agentic RL 的算法设计Agent 和 RL 都并非新鲜事物，而使用 RL 训练基于 LLM 的 agent 则是近期的研究的热点，那么，从算法角度来说，如何理解二者结合的动机、场景...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-%E4%BD%BF%E7%94%A8-Flowise-%E6%9E%84%E5%BB%BA%E5%9F%BA%E4%BA%8E%E7%A7%81%E6%9C%89%E7%9F%A5%E8%AF%86%E5%BA%93%E7%9A%84%E6%99%BA%E8%83%BD%E5%AE%A2%E6%9C%8D-Agent(%E5%9B%BE%E6%96%87%E6%95%99%E7%A8%8B)/" title="使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Flowise.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">使用 Flowise 构建基于私有知识库的智能客服 Agent(图文教程)</div></div><div class="info-2"><div class="info-item-1">使用 Flowise 构建基于私有知识库的智能客服 Agent（图文教程）https://blog.csdn.net/hejiahao_/article/details/147902607?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=147902607&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link </div></div></div></a><a class="pagination-related" href="/2025/09/01/2025-09-01-Web-Agent%E7%BB%BC%E8%BF%B0/" title="Web Agent综述"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/RL.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-01</div><div class="info-item-2">Web Agent综述</div></div><div class="info-2"><div class="info-item-1">WebAgents综述：大模型赋能AI Agent，实现下一代Web自动化https://finance.sina.cn/tech/csj/2025-08-08/detail-infkhmtz1833863.d.html?vt=4&amp;cid=206650&amp;node_id=206650 这篇文章是香港理工大学研究人员发表的首篇关于WebAgents的系统性综述，全面梳理了基于大模型的Web自动化智能体研究进展。 核心内容背景与意义 互联网已深度重塑生活，但网络活动存在大量重复低效的”数字苦力”（如反复填写个人信息、手动比对商品参数） WebAgents能够根据用户自然语言指令自动完成复杂Web任务，实现网络活动的自动化与智能化 例如ChatGPT Agent能独立规划执行任务，无需用户持续监督  WebAgents架构文章将WebAgents工作流程分为三个关键环节：  感知：观察环境  基于文本（利用HTML等） 基于视觉（利用截图） 多模态（结合文本与视觉信息）   规划与推理：分析环境并决策  任务规划（显式&#x2F;隐式分解任务） 动作推理（反应式&#x2F...</div></div></div></a><a class="pagination-related" href="/2025/09/01/2025-09-01-UI-R1%E9%80%9A%E8%BF%87%E5%BC%BA%E5%8C%96%E5%AD%A6%E4%B9%A0%E5%A2%9E%E5%BC%BAGUI%E4%BB%A3%E7%90%86%E7%9A%84%E5%8A%A8%E4%BD%9C%E9%A2%84%E6%B5%8B%E8%83%BD%E5%8A%9B/" title="UI-R1:通过强化学习增强GUI代理的动作预测能力"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/RL.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-01</div><div class="info-item-2">UI-R1:通过强化学习增强GUI代理的动作预测能力</div></div><div class="info-2"><div class="info-item-1">UI-R1：通过强化学习增强GUI代理的动作预测能力最近的DeepSeek-R1展示了通过基于规则的强化学习（RL）在大型语言模型（LLMs）中涌现出的推理能力。基于这一理念，我们首次探索了如何利用基于规则的RL来增强多模态大语言模型（MLLMs）在图形用户界面（GUI）动作预测任务中的推理能力。 为此  我们精心整理了一个包含136个具有挑战性任务的小而高质量的数据集，涵盖了移动设备上的五种常见动作类型。 我们还引入了一种统一的基于规则的动作奖励机制，使模型可以通过基于策略的算法（如组相对策略优化（GRPO））进行优化。  实验结果表明，我们提出的数据高效模型 UI-R1-3B 在领域内（ID）和领域外（OOD）任务上都取得了显著改进。具体来说，在ID基准测试 AndroidControl 上，动作类型准确率提高了 15% ，而定位准确率提高了 10.3% ，相较于基础模型（即Qwen2.5-VL-3B）。在OOD GUI定位基准ScreenSpot-Pro上，我们的模型超越了基础模型，提高了 6.0% ，并实现了与更大模型（例如OS-Atlas-7B）相当的性能，这些模型是通...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">122</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">115</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">33</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link" href="#Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC%E4%B8%8E%E4%B8%BE%E4%BE%8B"><span class="toc-number">1.</span> <span class="toc-text">Policy Gradient公式推导与举例</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E4%BC%98%E5%8C%96%E7%9B%AE%E6%A0%87"><span class="toc-number">1.0.1.</span> <span class="toc-text">1. 优化目标</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E5%AF%B9%E5%8F%82%E6%95%B0-%CE%B8-theta-%E6%B1%82%E6%A2%AF%E5%BA%A6"><span class="toc-number">1.0.2.</span> <span class="toc-text">2. 对参数 θ\theta 求梯度</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%BD%BF%E7%94%A8-log-trick-%E5%AF%B9%E6%95%B0%E6%8A%80%E5%B7%A7"><span class="toc-number">1.0.3.</span> <span class="toc-text">3. 使用 log trick (对数技巧)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E6%9B%BF%E6%8D%A2%E8%BF%9B%E7%9B%AE%E6%A0%87%E5%87%BD%E6%95%B0"><span class="toc-number">1.0.4.</span> <span class="toc-text">4. 替换进目标函数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E6%9C%9F%E6%9C%9B%E5%BD%A2%E5%BC%8F"><span class="toc-number">1.0.5.</span> <span class="toc-text">5. 期望形式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-%E8%92%99%E7%89%B9%E5%8D%A1%E6%B4%9B%E8%BF%91%E4%BC%BC"><span class="toc-number">1.0.6.</span> <span class="toc-text">6. 蒙特卡洛近似</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-%E5%88%86%E8%A7%A3%E8%BD%A8%E8%BF%B9%E6%A6%82%E7%8E%87"><span class="toc-number">1.0.7.</span> <span class="toc-text">7. 分解轨迹概率</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-%E6%9C%80%E7%BB%88%E5%85%AC%E5%BC%8F"><span class="toc-number">1.0.8.</span> <span class="toc-text">8. 最终公式</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%F0%9F%8E%AF-%E7%8E%AF%E5%A2%83%E8%AE%BE%E5%AE%9A"><span class="toc-number">1.1.</span> <span class="toc-text">🎯 环境设定</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E8%BD%A8%E8%BF%B9%E6%A6%82%E7%8E%87"><span class="toc-number">1.2.</span> <span class="toc-text">1. 轨迹概率</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E6%9C%9F%E6%9C%9B%E5%9B%9E%E6%8A%A5"><span class="toc-number">1.3.</span> <span class="toc-text">2. 期望回报</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E7%94%A8-log-trick-%E6%B1%82%E6%A2%AF%E5%BA%A6"><span class="toc-number">1.4.</span> <span class="toc-text">3. 用 log-trick 求梯度</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E5%B1%95%E5%BC%80%E5%85%AC%E5%BC%8F"><span class="toc-number">1.5.</span> <span class="toc-text">4. 展开公式</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E8%92%99%E7%89%B9%E5%8D%A1%E6%B4%9B%E4%BC%B0%E8%AE%A1"><span class="toc-number">1.6.</span> <span class="toc-text">5. 蒙特卡洛估计</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E2%9C%85-%E7%9B%B4%E8%A7%82%E8%A7%A3%E9%87%8A"><span class="toc-number">1.7.</span> <span class="toc-text">✅ 直观解释</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/" title="Policy Gradient公式推导与举例"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/policygradient.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Policy Gradient公式推导与举例"/></a><div class="content"><a class="title" href="/2025/09/06/2025-09-04-Policy-Gradient%E5%85%AC%E5%BC%8F%E6%8E%A8%E5%AF%BC/" title="Policy Gradient公式推导与举例">Policy Gradient公式推导与举例</a><time datetime="2025-09-05T16:00:00.000Z" title="发表于 2025-09-06 00:00:00">2025-09-06</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/04/2025-09-04-ITBenchEvaluating-AI-Agents-across-Diverse-Real-World-IT-Automation-Tasks/" title="ITBench:Evaluating AI Agents across Diverse Real-World IT Automation Tasks"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/ITBench.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="ITBench:Evaluating AI Agents across Diverse Real-World IT Automation Tasks"/></a><div class="content"><a class="title" href="/2025/09/04/2025-09-04-ITBenchEvaluating-AI-Agents-across-Diverse-Real-World-IT-Automation-Tasks/" title="ITBench:Evaluating AI Agents across Diverse Real-World IT Automation Tasks">ITBench:Evaluating AI Agents across Diverse Real-World IT Automation Tasks</a><time datetime="2025-09-03T16:00:00.000Z" title="发表于 2025-09-04 00:00:00">2025-09-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/04/2025-09-04-ICML25-%E5%8D%A1%E5%86%85%E5%9F%BA%E6%A2%85%E9%9A%86%E5%A4%A7%E5%AD%A6%E8%AE%A9Agent%E4%BB%8E%E2%80%9C%E5%A4%8D%E8%AF%BB%E6%9C%BA%E2%80%9D%E5%8F%98%E2%80%9C%E6%8E%A2%E7%B4%A2%E5%AE%B6%E2%80%9D/" title="ICML'25 卡内基梅隆大学让Agent从“复读机”变“探索家”"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/agent.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="ICML'25 卡内基梅隆大学让Agent从“复读机”变“探索家”"/></a><div class="content"><a class="title" href="/2025/09/04/2025-09-04-ICML25-%E5%8D%A1%E5%86%85%E5%9F%BA%E6%A2%85%E9%9A%86%E5%A4%A7%E5%AD%A6%E8%AE%A9Agent%E4%BB%8E%E2%80%9C%E5%A4%8D%E8%AF%BB%E6%9C%BA%E2%80%9D%E5%8F%98%E2%80%9C%E6%8E%A2%E7%B4%A2%E5%AE%B6%E2%80%9D/" title="ICML'25 卡内基梅隆大学让Agent从“复读机”变“探索家”">ICML'25 卡内基梅隆大学让Agent从“复读机”变“探索家”</a><time datetime="2025-09-03T16:00:00.000Z" title="发表于 2025-09-04 00:00:00">2025-09-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/04/2025-09-04-ICML25-Agent-Workflow-Memory/" title="ICML'25 Agent Workflow Memory"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/awm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="ICML'25 Agent Workflow Memory"/></a><div class="content"><a class="title" href="/2025/09/04/2025-09-04-ICML25-Agent-Workflow-Memory/" title="ICML'25 Agent Workflow Memory">ICML'25 Agent Workflow Memory</a><time datetime="2025-09-03T16:00:00.000Z" title="发表于 2025-09-04 00:00:00">2025-09-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/04/2025-09-04-Memory-OS-of-AI-Agent/" title="Memory OS of AI Agent"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/memos.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Memory OS of AI Agent"/></a><div class="content"><a class="title" href="/2025/09/04/2025-09-04-Memory-OS-of-AI-Agent/" title="Memory OS of AI Agent">Memory OS of AI Agent</a><time datetime="2025-09-03T16:00:00.000Z" title="发表于 2025-09-04 00:00:00">2025-09-04</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
