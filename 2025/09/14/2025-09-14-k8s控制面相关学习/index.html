@@ -1,0 +1,491 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>k8s控制面相关学习 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="k8s控制面相关学习 informer informer:https:&#x2F;&#x2F;zhuanlan.zhihu.com&#x2F;p&#x2F;391465614  https:&#x2F;&#x2F;www.zhihu.com&#x2F;question&#x2F;463207052&#x2F;answer&#x2F;2377261278 (注意Informer最后也有个controller，跟这个不一样) 对于Informer而言  大步骤1: Reflector 将资源对象的事">
+<meta property="og:type" content="article">
+<meta property="og:title" content="k8s控制面相关学习">
+<meta property="og:url" content="http://example.com/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="k8s控制面相关学习 informer informer:https:&#x2F;&#x2F;zhuanlan.zhihu.com&#x2F;p&#x2F;391465614  https:&#x2F;&#x2F;www.zhihu.com&#x2F;question&#x2F;463207052&#x2F;answer&#x2F;2377261278 (注意Informer最后也有个controller，跟这个不一样) 对于Informer而言  大步骤1: Reflector 将资源对象的事">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/k8s.png">
+<meta property="article:published_time" content="2025-09-13T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-09-14T11:18:15.077Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="K8S">
+<meta property="article:tag" content="控制面">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/k8s.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "k8s控制面相关学习",
+  "url": "http://example.com/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/",
+  "image": "http://example.com/img/cover/k8s.png",
+  "datePublished": "2025-09-13T16:00:00.000Z",
+  "dateModified": "2025-09-14T11:18:15.077Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'k8s控制面相关学习',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">132</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">119</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">35</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">k8s控制面相关学习</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">k8s控制面相关学习</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-09-13T16:00:00.000Z" title="发表于 2025-09-14 00:00:00">2025-09-14</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-09-14T11:18:15.077Z" title="更新于 2025-09-14 19:18:15">2025-09-14</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E6%8E%A7%E5%88%B6%E9%9D%A2/">控制面</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" data-flag-title="k8s控制面相关学习"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>k8s控制面相关学习</h1>
+<h3 id="informer">informer</h3>
+<p>informer:<a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/391465614">https://zhuanlan.zhihu.com/p/391465614</a>  <a target="_blank" rel="noopener" href="https://www.zhihu.com/question/463207052/answer/2377261278">https://www.zhihu.com/question/463207052/answer/2377261278</a></p>
+<p>(注意Informer最后也有个controller，跟这个不一样)</p>
+<p>对于Informer而言</p>
+<ol>
+<li>大步骤1: Reflector 将资源对象的事件添加进 <a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=462311339&amp;content_type=Answer&amp;match_order=1&amp;q=Delta+FIFO+queue&amp;zhida_source=entity">Delta FIFO queue</a> 中</li>
+</ol>
+<p>这里先提前介绍一下 Delta FIFO queue。 所谓 Delta 就是变化的意思，什么的变化呢？就是资源对象的变化。</p>
+<p>即 资源对象的变化都会被添加到 Delta FIFO queue 中！这样是不是就很好理解了。</p>
+<ol start="2">
+<li>大步骤2: Informer 将 Delta FIFO queue 中的对象数据 添加到本地 cache 中。</li>
+</ol>
+<p>补充一下这个本地 cache 缓存的就是监听资源对象的最新版。就是缓存的当前集群里面的资源信息。</p>
+<ol start="3">
+<li>大步骤3: 使用 workqueue 处理业务逻辑。</li>
+</ol>
+<h2 id="Kubernetes-控制面controller基础概念解析">Kubernetes 控制面controller基础概念解析</h2>
+<h3 id="1-控制面的基本组件">1. 控制面的基本组件</h3>
+<h4 id="控制器-Controller">控制器 (Controller)</h4>
+<p>从 <a href="pkg/controller/controller.go:21"><code>pkg/controller/controller.go</code></a> 可以看到，控制面主要由多个控制器组成：</p>
+<ul>
+<li><strong>主控制器</strong>：协调所有子控制器</li>
+<li><strong>EgressGateway 控制器</strong>：处理出口网关策略</li>
+<li><strong>IPAMPool 控制器</strong>：管理 IP 地址池</li>
+<li><strong>Operator 控制器</strong>：处理网格配置</li>
+</ul>
+<p>每个控制器都遵循相同的模式：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> controller <span class="keyword">struct</span> &#123;</span><br><span class="line">    *controllerruntime.GenericController</span><br><span class="line">    cache      gridCache.Cache</span><br><span class="line">    cnf        *config.Config</span><br><span class="line">    processors []controllerruntime.Processor</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h4 id="缓存系统-Cache">缓存系统 (Cache)</h4>
+<p>从 <a href="pkg/controller/cache/interfaces.go:16"><code>pkg/controller/cache/interfaces.go</code></a> 可以看到缓存系统的作用：</p>
+<ul>
+<li><strong>资源监听</strong>：监听 Kubernetes 资源变化</li>
+<li><strong>数据同步</strong>：保持本地缓存与集群状态同步</li>
+<li><strong>数据查询</strong>：提供高效的资源查询接口</li>
+</ul>
+<h4 id="处理器-Processors">处理器 (Processors)</h4>
+<p>每个控制器包含多个处理器，如 egressgateway 控制器中的：</p>
+<ul>
+<li>IPPoolProcessor：处理 IP 池</li>
+<li>DeploymentProcessor：处理部署</li>
+<li>StatusProcessor：更新状态</li>
+</ul>
+<h3 id="2-控制面设计原则">2. 控制面设计原则</h3>
+<h4 id="声明式-API">声明式 API</h4>
+<p>从 <a href="pkg/controller/apis/egressgateway_policy.go:9"><code>pkg/controller/apis/egressgateway_policy.go</code></a> 可以看到声明式设计：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> EgressGatewayPolicyInfo <span class="keyword">struct</span> &#123;</span><br><span class="line">    *v1alpha1.EgressGatewayPolicy</span><br><span class="line">    Deployment *EgressGatewayDeployment</span><br><span class="line">    EgressPods <span class="keyword">map</span>[EgressPodID]*EgressPodInfo</span><br><span class="line">    IPPool     *v1alpha1.IPAMPool</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>用户声明期望状态，控制器负责将当前状态调整为期望状态。</p>
+<h4 id="协调循环-Reconcile-Loop">协调循环 (Reconcile Loop)</h4>
+<p>每个控制器都有 <a href="pkg/controller/controllers/egressgateway/controller.go:112"><code>Reconcile</code></a> 方法：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(c *controller)</span></span> Reconcile(ctx context.Context, key <span class="type">string</span>, keyLogger logman.Logman) <span class="type">error</span> &#123;</span><br><span class="line">    <span class="comment">// 获取当前状态</span></span><br><span class="line">    <span class="comment">// 比较与期望状态的差异</span></span><br><span class="line">    <span class="comment">// 执行必要的操作</span></span><br><span class="line">    <span class="comment">// 更新状态</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h4 id="领导者选举">领导者选举</h4>
+<p>从 <a href="pkg/controller/controller.go:61"><code>pkg/controller/controller.go</code></a> 可以看到高可用设计：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">runner, err := runnable.NewLeaseLeaderElection(</span><br><span class="line">    c.clients.KubeClient(),</span><br><span class="line">    c.cnf.DelpoyingNamespace(),</span><br><span class="line">    c.cnf.DeployingApp(),</span><br><span class="line">    id,</span><br><span class="line">    leaderelection.LeaderElectionConfig&#123;</span><br><span class="line">        LeaseDuration: time.Second * <span class="number">15</span>,</span><br><span class="line">        RenewDeadline: time.Second * <span class="number">10</span>,</span><br><span class="line">        RetryPeriod:   time.Second * <span class="number">2</span>,</span><br><span class="line">    &#125;,</span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+<p>确保只有一个控制器实例处于活跃状态。</p>
+<h3 id="3-事件驱动架构">3. 事件驱动架构</h3>
+<h4 id="资源监听">资源监听</h4>
+<p>从 <a href="pkg/controller/controllers/egressgateway/controller.go:56"><code>WatchResources</code></a> 方法可以看到：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(c *controller)</span></span> WatchResources() []controllerruntime.WatchResourceDefination &#123;</span><br><span class="line">    <span class="keyword">return</span> []controllerruntime.WatchResourceDefination&#123;</span><br><span class="line">        &#123;</span><br><span class="line">            NewFunc: <span class="function"><span class="keyword">func</span><span class="params">()</span></span> runtime.Object &#123;</span><br><span class="line">                <span class="keyword">return</span> &amp;v1alpha1.EgressGatewayPolicy&#123;&#125;</span><br><span class="line">            &#125;,</span><br><span class="line">            <span class="comment">// ...</span></span><br><span class="line">        &#125;,</span><br><span class="line">        <span class="comment">// 其他资源...</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>控制器监听感兴趣的 Kubernetes 资源变化。</p>
+<h4 id="事件处理">事件处理</h4>
+<p>从 <a href="pkg/controller/controllers/egressgateway/controller.go:97"><code>AddEventHandlers</code></a> 方法可以看到事件处理机制：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(c *controller)</span></span> AddEventHandlers(obj runtime.Object, handlers cache.ResourceEventHandlerFuncs) &#123;</span><br><span class="line">    <span class="keyword">switch</span> obj.(<span class="keyword">type</span>) &#123;</span><br><span class="line">    <span class="keyword">case</span> *v1alpha1.EgressGatewayPolicy:</span><br><span class="line">        c.cache.AddEgressGatewayPolicyHandler(handlers, time.Second*<span class="number">3</span>)</span><br><span class="line">    <span class="comment">// ...</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h3 id="4-错误处理和重试机制">4. 错误处理和重试机制</h3>
+<h4 id="优雅的错误处理">优雅的错误处理</h4>
+<p>从 <a href="pkg/controller/controllers/egressgateway/controller.go:118"><code>Reconcile</code></a> 方法可以看到：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> errors.IsNotFound(err) &#123;</span><br><span class="line">    keyLogger.Infof(<span class="string">&quot;EgressGatewayPolicy %s not found, skip&quot;</span>, key)</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h4 id="速率限制">速率限制</h4>
+<p>从 <a href="pkg/controller/controllers/egressgateway/controller.go:108"><code>RateLimiter</code></a> 方法可以看到：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(c *controller)</span></span> RateLimiter() workqueue.RateLimiter &#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span> <span class="comment">// 使用默认速率限制器</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h3 id="5-学习要点总结">5. 学习要点总结</h3>
+<ol>
+<li>
+<p><strong>控制器模式</strong>：Kubernetes 控制面的核心是控制器模式，通过协调循环不断调整当前状态到期望状态。</p>
+</li>
+<li>
+<p><strong>声明式API</strong>：用户声明期望状态，系统负责实现和维护这个状态。</p>
+</li>
+<li>
+<p><strong>事件驱动</strong>：基于资源变化事件触发协调操作。</p>
+</li>
+<li>
+<p><strong>高可用性</strong>：通过领导者选举确保只有一个活跃实例。</p>
+</li>
+<li>
+<p><strong>缓存优化</strong>：使用本地缓存减少对 API Server 的压力。</p>
+</li>
+<li>
+<p><strong>模块化设计</strong>：控制器、处理器、缓存等组件职责分离。</p>
+</li>
+</ol>
+<p>这个 grid 项目展示了典型的 Kubernetes 控制器实现模式，是学习控制面设计的优秀示例。</p>
+<h2 id="CRD-controller-informer生成？">CRD controller/informer生成？</h2>
+<p>基于对代码的详细分析，这个项目基于自定义CRD生成informer、controller等的实现机制如下：</p>
+<h2 id="1-核心实现机制">1. 核心实现机制</h2>
+<h3 id="API定义阶段">API定义阶段</h3>
+<ul>
+<li>在 <a href="pkg/apis/"><code>pkg/apis/</code></a> 目录下定义自定义资源类型（如 <a href="pkg/apis/networking/v1alpha1/egp.go:18"><code>EgressGatewayPolicy</code></a>）</li>
+<li>使用Kubernetes代码生成标记：
+<ul>
+<li><a href="pkg/apis/networking/v1alpha1/egp.go:7"><code>+genclient</code></a>：生成客户端代码</li>
+<li><a href="pkg/apis/networking/v1alpha1/egp.go:9"><code>+k8s:deepcopy-gen:interfaces</code></a>：生成deepcopy方法</li>
+<li><a href="pkg/apis/networking/v1alpha1/egp.go:10-17"><code>+kubebuilder</code></a> 注解：定义CRD元数据</li>
+</ul>
+</li>
+</ul>
+<h3 id="代码生成流程">代码生成流程</h3>
+<ol>
+<li>
+<p><strong>CRD生成</strong>：通过 <a href="hack/gencrd.sh:10"><code>hack/gencrd.sh</code></a> 使用 <code>controller-gen</code> 生成CRD YAML文件到 <a href="manifests/"><code>manifests/</code></a> 目录</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># gencrd.sh</span></span><br><span class="line"><span class="comment">#!/bin/bash</span></span><br><span class="line"></span><br><span class="line"><span class="built_in">set</span> -o errexit</span><br><span class="line"></span><br><span class="line">go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.15.0</span><br><span class="line"></span><br><span class="line">gobin=<span class="string">&quot;<span class="variable">$&#123;GOBIN:-$(go env GOPATH)/bin&#125;</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="built_in">rm</span> -rf ./manifests/*</span><br><span class="line"><span class="variable">$&#123;gobin&#125;</span>/controller-gen crd:generateEmbeddedObjectMeta=<span class="literal">true</span> paths=./pkg/apis/... output:crd:<span class="built_in">dir</span>=./manifests</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+</li>
+<li>
+<p><strong>客户端代码生成</strong>：通过 <a href="hack/gencode.sh:42-47"><code>hack/gencode.sh</code></a> 调用Kubernetes的代码生成器：</p>
+<ul>
+<li>
+<p><code>client-gen</code>：生成客户端接口和实现</p>
+</li>
+<li>
+<p><code>lister-gen</code>：生成Lister用于缓存访问</p>
+</li>
+<li>
+<p><code>informer-gen</code>：生成Informer用于监听资源变化</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># gencode.sh</span></span><br><span class="line"><span class="comment">#!/bin/bash</span></span><br><span class="line"></span><br><span class="line"><span class="built_in">set</span> -o errexit</span><br><span class="line"><span class="built_in">set</span> -o nounset</span><br><span class="line"><span class="built_in">set</span> -o pipefail</span><br><span class="line"></span><br><span class="line"><span class="comment"># 获取脚本根目录</span></span><br><span class="line">SCRIPT_ROOT=$(<span class="built_in">dirname</span> <span class="string">&quot;<span class="variable">$&#123;BASH_SOURCE[0]&#125;</span>&quot;</span>)/..</span><br><span class="line"><span class="built_in">pushd</span> <span class="string">&quot;<span class="variable">$&#123;SCRIPT_ROOT&#125;</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 获取 kubernetes code-generator 的特定版本</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Fetching code-generator...&quot;</span></span><br><span class="line">go get k8s.io/code-generator@v0.30.14</span><br><span class="line"></span><br><span class="line"><span class="comment"># 定义生成代码的输入根包和输出根包</span></span><br><span class="line">INPUT_PKG=<span class="string">&quot;./pkg/apis&quot;</span></span><br><span class="line">OUTPUT_PKG=<span class="string">&quot;gitlab.infini-ai.com/mizar/apis/pkg/client&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 检查并导出 GOPATH</span></span><br><span class="line">GOPATH=$(go <span class="built_in">env</span> GOPATH)</span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;GOPATH=<span class="variable">$&#123;GOPATH&#125;</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 设置 CODEGEN_PKG 连接到正确定义的路径</span></span><br><span class="line">CODEGEN_PKG=<span class="string">&quot;<span class="variable">$GOPATH</span>/pkg/mod/k8s.io/code-generator@v0.30.14&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> [ ! -d <span class="string">&quot;<span class="variable">$CODEGEN_PKG</span>&quot;</span> ]; <span class="keyword">then</span></span><br><span class="line">    <span class="built_in">echo</span> <span class="string">&quot;Unable to find code-generator at <span class="variable">$CODEGEN_PKG</span>&quot;</span></span><br><span class="line">    <span class="built_in">exit</span> 1</span><br><span class="line"><span class="keyword">fi</span></span><br><span class="line"></span><br><span class="line"><span class="built_in">source</span> <span class="string">&quot;<span class="variable">$&#123;CODEGEN_PKG&#125;</span>/kube_codegen.sh&quot;</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Using code-generation package at: <span class="variable">$CODEGEN_PKG</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 生成 Deepcopy、Defaulter、Conversion 代码</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Generating deepcopy, defaulter, and conversion code...&quot;</span></span><br><span class="line">kube::codegen::gen_helpers \</span><br><span class="line">    --boilerplate <span class="string">&quot;./hack/boilerplate.go.txt&quot;</span> \</span><br><span class="line">    <span class="string">&quot;<span class="variable">$&#123;INPUT_PKG&#125;</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 生成 Client、Lister、Informer 代码</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Generating client, lister, and informer code...&quot;</span></span><br><span class="line">kube::codegen::gen_client \</span><br><span class="line">    --output-dir <span class="string">&quot;<span class="variable">$&#123;SCRIPT_ROOT&#125;</span>/pkg/client&quot;</span> \</span><br><span class="line">    --output-pkg <span class="string">&quot;<span class="variable">$&#123;OUTPUT_PKG&#125;</span>&quot;</span> \</span><br><span class="line">    --boilerplate <span class="string">&quot;<span class="variable">$&#123;SCRIPT_ROOT&#125;</span>/hack/boilerplate.go.txt&quot;</span> \</span><br><span class="line">    --with-watch \</span><br><span class="line">    <span class="string">&quot;<span class="variable">$&#123;INPUT_PKG&#125;</span>&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 检查生成的代码是否存在于预期的位置</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Checking generated code...&quot;</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Contents of <span class="variable">$&#123;SCRIPT_ROOT&#125;</span>/<span class="variable">$&#123;INPUT_PKG&#125;</span>/pkg/client/:&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 整理 go 模块</span></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Tidying up go modules...&quot;</span></span><br><span class="line">go mod tidy</span><br><span class="line"></span><br><span class="line"><span class="built_in">echo</span> <span class="string">&quot;Code generation complete.&quot;</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+</li>
+</ul>
+</li>
+</ol>
+<h3 id="生成的代码结构">生成的代码结构</h3>
+<h4 id="客户端代码-pkg-client">客户端代码 (<a href="pkg/client/"><code>pkg/client/</code></a>)</h4>
+<ul>
+<li><strong>Clientset</strong> (<a href="pkg/client/clientset/versioned/clientset.go:21"><code>clientset/versioned/clientset.go</code></a>)：统一的客户端接口</li>
+<li><strong>类型化客户端</strong> (<a href="pkg/client/clientset/versioned/typed/networking/v1alpha1/"><code>typed/networking/v1alpha1/</code></a>)：针对具体资源的客户端</li>
+<li><strong>资源操作接口</strong> (<a href="pkg/client/clientset/versioned/typed/networking/v1alpha1/egressgatewaypolicy.go:24"><code>egressgatewaypolicy.go</code></a>)：完整的CRUD操作</li>
+</ul>
+<h4 id="Informer系统-pkg-client-informers">Informer系统 (<a href="pkg/client/informers/"><code>pkg/client/informers/</code></a>)</h4>
+<ul>
+<li><strong>SharedInformerFactory</strong> (<a href="pkg/client/informers/externalversions/factory.go:215"><code>factory.go</code></a>)：管理所有informer的工厂</li>
+<li><strong>资源特定Informer</strong> (<a href="pkg/client/informers/externalversions/networking/v1alpha1/egressgatewaypolicy.go:21"><code>egressgatewaypolicy.go</code></a>)：监听特定资源变化</li>
+<li><strong>ListWatch机制</strong> (<a href="pkg/client/informers/externalversions/networking/v1alpha1/egressgatewaypolicy.go:44-55"><code>egressgatewaypolicy.go:44-55</code></a>)：实现资源的列表和监听</li>
+</ul>
+<h4 id="Lister缓存-pkg-client-listers">Lister缓存 (<a href="pkg/client/listers/"><code>pkg/client/listers/</code></a>)</h4>
+<ul>
+<li><strong>Lister接口</strong> (<a href="pkg/client/listers/networking/v1alpha1/egressgatewaypolicy.go:14"><code>egressgatewaypolicy.go:14</code></a>)：提供从缓存读取资源的接口</li>
+<li><strong>索引器操作</strong> (<a href="pkg/client/listers/networking/v1alpha1/egressgatewaypolicy.go:34-51"><code>egressgatewaypolicy.go:34-51</code></a>)：基于cache.Indexer的实现</li>
+</ul>
+<h2 id="2-关键特性">2. 关键特性</h2>
+<h3 id="自动代码生成">自动代码生成</h3>
+<ul>
+<li>基于Go结构体定义和注解自动生成全套客户端代码</li>
+<li>支持watch功能，实时监听资源变化</li>
+<li>内置缓存机制，减少API服务器压力</li>
+</ul>
+<h3 id="类型安全">类型安全</h3>
+<ul>
+<li>强类型接口，编译时检查</li>
+<li>自动生成的深拷贝方法确保数据一致性</li>
+</ul>
+<h3 id="完整的CRUD操作">完整的CRUD操作</h3>
+<ul>
+<li>Create、Get、List、Update、Delete、Patch、Watch等完整操作</li>
+<li>支持status子资源更新</li>
+</ul>
+<h2 id="3-使用流程">3. 使用流程</h2>
+<ol>
+<li><strong>定义API</strong>：在pkg/apis下定义资源结构体和注解</li>
+<li><strong>生成代码</strong>：运行 <code>make generate</code> 生成客户端、informer、lister代码</li>
+<li><strong>部署CRD</strong>：应用manifests目录下的CRD定义</li>
+<li><strong>使用客户端</strong>：通过生成的Clientset访问自定义资源</li>
+</ol>
+<p>这种实现方式充分利用了Kubernetes的代码生成生态系统，确保了类型安全和开发效率，同时保持了与原生Kubernetes资源相同的使用体验。</p>
+<h2 id="CRD-controller-informer生成具体的实现？">CRD controller/informer生成具体的实现？</h2>
+<h3 id="1-CRD生成-hack-gencrd-sh">1. CRD生成 (<a href="vscode-webview://1e3bqcnnsfongglgeeob64638dqaokb8c0opqn7f5f4pg39qdb42/hack/gencrd.sh"><code>hack/gencrd.sh</code></a>)</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 使用Kubebuilder的controller-gen工具</span></span><br><span class="line">go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.15.0</span><br><span class="line"><span class="variable">$&#123;gobin&#125;</span>/controller-gen crd:generateEmbeddedObjectMeta=<span class="literal">true</span> paths=./pkg/apis/... output:crd:<span class="built_in">dir</span>=./manifests</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>工具</strong>: Kubebuilder的controller-gen</li>
+<li><strong>功能</strong>: 解析API定义中的Kubebuilder注解，生成完整的CRD YAML</li>
+<li><strong>输出</strong>: <a href="vscode-webview://1e3bqcnnsfongglgeeob64638dqaokb8c0opqn7f5f4pg39qdb42/manifests/"><code>manifests/</code></a> 目录下的CRD文件</li>
+</ul>
+<h3 id="2-客户端代码生成-hack-gencode-sh">2. 客户端代码生成 (<a href="vscode-webview://1e3bqcnnsfongglgeeob64638dqaokb8c0opqn7f5f4pg39qdb42/hack/gencode.sh"><code>hack/gencode.sh</code></a>)</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 使用Kubernetes原生代码生成器</span></span><br><span class="line">go get k8s.io/code-generator@v0.30.14</span><br><span class="line"><span class="built_in">source</span> <span class="string">&quot;<span class="variable">$&#123;CODEGEN_PKG&#125;</span>/kube_codegen.sh&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 生成helpers和客户端代码</span></span><br><span class="line">kube::codegen::gen_helpers --boilerplate <span class="string">&quot;./hack/boilerplate.go.txt&quot;</span> <span class="string">&quot;<span class="variable">$&#123;INPUT_PKG&#125;</span>&quot;</span></span><br><span class="line">kube::codegen::gen_client --with-watch <span class="string">&quot;<span class="variable">$&#123;INPUT_PKG&#125;</span>&quot;</span></span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>工具</strong>: Kubernetes的code-generator (client-gen, informer-gen, lister-gen)</li>
+<li><strong>功能</strong>: 生成客户端、informer、lister等运行时组件</li>
+<li><strong>输出</strong>: <a href="vscode-webview://1e3bqcnnsfongglgeeob64638dqaokb8c0opqn7f5f4pg39qdb42/pkg/client/"><code>pkg/client/</code></a> 目录下的完整客户端代码</li>
+</ul>
+<h3 id="3-与Kubebuilder的关系">3. 与Kubebuilder的关系</h3>
+<h4 id="使用Kubebuilder的部分：">使用Kubebuilder的部分：</h4>
+<ul>
+<li><strong>注解系统</strong>: <code>+kubebuilder:</code> 注解定义CRD元数据和验证规则</li>
+<li><strong>CRD生成</strong>: 使用controller-gen工具生成CRD YAML</li>
+<li><strong>丰富特性</strong>: 支持验证规则、打印列、子资源等高级CRD特性</li>
+</ul>
+<h4 id="使用Kubernetes原生工具的部分：">使用Kubernetes原生工具的部分：</h4>
+<ul>
+<li><strong>客户端生成</strong>: 使用client-gen生成类型安全的客户端接口</li>
+<li><strong>Informer系统</strong>: 使用informer-gen生成高效的watch机制</li>
+<li><strong>Lister缓存</strong>: 使用lister-gen生成缓存访问接口</li>
+</ul>
+<h3 id="4-生成的关键组件">4. 生成的关键组件</h3>
+<h4 id="客户端层-pkg-client-clientset">客户端层 (<a href="vscode-webview://1e3bqcnnsfongglgeeob64638dqaokb8c0opqn7f5f4pg39qdb42/pkg/client/clientset/"><code>pkg/client/clientset/</code></a>)</h4>
+<ul>
+<li><strong>Clientset</strong>: 统一的客户端入口，支持所有API组版本</li>
+<li><strong>类型化客户端</strong>: 针对每个资源的强类型操作接口</li>
+</ul>
+<h4 id="Informer层-pkg-client-informers">Informer层 (<a href="vscode-webview://1e3bqcnnsfongglgeeob64638dqaokb8c0opqn7f5f4pg39qdb42/pkg/client/informers/"><code>pkg/client/informers/</code></a>)</h4>
+<ul>
+<li><strong>SharedInformerFactory</strong>: 管理所有informer的工厂模式</li>
+<li><strong>资源特定Informer</strong>: 实现ListWatch机制，实时监听资源变化</li>
+</ul>
+<h4 id="Lister层-pkg-client-listers">Lister层 (<a href="vscode-webview://1e3bqcnnsfongglgeeob64638dqaokb8c0opqn7f5f4pg39qdb42/pkg/client/listers/"><code>pkg/client/listers/</code></a>)</h4>
+<ul>
+<li><strong>缓存访问</strong>: 提供从本地缓存读取资源的接口</li>
+<li><strong>索引支持</strong>: 基于cache.Indexer的高效数据检索</li>
+</ul>
+<h3 id="5-优势总结">5. 优势总结</h3>
+<p>这种混合架构结合了：</p>
+<ol>
+<li><strong>Kubebuilder的CRD定义能力</strong> - 丰富的注解系统和验证规则</li>
+<li><strong>Kubernetes原生的客户端生态</strong> - 与k8s完全兼容的客户端模式</li>
+<li><strong>灵活性</strong> - 可以独立使用客户端而不依赖完整的controller框架</li>
+<li><strong>性能</strong> - 高效的informer/watch机制和本地缓存</li>
+</ol>
+<p>这种实现确保了自定义资源拥有与Kubernetes原生资源相同的开发体验和性能特性。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/">http://example.com/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/K8S/">K8S</a><a class="post-meta__tags" href="/tags/%E6%8E%A7%E5%88%B6%E9%9D%A2/">控制面</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/k8s.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">如何通过Pod进入到宿主机?</div></div><div class="info-2"><div class="info-item-1">如何通过Pod进入到宿主机? nsenter -a -t 1 bash 命令的作用是让你在一个新的 shell 会话中，进入 PID 为 1 的进程所在的全部命名空间（Namespace）。 通过这种方式，可以从pod中进入到宿主机（全部的namespace都跟宿主机一样） breakdown 如下：  nsenter: 这是一个 Linux 命令行工具，用于将当前进程“进入”到指定进程的一个或多个命名空间中。 -t 1: 这个选项指定了目标进程的 PID (Process ID)。在这里，1 是 Linux 系统中第一个启动的进程（通常是 init 或 systemd）的 PID。所有其他进程都是由它或它的子进程派生出来的。 -a: 这个选项是 “all namespaces” 的缩写。它告诉 nsenter 将当前进程加入到目标进程（PID 1）所属于的所有类型的命名空间中，包括但不限于：  Mount (mnt) UTS (主机名和域名) IPC (进程间通信) Network PID (进程 ID) User ID Cgroup   bash: 这是要在新加入的命名空间环...</div></div></div></a><a class="pagination-related" href="/2025/09/12/2025-09-12-Nano-vllm-%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="Nano-vllm 项目学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/nanovllm.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Nano-vllm 项目学习</div></div><div class="info-2"><div class="info-item-1">Nano-vllm 项目学习 项目地址：https://github.com/GeeeekExplorer/nano-vllm vllm介绍：https://zhuanlan.zhihu.com/p/693279132 paged attention:https://zhuanlan.zhihu.com/p/691038809 nano vllm: https://zhuanlan.zhihu.com/p/1923689524778766954   请求（request）可理解为操作系统中的一个进程   逻辑内存（logical KV blocks）可理解为操作系统中的虚拟内存，每个block类比于虚拟内存中的一个page。每个block的大小是固定的，在vLLM中默认大小为16，即可装16个token的K/V值   块表（block table）可理解为操作系统中的虚拟内存到物理内存的映射表   物理内存（physical KV blocks）可理解为操作系统中的物理内存，物理块在gpu显存上，每个block类比于虚拟内存中的一个page  vLLM节省KV cache显存的核...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/" title="NVIDIA device plugin for Kubernetes原理分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">NVIDIA device plugin for Kubernetes原理分析</div></div><div class="info-2"><div class="info-item-1">NVIDIA device plugin for Kubernetes原理分析 什么是 Device Plugin K8s 原生并没有支持第三方设备厂商的物理设备资源，因此 Device Plugins 给第三方设备厂商提供了相关接口，可以让他们的物理设备资源以 Extended Resources 提供给底层的容器。 当 device plugin 功能启动后，可以令 kubelet 开放 Register 的 gRPC 服务，device plugin 就可以通过这个服务向 kubelet 进行注册，注册成功后 device plugin 就进入了 Serving 模式，提供前面提到的 gRPC 接口调用服务，kubelet 也就可以通过调用 Listandwatch、Allocate 等方法对设备进行操作，可以用下图来描述单一节点上这一过程：  下面以 NVIDIA k8s-device-plugin 为例简单讲讲这一过程。 注册服务 先看 gRPC 注册部分，下面的函数用于启动一个 gRPC 服务器并在 kubelet 中注册 1234567891011121314151...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">如何通过Pod进入到宿主机?</div></div><div class="info-2"><div class="info-item-1">如何通过Pod进入到宿主机? nsenter -a -t 1 bash 命令的作用是让你在一个新的 shell 会话中，进入 PID 为 1 的进程所在的全部命名空间（Namespace）。 通过这种方式，可以从pod中进入到宿主机（全部的namespace都跟宿主机一样） breakdown 如下：  nsenter: 这是一个 Linux 命令行工具，用于将当前进程“进入”到指定进程的一个或多个命名空间中。 -t 1: 这个选项指定了目标进程的 PID (Process ID)。在这里，1 是 Linux 系统中第一个启动的进程（通常是 init 或 systemd）的 PID。所有其他进程都是由它或它的子进程派生出来的。 -a: 这个选项是 “all namespaces” 的缩写。它告诉 nsenter 将当前进程加入到目标进程（PID 1）所属于的所有类型的命名空间中，包括但不限于：  Mount (mnt) UTS (主机名和域名) IPC (进程间通信) Network PID (进程 ID) User ID Cgroup   bash: 这是要在新加入的命名空间环...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">k8s informer通俗易懂详解</div></div><div class="info-2"><div class="info-item-1">Kubernetes Informer 机制详解 核心概念 Informer 是 Kubernetes 中用于监听和缓存资源对象的核心机制，它通过 ListAndWatch 机制实现高效的资源监控。 核心组件及作用 1. Reflector（反射器）  作用：负责从 Kubernetes API Server 获取资源对象 功能：  List：获取资源的全量数据 Watch：监听资源的增量变化 将数据放入 Delta FIFO 队列    2. Delta FIFO Queue（增量队列）  作用：存储资源对象的变化（增删改） 特点：  保持操作顺序 存储对象的增量变化（Delta） 线程安全    3. Informer（通知器）  作用：从 Delta FIFO 队列中取出对象并处理 功能：  调用 Indexer 更新本地缓存 触发注册的事件处理器    4. Indexer（索引器）  作用：本地缓存，提供快速查询 功能：  存储资源对象的本地副本 提供基于索引的快速查找 线程安全的读写操作    5. Resource Event Handlers（资源事件处理器）  ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">132</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">119</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">35</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">k8s控制面相关学习</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#informer"><span class="toc-number">1.0.1.</span> <span class="toc-text">informer</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Kubernetes-%E6%8E%A7%E5%88%B6%E9%9D%A2controller%E5%9F%BA%E7%A1%80%E6%A6%82%E5%BF%B5%E8%A7%A3%E6%9E%90"><span class="toc-number">1.1.</span> <span class="toc-text">Kubernetes 控制面controller基础概念解析</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9A%84%E5%9F%BA%E6%9C%AC%E7%BB%84%E4%BB%B6"><span class="toc-number">1.1.1.</span> <span class="toc-text">1. 控制面的基本组件</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%8E%A7%E5%88%B6%E5%99%A8-Controller"><span class="toc-number">1.1.1.1.</span> <span class="toc-text">控制器 (Controller)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%BC%93%E5%AD%98%E7%B3%BB%E7%BB%9F-Cache"><span class="toc-number">1.1.1.2.</span> <span class="toc-text">缓存系统 (Cache)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%A4%84%E7%90%86%E5%99%A8-Processors"><span class="toc-number">1.1.1.3.</span> <span class="toc-text">处理器 (Processors)</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%AE%BE%E8%AE%A1%E5%8E%9F%E5%88%99"><span class="toc-number">1.1.2.</span> <span class="toc-text">2. 控制面设计原则</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%A3%B0%E6%98%8E%E5%BC%8F-API"><span class="toc-number">1.1.2.1.</span> <span class="toc-text">声明式 API</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8D%8F%E8%B0%83%E5%BE%AA%E7%8E%AF-Reconcile-Loop"><span class="toc-number">1.1.2.2.</span> <span class="toc-text">协调循环 (Reconcile Loop)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%A2%86%E5%AF%BC%E8%80%85%E9%80%89%E4%B8%BE"><span class="toc-number">1.1.2.3.</span> <span class="toc-text">领导者选举</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%BA%8B%E4%BB%B6%E9%A9%B1%E5%8A%A8%E6%9E%B6%E6%9E%84"><span class="toc-number">1.1.3.</span> <span class="toc-text">3. 事件驱动架构</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%B5%84%E6%BA%90%E7%9B%91%E5%90%AC"><span class="toc-number">1.1.3.1.</span> <span class="toc-text">资源监听</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BA%8B%E4%BB%B6%E5%A4%84%E7%90%86"><span class="toc-number">1.1.3.2.</span> <span class="toc-text">事件处理</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86%E5%92%8C%E9%87%8D%E8%AF%95%E6%9C%BA%E5%88%B6"><span class="toc-number">1.1.4.</span> <span class="toc-text">4. 错误处理和重试机制</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BC%98%E9%9B%85%E7%9A%84%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86"><span class="toc-number">1.1.4.1.</span> <span class="toc-text">优雅的错误处理</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%80%9F%E7%8E%87%E9%99%90%E5%88%B6"><span class="toc-number">1.1.4.2.</span> <span class="toc-text">速率限制</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E5%AD%A6%E4%B9%A0%E8%A6%81%E7%82%B9%E6%80%BB%E7%BB%93"><span class="toc-number">1.1.5.</span> <span class="toc-text">5. 学习要点总结</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#CRD-controller-informer%E7%94%9F%E6%88%90%EF%BC%9F"><span class="toc-number">1.2.</span> <span class="toc-text">CRD controller&#x2F;informer生成？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E6%A0%B8%E5%BF%83%E5%AE%9E%E7%8E%B0%E6%9C%BA%E5%88%B6"><span class="toc-number">1.3.</span> <span class="toc-text">1. 核心实现机制</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#API%E5%AE%9A%E4%B9%89%E9%98%B6%E6%AE%B5"><span class="toc-number">1.3.1.</span> <span class="toc-text">API定义阶段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BB%A3%E7%A0%81%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B"><span class="toc-number">1.3.2.</span> <span class="toc-text">代码生成流程</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%94%9F%E6%88%90%E7%9A%84%E4%BB%A3%E7%A0%81%E7%BB%93%E6%9E%84"><span class="toc-number">1.3.3.</span> <span class="toc-text">生成的代码结构</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%A2%E6%88%B7%E7%AB%AF%E4%BB%A3%E7%A0%81-pkg-client"><span class="toc-number">1.3.3.1.</span> <span class="toc-text">客户端代码 (pkg&#x2F;client&#x2F;)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Informer%E7%B3%BB%E7%BB%9F-pkg-client-informers"><span class="toc-number">1.3.3.2.</span> <span class="toc-text">Informer系统 (pkg&#x2F;client&#x2F;informers&#x2F;)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Lister%E7%BC%93%E5%AD%98-pkg-client-listers"><span class="toc-number">1.3.3.3.</span> <span class="toc-text">Lister缓存 (pkg&#x2F;client&#x2F;listers&#x2F;)</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E5%85%B3%E9%94%AE%E7%89%B9%E6%80%A7"><span class="toc-number">1.4.</span> <span class="toc-text">2. 关键特性</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%87%AA%E5%8A%A8%E4%BB%A3%E7%A0%81%E7%94%9F%E6%88%90"><span class="toc-number">1.4.1.</span> <span class="toc-text">自动代码生成</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%B1%BB%E5%9E%8B%E5%AE%89%E5%85%A8"><span class="toc-number">1.4.2.</span> <span class="toc-text">类型安全</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%8C%E6%95%B4%E7%9A%84CRUD%E6%93%8D%E4%BD%9C"><span class="toc-number">1.4.3.</span> <span class="toc-text">完整的CRUD操作</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E4%BD%BF%E7%94%A8%E6%B5%81%E7%A8%8B"><span class="toc-number">1.5.</span> <span class="toc-text">3. 使用流程</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#CRD-controller-informer%E7%94%9F%E6%88%90%E5%85%B7%E4%BD%93%E7%9A%84%E5%AE%9E%E7%8E%B0%EF%BC%9F"><span class="toc-number">1.6.</span> <span class="toc-text">CRD controller&#x2F;informer生成具体的实现？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-CRD%E7%94%9F%E6%88%90-hack-gencrd-sh"><span class="toc-number">1.6.1.</span> <span class="toc-text">1. CRD生成 (hack&#x2F;gencrd.sh)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E5%AE%A2%E6%88%B7%E7%AB%AF%E4%BB%A3%E7%A0%81%E7%94%9F%E6%88%90-hack-gencode-sh"><span class="toc-number">1.6.2.</span> <span class="toc-text">2. 客户端代码生成 (hack&#x2F;gencode.sh)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%B8%8EKubebuilder%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.6.3.</span> <span class="toc-text">3. 与Kubebuilder的关系</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8Kubebuilder%E7%9A%84%E9%83%A8%E5%88%86%EF%BC%9A"><span class="toc-number">1.6.3.1.</span> <span class="toc-text">使用Kubebuilder的部分：</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BD%BF%E7%94%A8Kubernetes%E5%8E%9F%E7%94%9F%E5%B7%A5%E5%85%B7%E7%9A%84%E9%83%A8%E5%88%86%EF%BC%9A"><span class="toc-number">1.6.3.2.</span> <span class="toc-text">使用Kubernetes原生工具的部分：</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E7%94%9F%E6%88%90%E7%9A%84%E5%85%B3%E9%94%AE%E7%BB%84%E4%BB%B6"><span class="toc-number">1.6.4.</span> <span class="toc-text">4. 生成的关键组件</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%A2%E6%88%B7%E7%AB%AF%E5%B1%82-pkg-client-clientset"><span class="toc-number">1.6.4.1.</span> <span class="toc-text">客户端层 (pkg&#x2F;client&#x2F;clientset&#x2F;)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Informer%E5%B1%82-pkg-client-informers"><span class="toc-number">1.6.4.2.</span> <span class="toc-text">Informer层 (pkg&#x2F;client&#x2F;informers&#x2F;)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Lister%E5%B1%82-pkg-client-listers"><span class="toc-number">1.6.4.3.</span> <span class="toc-text">Lister层 (pkg&#x2F;client&#x2F;listers&#x2F;)</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E4%BC%98%E5%8A%BF%E6%80%BB%E7%BB%93"><span class="toc-number">1.6.5.</span> <span class="toc-text">5. 优势总结</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="如何通过Pod进入到宿主机?"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?">如何通过Pod进入到宿主机?</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s informer通俗易懂详解"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解">k8s informer通俗易懂详解</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s控制面相关学习"/></a><div class="content"><a class="title" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习">k8s控制面相关学习</a><time datetime="2025-09-13T16:00:00.000Z" title="发表于 2025-09-14 00:00:00">2025-09-14</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/12/2025-09-12-Nano-vllm-%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="Nano-vllm 项目学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/nanovllm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Nano-vllm 项目学习"/></a><div class="content"><a class="title" href="/2025/09/12/2025-09-12-Nano-vllm-%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="Nano-vllm 项目学习">Nano-vllm 项目学习</a><time datetime="2025-09-11T16:00:00.000Z" title="发表于 2025-09-12 00:00:00">2025-09-12</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/11/2025-09-11-GSPO-&amp;-Routing-Replay/" title="GSPO &amp; Routing Replay"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/GSPO.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="GSPO &amp; Routing Replay"/></a><div class="content"><a class="title" href="/2025/09/11/2025-09-11-GSPO-&amp;-Routing-Replay/" title="GSPO &amp; Routing Replay">GSPO &amp; Routing Replay</a><time datetime="2025-09-10T16:00:00.000Z" title="发表于 2025-09-11 00:00:00">2025-09-11</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
