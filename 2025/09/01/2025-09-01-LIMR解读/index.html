@@ -1,0 +1,532 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>LIMR解读 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="LIMR解读 之前已经有很多文章研究「如何用少量精选数据提升LLM效率」这个话题了，包括之前媒体声量很大的s1和LIMO，这些工作的核心观点就是——Less is More，数据质量 &gt; 数量。 LIMR这篇论文可以看做这种思想的延续，不过关注的点在与RL，而不是SFT。这篇论文对我来说，最有意思的点是，「如何衡量哪些数据好呢」？作者给出了一个指导思想：好的训练样本应该与模型的整体学习轨迹对">
+<meta property="og:type" content="article">
+<meta property="og:title" content="LIMR解读">
+<meta property="og:url" content="http://example.com/2025/09/01/2025-09-01-LIMR%E8%A7%A3%E8%AF%BB/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="LIMR解读 之前已经有很多文章研究「如何用少量精选数据提升LLM效率」这个话题了，包括之前媒体声量很大的s1和LIMO，这些工作的核心观点就是——Less is More，数据质量 &gt; 数量。 LIMR这篇论文可以看做这种思想的延续，不过关注的点在与RL，而不是SFT。这篇论文对我来说，最有意思的点是，「如何衡量哪些数据好呢」？作者给出了一个指导思想：好的训练样本应该与模型的整体学习轨迹对">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/RL.jpeg">
+<meta property="article:published_time" content="2025-08-31T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-09-01T07:24:50.301Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="强化学习">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/RL.jpeg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "LIMR解读",
+  "url": "http://example.com/2025/09/01/2025-09-01-LIMR%E8%A7%A3%E8%AF%BB/",
+  "image": "http://example.com/img/cover/RL.jpeg",
+  "datePublished": "2025-08-31T16:00:00.000Z",
+  "dateModified": "2025-09-01T07:24:50.301Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/09/01/2025-09-01-LIMR%E8%A7%A3%E8%AF%BB/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'LIMR解读',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">134</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">120</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">36</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">LIMR解读</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">LIMR解读</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-08-31T16:00:00.000Z" title="发表于 2025-09-01 00:00:00">2025-09-01</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-09-01T07:24:50.301Z" title="更新于 2025-09-01 15:24:50">2025-09-01</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%BC%BA%E5%8C%96%E5%AD%A6%E4%B9%A0/">强化学习</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/09/01/2025-09-01-LIMR%E8%A7%A3%E8%AF%BB/" data-flag-title="LIMR解读"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>LIMR解读</h1>
+<p>之前已经有很多文章研究「如何用少量精选数据提升<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=254044311&amp;content_type=Article&amp;match_order=1&amp;q=LLM&amp;zhida_source=entity">LLM</a>效率」这个话题了，包括之前媒体声量很大的s1和LIMO，这些工作的核心观点就是——Less is More，数据质量 &gt; 数量。</p>
+<p>LIMR这篇论文可以看做这种思想的延续，不过关注的点在与<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=254044311&amp;content_type=Article&amp;match_order=1&amp;q=RL&amp;zhida_source=entity">RL</a>，而不是<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=254044311&amp;content_type=Article&amp;match_order=1&amp;q=SFT&amp;zhida_source=entity">SFT</a>。这篇论文对我来说，最有意思的点是，「如何衡量哪些数据好呢」？作者给出了一个指导思想：<strong>好的训练样本应该与模型的整体学习轨迹对齐</strong>。通俗地解释一下，这就是一种「同步进化」的思想，即高价值样本的奖励变化需要与模型能力提升<strong>同频共振</strong>。就像教学生数学，要选择那些<strong>当前稍难，但通过练习就能掌握</strong>的题目（样本A），而不是一直做简单题（样本B）或超纲题（样本C）。</p>
+<p>实验目前做的还不是很完善，论证链条有待进一步加强。</p>
+<p>论文与代码：<a href="https://link.zhihu.com/?target=https%3A//github.com/GAIR-NLP/LIMR">GitHub - GAIR-NLP/LIMR</a></p>
+<hr>
+<h2 id="主要内容">主要内容</h2>
+<h3 id="1-作者和团队信息"><strong>1. 作者和团队信息</strong></h3>
+<ul>
+<li><strong>作者</strong>：Xuefeng Li, Haoyang Zou, Pengfei Liu。</li>
+<li><strong>团队</strong>：来自上海交通大学 (SJTU), 上海人工智能研究院 (SII), 通用人工智能研究院 (GAIR)。</li>
+<li><strong>主要贡献者</strong>：Pengfei Liu，论文通讯作者。</li>
+<li><strong>团队贡献</strong>：GAIR-NLP 团队在自然语言处理领域有丰富的研究成果，尤其在模型训练和优化方面。</li>
+</ul>
+<h3 id="2-背景和动机"><strong>2. 背景和动机</strong></h3>
+<ul>
+<li><strong>发表时间</strong>：2025年2月（arxiv预印版）</li>
+<li><strong>研究问题</strong>：如何更有效地利用强化学习（RL）训练数据，提升大型语言模型（LLM）的推理能力？</li>
+<li><strong>问题背景</strong>：
+<ul>
+<li>近年来，像o1、<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=254044311&amp;content_type=Article&amp;match_order=1&amp;q=Deepseek+R1&amp;zhida_source=entity">Deepseek R1</a>、Kimi1.5等模型展示了RL在提升LLM推理能力方面的潜力。</li>
+<li>然而，这些研究对于RL训练所需的数据量缺乏透明度，阻碍了进一步的研究和发展。</li>
+<li>已有的开源项目在RL训练数据量上差异很大（从几千到几十万不等），缺乏明确的指导原则。</li>
+<li><strong>论文关注点</strong>：<strong>在没有数据蒸馏的情况下，直接从基座模型开始进行RL训练</strong>，类似于Deepseek R1-zero的设置。</li>
+</ul>
+</li>
+</ul>
+<h3 id="3-相关研究"><strong>3. 相关研究</strong></h3>
+<ul>
+<li><strong>现有研究的不足</strong>：
+<ul>
+<li>缺乏关于RL训练数据规模的明确基准，研究人员只能依赖试错，导致资源浪费和效果不佳。</li>
+<li>缺乏对样本数量如何影响模型性能的系统分析，难以做出明智的资源分配决策。</li>
+<li><strong>最关键的疑问</strong>：仅仅扩大RL训练数据的规模是提升模型性能的关键吗？是否忽略了更重要的因素，如样本质量和选择标准？</li>
+</ul>
+</li>
+<li><strong>对比</strong>：
+<ul>
+<li><strong>LIMO</strong>和<strong>s1</strong>：在32B参数规模的模型上，通过监督微调（SFT）在数据效率方面表现出潜力。但本文发现，在7B参数规模的模型上，这些方法表现不佳。</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-核心思路"><strong>4. 核心思路</strong></h3>
+<ul>
+<li><strong>核心观点</strong>：训练样本的质量和相关性远比数量重要。</li>
+<li><strong>主要思路</strong>：
+<ul>
+<li><strong>通过实验观察</strong>：发现精心挑选的RL训练样本子集（1,389个）可以达到甚至超过使用完整数据集（8,523个）的性能。</li>
+<li><strong>提出<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=254044311&amp;content_type=Article&amp;match_order=1&amp;q=Learning+Impact+Measurement&amp;zhida_source=entity">Learning Impact Measurement</a> (LIM)</strong>：一种自动化的定量方法，用于评估RL训练样本的潜在价值，预测哪些样本对模型改进贡献最大。</li>
+</ul>
+</li>
+</ul>
+<h3 id="5-方案与技术"><strong>5. 方案与技术</strong></h3>
+<ul>
+<li><strong>Learning Impact Measurement (LIM)</strong>：
+<ul>
+<li><strong>模型对齐的轨迹分析</strong>：基于样本对模型学习的贡献来评估训练样本。</li>
+<li><strong>关键发现</strong>：学习模式与模型整体性能轨迹互补的样本更有价值。</li>
+<li><strong>计算方法</strong>：
+<ul>
+<li>首先使用模型平均奖励曲线作为参考：<br>
+其中表示第个样本在第个 epoch 的奖励，是样本总数。</li>
+<li>然后计算每个样本的归一化对齐分数（normalized alignment score）：，这个公式衡量了样本学习模式与模型整体学习轨迹的对齐程度，分数越高表示对齐越好。</li>
+</ul>
+</li>
+<li><strong>样本选择策略</strong>：选择分数高于阈值的样本：。实验中，时，从原始数据集中选择了1,389个高质量样本，组成了LIMR数据集。</li>
+</ul>
+</li>
+<li><strong>基线方法</strong>：
+<ul>
+<li><strong>随机抽样 (RAND)</strong>：从MATH-FULL数据集中随机选择1,389个样本，作为对比的基准。</li>
+<li><strong>线性进度分析 (LINEAR)</strong>：根据样本在训练 epochs 中显示出稳定改进的一致性来评估样本。</li>
+</ul>
+</li>
+<li><strong>奖励设计</strong>：
+<ul>
+<li>与Deepseek R1类似，使用基于规则的奖励函数。
+<ul>
+<li>答案正确：奖励为1。</li>
+<li>答案不正确但格式正确：奖励为-0.5。</li>
+<li>答案格式错误：奖励为-1。</li>
+</ul>
+</li>
+<li><strong>公式</strong>：</li>
+</ul>
+</li>
+</ul>
+<h3 id="6-实验与结论"><strong>6. 实验与结论</strong></h3>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://picx.zhimg.com/v2-e7b826c636a26d673aec979720df38ab_1440w.jpg" alt="img"></p>
+<ul>
+<li><strong>实验设置</strong>：
+<ul>
+<li><strong>训练</strong>：使用OpenRLHF框架中实现的PPO算法。
+<ul>
+<li>初始策略模型：Qwen2.5-Math-7B。</li>
+<li>Rollout batch size：1,024，每个 prompt 生成8个样本（温度为1.2）。</li>
+<li>训练 batch size：256。</li>
+<li>Actor 和 Critic 模型的学习率分别为 5e-7 和 9e-6，KL 系数为 0.01。</li>
+</ul>
+</li>
+<li><strong>评估</strong>：在多个 benchmark 上进行评估。
+<ul>
+<li>MATH500</li>
+<li>AIME2024</li>
+<li>AMC2023</li>
+<li>使用 vLLM 框架加速评估过程。</li>
+<li>对于 AIME24 和 AMC23，每个问题进行4次抽样（温度为0.4）。对于 MATH500，采用贪婪解码进行推理。</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>主要结果</strong>：
+<ul>
+<li>直接对 <a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=254044311&amp;content_type=Article&amp;match_order=1&amp;q=Qwen-Math-7B&amp;zhida_source=entity">Qwen-Math-7B</a> 应用 RL，使用 MATH-FULL 数据集可以显著提高性能。</li>
+<li>不同的数据选择策略导致性能差异。
+<ul>
+<li>与完整数据集相比，使用 MATH-RAND 数据集导致平均准确率下降 8.1%。</li>
+<li>MATH-LINEAR 仅导致 2% 的损失。</li>
+<li><strong>LIMR 仅使用了 8,523 个样本中的 1,389 个，但性能与 MATH-FULL 几乎相当</strong>。</li>
+</ul>
+</li>
+<li>LIMR 和 MATH-FULL 的准确率曲线几乎相同，都明显优于 MATH-RAND。</li>
+<li>MATH-FULL 的训练曲线在序列长度方面表现出不稳定性，而 LIMR 的相应曲线先下降后逐渐上升。</li>
+<li>LIMR 的奖励曲线上升更快，并最终接近 1.0，表明模型有效地利用了 LIMR 数据集进行学习。</li>
+<li>在相同的数据量下，<strong>RL 比 SFT 更有效</strong>。与 LIMO 和 s1 相比，LIMR 在 AIME 上的相对改进超过 100%，在 AMC23 和 MATH500 上的准确率至少提高了 10%。</li>
+</ul>
+</li>
+</ul>
+<h3 id="7-贡献"><strong>7. 贡献</strong></h3>
+<ul>
+<li><strong>对后续研究的启发和影响</strong>：
+<ul>
+<li>挑战了传统观点，即扩大 RL 训练数据对于提升 LLM 推理能力是必要的。</li>
+<li>LIM 方法为研究人员提供了一种可扩展的解决方案，以实现高效的 RL 训练。</li>
+<li>强调了优化样本质量而非增加数据数量的重要性。</li>
+<li>结合高效数据选择的 RL 对于数据有限的小型模型可能特别有效。</li>
+</ul>
+</li>
+<li><strong>未来潜在的可能性和启发</strong>：
+<ul>
+<li>LIM 方法可以应用于其他领域，而不仅仅是数学推理。</li>
+</ul>
+</li>
+</ul>
+<h3 id="8-不足"><strong>8. 不足</strong></h3>
+<ul>
+<li><strong>LIM 方法的局限性</strong>：
+<ul>
+<li>LIM 依赖于奖励函数的设计，如果奖励函数不能准确反映模型的学习效果，LIM 的效果可能会受到影响。</li>
+<li>LIM 的计算复杂度较高，需要对每个样本进行多次评估，计算资源消耗较大。</li>
+<li>阈值的选择可能会影响 LIM 的效果，需要根据具体情况进行调整。</li>
+</ul>
+</li>
+<li><strong>实验设置的局限性</strong>：
+<ul>
+<li>实验仅使用了 Qwen-Math-7B 模型，LIMR 方法在其他模型上的效果如何尚不清楚。</li>
+<li>实验仅在数学推理任务上进行了评估，LIMR 方法在其他任务上的效果如何尚不清楚。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="QA">QA</h2>
+<h3 id="Q1：为什么作者认为应该关注于没有经过蒸馏的基座模型？">Q1：为什么作者认为应该关注于没有经过蒸馏的基座模型？</h3>
+<ul>
+<li>因为作者想研究最原始的RL scaling 规律，如果使用蒸馏模型，会引入额外的偏差，影响研究结果的准确性。</li>
+<li>Deepseek R1-zero 也是从零开始，没有使用任何蒸馏数据，这与本文的研究目标一致。</li>
+</ul>
+<h3 id="Q2：LIM-方法的核心思想是什么？它是如何衡量样本价值的？">Q2：LIM 方法的核心思想是什么？它是如何衡量样本价值的？</h3>
+<ul>
+<li>LIM 的核心思想是：<strong>好的训练样本应该与模型的整体学习轨迹对齐</strong>。</li>
+<li>具体来说，LIM 假设神经网络的学习过程通常遵循对数增长模式。因此，它使用模型的平均奖励曲线作为参考，来衡量每个样本的学习模式与整体学习轨迹的对齐程度。</li>
+<li>如果一个样本的学习模式与模型的整体学习轨迹相似，那么它就被认为更有价值。</li>
+</ul>
+<h3 id="Q3：归一化对齐分数是如何计算的？它代表什么含义？">Q3：归一化对齐分数是如何计算的？它代表什么含义？</h3>
+<ul>
+<li>具体来说，它首先计算样本在每个 epoch的奖励与该样本的平均奖励之间的差异，以及模型在每个 epoch的平均奖励与整体平均奖励之间的差异。</li>
+<li>然后，它将这两个差异向量进行点积，并除以它们的模长的乘积，得到余弦相似度。</li>
+<li>余弦相似度的取值范围在 -1 到 1 之间。
+<ul>
+<li><strong>值越接近 1，表示样本的学习轨迹与模型平均学习轨迹越相似</strong>，即该样本对模型的学习贡献越大。</li>
+<li>值越接近 -1，表示样本的学习轨迹与模型平均学习轨迹越相反，即该样本对模型的学习可能产生负面影响。</li>
+<li>值接近 0，表示样本的学习轨迹与模型平均学习轨迹不相关。</li>
+</ul>
+</li>
+</ul>
+<h3 id="Q4：为什么在-AIME24-和-AMC23-上要进行多次抽样，而在-MATH500-上采用贪婪解码？">Q4：为什么在 AIME24 和 AMC23 上要进行多次抽样，而在 MATH500 上采用贪婪解码？</h3>
+<ul>
+<li>AIME24 和 AMC23 的问题数量较少（分别为30和40），为了更准确地评估模型在这两个 benchmark 上的性能，作者采用了多次抽样的方法，即对每个问题进行多次推理，然后取平均结果。这样可以减少随机性带来的影响。</li>
+<li>MATH500 的问题数量较多（500），为了加快评估速度，作者采用了贪婪解码的方法，即每次选择概率最高的 token 作为输出。</li>
+</ul>
+<h3 id="Q5：如何理解-「RL-outperforms-SFT-in-Data-Efficiency」-这一结论？">Q5：如何理解 「RL outperforms SFT in Data Efficiency」 这一结论？</h3>
+<ul>
+<li>LIMO 和 s1 等工作表明，通过蒸馏等方式，可以利用少量数据来提升模型的推理能力。</li>
+<li>但是，本文的实验结果表明，<strong>在数据量有限的情况下，使用 RL 方法比使用 SFT 方法更有效</strong>。</li>
+<li>这可能是因为 RL 方法可以通过与环境的交互来学习，从而更好地利用有限的数据。而 SFT 方法只能通过模仿来学习，对数据的依赖性更强。</li>
+<li>因此，对于小型模型来说，RL 可能是更有效的数据利用方式。</li>
+</ul>
+<p>PPO的探索特性可能是关键因素：</p>
+<ul>
+<li><strong>探索-利用平衡</strong>：PPO在训练时生成多个候选答案（文中设置8个样本/prompt），通过优势函数筛选高质量轨迹。这种机制允许模型发现超出原始数据分布的解决方案。</li>
+<li><strong>隐式数据增强</strong>：每次迭代中，模型实际接触的数据量是原始数据量的数倍（8倍于batch size），相当于自动扩展了训练集。</li>
+<li><strong>对比验证</strong>：若在SFT中引入相似的数据增强（如对同一问题生成多个答案并选择最优），可能缩小与RL的差距。</li>
+<li><strong>核心差异</strong>：RL通过环境交互实现动态课程学习，而SFT是静态知识注入。</li>
+</ul>
+<h3 id="Q6：LIMR-方法有哪些潜在的应用场景？">Q6：LIMR 方法有哪些潜在的应用场景？</h3>
+<ul>
+<li><strong>节省计算资源</strong>：LIMR 可以通过选择高质量的训练样本来减少数据量，从而降低训练成本，节省计算资源。</li>
+<li><strong>提升小模型的性能</strong>：LIMR 结合 RL 方法，可以更有效地利用有限的数据，从而提升小模型的性能。</li>
+<li><strong>加速模型开发</strong>：LIMR 可以帮助研究人员更快地找到有价值的训练样本，从而加速模型开发过程。</li>
+<li><strong>应用于其他领域</strong>：LIMR 的思想可以应用于其他领域，例如图像识别、语音识别等，通过选择高质量的训练样本来提升模型性能。</li>
+</ul>
+<h3 id="Q7：LIM方法的核心假设是「样本学习轨迹与模型整体轨迹的对齐性决定其价值」。这一假设是否忽视了样本间的协同效应？">Q7：LIM方法的核心假设是「样本学习轨迹与模型整体轨迹的对齐性决定其价值」。这一假设是否忽视了样本间的协同效应？</h3>
+<p>LIM方法确实可能忽略样本间的协同效应。当前的评分机制基于个体样本的轨迹相关性，未考虑样本组合对模型学习的互补性。例如，某些在早期阶段表现平平的样本可能在后期与其他样本结合时触发关键推理能力的突破。</p>
+<ul>
+<li><strong>潜在风险</strong>：单纯选择高LIM分数的样本可能导致训练数据同质化，削弱模型处理多样化问题的能力。</li>
+<li><strong>改进方向</strong>：可引入群体智能（swarm intelligence）思想，设计基于样本集的动态评分机制，评估样本组合的整体价值。例如，使用强化学习优化样本子集的组合策略，而不仅是个体分数。</li>
+</ul>
+<h3 id="Q8：论文强调在7B模型上RL优于SFT，但这是否源于SFT数据选择策略的次优性？LIMO和s1的数据是否真正适合7B模型的容量？"><strong>Q8：论文强调在7B模型上RL优于SFT，但这是否源于SFT数据选择策略的次优性？LIMO和s1的数据是否真正适合7B模型的容量？</strong></h3>
+<p>作者的结论可能受限于对比实验设计：</p>
+<ul>
+<li><strong>数据适配性问题</strong>：LIMO和s1的数据可能针对更大模型（如32B）优化，直接用于7B模型可能导致知识蒸馏失效。例如，复杂的长链推理数据可能超出小模型的学习能力。</li>
+<li><strong>训练策略差异</strong>：SFT通常需要更精细的学习率调度和数据增强，而论文未说明是否对SFT进行了充分优化。</li>
+<li><strong>验证方法</strong>：需控制变量实验，例如：
+<ul>
+<li>使用相同数据分别进行RL和SFT训练，比较结果。</li>
+<li>调整SFT训练参数（如学习率、批大小）以适配小模型。</li>
+</ul>
+</li>
+<li><strong>深层启示</strong>：模型规模与数据复杂度需匹配，盲目采用大模型数据可能损害小模型性能。</li>
+</ul>
+<h3 id="Q9：LIM的样本选择基于静态阈值θ-0-6，是否应动态调整以适配不同训练阶段？"><strong>Q9：LIM的样本选择基于静态阈值θ=0.6，是否应动态调整以适配不同训练阶段？</strong></h3>
+<p>固定阈值的局限性明显：</p>
+<ul>
+<li><strong>阶段适应性缺失</strong>：模型在不同训练阶段需要不同难度的样本。早期可能需要高奖励样本建立基础能力，后期则需要挑战性样本突破瓶颈。</li>
+<li><strong>数据分布偏移风险</strong>：随着模型能力提升，原高价值样本可能逐渐失效（如模型已完全掌握），但静态选择机制无法及时淘汰过时样本。</li>
+<li><strong>改进思路</strong>：
+<ul>
+<li>设计自适应阈值机制，例如基于模型当前平均奖励动态调整θ。</li>
+<li>引入课程学习（curriculum learning），分阶段调整样本选择策略。例如，早期选择高LIM分数样本，后期逐步加入低分数但高多样性的样本。</li>
+</ul>
+</li>
+</ul>
+<h3 id="Q10：实验仅验证数学推理任务，LIM方法是否受限于任务特性？例如，在需要常识推理或创造性生成的任务中，轨迹对齐假设是否依然成立？"><strong>Q10：实验仅验证数学推理任务，LIM方法是否受限于任务特性？例如，在需要常识推理或创造性生成的任务中，轨迹对齐假设是否依然成立？</strong></h3>
+<p>任务特性可能显著影响LIM的有效性：</p>
+<ul>
+<li><strong>数学推理的确定性</strong>：数学问题通常有明确答案，奖励函数容易设计，而开放性任务（如创意写作）的奖励更模糊，可能削弱LIM的评估准确性。</li>
+<li><strong>学习轨迹的可预测性</strong>：数学问题的解决过程往往呈现清晰的渐进模式（如从简单算术到复杂证明），而创造性任务的学习轨迹可能更加非线性。</li>
+<li><strong>验证必要性</strong>：需在多样化任务（如代码生成、故事创作）中测试LIM的泛化性。</li>
+<li><strong>潜在挑战</strong>：
+<ul>
+<li>如何定义非确定性任务的奖励函数？</li>
+<li>如何量化开放性任务的“学习轨迹”？</li>
+</ul>
+</li>
+</ul>
+<h3 id="Q11：LIMR声称无需蒸馏，但实验中使用的Qwen-Math-7B基座模型是否已隐含数学能力？该基座模型是否经过数学相关预训练，导致结论难以推广到纯通用基座模型？"><strong>Q11：LIMR声称无需蒸馏，但实验中使用的Qwen-Math-7B基座模型是否已隐含数学能力？该基座模型是否经过数学相关预训练，导致结论难以推广到纯通用基座模型？</strong></h3>
+<p>模型的预训练数据可能影响结论普适性：</p>
+<ul>
+<li><strong>Qwen-Math-7B的特性</strong>：根据技术报告，该模型已在数学语料上进行继续预训练，并非纯通用基座模型。这意味着LIMR的效果可能部分源于基座模型的数学偏向性。</li>
+<li><strong>泛化性风险</strong>：若换用通用基座模型（如Llama-3），可能需要更大量数据才能达到相同效果，导致LIMR的相对优势减弱。</li>
+<li><strong>验证建议</strong>：补充实验对比不同基座模型（数学专用 vs 通用）下的LIMR效果差异。</li>
+</ul>
+<hr>
+<h2 id="伪代码">伪代码</h2>
+<p>下面是一个极简的伪代码流程演示，原版代码可以直接去项目里看。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br><span class="line">122</span><br><span class="line">123</span><br><span class="line">124</span><br><span class="line">125</span><br><span class="line">126</span><br><span class="line">127</span><br><span class="line">128</span><br><span class="line">129</span><br><span class="line">130</span><br><span class="line">131</span><br><span class="line">132</span><br><span class="line">133</span><br><span class="line">134</span><br><span class="line">135</span><br><span class="line">136</span><br><span class="line">137</span><br><span class="line">138</span><br><span class="line">139</span><br><span class="line">140</span><br><span class="line">141</span><br><span class="line">142</span><br><span class="line">143</span><br><span class="line">144</span><br><span class="line">145</span><br><span class="line">146</span><br><span class="line">147</span><br><span class="line">148</span><br><span class="line">149</span><br><span class="line">150</span><br><span class="line">151</span><br><span class="line">152</span><br><span class="line">153</span><br><span class="line">154</span><br><span class="line">155</span><br><span class="line">156</span><br><span class="line">157</span><br></pre></td><td class="code"><pre><span class="line">import torch</span><br><span class="line">import torch.nn as nn</span><br><span class="line">from torch.utils.data import Dataset, DataLoader</span><br><span class="line">import numpy as np</span><br><span class="line">from collections import defaultdict</span><br><span class="line"></span><br><span class="line"># 假设的数学问题数据集（需替换为真实数据）</span><br><span class="line">class MathDataset(Dataset):</span><br><span class="line">    def __init__(self):</span><br><span class="line">        self.questions = [</span><br><span class="line">            &#123;&quot;id&quot;: 0, &quot;text&quot;: &quot;解方程 x^2 + 2x + 1 = 0&quot;, &quot;difficulty&quot;: 3&#125;,</span><br><span class="line">            &#123;&quot;id&quot;: 1, &quot;text&quot;: &quot;求导数 d/dx(sin(x))&quot;, &quot;difficulty&quot;: 2&#125;,</span><br><span class="line">            # … 添加更多样本</span><br><span class="line">        ]</span><br><span class="line">        </span><br><span class="line">    def __len__(self):</span><br><span class="line">        return len(self.questions)</span><br><span class="line">    </span><br><span class="line">    def __getitem__(self, idx):</span><br><span class="line">        return self.questions[idx]</span><br><span class="line"></span><br><span class="line"># 基于Transformer的Actor-Critic模型</span><br><span class="line">class MathSolver(nn.Module):</span><br><span class="line">    def __init__(self, vocab_size=10000, embed_dim=256):</span><br><span class="line">        super().__init__()</span><br><span class="line">        self.embedding = nn.Embedding(vocab_size, embed_dim)</span><br><span class="line">        self.transformer = nn.TransformerEncoder(</span><br><span class="line">            nn.TransformerEncoderLayer(d_model=embed_dim, nhead=8),</span><br><span class="line">            num_layers=6</span><br><span class="line">        )</span><br><span class="line">        self.actor = nn.Linear(embed_dim, vocab_size)  # 生成答案</span><br><span class="line">        self.critic = nn.Linear(embed_dim, 1)         # 评估状态价值</span><br><span class="line"></span><br><span class="line">    def forward(self, input_ids):</span><br><span class="line">        embeds = self.embedding(input_ids)</span><br><span class="line">        hidden = self.transformer(embeds)</span><br><span class="line">        logits = self.actor(hidden[:, -1, :])  # 取最后一个token的表示</span><br><span class="line">        value = self.critic(hidden[:, -1, :])</span><br><span class="line">        return logits, value</span><br><span class="line"></span><br><span class="line"># 实现LIM的核心计算</span><br><span class="line">class LIMCalculator:</span><br><span class="line">    def __init__(self):</span><br><span class="line">        self.sample_rewards = defaultdict(list)  # &#123;样本ID: [epoch1奖励, epoch2奖励…]&#125;</span><br><span class="line">        self.avg_rewards = []                    # 每个epoch的平均奖励</span><br><span class="line"></span><br><span class="line">    def update(self, epoch, sample_ids, rewards):</span><br><span class="line">        &quot;&quot;&quot;记录每个样本的奖励历史&quot;&quot;&quot;</span><br><span class="line">        for sid, r in zip(sample_ids, rewards):</span><br><span class="line">            self.sample_rewards[sid].append(r)</span><br><span class="line">        self.avg_rewards.append(np.mean(rewards))</span><br><span class="line"></span><br><span class="line">    def compute_lim_scores(self):</span><br><span class="line">        &quot;&quot;&quot;计算LIM分数（与平均奖励轨迹的余弦相似度）&quot;&quot;&quot;</span><br><span class="line">        scores = &#123;&#125;</span><br><span class="line">        K = len(self.avg_rewards)  # 总训练轮次</span><br><span class="line">        </span><br><span class="line">        # 转换为张量便于计算</span><br><span class="line">        avg_tensor = torch.tensor(self.avg_rewards)</span><br><span class="line">        avg_mean = torch.mean(avg_tensor)</span><br><span class="line">        </span><br><span class="line">        for sid in self.sample_rewards:</span><br><span class="line">            # 对齐历史长度（处理部分样本未参与早期训练的情况）</span><br><span class="line">            sample_r = self.sample_rewards[sid]</span><br><span class="line">            if len(sample_r) &lt; K:</span><br><span class="line">                sample_r = [0.0]*(K - len(sample_r)) + sample_r</span><br><span class="line">                </span><br><span class="line">            sample_tensor = torch.tensor(sample_r)</span><br><span class="line">            sample_mean = torch.mean(sample_tensor)</span><br><span class="line">            </span><br><span class="line">            # 计算协方差</span><br><span class="line">            numerator = torch.sum((sample_tensor - sample_mean) * (avg_tensor - avg_mean))</span><br><span class="line">            denominator = torch.sqrt(</span><br><span class="line">                torch.sum((sample_tensor - sample_mean)**2) * </span><br><span class="line">                torch.sum((avg_tensor - avg_mean)**2)</span><br><span class="line">            ) + 1e-8  # 防止除零</span><br><span class="line">            </span><br><span class="line">            scores[sid] = (numerator / denominator).item()</span><br><span class="line">        return scores</span><br><span class="line"></span><br><span class="line"># 强化学习训练流程</span><br><span class="line">def train_limr():</span><br><span class="line">    # 初始化</span><br><span class="line">    device = torch.device(&quot;cuda&quot; if torch.cuda.is_available() else &quot;cpu&quot;)</span><br><span class="line">    dataset = MathDataset()</span><br><span class="line">    model = MathSolver().to(device)</span><br><span class="line">    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)</span><br><span class="line">    lim_calculator = LIMCalculator()</span><br><span class="line">    </span><br><span class="line">    # 训练参数</span><br><span class="line">    num_epochs = 10</span><br><span class="line">    batch_size = 32</span><br><span class="line">    gamma = 0.99       # 折扣因子</span><br><span class="line">    clip_epsilon = 0.2 # PPO裁剪系数</span><br><span class="line">    </span><br><span class="line">    for epoch in range(num_epochs):</span><br><span class="line">        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)</span><br><span class="line">        epoch_rewards = []</span><br><span class="line">        </span><br><span class="line">        for batch in dataloader:</span><br><span class="line">            # 生成答案（假设已转换为token id）</span><br><span class="line">            input_ids = … # 实际需要文本编码处理</span><br><span class="line">            old_logits, old_values = model(input_ids)</span><br><span class="line">            </span><br><span class="line">            # 使用当前策略采样多个答案（PPO中的rollout）</span><br><span class="line">            with torch.no_grad():</span><br><span class="line">                new_logits, new_values = model(input_ids)</span><br><span class="line">                action_probs = torch.softmax(new_logits, dim=-1)</span><br><span class="line">                actions = torch.multinomial(action_probs, num_samples=8)  # 每个问题生成8个答案</span><br><span class="line">            </span><br><span class="line">            # 计算奖励（示例规则）</span><br><span class="line">            rewards = []</span><br><span class="line">            for qid, action in zip(batch[&#x27;id&#x27;], actions):</span><br><span class="line">                # 此处应实现答案验证逻辑，示例使用随机值</span><br><span class="line">                if np.random.rand() &gt; 0.7:   # 30%正确率</span><br><span class="line">                    reward = 1.0</span><br><span class="line">                elif np.random.rand() &gt; 0.3: # 40%格式正确但答案错误</span><br><span class="line">                    reward = -0.5</span><br><span class="line">                else:                        # 30%格式错误</span><br><span class="line">                    reward = -1.0</span><br><span class="line">                rewards.append(reward)</span><br><span class="line">            rewards = torch.tensor(rewards).to(device)</span><br><span class="line">            </span><br><span class="line">            # 记录LIM数据</span><br><span class="line">            lim_calculator.update(epoch, batch[&#x27;id&#x27;], rewards.cpu().numpy())</span><br><span class="line">            </span><br><span class="line">            # PPO更新计算（简化版）</span><br><span class="line">            # 计算新旧策略概率比</span><br><span class="line">            new_probs = torch.log_softmax(new_logits, dim=-1)</span><br><span class="line">            old_probs = torch.log_softmax(old_logits.detach(), dim=-1)</span><br><span class="line">            ratio = torch.exp(new_probs - old_probs)</span><br><span class="line">            </span><br><span class="line">            # 计算优势函数</span><br><span class="line">            advantages = rewards - old_values.squeeze()</span><br><span class="line">            </span><br><span class="line">            # PPO损失计算</span><br><span class="line">            surr1 = ratio * advantages</span><br><span class="line">            surr2 = torch.clamp(ratio, 1-clip_epsilon, 1+clip_epsilon) * advantages</span><br><span class="line">            actor_loss = -torch.min(surr1, surr2).mean()</span><br><span class="line">            </span><br><span class="line">            critic_loss = nn.MSELoss()(new_values.squeeze(), rewards)</span><br><span class="line">            </span><br><span class="line">            # 反向传播</span><br><span class="line">            loss = actor_loss + 0.5 * critic_loss</span><br><span class="line">            optimizer.zero_grad()</span><br><span class="line">            loss.backward()</span><br><span class="line">            optimizer.step()</span><br><span class="line">        </span><br><span class="line">        # 每轮结束后计算LIM分数并筛选样本</span><br><span class="line">        if epoch % 2 == 0:  # 每2轮筛选一次</span><br><span class="line">            lim_scores = lim_calculator.compute_lim_scores()</span><br><span class="line">            top_samples = sorted(lim_scores.items(), key=lambda x: x[1], reverse=True)[:500]</span><br><span class="line">            # 更新数据集为高LIM分数样本（此处需实现数据集动态更新逻辑）</span><br><span class="line">            </span><br><span class="line"># 运行训练</span><br><span class="line">if __name__ == &quot;__main__&quot;:</span><br><span class="line">    train_limr()</span><br></pre></td></tr></table></figure>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/09/01/2025-09-01-LIMR%E8%A7%A3%E8%AF%BB/">http://example.com/2025/09/01/2025-09-01-LIMR%E8%A7%A3%E8%AF%BB/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E5%BC%BA%E5%8C%96%E5%AD%A6%E4%B9%A0/">强化学习</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/RL.jpeg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/" title="Linux 云服务器根分区扩容流程(ext4 示例)"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/df.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Linux 云服务器根分区扩容流程(ext4 示例)</div></div><div class="info-2"><div class="info-item-1">Linux 云服务器根分区扩容流程（ext4 示例） 1. 云厂商控制台扩容磁盘  登录云服务商（AWS、阿里云、腾讯云等） 找到对应实例的 系统盘 / 数据盘 修改磁盘大小，例如从 40G → 80G 这一步完成后，虚拟磁盘 /dev/vda 就会变大，但分区和文件系统不会自动变大   2. 确认磁盘和分区情况 12lsblkdf -h  lsblk 会显示磁盘和分区大小 df -h 会显示文件系统挂载的空间大小  例子： 12vda    80G└─vda1 40G   / 👉 说明磁盘是 80G，但分区还只有 40G  3. 安装扩容工具 （Ubuntu/Debian） 12sudo apt updatesudo apt install -y cloud-guest-utils （CentOS/RHEL） 1sudo yum install -y cloud-utils-growpart  4. 扩展分区 1sudo growpart /dev/vda 1  /dev/vda → 磁盘名 1 → 分区号（即 /dev/vda1）  执行后再看： 1lsblk 应该变成： ...</div></div></div></a><a class="pagination-related" href="/2025/08/29/2025-08-29-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%B7%B7%E5%90%88%E5%B9%B6%E8%A1%8CDPTPPP%EF%BC%8C%E5%A6%82%E4%BD%95%E5%88%92%E5%88%86%E6%9C%BA%E5%99%A8%EF%BC%9F/" title="大模型混合并行DP/TP/PP，如何划分机器？"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/3d.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">大模型混合并行DP/TP/PP，如何划分机器？</div></div><div class="info-2"><div class="info-item-1">大模型混合并行DP/TP/PP，如何划分机器？ 1 DP/TP/PP的通信量比较 在大规模深度学习模型的训练过程中，为了加速训练和减少单个计算节点的压力，通常会使用分布式训练技术。分布式训练涉及到几种并行策略，其中最常提到的是数据并行（Data Parallelism, DP）、模型并行（Model Parallelism, MP）和流水线并行（Pipeline Parallelism, PP）。另外，模型并行中还有一种称为张量并行（Tensor Parallelism, TP）的方式，它是指将模型的张量（如权重矩阵）分割到不同的设备上进行计算。  数据并行（DP）：解决计算墙的问题。每个设备上都会有一个模型的完整副本，每个设备独立地处理一部分数据集，然后将各自的梯度汇总起来（通常是通过AllReduce操作）。因此，DP的通信主要发生在训练的每个epoch结束时，各个设备之间需要交换梯度信息。这种通信通常量较大，因为它涉及到模型所有参数的同步。 张量并行（TP）：解决内存墙的问题。模型的权重矩阵被分割成多个部分，每个部分由不同的设备负责计算。TP的通信主要发生在前向和后向传播过...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/11/2024-09-11-RLHF/" title="RLHF"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/RL.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-11</div><div class="info-item-2">RLHF</div></div><div class="info-2"><div class="info-item-1">RLHF 从零实现ChatGPT——RLHF技术笔记 - 知乎 (zhihu.com) 一文读懂「RLHF」基于人类反馈的进行强化学习-CSDN博客 大模型 | 通俗理解RLHF基础知识以及完整流程-CSDN博客 </div></div></div></a><a class="pagination-related" href="/2024/09/11/2024-09-11-%E5%BC%BA%E5%8C%96%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0/" title="强化学习笔记"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/RL.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-11</div><div class="info-item-2">强化学习笔记</div></div><div class="info-2"><div class="info-item-1">强化学习笔记 强化学习极简入门：通俗理解MDP、DP MC TC和Q学习、策略梯度、PPO-CSDN博客 </div></div></div></a><a class="pagination-related" href="/2025/08/14/2025-08-13-Qwen3%E6%8A%80%E6%9C%AF%E6%96%87%E6%A1%A3/" title="Qwen3技术报告解读"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Qwen.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-14</div><div class="info-item-2">Qwen3技术报告解读</div></div><div class="info-2"><div class="info-item-1">Qwen3技术报告解读 转自：https://zhuanlan.zhihu.com/p/1905926139756680880 模型架构 Qwen3系列，包括6个Dense模型，分别是Qwen3-0.6B、Qwen3-1.7B、Qwen3-4B、Qwen3-8B、Qwen3-14B和Qwen3-32B；2个MoE模型，分别是Qwen3-30B-A3B和Qwen3-235B-A22B。 Qwen3 Dense模型的架构与Qwen2.5相似，包括GQA、SwiGLU、RoPE以及RMSNorm with pre-normalization。此外，移除了Qwen2中使用的QKV偏置，并在注意力机制中引入了QK-Norm，以确保Qwen3的稳定训练。  Qwen3 MoE模型采用了细粒度专家分割，共有128个专家，激活8个专家。但与Qwen2.5-MoE不同，Qwen3-MoE去除了共享专家。同时，采用了全局批次负载平衡损失。  预训练 预训练数据共36T Tokens，包含119种语言和方言，涉及代码、STEM、推理任务、书籍、合成数据等。 其中，有部分数据是Qwen2.5-VL模型对...</div></div></div></a><a class="pagination-related" href="/2025/08/14/2025-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF/" title="大模型蒸馏技术"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Distillation.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-14</div><div class="info-item-2">大模型蒸馏技术</div></div><div class="info-2"><div class="info-item-1">导读 在人工智能快速发展的今天，模型的规模越来越大，计算成本也越来越高，这对中小型开发者来说无疑是一个巨大的挑战：如何通过将大模型的知识和能力浓缩到更小、更轻量化的模型中，降低硬件要求，以更低的成本享受到先进的人工智能技术？  DeepSeek-R1及其API的开源标志着这一领域的重要突破。 对于中小型开发者而言，这意味着他们不再需要依赖庞大的计算资源就能实现高效、强大的人工智能应用。DeepSeek提供的开源蒸馏检查点（如基于Qwen2.5和Llama3系列的1.5B、7B、8B等参数规模）为开发者提供了丰富的选择空间，无论是初创公司还是个人项目，都可以根据自身需求灵活调用这些模型。   github 地址：https://github.com/deepseek-ai/DeepSeek-R1  这一技术不仅降低了人工智能的准入门槛，也为中小型开发者在资源有限的情况下实现创新提供了更多可能性。通过蒸馏模型，他们可以更专注于业务逻辑和应用场景的优化，而无需过多关注底层计算资源的限制。这无疑将推动人工智能技术在更广泛的领域中落地生根。  接下来，详细跟大家聊聊模型蒸馏。  一、为什么...</div></div></div></a><a class="pagination-related" href="/2025/08/13/2025-08-13-%E5%9F%BA%E4%BA%8E-Ray-%E7%9A%84%E5%88%86%E7%A6%BB%E5%BC%8F%E6%9E%B6%E6%9E%84veRL%E3%80%81OpenRLHF-%E5%B7%A5%E7%A8%8B%E8%AE%BE%E8%AE%A1/" title="基于 Ray 的分离式架构:veRL、OpenRLHF 工程设计"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Ray.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-13</div><div class="info-item-2">基于 Ray 的分离式架构:veRL、OpenRLHF 工程设计</div></div><div class="info-2"><div class="info-item-1">基于 Ray 的分离式架构:veRL、OpenRLHF 工程设计 转载：https://zhuanlan.zhihu.com/p/26833089345 在 RL、蒸馏等任务中需要多个模型协同完成计算、数据通信、流程控制等工作。例如 PPO 及各类衍生算法中，就需要管理 Actor、Rollout、Ref、Critic、Reward 等最多 5 类模块，每类模块还承担着 train、eval、generate 其中的一种或多种职责，而蒸馏任务中也存在着多组 Teacher 和多组 Student 共同蒸馏的场景。 如果我们仍然采用 Pretrain、SFT 训练这种基于单脚本多进程的运行模式（通过 deepspeed、torchrun 等命令启动任务），是难以实现灵活的任务调度和资源分配策略的。而 Ray 提供的 remote 异步调用和 Actor 抽象，可以让每个模块有独立的运行单元和任务处理逻辑，这种分离式架构使之天然适配多模型之间的频繁交互和协同工作的场景。 这篇文章以当今最为流行的两个 RL 框架 veRL 和 OpenRLHF 为例，从工程角度分析这两个框架的特点和优...</div></div></div></a><a class="pagination-related" href="/2025/08/20/2025-08-20-UloRLAn-Ultra-Long-Output-Reinforcement-Learning-Approach-for/" title="UloRL:An Ultra-Long Output Reinforcement Learning Approach for Advancing Large Language Models’ Reasoning Abilities"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-20</div><div class="info-item-2">UloRL:An Ultra-Long Output Reinforcement Learning Approach for Advancing Large Language Models’ Reasoning Abilities</div></div><div class="info-2"><div class="info-item-1">UloRL:An Ultra-Long Output Reinforcement Learning Approach for Advancing Large Language Models’ Reasoning Abilities 论文链接：https://arxiv.org/pdf/2507.19766 转自：https://zhuanlan.zhihu.com/p/1932380821412638989 得益于Test-time Scaling的成功，大模型的推理能力取得了突破性的进展。为了探索Test-time Scaling的上限，我们尝试通过强化学习来扩展模型输出长度，以提升模型的推理能力。然而，强化学习在处理超长输出时面临两个问题：1) 由于输出长度的长尾分布问题，整体的训练效率低下；2) 超长序列的训练过程中会面临熵崩塌问题。为应对这些挑战，我们对GRPO做了一系列优化，提出了一个名为UloRL的强化学习算法。在Qwen3-30B-A3B的实验表明，通过我们的方法进行强化训练，模型在AIME-2025上由70.9提升到85.1，在BeyondAIME上由50.7提升...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">134</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">120</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">36</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">LIMR解读</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BB%E8%A6%81%E5%86%85%E5%AE%B9"><span class="toc-number">1.1.</span> <span class="toc-text">主要内容</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E4%BD%9C%E8%80%85%E5%92%8C%E5%9B%A2%E9%98%9F%E4%BF%A1%E6%81%AF"><span class="toc-number">1.1.1.</span> <span class="toc-text">1. 作者和团队信息</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E8%83%8C%E6%99%AF%E5%92%8C%E5%8A%A8%E6%9C%BA"><span class="toc-number">1.1.2.</span> <span class="toc-text">2. 背景和动机</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E7%9B%B8%E5%85%B3%E7%A0%94%E7%A9%B6"><span class="toc-number">1.1.3.</span> <span class="toc-text">3. 相关研究</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E6%A0%B8%E5%BF%83%E6%80%9D%E8%B7%AF"><span class="toc-number">1.1.4.</span> <span class="toc-text">4. 核心思路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E6%96%B9%E6%A1%88%E4%B8%8E%E6%8A%80%E6%9C%AF"><span class="toc-number">1.1.5.</span> <span class="toc-text">5. 方案与技术</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-%E5%AE%9E%E9%AA%8C%E4%B8%8E%E7%BB%93%E8%AE%BA"><span class="toc-number">1.1.6.</span> <span class="toc-text">6. 实验与结论</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-%E8%B4%A1%E7%8C%AE"><span class="toc-number">1.1.7.</span> <span class="toc-text">7. 贡献</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-%E4%B8%8D%E8%B6%B3"><span class="toc-number">1.1.8.</span> <span class="toc-text">8. 不足</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#QA"><span class="toc-number">1.2.</span> <span class="toc-text">QA</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Q1%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BD%9C%E8%80%85%E8%AE%A4%E4%B8%BA%E5%BA%94%E8%AF%A5%E5%85%B3%E6%B3%A8%E4%BA%8E%E6%B2%A1%E6%9C%89%E7%BB%8F%E8%BF%87%E8%92%B8%E9%A6%8F%E7%9A%84%E5%9F%BA%E5%BA%A7%E6%A8%A1%E5%9E%8B%EF%BC%9F"><span class="toc-number">1.2.1.</span> <span class="toc-text">Q1：为什么作者认为应该关注于没有经过蒸馏的基座模型？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q2%EF%BC%9ALIM-%E6%96%B9%E6%B3%95%E7%9A%84%E6%A0%B8%E5%BF%83%E6%80%9D%E6%83%B3%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F%E5%AE%83%E6%98%AF%E5%A6%82%E4%BD%95%E8%A1%A1%E9%87%8F%E6%A0%B7%E6%9C%AC%E4%BB%B7%E5%80%BC%E7%9A%84%EF%BC%9F"><span class="toc-number">1.2.2.</span> <span class="toc-text">Q2：LIM 方法的核心思想是什么？它是如何衡量样本价值的？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q3%EF%BC%9A%E5%BD%92%E4%B8%80%E5%8C%96%E5%AF%B9%E9%BD%90%E5%88%86%E6%95%B0%E6%98%AF%E5%A6%82%E4%BD%95%E8%AE%A1%E7%AE%97%E7%9A%84%EF%BC%9F%E5%AE%83%E4%BB%A3%E8%A1%A8%E4%BB%80%E4%B9%88%E5%90%AB%E4%B9%89%EF%BC%9F"><span class="toc-number">1.2.3.</span> <span class="toc-text">Q3：归一化对齐分数是如何计算的？它代表什么含义？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q4%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E5%9C%A8-AIME24-%E5%92%8C-AMC23-%E4%B8%8A%E8%A6%81%E8%BF%9B%E8%A1%8C%E5%A4%9A%E6%AC%A1%E6%8A%BD%E6%A0%B7%EF%BC%8C%E8%80%8C%E5%9C%A8-MATH500-%E4%B8%8A%E9%87%87%E7%94%A8%E8%B4%AA%E5%A9%AA%E8%A7%A3%E7%A0%81%EF%BC%9F"><span class="toc-number">1.2.4.</span> <span class="toc-text">Q4：为什么在 AIME24 和 AMC23 上要进行多次抽样，而在 MATH500 上采用贪婪解码？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q5%EF%BC%9A%E5%A6%82%E4%BD%95%E7%90%86%E8%A7%A3-%E3%80%8CRL-outperforms-SFT-in-Data-Efficiency%E3%80%8D-%E8%BF%99%E4%B8%80%E7%BB%93%E8%AE%BA%EF%BC%9F"><span class="toc-number">1.2.5.</span> <span class="toc-text">Q5：如何理解 「RL outperforms SFT in Data Efficiency」 这一结论？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q6%EF%BC%9ALIMR-%E6%96%B9%E6%B3%95%E6%9C%89%E5%93%AA%E4%BA%9B%E6%BD%9C%E5%9C%A8%E7%9A%84%E5%BA%94%E7%94%A8%E5%9C%BA%E6%99%AF%EF%BC%9F"><span class="toc-number">1.2.6.</span> <span class="toc-text">Q6：LIMR 方法有哪些潜在的应用场景？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q7%EF%BC%9ALIM%E6%96%B9%E6%B3%95%E7%9A%84%E6%A0%B8%E5%BF%83%E5%81%87%E8%AE%BE%E6%98%AF%E3%80%8C%E6%A0%B7%E6%9C%AC%E5%AD%A6%E4%B9%A0%E8%BD%A8%E8%BF%B9%E4%B8%8E%E6%A8%A1%E5%9E%8B%E6%95%B4%E4%BD%93%E8%BD%A8%E8%BF%B9%E7%9A%84%E5%AF%B9%E9%BD%90%E6%80%A7%E5%86%B3%E5%AE%9A%E5%85%B6%E4%BB%B7%E5%80%BC%E3%80%8D%E3%80%82%E8%BF%99%E4%B8%80%E5%81%87%E8%AE%BE%E6%98%AF%E5%90%A6%E5%BF%BD%E8%A7%86%E4%BA%86%E6%A0%B7%E6%9C%AC%E9%97%B4%E7%9A%84%E5%8D%8F%E5%90%8C%E6%95%88%E5%BA%94%EF%BC%9F"><span class="toc-number">1.2.7.</span> <span class="toc-text">Q7：LIM方法的核心假设是「样本学习轨迹与模型整体轨迹的对齐性决定其价值」。这一假设是否忽视了样本间的协同效应？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q8%EF%BC%9A%E8%AE%BA%E6%96%87%E5%BC%BA%E8%B0%83%E5%9C%A87B%E6%A8%A1%E5%9E%8B%E4%B8%8ARL%E4%BC%98%E4%BA%8ESFT%EF%BC%8C%E4%BD%86%E8%BF%99%E6%98%AF%E5%90%A6%E6%BA%90%E4%BA%8ESFT%E6%95%B0%E6%8D%AE%E9%80%89%E6%8B%A9%E7%AD%96%E7%95%A5%E7%9A%84%E6%AC%A1%E4%BC%98%E6%80%A7%EF%BC%9FLIMO%E5%92%8Cs1%E7%9A%84%E6%95%B0%E6%8D%AE%E6%98%AF%E5%90%A6%E7%9C%9F%E6%AD%A3%E9%80%82%E5%90%887B%E6%A8%A1%E5%9E%8B%E7%9A%84%E5%AE%B9%E9%87%8F%EF%BC%9F"><span class="toc-number">1.2.8.</span> <span class="toc-text">Q8：论文强调在7B模型上RL优于SFT，但这是否源于SFT数据选择策略的次优性？LIMO和s1的数据是否真正适合7B模型的容量？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q9%EF%BC%9ALIM%E7%9A%84%E6%A0%B7%E6%9C%AC%E9%80%89%E6%8B%A9%E5%9F%BA%E4%BA%8E%E9%9D%99%E6%80%81%E9%98%88%E5%80%BC%CE%B8-0-6%EF%BC%8C%E6%98%AF%E5%90%A6%E5%BA%94%E5%8A%A8%E6%80%81%E8%B0%83%E6%95%B4%E4%BB%A5%E9%80%82%E9%85%8D%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E9%98%B6%E6%AE%B5%EF%BC%9F"><span class="toc-number">1.2.9.</span> <span class="toc-text">Q9：LIM的样本选择基于静态阈值θ&#x3D;0.6，是否应动态调整以适配不同训练阶段？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q10%EF%BC%9A%E5%AE%9E%E9%AA%8C%E4%BB%85%E9%AA%8C%E8%AF%81%E6%95%B0%E5%AD%A6%E6%8E%A8%E7%90%86%E4%BB%BB%E5%8A%A1%EF%BC%8CLIM%E6%96%B9%E6%B3%95%E6%98%AF%E5%90%A6%E5%8F%97%E9%99%90%E4%BA%8E%E4%BB%BB%E5%8A%A1%E7%89%B9%E6%80%A7%EF%BC%9F%E4%BE%8B%E5%A6%82%EF%BC%8C%E5%9C%A8%E9%9C%80%E8%A6%81%E5%B8%B8%E8%AF%86%E6%8E%A8%E7%90%86%E6%88%96%E5%88%9B%E9%80%A0%E6%80%A7%E7%94%9F%E6%88%90%E7%9A%84%E4%BB%BB%E5%8A%A1%E4%B8%AD%EF%BC%8C%E8%BD%A8%E8%BF%B9%E5%AF%B9%E9%BD%90%E5%81%87%E8%AE%BE%E6%98%AF%E5%90%A6%E4%BE%9D%E7%84%B6%E6%88%90%E7%AB%8B%EF%BC%9F"><span class="toc-number">1.2.10.</span> <span class="toc-text">Q10：实验仅验证数学推理任务，LIM方法是否受限于任务特性？例如，在需要常识推理或创造性生成的任务中，轨迹对齐假设是否依然成立？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q11%EF%BC%9ALIMR%E5%A3%B0%E7%A7%B0%E6%97%A0%E9%9C%80%E8%92%B8%E9%A6%8F%EF%BC%8C%E4%BD%86%E5%AE%9E%E9%AA%8C%E4%B8%AD%E4%BD%BF%E7%94%A8%E7%9A%84Qwen-Math-7B%E5%9F%BA%E5%BA%A7%E6%A8%A1%E5%9E%8B%E6%98%AF%E5%90%A6%E5%B7%B2%E9%9A%90%E5%90%AB%E6%95%B0%E5%AD%A6%E8%83%BD%E5%8A%9B%EF%BC%9F%E8%AF%A5%E5%9F%BA%E5%BA%A7%E6%A8%A1%E5%9E%8B%E6%98%AF%E5%90%A6%E7%BB%8F%E8%BF%87%E6%95%B0%E5%AD%A6%E7%9B%B8%E5%85%B3%E9%A2%84%E8%AE%AD%E7%BB%83%EF%BC%8C%E5%AF%BC%E8%87%B4%E7%BB%93%E8%AE%BA%E9%9A%BE%E4%BB%A5%E6%8E%A8%E5%B9%BF%E5%88%B0%E7%BA%AF%E9%80%9A%E7%94%A8%E5%9F%BA%E5%BA%A7%E6%A8%A1%E5%9E%8B%EF%BC%9F"><span class="toc-number">1.2.11.</span> <span class="toc-text">Q11：LIMR声称无需蒸馏，但实验中使用的Qwen-Math-7B基座模型是否已隐含数学能力？该基座模型是否经过数学相关预训练，导致结论难以推广到纯通用基座模型？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BC%AA%E4%BB%A3%E7%A0%81"><span class="toc-number">1.3.</span> <span class="toc-text">伪代码</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="sandbox和container对比"/></a><div class="content"><a class="title" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比">sandbox和container对比</a><time datetime="2025-09-15T16:00:00.000Z" title="发表于 2025-09-16 00:00:00">2025-09-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="容器运行时扩展方案技术解析"/></a><div class="content"><a class="title" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析">容器运行时扩展方案技术解析</a><time datetime="2025-09-15T16:00:00.000Z" title="发表于 2025-09-16 00:00:00">2025-09-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="如何通过Pod进入到宿主机?"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?">如何通过Pod进入到宿主机?</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s informer通俗易懂详解"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解">k8s informer通俗易懂详解</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s控制面相关学习"/></a><div class="content"><a class="title" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习">k8s控制面相关学习</a><time datetime="2025-09-13T16:00:00.000Z" title="发表于 2025-09-14 00:00:00">2025-09-14</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

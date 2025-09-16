@@ -1,0 +1,326 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>知识蒸馏技术原理详解:从软标签到模型压缩的实现机制 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="知识蒸馏技术原理详解：从软标签到模型压缩的实现机制 **知识蒸馏**是一种通过性能与模型规模的权衡来实现模型压缩的技术。其核心思想是将较大规模模型（称为教师模型）中的知识迁移到规模较小的模型（称为学生模型）中。本文将深入探讨知识迁移的具体实现机制。  知识蒸馏原理 知识蒸馏的核心目标是实现从教师模型到学生模型的知识迁移。在实际应用中，无论是大规模语言模型（LLMs）还是其他类型的神经网络模型，都会">
+<meta property="og:type" content="article">
+<meta property="og:title" content="知识蒸馏技术原理详解:从软标签到模型压缩的实现机制">
+<meta property="og:url" content="http://example.com/2025/08/14/2025-08-14-%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86%E8%AF%A6%E8%A7%A3%E4%BB%8E%E8%BD%AF%E6%A0%87%E7%AD%BE%E5%88%B0%E6%A8%A1%E5%9E%8B%E5%8E%8B%E7%BC%A9%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%9C%BA%E5%88%B6/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="知识蒸馏技术原理详解：从软标签到模型压缩的实现机制 **知识蒸馏**是一种通过性能与模型规模的权衡来实现模型压缩的技术。其核心思想是将较大规模模型（称为教师模型）中的知识迁移到规模较小的模型（称为学生模型）中。本文将深入探讨知识迁移的具体实现机制。  知识蒸馏原理 知识蒸馏的核心目标是实现从教师模型到学生模型的知识迁移。在实际应用中，无论是大规模语言模型（LLMs）还是其他类型的神经网络模型，都会">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/soft.png">
+<meta property="article:published_time" content="2025-08-13T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-08-15T06:47:59.159Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="人工智能">
+<meta property="article:tag" content="大模型">
+<meta property="article:tag" content="知识蒸馏">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/soft.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "知识蒸馏技术原理详解:从软标签到模型压缩的实现机制",
+  "url": "http://example.com/2025/08/14/2025-08-14-%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86%E8%AF%A6%E8%A7%A3%E4%BB%8E%E8%BD%AF%E6%A0%87%E7%AD%BE%E5%88%B0%E6%A8%A1%E5%9E%8B%E5%8E%8B%E7%BC%A9%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%9C%BA%E5%88%B6/",
+  "image": "http://example.com/img/cover/soft.png",
+  "datePublished": "2025-08-13T16:00:00.000Z",
+  "dateModified": "2025-08-15T06:47:59.159Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/08/14/2025-08-14-%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86%E8%AF%A6%E8%A7%A3%E4%BB%8E%E8%BD%AF%E6%A0%87%E7%AD%BE%E5%88%B0%E6%A8%A1%E5%9E%8B%E5%8E%8B%E7%BC%A9%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%9C%BA%E5%88%B6/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '知识蒸馏技术原理详解:从软标签到模型压缩的实现机制',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">134</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">120</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">36</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">知识蒸馏技术原理详解:从软标签到模型压缩的实现机制</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">知识蒸馏技术原理详解:从软标签到模型压缩的实现机制</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-08-13T16:00:00.000Z" title="发表于 2025-08-14 00:00:00">2025-08-14</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-08-15T06:47:59.159Z" title="更新于 2025-08-15 14:47:59">2025-08-15</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B/">大模型</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/08/14/2025-08-14-%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86%E8%AF%A6%E8%A7%A3%E4%BB%8E%E8%BD%AF%E6%A0%87%E7%AD%BE%E5%88%B0%E6%A8%A1%E5%9E%8B%E5%8E%8B%E7%BC%A9%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%9C%BA%E5%88%B6/" data-flag-title="知识蒸馏技术原理详解:从软标签到模型压缩的实现机制"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>知识蒸馏技术原理详解：从软标签到模型压缩的实现机制</h1>
+<p>**<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=253114906&amp;content_type=Article&amp;match_order=1&amp;q=%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F&amp;zhida_source=entity">知识蒸馏</a>**是一种通过性能与模型规模的权衡来实现模型压缩的技术。其核心思想是将较大规模模型（称为<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=253114906&amp;content_type=Article&amp;match_order=1&amp;q=%E6%95%99%E5%B8%88%E6%A8%A1%E5%9E%8B&amp;zhida_source=entity">教师模型</a>）中的知识迁移到规模较小的模型（称为<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=253114906&amp;content_type=Article&amp;match_order=1&amp;q=%E5%AD%A6%E7%94%9F%E6%A8%A1%E5%9E%8B&amp;zhida_source=entity">学生模型</a>）中。本文将深入探讨知识迁移的具体实现机制。</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://pic1.zhimg.com/v2-9b0e698fcfbbbeb95dceaa71d99652ce_1440w.jpg" alt="img"></p>
+<h3 id="知识蒸馏原理">知识蒸馏原理</h3>
+<p>知识蒸馏的核心目标是实现从教师模型到学生模型的知识迁移。在实际应用中，无论是大规模语言模型（LLMs）还是其他类型的神经网络模型，都会通过softmax函数输出概率分布。</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://pic3.zhimg.com/v2-692cb0ccc955af9366433e7f90913844_1440w.jpg" alt="img"></p>
+<h3 id="Softmax输出示例分析">Softmax输出示例分析</h3>
+<p>考虑一个输出三类别概率的神经网络模型。假设教师模型输出以下logits值：</p>
+<p><strong>教师模型logits：</strong> [1.1, 0.2, 0.2]</p>
+<p>经过softmax函数转换后得到：</p>
+<p><strong>Softmax概率分布：</strong> [0.552, 0.224, 0.224]</p>
+<p>此时，类别0获得最高概率，成为模型的预测输出。模型同时为类别1和类别2分配了较低的概率值。这种概率分布表明，尽管输入数据最可能属于类别0，但其特征表现出了与类别1和类别2的部分相关性。</p>
+<h3 id="低概率信息的利用价值">低概率信息的利用价值</h3>
+<p>在传统分类任务中，由于最高概率（0.552）显著高于其他概率值（均为0.224），次高概率通常会被忽略。而知识蒸馏技术的创新之处在于充分利用这些次要概率信息来指导学生模型的训练过程。</p>
+<p><strong>分类任务实例分析：</strong></p>
+<p>以动物识别任务为例，当教师模型处理一张马的图像时，除了对&quot;马&quot;类别赋予最高概率外，还会为&quot;鹿&quot;和&quot;牛&quot;类别分配一定概率。这种概率分配反映了物种间的特征相似性，如四肢结构和尾部特征。虽然马的体型大小和头部轮廓等特征最终导致&quot;马&quot;类别获得最高概率，但模型捕获到的类别间相似性信息同样具有重要价值。</p>
+<p>分析另一组教师模型输出的logits值：</p>
+<p><strong>教师模型logits：</strong> [2.9, 0.1, 0.23]</p>
+<p>应用softmax函数后得到：</p>
+<p><strong>Softmax概率分布：</strong> [0.885, 0.054, 0.061]</p>
+<p>在这个例子中，类别0以0.885的高概率占据主导地位，但其他类别仍保留了有效信息。为了更好地利用这些细粒度信息，我们引入温度参数T=3对分布进行软化处理。软化后的logits值为：</p>
+<p><strong>软化后logits：</strong> [0.967, 0.033, 0.077]</p>
+<p>再次应用softmax函数：</p>
+<p><strong>温度调节后的概率分布：</strong> [0.554, 0.218, 0.228]</p>
+<p>经过软化处理的概率分布在保留主导类别信息的同时，适当提升了其他类别的概率权重。这种被称为<strong>软标签</strong>的概率分布，相比传统的<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=253114906&amp;content_type=Article&amp;match_order=1&amp;q=%E7%8B%AC%E7%83%AD%E7%BC%96%E7%A0%81%E6%A0%87%E7%AD%BE&amp;zhida_source=entity">独热编码标签</a>（如[1, 0, 0]），包含了更丰富的类别间关系信息。</p>
+<h3 id="学生模型训练机制">学生模型训练机制</h3>
+<p>在传统的模型训练中，仅使用独热编码标签（如[1, 0, 0]）会导致模型仅关注正确类别的预测。这种训练方式通常采用**<a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=253114906&amp;content_type=Article&amp;match_order=1&amp;q=%E4%BA%A4%E5%8F%89%E7%86%B5%E6%8D%9F%E5%A4%B1%E5%87%BD%E6%95%B0&amp;zhida_source=entity">交叉熵损失函数</a>**。而知识蒸馏技术通过引入教师模型的软标签信息，为学生模型提供了更丰富的学习目标。</p>
+<h3 id="复合损失函数设计">复合损失函数设计</h3>
+<p>学生模型的训练目标由两个损失分量构成：</p>
+<ol>
+<li><strong>硬标签损失：</strong> 学生模型预测值与真实标签之间的标准交叉熵损失。</li>
+<li><strong>软标签损失：</strong> 基于教师模型软标签计算的知识迁移损失。</li>
+</ol>
+<p>这种复合损失函数可以用数学形式表示为：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://pica.zhimg.com/v2-3c6500e1803143c813d8728150312b44_1440w.jpg" alt="img"></p>
+<h3 id="KL散度计算方法"><a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=253114906&amp;content_type=Article&amp;match_order=1&amp;q=KL%E6%95%A3%E5%BA%A6&amp;zhida_source=entity">KL散度</a>计算方法</h3>
+<p>为了度量教师模型软标签与学生模型预测之间的差异，采用<strong>Kullback-Leibler (KL) 散度</strong>作为度量标准：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://pica.zhimg.com/v2-52bab4e7c50409a9f8e8f4a951c0f7cc_1440w.jpg" alt="img"></p>
+<p>其中：</p>
+<ul>
+<li>pi表示教师模型的软标签概率。</li>
+<li>qi表示学生模型的预测概率。</li>
+</ul>
+<p>数值计算示例</p>
+<p>以下示例展示了教师模型和学生模型预测之间的KL散度计算过程：</p>
+<p><strong>教师模型软标签：</strong> [0.554,0.218,0.228]</p>
+<p><strong>学生模型预测值：</strong> [0.26,0.32,0.42]</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://pic1.zhimg.com/v2-35698cdcec8477313b360f10e6aa88ac_1440w.jpg" alt="img"></p>
+<p>各项计算过程：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://pic2.zhimg.com/v2-9d9e8d261642835e0fe277680b400733_1440w.jpg" alt="img"></p>
+<p>求和结果：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://picx.zhimg.com/v2-87878272ffeab5585097cf9a6c0c7eb3_1440w.jpg" alt="img"></p>
+<h3 id="最终损失计算方法">最终损失计算方法</h3>
+<p>为了补偿温度参数带来的影响，需要将KL散度乘以温度参数的平方（T²）：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://pic4.zhimg.com/v2-b178eae45c9ac6e0e7ace30035dc014d_1440w.jpg" alt="img"></p>
+<p>这种补偿机制确保了KL散度不会因温度参数的引入而过度衰减，从而避免反向传播过程中出现梯度消失问题。通过综合考虑硬标签损失和经过温度调节的KL散度，学生模型能够有效利用教师模型提供的知识，实现更高效的参数学习。</p>
+<h3 id="总结">总结</h3>
+<p>与仅使用独热编码标签（如[1, 0, 0]）的传统训练方法相比，知识蒸馏技术通过引入教师模型的软标签信息，显著降低了学生模型的学习难度。这种知识迁移机制使得构建小型高效模型成为可能，为模型压缩技术提供了新的解决方案。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/08/14/2025-08-14-%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86%E8%AF%A6%E8%A7%A3%E4%BB%8E%E8%BD%AF%E6%A0%87%E7%AD%BE%E5%88%B0%E6%A8%A1%E5%9E%8B%E5%8E%8B%E7%BC%A9%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%9C%BA%E5%88%B6/">http://example.com/2025/08/14/2025-08-14-%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86%E8%AF%A6%E8%A7%A3%E4%BB%8E%E8%BD%AF%E6%A0%87%E7%AD%BE%E5%88%B0%E6%A8%A1%E5%9E%8B%E5%8E%8B%E7%BC%A9%E7%9A%84%E5%AE%9E%E7%8E%B0%E6%9C%BA%E5%88%B6/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD/">人工智能</a><a class="post-meta__tags" href="/tags/%E5%A4%A7%E6%A8%A1%E5%9E%8B/">大模型</a><a class="post-meta__tags" href="/tags/%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F/">知识蒸馏</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/soft.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2025/08/15/2025-08-15-ray-accelerate-trainer-lightning-pytorch/" title="ray accelerate trainer lightning pytorch"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">ray accelerate trainer lightning pytorch</div></div><div class="info-2"><div class="info-item-1">ray、accelerate、trainer、lightning、pytorch 转自：https://www.zhihu.com/question/1926849595331318550/answer/1928049512619968205 作者：CodeCrafter 链接：https://www.zhihu.com/question/1926849595331318550/answer/1939450608894608104 来源：知乎 著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。 2025 年，纯 PyTorch 是基本功，你必须得会，而且要熟。 它是你的内力，是你理解一切上层框架的基础。 Hugging Face Trainer 是特定领域（尤其是 NLP）的“版本答案”。 如果你就是做微调、做推理，用它，省心省力，快速出活儿。 Lightning 和 Accelerate 是“效率增强器”。 帮你把 PyTorch 代码写得更规范、更工程化，让你从繁琐的样板代码里解放出来，专注于模型本身。 Ray… 这家伙是个“大杀器”，跟前面几个不是一个维度...</div></div></div></a><a class="pagination-related" href="/2025/08/14/2025-08-14-Qwen2.5%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%BE%AE%E8%B0%83%E5%85%A5%E9%97%A8%E5%AE%9E%E6%88%98/" title="Qwen2.5大模型微调入门实战"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Qwen.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Qwen2.5大模型微调入门实战</div></div><div class="info-2"><div class="info-item-1">Qwen2.5大模型微调入门实战 知识点：什么是全参数微调？ 大模型全参数微调是指对预训练大模型的所有参数进行更新和优化，区别于部分参数微调和LoRA微调。 这种方法通过将整个模型权重（包括底层词嵌入、中间特征提取层和顶层任务适配层）在下游任务数据上进行梯度反向传播，使模型整体适应新任务的需求。相比仅微调部分参数，全参数微调能更充分地利用预训练模型的泛化能力，并针对特定任务进行深度适配，通常在数据差异较大或任务复杂度较高的场景下表现更优。  不过，全参数微调往往需要更高的计算资源和存储开销，且存在**过拟合风险**（尤其在小数据集上）。实际应用中常结合学习率调整、参数分组优化或正则化技术来缓解这些问题。 全参数微调多用于对模型表现性能要求较高的场景，例如专业领域知识问答或高精度文本生成。 1. 环境安装 本案例基于Python&gt;=3.8，请在您的计算机上安装好Python； 另外，您的计算机上至少要有一张英伟达/昇腾显卡（显存要求大概32GB左右可以跑）。 我们需要安装以下这几个Python库，在这之前，请确保你的环境内已安装了pytorch以及CUDA： 1234567s...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/05/2024-09-05-%E4%B8%A4%E4%B8%87%E5%AD%97%E8%AE%B2%E6%B8%85%E6%A5%9A%EF%BC%9A%E7%8E%B0%E5%9C%A8%E7%9A%84AI%E4%BA%A7%E5%93%81%E6%9C%89%E5%A4%9A%E9%9A%BE%E5%81%9A%EF%BC%9F/" title="两万字讲清楚：现在的AI产品有多难做？"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-05</div><div class="info-item-2">两万字讲清楚：现在的AI产品有多难做？</div></div><div class="info-2"><div class="info-item-1">两万字讲清楚：现在的AI产品有多难做？ https://mp.weixin.qq.com/s/pMt_VMs6uq5wsPPscOyefA 这篇文章深入探讨了AI产品经理在处理大型AI模型时应该考虑的关键问题和机遇。 1. 关注API而非仅仅是产品  核心观点：产品经理应该深入理解大模型的API，因为这是模型能力的直接体现。产品的最终形态往往是API能力的延伸，但可能会因为各种工程限制而与API的能力有所差异。 实际意义：了解API的能力和限制可以帮助产品经理更准确地设计产品功能，避免过度依赖模型无法实现的功能。  2. AI与移动互联网的类比不恰当  核心观点：简单地将AI技术应用到所有应用中并不是一个有效策略。只有那些真正能够从AI中获得显著优势的应用才应该进行AI重构。 实际意义：这要求产品经理进行深入的需求分析和成本效益分析，以确定AI的投入是否真正值得。  3. 产品经理需要学会调用API  核心观点：产品经理应该具备直接与AI模型交互的能力，这有助于更好地理解模型的能力和局限。 实际意义：这种能力可以帮助产品经理在产品开发过程中做出更准确的决策，并能够快速迭代产品以适...</div></div></div></a><a class="pagination-related" href="/2025/08/14/2025-08-13-Qwen3%E6%8A%80%E6%9C%AF%E6%96%87%E6%A1%A3/" title="Qwen3技术报告解读"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Qwen.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-14</div><div class="info-item-2">Qwen3技术报告解读</div></div><div class="info-2"><div class="info-item-1">Qwen3技术报告解读 转自：https://zhuanlan.zhihu.com/p/1905926139756680880 模型架构 Qwen3系列，包括6个Dense模型，分别是Qwen3-0.6B、Qwen3-1.7B、Qwen3-4B、Qwen3-8B、Qwen3-14B和Qwen3-32B；2个MoE模型，分别是Qwen3-30B-A3B和Qwen3-235B-A22B。 Qwen3 Dense模型的架构与Qwen2.5相似，包括GQA、SwiGLU、RoPE以及RMSNorm with pre-normalization。此外，移除了Qwen2中使用的QKV偏置，并在注意力机制中引入了QK-Norm，以确保Qwen3的稳定训练。  Qwen3 MoE模型采用了细粒度专家分割，共有128个专家，激活8个专家。但与Qwen2.5-MoE不同，Qwen3-MoE去除了共享专家。同时，采用了全局批次负载平衡损失。  预训练 预训练数据共36T Tokens，包含119种语言和方言，涉及代码、STEM、推理任务、书籍、合成数据等。 其中，有部分数据是Qwen2.5-VL模型对...</div></div></div></a><a class="pagination-related" href="/2025/08/14/2025-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%92%B8%E9%A6%8F%E6%8A%80%E6%9C%AF/" title="大模型蒸馏技术"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Distillation.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-14</div><div class="info-item-2">大模型蒸馏技术</div></div><div class="info-2"><div class="info-item-1">导读 在人工智能快速发展的今天，模型的规模越来越大，计算成本也越来越高，这对中小型开发者来说无疑是一个巨大的挑战：如何通过将大模型的知识和能力浓缩到更小、更轻量化的模型中，降低硬件要求，以更低的成本享受到先进的人工智能技术？  DeepSeek-R1及其API的开源标志着这一领域的重要突破。 对于中小型开发者而言，这意味着他们不再需要依赖庞大的计算资源就能实现高效、强大的人工智能应用。DeepSeek提供的开源蒸馏检查点（如基于Qwen2.5和Llama3系列的1.5B、7B、8B等参数规模）为开发者提供了丰富的选择空间，无论是初创公司还是个人项目，都可以根据自身需求灵活调用这些模型。   github 地址：https://github.com/deepseek-ai/DeepSeek-R1  这一技术不仅降低了人工智能的准入门槛，也为中小型开发者在资源有限的情况下实现创新提供了更多可能性。通过蒸馏模型，他们可以更专注于业务逻辑和应用场景的优化，而无需过多关注底层计算资源的限制。这无疑将推动人工智能技术在更广泛的领域中落地生根。  接下来，详细跟大家聊聊模型蒸馏。  一、为什么...</div></div></div></a><a class="pagination-related" href="/2025/08/14/2025-08-14-Qwen2.5%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%BE%AE%E8%B0%83%E5%85%A5%E9%97%A8%E5%AE%9E%E6%88%98/" title="Qwen2.5大模型微调入门实战"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Qwen.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-14</div><div class="info-item-2">Qwen2.5大模型微调入门实战</div></div><div class="info-2"><div class="info-item-1">Qwen2.5大模型微调入门实战 知识点：什么是全参数微调？ 大模型全参数微调是指对预训练大模型的所有参数进行更新和优化，区别于部分参数微调和LoRA微调。 这种方法通过将整个模型权重（包括底层词嵌入、中间特征提取层和顶层任务适配层）在下游任务数据上进行梯度反向传播，使模型整体适应新任务的需求。相比仅微调部分参数，全参数微调能更充分地利用预训练模型的泛化能力，并针对特定任务进行深度适配，通常在数据差异较大或任务复杂度较高的场景下表现更优。  不过，全参数微调往往需要更高的计算资源和存储开销，且存在**过拟合风险**（尤其在小数据集上）。实际应用中常结合学习率调整、参数分组优化或正则化技术来缓解这些问题。 全参数微调多用于对模型表现性能要求较高的场景，例如专业领域知识问答或高精度文本生成。 1. 环境安装 本案例基于Python&gt;=3.8，请在您的计算机上安装好Python； 另外，您的计算机上至少要有一张英伟达/昇腾显卡（显存要求大概32GB左右可以跑）。 我们需要安装以下这几个Python库，在这之前，请确保你的环境内已安装了pytorch以及CUDA： 1234567s...</div></div></div></a><a class="pagination-related" href="/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/" title="Transformer解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/transformer.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-05</div><div class="info-item-2">Transformer解析</div></div><div class="info-2"><div class="info-item-1">Transformer解析（Attention Is All You Need） 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 Transformer论文逐段精读【论文精读】_哔哩哔哩_bilibili 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 大模型面试准备（十二）：深入剖析Transformer - 残差连接和层归一化_残差层和归一化层-CSDN博客 Transformer通俗笔记：从Word2Vec、Seq2Seq逐步理解到GPT、BERT-CSDN博客  “Attention Is All You Need” 是一篇由 Ashish Vaswani 等人撰写的论文，发表于 2017 年的 NeurIPS 会议上。这篇论文提出了 Transformer 模型，Transformer是一种用于自然语言处理（NLP）和其他序列到序列（sequence-to-sequence）任务的深度学习模型架构。Transformer架构引入了自注意力机制（self-attention mechanism），这是一个...</div></div></div></a><a class="pagination-related" href="/2024/09/05/2024-09-05-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="大模型学习路线"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-05</div><div class="info-item-2">大模型学习路线</div></div><div class="info-2"><div class="info-item-1">大模型学习路线  现在门槛降低了，成本也降低了。大模型技术爆发，抓住机会。 开源大模型（离线，更安全）/在线大模型   微调：Lora-&gt;垂类  适用于用户意图识别    RAG：检索增强生成（一系列专家，提升表现幅度，降低幻觉）  只要提供了正确答案，大概率就不会答错 适合私有数据库 所以依赖于提供的数据库的信息，对数据质量要求比较高 推理更加缓慢（低于微调） 对知识库构建/信息压缩排名等（并非深度学习方面，需要深度学习算法工程师进行辅助）    提示词工程 【AI大模型】Prompt 提示词工程使用详解_大模型prompt的用法详解-CSDN博客   预训练：创造出属于自己的全新大模型  需要算力最多（微调其次，RAG和提示词工程对于算力的要求就没那么高）    agent-&gt;担任80%脑力工作 一些课程 NLP FudanNLP/nlp-beginner: NLP上手教程 (github.com) 自然语言处理的入门练习 深度学习 跟李沐学AI的个人空间-跟李沐学AI个人主页-哔哩哔哩视频 (bilibili.com) 动手学深度学习 论文精读 https://...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">134</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">120</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">36</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">知识蒸馏技术原理详解：从软标签到模型压缩的实现机制</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9F%A5%E8%AF%86%E8%92%B8%E9%A6%8F%E5%8E%9F%E7%90%86"><span class="toc-number">1.0.1.</span> <span class="toc-text">知识蒸馏原理</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Softmax%E8%BE%93%E5%87%BA%E7%A4%BA%E4%BE%8B%E5%88%86%E6%9E%90"><span class="toc-number">1.0.2.</span> <span class="toc-text">Softmax输出示例分析</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BD%8E%E6%A6%82%E7%8E%87%E4%BF%A1%E6%81%AF%E7%9A%84%E5%88%A9%E7%94%A8%E4%BB%B7%E5%80%BC"><span class="toc-number">1.0.3.</span> <span class="toc-text">低概率信息的利用价值</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AD%A6%E7%94%9F%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E6%9C%BA%E5%88%B6"><span class="toc-number">1.0.4.</span> <span class="toc-text">学生模型训练机制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%8D%E5%90%88%E6%8D%9F%E5%A4%B1%E5%87%BD%E6%95%B0%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.0.5.</span> <span class="toc-text">复合损失函数设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#KL%E6%95%A3%E5%BA%A6%E8%AE%A1%E7%AE%97%E6%96%B9%E6%B3%95"><span class="toc-number">1.0.6.</span> <span class="toc-text">KL散度计算方法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%80%E7%BB%88%E6%8D%9F%E5%A4%B1%E8%AE%A1%E7%AE%97%E6%96%B9%E6%B3%95"><span class="toc-number">1.0.7.</span> <span class="toc-text">最终损失计算方法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">1.0.8.</span> <span class="toc-text">总结</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="sandbox和container对比"/></a><div class="content"><a class="title" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比">sandbox和container对比</a><time datetime="2025-09-15T16:00:00.000Z" title="发表于 2025-09-16 00:00:00">2025-09-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="容器运行时扩展方案技术解析"/></a><div class="content"><a class="title" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析">容器运行时扩展方案技术解析</a><time datetime="2025-09-15T16:00:00.000Z" title="发表于 2025-09-16 00:00:00">2025-09-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="如何通过Pod进入到宿主机?"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?">如何通过Pod进入到宿主机?</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s informer通俗易懂详解"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解">k8s informer通俗易懂详解</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s控制面相关学习"/></a><div class="content"><a class="title" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习">k8s控制面相关学习</a><time datetime="2025-09-13T16:00:00.000Z" title="发表于 2025-09-14 00:00:00">2025-09-14</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,745 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Transformer解析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Transformer解析（Attention Is All You Need） 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 Transformer论文逐段精读【论文精读】_哔哩哔哩_bilibili 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 大模型面试准备（十二）：深入剖析Transformer - 残差连接和层归一化">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Transformer解析">
+<meta property="og:url" content="http://example.com/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="Transformer解析（Attention Is All You Need） 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 Transformer论文逐段精读【论文精读】_哔哩哔哩_bilibili 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 大模型面试准备（十二）：深入剖析Transformer - 残差连接和层归一化">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/transformer.png">
+<meta property="article:published_time" content="2024-09-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-08-13T04:12:24.083Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="人工智能">
+<meta property="article:tag" content="Transformer">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/transformer.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Transformer解析",
+  "url": "http://example.com/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/",
+  "image": "http://example.com/img/cover/transformer.png",
+  "datePublished": "2024-09-04T16:00:00.000Z",
+  "dateModified": "2025-08-13T04:12:24.083Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Transformer解析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">134</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">120</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">36</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Transformer解析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Transformer解析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2024-09-04T16:00:00.000Z" title="发表于 2024-09-05 00:00:00">2024-09-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-08-13T04:12:24.083Z" title="更新于 2025-08-13 12:12:24">2025-08-13</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B/">大模型</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/" data-flag-title="Transformer解析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>Transformer解析（Attention Is All You Need）</h1>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/weixin_42475060/article/details/121101749">【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客</a></p>
+<p><a target="_blank" rel="noopener" href="https://www.bilibili.com/video/BV1pu411o7BE/?spm_id_from=333.788&amp;vd_source=d2728007bbda9125d177004b9124afc1">Transformer论文逐段精读【论文精读】_哔哩哔哩_bilibili</a></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/weixin_42475060/article/details/121101749?ops_request_misc=%7B%22request%5Fid%22%3A%2223205416-E55A-4366-8460-16BF03B50DC7%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&amp;request_id=23205416-E55A-4366-8460-16BF03B50DC7&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~top_positive~default-2-121101749-null-null.142%5Ev100%5Epc_search_result_base8&amp;utm_term=Transformer&amp;spm=1018.2226.3001.4187">【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客</a></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/2401_84033492/article/details/137428500?ops_request_misc=&amp;request_id=&amp;biz_id=102&amp;utm_term=%E6%AE%8B%E5%B7%AE%E8%BF%9E%E6%8E%A5&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduweb~default-8-137428500.142%5Ev100%5Epc_search_result_base8&amp;spm=1018.2226.3001.4187">大模型面试准备（十二）：深入剖析Transformer - 残差连接和层归一化_残差层和归一化层-CSDN博客</a></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/v_JULY_v/article/details/127411638">Transformer通俗笔记：从Word2Vec、Seq2Seq逐步理解到GPT、BERT-CSDN博客</a></p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/09/AkNgzf385QGD1pq.png" alt="a78c6302f00b8b42a12d28dd3081a82c[1].png"></p>
+<p>“Attention Is All You Need” 是一篇由 Ashish Vaswani 等人撰写的论文，发表于 2017 年的 NeurIPS 会议上。这篇论文提出了 Transformer 模型，Transformer是一种用于自然语言处理（NLP）和其他序列到序列（sequence-to-sequence）任务的深度学习模型架构。Transformer架构引入了自注意力机制（self-attention mechanism），这是一个关键的创新，使其在处理序列数据时表现出色。</p>
+<h2 id="Transformer-模型的主要特点：">Transformer 模型的主要特点：</h2>
+<ol>
+<li>
+<p><strong>自注意力机制（Self-Attention）</strong>：Transformer 模型的核心是自注意力机制，它允许模型在序列的每个位置都计算与其他位置的注意力，从而捕捉序列内部的长距离依赖关系。这种机制使得模型能够更好地理解文本中的上下文信息。</p>
+</li>
+<li>
+<p><strong>并行化处理</strong>：与循环神经网络（RNN）和长短期记忆网络（LSTM）不同，Transformer 模型可以并行处理序列中的所有元素，这大大提高了模型的训练速度。</p>
+</li>
+<li>
+<p><strong>编码器-解码器架构</strong>：Transformer 模型通常由编码器和解码器两部分组成。编码器将输入序列转换为中间表示，解码器则根据这个表示生成输出序列。这种架构特别适用于机器翻译等任务。</p>
+</li>
+<li>
+<p><strong>位置编码</strong>：由于自注意力机制本身不包含序列中的位置信息，Transformer 引入了位置编码来为模型提供序列中单词的位置信息。</p>
+</li>
+<li>
+<p><strong>多头注意力（Multi-Head Attention）</strong>：Transformer 模型使用多头注意力机制来从不同的表示子空间中捕捉信息，这增强了模型的表达能力。</p>
+</li>
+<li>
+<p><strong>层标准化（Layer Normalization）<strong>和</strong>残差连接（Residual Connections）</strong>：这些技术有助于提高模型的训练稳定性和性能。</p>
+</li>
+</ol>
+<h2 id="Transformer重点">Transformer重点</h2>
+<h3 id="编码器（Encoder）：">编码器（Encoder）：</h3>
+<p>编码器：（多头注意力+MLP+残差连接）*N（N=6）</p>
+<ul>
+<li>
+<p>2 sub layer:</p>
+<ol>
+<li>Multi-Head Attention（多头注意力）</li>
+<li>position-wise fully connected feed-forward network（一个MLP）</li>
+</ol>
+<p>在每一个sub layer中，有一个residual connection（残差连接）和一个Layer Norm（层归一化）。</p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/m0_73624835/article/details/134743624?ops_request_misc=%7B%22request%5Fid%22%3A%22F95741FB-CE0D-4A26-A431-25A8C54101E0%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&amp;request_id=F95741FB-CE0D-4A26-A431-25A8C54101E0&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~top_positive~default-1-134743624-null-null.142%5Ev100%5Epc_search_result_base8&amp;utm_term=%E6%AE%8B%E5%B7%AE%E8%BF%9E%E6%8E%A5&amp;spm=1018.2226.3001.4187">残差连接（Residual Connection）-CSDN博客</a></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/weixin_66526635/article/details/132411168?ops_request_misc=%7B%22request%5Fid%22%3A%223415ECC2-BAC2-49E8-A135-FB3D948A035C%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&amp;request_id=3415ECC2-BAC2-49E8-A135-FB3D948A035C&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-2-132411168-null-null.142%5Ev100%5Epc_search_result_base8&amp;utm_term=%E6%AE%8B%E5%B7%AE%E8%BF%9E%E6%8E%A5%E5%92%8C%E8%B7%B3%E8%B7%83%E8%BF%9E%E6%8E%A5&amp;spm=1018.2226.3001.4187">【深度学习 | ResNet核心思想】残差连接 &amp; 跳跃连接：让信息自由流动的神奇之道-CSDN博客</a></p>
+<p>Layer Norm(x+sub layer(x))</p>
+<p>[BatchNorm和LayerNorm——通俗易懂的理解_layernorm和batchnorm-CSDN博客](<a target="_blank" rel="noopener" href="https://blog.csdn.net/Little_White_9/article/details/123345062?ops_request_misc=%7B%22request%5Fid%22%3A%225650B123-9D57-41CE-A28B-51467C660DDF%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&amp;request_id=5650B123-9D57-41CE-A28B-51467C660DDF&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~top_positive~default-1-123345062-null-null.142%5Ev100%5Epc_search_result_base8&amp;utm_term=Layer">https://blog.csdn.net/Little_White_9/article/details/123345062?ops_request_misc={&quot;request_id&quot;%3A&quot;5650B123-9D57-41CE-A28B-51467C660DDF&quot;%2C&quot;scm&quot;%3A&quot;20140713.130102334..&quot;}&amp;request_id=5650B123-9D57-41CE-A28B-51467C660DDF&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~top_positive~default-1-123345062-null-null.142^v100^pc_search_result_base8&amp;utm_term=Layer</a> Norm&amp;spm=1018.2226.3001.4187)</p>
+<ul>
+<li>
+<p>batchNorm和layerNorm:</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/09/sTIE2vQASRWmqnu.png" alt="image-20240909205149244.png"></p>
+<p>在上面的立方体中，可以理解为batch(有多少个句子)，seq（句子里有多少词）,feature（一个词的向量表示，在论文中是长度为512)。均值变为0方差变为1（减去均值再除以标准差）。</p>
+<p>batchNorm（批归一化）是关注的不同样本和序列的同一feature的切面（蓝色）。</p>
+<p>而layerNorm（层归一化）关注的是一个样本下的东西（黄色）。</p>
+</li>
+</ul>
+</li>
+</ul>
+<p>编码器的输出作为解码器的输入。</p>
+<h3 id="解码器（Decoder）：">解码器（Decoder）：</h3>
+<p>解码器：（带掩码的多头注意力+多头注意力+MLP+残差连接）*N（N=6）</p>
+<ul>
+<li>3 sub layer:
+<ol>
+<li>Masked Multi-Head Attention（带掩码多头注意力）</li>
+<li>Multi-Head Attention（多头注意力)</li>
+<li>position-wise fully connected feed-forward network（一个MLP）</li>
+</ol>
+</li>
+</ul>
+<p>在 Transformer 模型中，带掩码的多头注意力机制（Masked Multi-Head Attention）主要用于解码器（Decoder）部分，其作用是确保解码器在生成输出序列时，每一步只能使用之前的时间步的信息，而不能“看到”未来的信息。这种机制对于保持生成序列的自回归特性至关重要，以下是其具体作用和重要性：</p>
+<ol>
+<li><strong>自回归特性</strong>：在序列生成任务（如语言模型、机器翻译）中，模型在生成当前词的同时，只能依赖于之前已经生成的词，而不能利用未来的词。带掩码的多头注意力机制通过掩码（Masking）操作实现这一点，确保在计算当前位置的注意力权重时，只考虑当前和之前位置的信息。</li>
+<li><strong>避免未来信息泄露</strong>：在训练过程中，模型应该只根据给定的输入序列生成输出，而不应该利用未来的信息。如果不使用掩码，模型可能会“作弊”，利用未来的信息来生成当前的输出，这会影响模型的泛化能力和实用性。</li>
+<li><strong>提高模型的鲁棒性</strong>：通过限制模型只能使用过去的信息，带掩码的多头注意力机制迫使模型学习如何更好地从已有的信息中提取和利用有用的特征，从而提高了模型的鲁棒性。</li>
+<li><strong>实现并行解码</strong>：在解码过程中，由于每个时间步的输出只依赖于之前的输出，这允许模型并行生成整个序列，而不是必须等待前一个词生成完毕。这在某些场景下可以提高解码的效率。</li>
+<li><strong>保持序列生成的连贯性</strong>：在生成文本或其他类型的序列数据时，保持序列的连贯性和逻辑性是非常重要的。带掩码的多头注意力机制通过确保每一步生成都只依赖于之前的信息，有助于生成更加连贯和合理的序列。</li>
+</ol>
+<p>在 Transformer 模型中，这种掩码通常是通过一个上三角矩阵实现的，其中未来位置的权重被设置为一个非常大的负数（例如负无穷大），这样在应用 softmax 函数时，这些位置的注意力权重会接近于零，从而被忽略。这种掩码也被称为因果掩码（Causal Mask），因为它确保了解码过程中的因果关系。</p>
+<p>编码器和解码器之间的联系作用的几个关键点：</p>
+<ol>
+<li><strong>信息传递</strong>：编码器将输入序列（如源语言文本）转换为一系列连续的表示，解码器则利用这些表示来生成输出序列（如目标语言文本）。编码器-解码器注意力机制使得解码器能够在每一步生成输出时，都能够参考编码器提供的上下文信息。</li>
+<li><strong>对齐关系</strong>：在机器翻译等任务中，编码器-解码器注意力机制有助于识别输入序列和输出序列之间的对齐关系。例如，它可以帮助模型确定在翻译过程中，源语言中的某个词对应于目标语言中的哪个词。</li>
+<li><strong>上下文建模</strong>：解码器在生成每个输出词时，不仅要考虑已经生成的输出序列的部分，还要考虑整个输入序列的上下文。编码器-解码器注意力机制使得解码器能够在生成过程中充分利用输入序列的全局上下文信息。</li>
+<li><strong>灵活性</strong>：编码器-解码器架构提供了灵活性，使得模型可以处理各种序列到序列的任务，如文本摘要、问答系统、对话系统等，而不仅仅是机器翻译。</li>
+<li><strong>并行处理</strong>：在训练阶段，编码器可以并行处理整个输入序列，而解码器则可以并行生成整个输出序列，这大大提高了模型的训练效率。</li>
+<li><strong>自回归特性</strong>：尽管解码器可以并行接收编码器的输出，但在生成输出序列时，它仍然保持自回归特性，即在生成当前词时，只能使用之前的时间步信息，而不能使用未来的信息。</li>
+</ol>
+<p>在 Transformer 模型的具体实现中，编码器-解码器注意力层通常位于解码器的每个层中。在这一层次上，查询（Queries）来自于解码器的上一层输出，键（Keys）和值（Values）来自于编码器的输出。通过这种方式，解码器可以有效地利用编码器处理过的输入序列信息来生成输出序列。</p>
+<h3 id="Attention：">Attention：</h3>
+<p>Q、K、V（都是矩阵）：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="C:%5CUsers%5C11505%5CAppData%5CRoaming%5CTypora%5Ctypora-user-images%5Cimage-20240909214257577.png" alt="image-20240909214257577"></p>
+<p>对于每一个key，有一个value和它对应。</p>
+<p>query（黄色部分）将进行查询，搜索到与query相似度最大的若干key，并进行权重的分配（相似度越高的权重也就越高），综合value返回结果。</p>
+<p>不同注意力-&gt;不同权重，结果也不同</p>
+<h4 id="Scaled-Dot-Product-Attention">Scaled Dot-Product Attention</h4>
+<p>Transformer自己的注意力机制叫做：<strong>Scaled Dot-Product Attention</strong>。</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>A</mi><mi>t</mi><mi>t</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi>i</mi><mi>o</mi><mi>n</mi><mo stretchy="false">(</mo><mi>Q</mi><mo separator="true">,</mo><mi>K</mi><mo separator="true">,</mo><mi>V</mi><mo stretchy="false">)</mo><mo>=</mo><mi>s</mi><mi>o</mi><mi>f</mi><mi>t</mi><mi>m</mi><mi>a</mi><mi>x</mi><mo stretchy="false">(</mo><mi>Q</mi><msup><mi>K</mi><mi>T</mi></msup><mi mathvariant="normal">/</mi><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt><mo stretchy="false">)</mo><mi>V</mi></mrow><annotation encoding="application/x-tex">Attention(Q,K,V)=softmax(QK^T/\sqrt{dk})V
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal">A</span><span class="mord mathnormal">tt</span><span class="mord mathnormal">e</span><span class="mord mathnormal">n</span><span class="mord mathnormal">t</span><span class="mord mathnormal">i</span><span class="mord mathnormal">o</span><span class="mord mathnormal">n</span><span class="mopen">(</span><span class="mord mathnormal">Q</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.2311em;vertical-align:-0.25em;"></span><span class="mord mathnormal">so</span><span class="mord mathnormal" style="margin-right:0.10764em;">f</span><span class="mord mathnormal">t</span><span class="mord mathnormal">ma</span><span class="mord mathnormal">x</span><span class="mopen">(</span><span class="mord mathnormal">Q</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">K</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8913em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.13889em;">T</span></span></span></span></span></span></span></span><span class="mord">/</span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span><span class="mclose">)</span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span></span></span></span></span></p>
+<p>这里的query和key的维度是一样的（都是dk），而value的维度是（dv）。</p>
+<p>注意到softmax中的公式，Q乘以K的转置（做一个内积，余弦相似度），再除以根号dk，再softmax（对每一行做softmax）得到n个非负的且加起来和等于1的权重。</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/09/VeZ7kDjfEz9XHnw.png" alt="image-20240909220428169.png"></p>
+<p>这里其实是一个点乘注意力（dot-product attention）+除以根号dk</p>
+<p><strong>为什么除以根号dk</strong>？</p>
+<p>Scaled dot-product attention 中的缩放因子</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt></mrow><annotation encoding="application/x-tex">\sqrt{dk}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.04em;vertical-align:-0.0589em;"></span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span></span></span></span></span></p>
+<p>是为了调整点积注意力的缩放，以防止在计算注意力分数时出现过大的数值，这可能会导致梯度消失或者梯度爆炸的问题。这里的</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt></mrow><annotation encoding="application/x-tex">\sqrt{dk}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.04em;vertical-align:-0.0589em;"></span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span></span></span></span></span></p>
+<p>是查询（queries）、键（keys）向量的维度。</p>
+<p>当我们计算两个向量的点积时，如果向量的维度</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt></mrow><annotation encoding="application/x-tex">\sqrt{dk}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.04em;vertical-align:-0.0589em;"></span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span></span></span></span></span></p>
+<p>较大，那么点积的结果可能会变得非常大。由于 softmax 函数的输入值如果过大，会导致输出值接近于 0 或 1，这会使得梯度非常小，从而在反向传播过程中难以有效地更新权重。通过除以</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt></mrow><annotation encoding="application/x-tex"> \sqrt{dk}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.04em;vertical-align:-0.0589em;"></span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span></span></span></span></span></p>
+<p>，我们可以将点积的结果缩放到一个更合理的范围内，这样 softmax 函数的输出分布会更加平滑，梯度也会更加稳定。</p>
+<p>具体来说，缩放点积注意力的计算步骤如下：</p>
+<ol>
+<li>
+<p>计算查询 Q和所有键 K之间的点积。</p>
+</li>
+<li>
+<p>将点积结果除以</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt></mrow><annotation encoding="application/x-tex">\sqrt{dk}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.04em;vertical-align:-0.0589em;"></span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span></span></span></span></span></p>
+<p>，这样做可以防止点积结果过大。</p>
+</li>
+<li>
+<p>应用 softmax 函数来获取注意力权重，这些权重表示每个值 V在计算加权和时的重要性。</p>
+</li>
+<li>
+<p>使用注意力权重对值 V进行加权求和，得到最终的注意力输出。</p>
+</li>
+</ol>
+<p>数学上，Scaled dot-product attention 可以表示为：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>A</mi><mi>t</mi><mi>t</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi>i</mi><mi>o</mi><mi>n</mi><mo stretchy="false">(</mo><mi>Q</mi><mo separator="true">,</mo><mi>K</mi><mo separator="true">,</mo><mi>V</mi><mo stretchy="false">)</mo><mo>=</mo><mi>s</mi><mi>o</mi><mi>f</mi><mi>t</mi><mi>m</mi><mi>a</mi><mi>x</mi><mo stretchy="false">(</mo><mi>Q</mi><msup><mi>K</mi><mi>T</mi></msup><mi mathvariant="normal">/</mi><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt><mo stretchy="false">)</mo><mi>V</mi></mrow><annotation encoding="application/x-tex">Attention(Q,K,V)=softmax(QK^T/\sqrt{dk})V
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal">A</span><span class="mord mathnormal">tt</span><span class="mord mathnormal">e</span><span class="mord mathnormal">n</span><span class="mord mathnormal">t</span><span class="mord mathnormal">i</span><span class="mord mathnormal">o</span><span class="mord mathnormal">n</span><span class="mopen">(</span><span class="mord mathnormal">Q</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.2311em;vertical-align:-0.25em;"></span><span class="mord mathnormal">so</span><span class="mord mathnormal" style="margin-right:0.10764em;">f</span><span class="mord mathnormal">t</span><span class="mord mathnormal">ma</span><span class="mord mathnormal">x</span><span class="mopen">(</span><span class="mord mathnormal">Q</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">K</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8913em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.13889em;">T</span></span></span></span></span></span></span></span><span class="mord">/</span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span><span class="mclose">)</span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span></span></span></span></span></p>
+<p>其中 Q是查询矩阵，K 是键矩阵，V是值矩阵，</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msqrt><mrow><mi>d</mi><mi>k</mi></mrow></msqrt></mrow><annotation encoding="application/x-tex">\sqrt{dk}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.04em;vertical-align:-0.0589em;"></span><span class="mord sqrt"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.9811em;"><span class="svg-align" style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord" style="padding-left:0.833em;"><span class="mord mathnormal">d</span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span><span style="top:-2.9411em;"><span class="pstrut" style="height:3em;"></span><span class="hide-tail" style="min-width:0.853em;height:1.08em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="1.08em" viewBox="0 0 400000 1080" preserveAspectRatio="xMinYMin slice"><path d="M95,702
+c-2.7,0,-7.17,-2.7,-13.5,-8c-5.8,-5.3,-9.5,-10,-9.5,-14
+c0,-2,0.3,-3.3,1,-4c1.3,-2.7,23.83,-20.7,67.5,-54
+c44.2,-33.3,65.8,-50.3,66.5,-51c1.3,-1.3,3,-2,5,-2c4.7,0,8.7,3.3,12,10
+s173,378,173,378c0.7,0,35.3,-71,104,-213c68.7,-142,137.5,-285,206.5,-429
+c69,-144,104.5,-217.7,106.5,-221
+l0 -0
+c5.3,-9.3,12,-14,20,-14
+H400000v40H845.2724
+s-225.272,467,-225.272,467s-235,486,-235,486c-2.7,4.7,-9,7,-19,7
+c-6,0,-10,-1,-12,-3s-194,-422,-194,-422s-65,47,-65,47z
+M834 80h400000v40h-400000z"/></svg></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.0589em;"><span></span></span></span></span></span></span></span></span></span></p>
+<p>是缩放因子。</p>
+<p>这种缩放操作是 Transformer 模型中的一个关键设计，它有助于模型在处理长序列时保持稳定性，并且使得模型能够更有效地学习序列中的长距离依赖关系。</p>
+<h4 id="掩码机制">掩码机制</h4>
+<p>掩码机制：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/09/FYbUzcojJktZCqh.png" alt="image-20240909221704256.png"></p>
+<p>在 Transformer 模型中，掩码机制（Masking Mechanism）的作用主要是在解码器（Decoder）的自注意力层中防止未来信息的泄露，确保模型在生成当前输出时只能使用之前的时间步信息。这种机制对于保证序列生成任务的正确性和因果关系至关重要。以下是掩码机制的几个主要作用：</p>
+<ol>
+<li><strong>因果关系维护</strong>：在序列生成任务中，如语言模型或机器翻译，每个输出应该是基于之前输出的因果序列。掩码机制确保解码器在生成当前词时，不会利用到未来词的信息，从而维护了序列的因果性。</li>
+<li><strong>训练稳定性</strong>：通过限制自注意力层的计算范围，掩码机制可以防止在训练过程中出现错误的信息流，这有助于提高模型训练的稳定性和效率。</li>
+<li><strong>并行解码</strong>：在解码过程中，掩码机制允许模型并行生成整个序列，因为每个输出词的生成只依赖于它之前的词，而不是整个序列。这大大提高了解码速度。</li>
+<li><strong>避免无效计算</strong>：在自注意力计算中，掩码机制通过忽略无关的位置（例如填充位置或未来的词），减少了不必要的计算，从而提高了计算效率。</li>
+<li><strong>处理变长序列</strong>：在处理不同长度的序列时，掩码机制可以动态地适应序列的实际长度，忽略填充部分，确保模型只关注有效的序列部分。</li>
+</ol>
+<p>在 Transformer 模型的解码器中，通常使用两种类型的掩码：</p>
+<ul>
+<li><strong>因果掩码（Causal Mask）</strong>：这种掩码确保在生成序列的每个时间步时，模型只能看到当前和之前的词，而不能“看到”未来的词。这通常通过一个上三角矩阵实现，其中未来位置的权重被设置为一个非常大的负数（例如负无穷大），<strong>使得在应用 softmax 函数时，这些位置的注意力权重接近于零</strong>。</li>
+<li><strong>填充掩码（Padding Mask）</strong>：在处理包含不同长度序列的批次时，通常会使用<strong>填充（Padding）来对齐序列长度</strong>。填充掩码用于告诉模型忽略这些填充的位置，因为它们不包含有效信息。</li>
+</ul>
+<p>例如，在机器翻译任务中，当模型正在生成英文翻译的第 i 个词时，它只能使用到已经翻译好的前 i-1 个词，而不能使用第 i 个词之后的信息。这样可以确保翻译的连贯性和正确性，因为翻译的每个步骤都是基于当前可用的最完整的上下文信息。</p>
+<h4 id="多头注意力">多头注意力</h4>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/09/cUkOgSZYiDBRw2r.png" alt="image-20240909222828981.png"></p>
+<p>其实在Scaled Dot-Product Attention中没有什么要去学的参数，这里直接QKV线性变化低维投影，然后重复h次最后concat再做一次线性投影。</p>
+<p>在 Transformer 模型中的多头注意力机制（Multi-Head Attention）中，进行线性变换（Linear Transformation）和拼接（Concatenation）的步骤是为了增加模型的表达能力，允许它在不同的表示子空间中并行地学习信息。以下是这些步骤的具体作用和原因：</p>
+<ol>
+<li>
+<p><strong>线性变换</strong>：</p>
+<ul>
+<li><strong>增加非线性</strong>：通过线性变换，模型可以学习到输入数据的不同线性组合，这有助于引入非线性特性，使得模型能够捕捉更复杂的特征和模式。</li>
+<li><strong>特征提取</strong>：每个“头”（Head）中的线性变换可以看作是一种特征提取过程，它允许模型在不同的表示子空间中捕捉不同的信息。</li>
+<li><strong>减少维度</strong>：在拼接之前，通常需要对每个头的输出进行线性变换，以减少维度，使得不同头的输出可以被拼接在一起而不会超过原始的维度限制。</li>
+</ul>
+</li>
+<li>
+<p><strong>拼接</strong>：</p>
+<ul>
+<li><strong>整合信息</strong>：拼接操作将多个头的输出合并成一个单一的表示，这样模型就可以同时考虑到所有头学习到的信息。</li>
+<li><strong>增加宽度</strong>：拼接增加了模型的宽度，类似于在卷积神经网络中增加滤波器的数量，这有助于提高模型的容量和学习能力。</li>
+<li><strong>保留多样性</strong>：每个头可以学习到不同的特征，拼接这些特征可以保留这种多样性，使得模型能够从多个角度理解数据。</li>
+</ul>
+</li>
+<li>
+<p><strong>多头注意力的优势</strong>：</p>
+<ul>
+<li><strong>并行处理</strong>：多头注意力允许模型并行地在不同的子空间中学习信息，这提高了计算效率。</li>
+<li><strong>捕捉不同尺度的特征</strong>：不同的头可以捕捉到不同尺度的特征，例如，一些头可能关注局部细节，而另一些头可能关注更广泛的上下文信息。</li>
+<li><strong>提高鲁棒性</strong>：多头机制增加了模型的鲁棒性，即使某些头没有学习到有用的特征，其他头仍然可以提供有用的信息。</li>
+</ul>
+</li>
+</ol>
+<p>在实际操作中，多头注意力的计算过程通常如下：</p>
+<ol>
+<li>将输入 ( X ) 通过三个不同的线性变换得到查询 ( Q )、键 ( K ) 和值 ( V )。</li>
+<li>将 ( Q )、( K ) 和 ( V ) 分别分割成多个头，每个头对应一个子空间。</li>
+<li>对每个头，计算 ( Q ) 和 ( K ) 的点积注意力，然后应用 softmax 函数得到注意力权重，最后用这些权重对 ( V ) 进行加权求和。</li>
+<li>将所有头的输出拼接在一起，并通过另一个线性变换来整合信息，得到最终的多头注意力输出。</li>
+</ol>
+<p>这种设计使得 Transformer 模型在处理序列数据时非常有效，尤其是在自然语言处理任务中。</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/09/X9HYDxWQgil2aOM.png" alt="image-20240909223600900.png"></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/WhiffeYF/article/details/140336134?ops_request_misc=&amp;request_id=&amp;biz_id=102&amp;utm_term=%E5%A4%9A%E5%A4%B4%E6%B3%A8%E6%84%8F%E5%8A%9B%E7%9A%84%E5%85%AC%E5%BC%8F%E8%A7%A3%E8%AF%BB&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduweb~default-0-140336134.142%5Ev100%5Epc_search_result_base8&amp;spm=1018.2226.3001.4187">多头注意力的公式理解_multihead attention公式-CSDN博客</a></p>
+<h4 id="Application-of-Attention-in-Our-Model">Application of Attention in Our Model</h4>
+<p>Transformer中的三个attention是在干什么事情？</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/09/hAuO47UifTsYnyM.png" alt="image-20240909230308576.png"></p>
+<p>在Transformer架构中，有3种不同的注意力层：</p>
+<ul>
+<li>
+<p>解码器中的交叉注意力层（Cross attention layer）（右上角）</p>
+<ul>
+<li>
+<p>在 Transformer 中，交叉注意力层位于字面上的中心位置；它连接了编码器和解码器，是在模型中使用注意力最直接的方式。</p>
+<p>要实现这一点，需要将目标序列作为查询，将上下文序列作为键/值传递。</p>
+<ul>
+<li>Q = 解码器中因果注意力层的输出向量</li>
+<li>K = 编码器输出的注意力向量</li>
+<li>V = 编码器输出的注意力向量</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>编码器中的全局自注意力层（Global self attention layer）（左下角）</p>
+<ul>
+<li>
+<p>全局自注意力是Transformer编码器的一部分，它的作用是负责处理整个输入序列。</p>
+<p>它允许每个序列元素直接访问其他所有序列元素，只需将整个序列作为Q，K，V即可，所有输出可以并行计算。</p>
+<ul>
+<li>
+<p>Q = 输入序列中的当前位置词向量</p>
+</li>
+<li>
+<p>K = 输入序列中的所有位置词向量</p>
+</li>
+<li>
+<p>V = 输入序列中的所有位置词向量</p>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>解码器中的因果自注意力层（Casual attention layer）（右下角）</p>
+<ul>
+<li>
+<p>因果注意力层对解码器中输出序列执行类似于全局自注意力层的工作；但与编码器的全局自注意力层有不同的处理方式。</p>
+<p>Transformer是一个“自回归”模型，它逐个标记地生成文本，并将输出反馈到输入中；为了使这个过程高效，这些模型确保每个序列元素的输出只依赖于前面的序列元素；这些模型是“因果”的。</p>
+<p>要构建一个因果自注意力层，在计算注意力分数和求和注意力值时需要使用适当的掩码，因为输出序列也是一次性输入的，但在计算前面分词的时候是不希望它后面的分词也参与计算的。</p>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="Position-wise-Feed-Forward-Networks">Position-wise Feed-Forward Networks</h3>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="C:%5CUsers%5C11505%5CAppData%5CRoaming%5CTypora%5Ctypora-user-images%5Cimage-20240910082508849.png" alt="image-20240910082508849"></p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mtext>FFN</mtext><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>max</mi><mo>⁡</mo><mo stretchy="false">(</mo><mn>0</mn><mo separator="true">,</mo><mi>x</mi><msub><mi>W</mi><mn>1</mn></msub><mo>+</mo><msub><mi>b</mi><mn>1</mn></msub><mo stretchy="false">)</mo><msub><mi>W</mi><mn>2</mn></msub><mo>+</mo><msub><mi>b</mi><mn>2</mn></msub></mrow><annotation encoding="application/x-tex">\text{FFN}(x) = \max(0, xW_1 + b_1)W_2 + b_2
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord text"><span class="mord">FFN</span></span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mop">max</span><span class="mopen">(</span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">x</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.13889em;">W</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:-0.1389em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.13889em;">W</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:-0.1389em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span></p>
+<p>一个单隐藏层的MLP，做语义的转换。</p>
+<p>如上图所示：</p>
+<ul>
+<li>最下面蓝色的是输入，上面红色的长块就是注意力</li>
+<li>注意力能够提取到有用的序列信息</li>
+<li>这些有用的信息再经过一次MLP</li>
+</ul>
+<p>在Transformer模型中，Position-wise Feed-Forward Network（FFN）是编码器和解码器内部的一个关键组件。它的作用主要体现在以下几个方面：</p>
+<ol>
+<li>
+<p><strong>增加模型的表达能力</strong>：FFN通过引入非线性变换，使得模型能够捕捉到输入数据中更复杂的特征和模式。这对于处理序列数据尤其重要，因为序列数据往往包含丰富的上下文信息和复杂的依赖关系。</p>
+</li>
+<li>
+<p><strong>参数效率</strong>：尽管Transformer模型的自注意力机制能够处理长距离依赖，但它的参数数量随着输入序列长度的增加而线性增长。FFN通过在每个位置独立地应用相同的权重，使得模型能够在保持参数数量相对固定的同时，处理不同长度的输入序列。</p>
+</li>
+<li>
+<p><strong>位置不变性</strong>：FFN的设计使得它对输入序列中的位置信息不敏感，这有助于模型更好地泛化到不同的输入序列。在自注意力机制中，位置信息是通过位置编码（Positional Encoding）来引入的，而FFN则专注于处理序列中的局部特征。</p>
+</li>
+<li>
+<p><strong>并行化处理</strong>：由于FFN在每个位置独立地应用相同的权重，这使得它可以很容易地在不同的位置上并行处理，从而提高模型的训练效率。</p>
+</li>
+<li>
+<p><strong>减少过拟合</strong>：FFN通过引入额外的参数和非线性变换，增加了模型的复杂度，这有助于模型在面对复杂数据时减少过拟合的风险。</p>
+</li>
+</ol>
+<p>FFN通常由两个线性变换和一个非线性激活函数（如ReLU）组成，其结构可以表示为：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mtext>FFN</mtext><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>max</mi><mo>⁡</mo><mo stretchy="false">(</mo><mn>0</mn><mo separator="true">,</mo><mi>x</mi><msub><mi>W</mi><mn>1</mn></msub><mo>+</mo><msub><mi>b</mi><mn>1</mn></msub><mo stretchy="false">)</mo><msub><mi>W</mi><mn>2</mn></msub><mo>+</mo><msub><mi>b</mi><mn>2</mn></msub></mrow><annotation encoding="application/x-tex">\text{FFN}(x) = \max(0, xW_1 + b_1)W_2 + b_2
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord text"><span class="mord">FFN</span></span><span class="mopen">(</span><span class="mord mathnormal">x</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mop">max</span><span class="mopen">(</span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">x</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.13889em;">W</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:-0.1389em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.13889em;">W</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:-0.1389em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></span></p>
+<p>其中，( x ) 是输入向量，( W_1 ) 和 ( W_2 ) 是权重矩阵，( b_1 ) 和 ( b_2 ) 是偏置向量。</p>
+<p>FFN的结构如下所示：</p>
+<ol>
+<li><strong>第一个线性变换</strong>：输入数据首先通过一个线性变换，这个变换由权重矩阵 <em>W</em>1 和偏置向量 <em>b</em>1 组成。</li>
+<li><strong>ReLU激活函数</strong>：经过第一个线性变换后，数据会通过ReLU激活函数，ReLU函数的公式是 max⁡(0,x)max(0,<em>x</em>)，它将所有负值置为0，保留所有正值。这一步的目的是增加模型的非线性，使得模型能够学习到更复杂的函数。</li>
+<li><strong>第二个线性变换</strong>：经过ReLU激活后的数据再通过另一个线性变换，这个变换由权重矩阵 <em>W</em>2 和偏置向量 <em>b</em>2 组成。</li>
+</ol>
+<p>在Transformer模型中，FFN通常在自注意力层之后应用，它的作用是对自注意力层的输出进行进一步的变换和特征提取。通过这种方式，FFN与自注意力机制协同工作，共同提高了模型的性能和泛化能力。</p>
+<p>RNN：</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/10/TdGkIrPghzVW4vL.png" alt="image-20240910092953130.png"></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/v_JULY_v/article/details/89894058?ops_request_misc=%7B%22request%5Fid%22%3A%22BA7B6A11-87B4-438A-9CEE-4ECB7E7E651A%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&amp;request_id=BA7B6A11-87B4-438A-9CEE-4ECB7E7E651A&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~top_positive~default-1-89894058-null-null.142%5Ev100%5Epc_search_result_base8&amp;utm_term=RNN&amp;spm=1018.2226.3001.4187">如何从RNN起步，一步一步通俗理解LSTM_rnn lstm-CSDN博客</a></p>
+<h3 id="Embeddings-and-Softmax">Embeddings and Softmax</h3>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2024/09/10/q9WzusRYHvoL1kO.png" alt="image-20240910094410891.png"></p>
+<p>在RNN中，自然是包含时序信息的：将之前的输出自然的作为输出。</p>
+<p>但注意力机制而言，如果将一个句子顺序打乱，其得到的权重是不变的-&gt;这显然是不符合常理的，因为打乱顺序就意味着语义变化。为了弥补这种缺陷，加入了 位置编码。</p>
+<p>input-&gt;词嵌入，得到一个向量-&gt;位置编码（正余弦，值在-1到1）-&gt;将向量和位置编码相加。</p>
+<p>在Transformer模型中，“Embedding” 和 “Softmax” 是两个重要的概念，它们在模型的不同部分发挥着关键作用。</p>
+<h4 id="Embedding">Embedding</h4>
+<ol>
+<li>
+<p><strong>定义</strong>：</p>
+<ul>
+<li>Embedding 是一种将离散数据（如单词、字符或其他符号）映射到连续的向量空间的技术。在自然语言处理（NLP）中，embedding 通常用于将词汇表中的单词转换为固定长度的向量。</li>
+</ul>
+</li>
+<li>
+<p><strong>在Transformer中的应用</strong>：</p>
+<ul>
+<li><strong>词嵌入（Word Embedding）</strong>：在Transformer模型的输入阶段，每个单词首先被转换为一个词嵌入向量。这些向量捕捉了单词的语义信息，并且可以通过训练进一步优化。</li>
+<li><strong>位置编码（Positional Encoding）</strong>：由于Transformer模型本身不具备捕捉序列中位置信息的能力，因此需要添加位置编码到词嵌入中。位置编码是一种将位置信息编码到向量中的方法，<strong>它与词嵌入向量相加，以确保模型能够理解单词在序列中的位置</strong>。</li>
+</ul>
+</li>
+</ol>
+<h4 id="Softmax">Softmax</h4>
+<ol>
+<li>
+<p><strong>定义</strong>：</p>
+<ul>
+<li>Softmax 是一种将实数向量转换为概率分布的函数。对于向量中的每个元素，Softmax 函数计算其相对于其他元素的指数，并将其归一化，使得所有输出值的和为1。</li>
+</ul>
+</li>
+<li>
+<p><strong>在Transformer中的应用</strong>：</p>
+<ul>
+<li><strong>自注意力机制中的输出</strong>：在自注意力层中，每个单词的嵌入向量会通过一个线性变换，然后应用Softmax函数。Softmax函数的输出表示每个单词对其他所有单词的关注程度，即注意力权重。</li>
+<li><strong>解码器中的输出</strong>：在解码器的最后阶段，模型会预测下一个单词的概率分布。这里也会使用Softmax函数，将最后一个隐藏层的输出转换为词汇表上的概率分布，以便选择下一个最可能的单词。</li>
+</ul>
+</li>
+</ol>
+<h3 id="具体应用示例">具体应用示例</h3>
+<ol>
+<li>
+<p><strong>词嵌入</strong>：</p>
+<ul>
+<li>假设词汇表大小为10000，每个单词被映射到一个维度为512的向量空间。词嵌入层会将输入的单词索引转换为相应的512维向量。</li>
+</ul>
+</li>
+<li>
+<p><strong>位置编码</strong>：</p>
+<ul>
+<li>位置编码通常是与词嵌入向量相同维度的向量，它通过正弦和余弦函数生成，以确保模型能够区分不同位置的单词。</li>
+</ul>
+</li>
+<li>
+<p><strong>自注意力层中的Softmax</strong>：</p>
+<ul>
+<li>在自注意力层中，每个单词的嵌入向量会通过一个线性变换，得到一个未归一化的注意力分数。然后，Softmax函数将这些分数转换为概率分布，即每个单词对其他单词的关注权重。</li>
+</ul>
+</li>
+<li>
+<p><strong>解码器的输出Softmax</strong>：</p>
+<ul>
+<li>在解码器的最后，模型会将最后一个隐藏层的输出通过一个线性变换，然后应用Softmax函数，得到词汇表上每个单词的概率分布。这个分布用于选择下一个最可能的单词。</li>
+</ul>
+</li>
+</ol>
+<p>通过这些机制，Transformer模型能够有效地处理序列数据，捕捉单词之间的依赖关系，并在各种NLP任务中取得优异的性能。</p>
+<h3 id="Why-Self-Attention">Why Self-Attention</h3>
+<p>没有说的太清楚</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="C:%5CUsers%5C11505%5CAppData%5CRoaming%5CTypora%5Ctypora-user-images%5Cimage-20240910121441665.png" alt="image-20240910121441665"></p>
+<p><strong>Complexity per Layer（每层的复杂度）</strong></p>
+<p><strong>Sequential Operations（序列操作）</strong>：</p>
+<ul>
+<li>**O(1)：**这意味着在处理序列时，每个层的操作可以并行化，不需要等待前一个操作完成。</li>
+<li><strong>O(n)</strong>：并行化程度较差</li>
+</ul>
+<p><strong>Maximum Path Length（最大路径长度）</strong></p>
+<p><a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/615000678">CNN/RNN/Transformer对比 - 知乎 (zhihu.com)</a></p>
+<h2 id="Transformer-的应用：">Transformer 的应用：</h2>
+<p>Transformer 模型自提出以来，已经在自然语言处理领域取得了巨大的成功，尤其是在机器翻译、文本摘要、问答系统和文本生成等任务中。此外，它也被用于语音识别和计算机视觉等领域。</p>
+<p>“Attention Is All You Need” 论文的提出标志着 NLP 领域的一个重要转折点，它不仅推动了模型架构的发展，也为后续的研究和应用奠定了基础。</p>
+<h2 id="Transformer和CNN：">Transformer和CNN：</h2>
+<p>Transformer 和 CNN 是两种在深度学习领域广泛使用的模型架构，它们各自有着独特的优势和适用场景。</p>
+<p><strong>Transformer</strong>：</p>
+<ul>
+<li><strong>并行处理能力</strong>：Transformer 模型由于不依赖于序列的循环结构，可以并行处理序列中的所有元素，这使得它在训练时能够充分利用现代硬件的并行计算能力，从而加快训练速度。</li>
+<li><strong>自注意力机制</strong>：Transformer 通过自注意力机制能够捕捉序列中的长距离依赖关系，这在处理长序列数据时特别有用，如机器翻译和文本生成等任务。</li>
+<li><strong>多头注意力</strong>：Transformer 模型中的多头注意力机制可以同时从不同的表示子空间中学习信息，增强了模型的表达能力。</li>
+<li><strong>位置编码</strong>：由于 Transformer 本身不包含序列中的位置信息，因此需要引入位置编码来为模型提供序列中单词的位置信息。</li>
+</ul>
+<p><strong>CNN</strong>：</p>
+<ul>
+<li><strong>局部特征提取</strong>：CNN 通过卷积层可以有效地提取图像中的局部特征，如边缘、纹理等，这使得它在图像识别和分类任务中表现出色。</li>
+<li><strong>参数共享</strong>：CNN 的卷积层通过权重共享减少了模型的参数数量，这不仅减少了计算成本，也使得模型更加高效。</li>
+<li><strong>多层结构</strong>：CNN 通常包含多个卷积层和池化层，这有助于模型学习从低级到高级的特征表示。</li>
+<li><strong>平移不变性</strong>：CNN 的卷积操作具有平移不变性，这意味着模型对图像中物体的位置变化具有一定的鲁棒性。</li>
+</ul>
+<p>在<strong>计算机视觉</strong>领域，CNN 长期以来一直是主流的模型架构，但近年来 Transformer 也开始在这一领域取得突破。例如，Vision Transformer（ViT）通过将图像分割成多个小块，然后将这些小块作为序列输入到 Transformer 模型中，已经在多个视觉任务中取得了优异的性能。</p>
+<p>在<strong>自然语言处理</strong>领域，Transformer 已经成为许多任务的首选模型，如机器翻译、文本摘要和问答系统等。它的并行化处理能力和长距离依赖关系的捕捉能力使其在这些任务中超越了传统的 RNN 和 LSTM 模型。</p>
+<p>总的来说，Transformer 和 CNN 各有优势，选择哪种模型取决于具体的任务需求、数据类型和计算资源。在某些情况下，甚至可以将两者结合起来，以利用它们各自的优势。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/">http://example.com/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD/">人工智能</a><a class="post-meta__tags" href="/tags/Transformer/">Transformer</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/transformer.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2024/09/05/2024-09-05-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="大模型学习路线"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">大模型学习路线</div></div><div class="info-2"><div class="info-item-1">大模型学习路线  现在门槛降低了，成本也降低了。大模型技术爆发，抓住机会。 开源大模型（离线，更安全）/在线大模型   微调：Lora-&gt;垂类  适用于用户意图识别    RAG：检索增强生成（一系列专家，提升表现幅度，降低幻觉）  只要提供了正确答案，大概率就不会答错 适合私有数据库 所以依赖于提供的数据库的信息，对数据质量要求比较高 推理更加缓慢（低于微调） 对知识库构建/信息压缩排名等（并非深度学习方面，需要深度学习算法工程师进行辅助）    提示词工程 【AI大模型】Prompt 提示词工程使用详解_大模型prompt的用法详解-CSDN博客   预训练：创造出属于自己的全新大模型  需要算力最多（微调其次，RAG和提示词工程对于算力的要求就没那么高）    agent-&gt;担任80%脑力工作 一些课程 NLP FudanNLP/nlp-beginner: NLP上手教程 (github.com) 自然语言处理的入门练习 深度学习 跟李沐学AI的个人空间-跟李沐学AI个人主页-哔哩哔哩视频 (bilibili.com) 动手学深度学习 论文精读 https://...</div></div></div></a><a class="pagination-related" href="/2024/09/05/2024-09-05-%E4%B8%A4%E4%B8%87%E5%AD%97%E8%AE%B2%E6%B8%85%E6%A5%9A%EF%BC%9A%E7%8E%B0%E5%9C%A8%E7%9A%84AI%E4%BA%A7%E5%93%81%E6%9C%89%E5%A4%9A%E9%9A%BE%E5%81%9A%EF%BC%9F/" title="两万字讲清楚：现在的AI产品有多难做？"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">两万字讲清楚：现在的AI产品有多难做？</div></div><div class="info-2"><div class="info-item-1">两万字讲清楚：现在的AI产品有多难做？ https://mp.weixin.qq.com/s/pMt_VMs6uq5wsPPscOyefA 这篇文章深入探讨了AI产品经理在处理大型AI模型时应该考虑的关键问题和机遇。 1. 关注API而非仅仅是产品  核心观点：产品经理应该深入理解大模型的API，因为这是模型能力的直接体现。产品的最终形态往往是API能力的延伸，但可能会因为各种工程限制而与API的能力有所差异。 实际意义：了解API的能力和限制可以帮助产品经理更准确地设计产品功能，避免过度依赖模型无法实现的功能。  2. AI与移动互联网的类比不恰当  核心观点：简单地将AI技术应用到所有应用中并不是一个有效策略。只有那些真正能够从AI中获得显著优势的应用才应该进行AI重构。 实际意义：这要求产品经理进行深入的需求分析和成本效益分析，以确定AI的投入是否真正值得。  3. 产品经理需要学会调用API  核心观点：产品经理应该具备直接与AI模型交互的能力，这有助于更好地理解模型的能力和局限。 实际意义：这种能力可以帮助产品经理在产品开发过程中做出更准确的决策，并能够快速迭代产品以适...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/05/2024-09-05-%E4%B8%A4%E4%B8%87%E5%AD%97%E8%AE%B2%E6%B8%85%E6%A5%9A%EF%BC%9A%E7%8E%B0%E5%9C%A8%E7%9A%84AI%E4%BA%A7%E5%93%81%E6%9C%89%E5%A4%9A%E9%9A%BE%E5%81%9A%EF%BC%9F/" title="两万字讲清楚：现在的AI产品有多难做？"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-05</div><div class="info-item-2">两万字讲清楚：现在的AI产品有多难做？</div></div><div class="info-2"><div class="info-item-1">两万字讲清楚：现在的AI产品有多难做？ https://mp.weixin.qq.com/s/pMt_VMs6uq5wsPPscOyefA 这篇文章深入探讨了AI产品经理在处理大型AI模型时应该考虑的关键问题和机遇。 1. 关注API而非仅仅是产品  核心观点：产品经理应该深入理解大模型的API，因为这是模型能力的直接体现。产品的最终形态往往是API能力的延伸，但可能会因为各种工程限制而与API的能力有所差异。 实际意义：了解API的能力和限制可以帮助产品经理更准确地设计产品功能，避免过度依赖模型无法实现的功能。  2. AI与移动互联网的类比不恰当  核心观点：简单地将AI技术应用到所有应用中并不是一个有效策略。只有那些真正能够从AI中获得显著优势的应用才应该进行AI重构。 实际意义：这要求产品经理进行深入的需求分析和成本效益分析，以确定AI的投入是否真正值得。  3. 产品经理需要学会调用API  核心观点：产品经理应该具备直接与AI模型交互的能力，这有助于更好地理解模型的能力和局限。 实际意义：这种能力可以帮助产品经理在产品开发过程中做出更准确的决策，并能够快速迭代产品以适...</div></div></div></a><a class="pagination-related" href="/2024/09/05/2024-09-05-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="大模型学习路线"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-05</div><div class="info-item-2">大模型学习路线</div></div><div class="info-2"><div class="info-item-1">大模型学习路线  现在门槛降低了，成本也降低了。大模型技术爆发，抓住机会。 开源大模型（离线，更安全）/在线大模型   微调：Lora-&gt;垂类  适用于用户意图识别    RAG：检索增强生成（一系列专家，提升表现幅度，降低幻觉）  只要提供了正确答案，大概率就不会答错 适合私有数据库 所以依赖于提供的数据库的信息，对数据质量要求比较高 推理更加缓慢（低于微调） 对知识库构建/信息压缩排名等（并非深度学习方面，需要深度学习算法工程师进行辅助）    提示词工程 【AI大模型】Prompt 提示词工程使用详解_大模型prompt的用法详解-CSDN博客   预训练：创造出属于自己的全新大模型  需要算力最多（微调其次，RAG和提示词工程对于算力的要求就没那么高）    agent-&gt;担任80%脑力工作 一些课程 NLP FudanNLP/nlp-beginner: NLP上手教程 (github.com) 自然语言处理的入门练习 深度学习 跟李沐学AI的个人空间-跟李沐学AI个人主页-哔哩哔哩视频 (bilibili.com) 动手学深度学习 论文精读 https://...</div></div></div></a><a class="pagination-related" href="/2024/09/10/2024-09-10-AlexNet%E8%A7%A3%E6%9E%90/" title="AlexNet解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AlexNet.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-10</div><div class="info-item-2">AlexNet解析</div></div><div class="info-2"><div class="info-item-1">AlexNet解析 卷积神经网络经典回顾之AlexNet - 知乎 (zhihu.com) AlexNet论文逐段精读【论文精读】_哔哩哔哩_bilibili 饱和：saturating 非饱和：non-saturating   </div></div></div></a><a class="pagination-related" href="/2024/09/10/2024-09-10-%E9%A5%B1%E5%92%8C%EF%BC%88saturating%EF%BC%89%E5%92%8C%E9%9D%9E%E9%A5%B1%E5%92%8C%EF%BC%88non-saturating%EF%BC%89%E7%9A%84%E6%BF%80%E6%B4%BB%E5%87%BD%E6%95%B0/" title="饱和（saturating）和非饱和（non-saturating）的激活函数"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E6%BF%80%E6%B4%BB%E5%87%BD%E6%95%B0.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-10</div><div class="info-item-2">饱和（saturating）和非饱和（non-saturating）的激活函数</div></div><div class="info-2"><div class="info-item-1">饱和（saturating）和非饱和（non-saturating）的激活函数 在神经网络中，激活函数是决定网络能否学习复杂模式的关键因素之一。激活函数的选择会影响网络的收敛速度、性能以及最终的泛化能力。激活函数可以根据其输出特性被分为“饱和”（saturating）和“非饱和”（non-saturating）两大类： 饱和激活函数（Saturating Activation Functions）   定义：  饱和激活函数是指当输入值增大或减小时，函数的输出值会达到一个上限或下限，并在该范围内趋于稳定，不再随输入的增加而显著变化。    特点：  输出值存在一个明显的上限和下限。 当输入值增大到一定程度后，输出值不再显著增加（或减少）。    例子：  Sigmoid 函数：[ \sigma(x) = \frac{1}{1 + e^{-x}} ] Tanh 函数（双曲正切函数）：[ \tanh(x) = \frac{2}{1 + e^{-2x}} - 1 ] ReLU 函数（Rectified Linear Unit）在正区间内是非饱和的，但在负区间内是饱和的。    影响： ...</div></div></div></a><a class="pagination-related" href="/2024/09/10/2024-09-10-%E5%B8%B8%E7%94%A8%E6%BF%80%E6%B4%BB%E5%87%BD%E6%95%B0/" title="常用激活函数"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E6%BF%80%E6%B4%BB%E5%87%BD%E6%95%B0.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-10</div><div class="info-item-2">常用激活函数</div></div><div class="info-2"><div class="info-item-1">常用激活函数 激活函数汇总_高斯激活函数-CSDN博客 常用的激活函数合集（详细版）-CSDN博客 重点关注ReLU(max(0,x))，Sigmoid(0-1)，Softmax（0-1概率） 神经网络之softmax(作用，工作原理【示例说明】，损失计算)_softmax层-CSDN博客 预处理直接做原始图片 （224 * 224 * 3） </div></div></div></a><a class="pagination-related" href="/2024/09/11/2024-09-11-CNN%E7%AC%94%E8%AE%B0/" title="CNN笔记"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CNN.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-11</div><div class="info-item-2">CNN笔记</div></div><div class="info-2"><div class="info-item-1">CNN笔记 CNN笔记：通俗理解卷积神经网络_cnn卷积神经网络-CSDN博客 Zero Padding（零填充）——在卷积神经网络中的作用？-CSDN博客 一句话CNN：如何理解padding的作用和算法 - 知乎 (zhihu.com) 为什么需要随机裁剪：随机裁剪相当于建立每个因子特征与相应类别的权重关系，减弱背景(或噪音)因子的权重，且使模型面对缺失值不敏感，也就可以产生更好的学习效果，增加模型稳定性。 </div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">134</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">120</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">36</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">Transformer解析（Attention Is All You Need）</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#Transformer-%E6%A8%A1%E5%9E%8B%E7%9A%84%E4%B8%BB%E8%A6%81%E7%89%B9%E7%82%B9%EF%BC%9A"><span class="toc-number">1.1.</span> <span class="toc-text">Transformer 模型的主要特点：</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Transformer%E9%87%8D%E7%82%B9"><span class="toc-number">1.2.</span> <span class="toc-text">Transformer重点</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BC%96%E7%A0%81%E5%99%A8%EF%BC%88Encoder%EF%BC%89%EF%BC%9A"><span class="toc-number">1.2.1.</span> <span class="toc-text">编码器（Encoder）：</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%A7%A3%E7%A0%81%E5%99%A8%EF%BC%88Decoder%EF%BC%89%EF%BC%9A"><span class="toc-number">1.2.2.</span> <span class="toc-text">解码器（Decoder）：</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Attention%EF%BC%9A"><span class="toc-number">1.2.3.</span> <span class="toc-text">Attention：</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#Scaled-Dot-Product-Attention"><span class="toc-number">1.2.3.1.</span> <span class="toc-text">Scaled Dot-Product Attention</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%8E%A9%E7%A0%81%E6%9C%BA%E5%88%B6"><span class="toc-number">1.2.3.2.</span> <span class="toc-text">掩码机制</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%A4%9A%E5%A4%B4%E6%B3%A8%E6%84%8F%E5%8A%9B"><span class="toc-number">1.2.3.3.</span> <span class="toc-text">多头注意力</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Application-of-Attention-in-Our-Model"><span class="toc-number">1.2.3.4.</span> <span class="toc-text">Application of Attention in Our Model</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Position-wise-Feed-Forward-Networks"><span class="toc-number">1.2.4.</span> <span class="toc-text">Position-wise Feed-Forward Networks</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Embeddings-and-Softmax"><span class="toc-number">1.2.5.</span> <span class="toc-text">Embeddings and Softmax</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#Embedding"><span class="toc-number">1.2.5.1.</span> <span class="toc-text">Embedding</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Softmax"><span class="toc-number">1.2.5.2.</span> <span class="toc-text">Softmax</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B7%E4%BD%93%E5%BA%94%E7%94%A8%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.2.6.</span> <span class="toc-text">具体应用示例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Why-Self-Attention"><span class="toc-number">1.2.7.</span> <span class="toc-text">Why Self-Attention</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Transformer-%E7%9A%84%E5%BA%94%E7%94%A8%EF%BC%9A"><span class="toc-number">1.3.</span> <span class="toc-text">Transformer 的应用：</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Transformer%E5%92%8CCNN%EF%BC%9A"><span class="toc-number">1.4.</span> <span class="toc-text">Transformer和CNN：</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="sandbox和container对比"/></a><div class="content"><a class="title" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比">sandbox和container对比</a><time datetime="2025-09-15T16:00:00.000Z" title="发表于 2025-09-16 00:00:00">2025-09-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="容器运行时扩展方案技术解析"/></a><div class="content"><a class="title" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析">容器运行时扩展方案技术解析</a><time datetime="2025-09-15T16:00:00.000Z" title="发表于 2025-09-16 00:00:00">2025-09-16</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="如何通过Pod进入到宿主机?"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?">如何通过Pod进入到宿主机?</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s informer通俗易懂详解"/></a><div class="content"><a class="title" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解">k8s informer通俗易懂详解</a><time datetime="2025-09-14T16:00:00.000Z" title="发表于 2025-09-15 00:00:00">2025-09-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="k8s控制面相关学习"/></a><div class="content"><a class="title" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习">k8s控制面相关学习</a><time datetime="2025-09-13T16:00:00.000Z" title="发表于 2025-09-14 00:00:00">2025-09-14</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
