@@ -1,0 +1,375 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>GPU资源共享/抢占 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="GPU共享的整体架构 这个项目是一个Kubernetes GPU共享调度系统，通过两种类型的pod实现GPU资源共享： 1. Shadow Pod（影子Pod）  作用：占用物理GPU资源，作为GPU的实际持有者 特征：运行一个简单的sleep容器，不执行实际计算任务 创建时机：当quota资源不足时自动创建 生命周期：由shadow controller管理，根据使用情况自动创建和删除  2.">
+<meta property="og:type" content="article">
+<meta property="og:title" content="GPU资源共享&#x2F;抢占">
+<meta property="og:url" content="http://example.com/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="GPU共享的整体架构 这个项目是一个Kubernetes GPU共享调度系统，通过两种类型的pod实现GPU资源共享： 1. Shadow Pod（影子Pod）  作用：占用物理GPU资源，作为GPU的实际持有者 特征：运行一个简单的sleep容器，不执行实际计算任务 创建时机：当quota资源不足时自动创建 生命周期：由shadow controller管理，根据使用情况自动创建和删除  2.">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/k8s.png">
+<meta property="article:published_time" content="2025-09-17T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-09-18T02:51:54.504Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="K8S">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/k8s.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "GPU资源共享/抢占",
+  "url": "http://example.com/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/",
+  "image": "http://example.com/img/cover/k8s.png",
+  "datePublished": "2025-09-17T16:00:00.000Z",
+  "dateModified": "2025-09-18T02:51:54.504Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'GPU资源共享/抢占',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">142</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">124</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">38</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">GPU资源共享/抢占</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">GPU资源共享/抢占</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-09-17T16:00:00.000Z" title="发表于 2025-09-18 00:00:00">2025-09-18</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-09-18T02:51:54.504Z" title="更新于 2025-09-18 10:51:54">2025-09-18</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/k8s/">k8s</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/" data-flag-title="GPU资源共享/抢占"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h2 id="GPU共享的整体架构">GPU共享的整体架构</h2>
+<p>这个项目是一个Kubernetes GPU共享调度系统，通过两种类型的pod实现GPU资源共享：</p>
+<h3 id="1-Shadow-Pod（影子Pod）">1. Shadow Pod（影子Pod）</h3>
+<ul>
+<li><strong>作用</strong>：占用物理GPU资源，作为GPU的实际持有者</li>
+<li><strong>特征</strong>：运行一个简单的sleep容器，不执行实际计算任务</li>
+<li><strong>创建时机</strong>：当quota资源不足时自动创建</li>
+<li><strong>生命周期</strong>：由shadow controller管理，根据使用情况自动创建和删除</li>
+</ul>
+<h3 id="2-Share-Pod（共享Pod）">2. Share Pod（共享Pod）</h3>
+<ul>
+<li><strong>作用</strong>：实际执行计算任务的pod，通过device plugin共享shadow pod的GPU资源</li>
+<li><strong>特征</strong>：使用虚拟GPU设备，通过时间片或空间分割方式共享物理GPU</li>
+<li><strong>资源请求</strong>：请求共享GPU资源（如mizar.share.gpu.2表示2路共享）</li>
+</ul>
+<h2 id="核心逻辑链路">核心逻辑链路</h2>
+<h3 id="1-配额管理（Quota-Controller）">1. 配额管理（Quota Controller）</h3>
+<ul>
+<li>监控quota资源状态，计算shadow resource需求</li>
+<li>维护shadow pod与物理GPU的映射关系</li>
+<li>处理shadow pod的创建和删除逻辑</li>
+</ul>
+<h3 id="2-Shadow-Pod管理（Shadow-Controller）">2. Shadow Pod管理（Shadow Controller）</h3>
+<ul>
+<li><strong>创建逻辑</strong>：当quota的ready + pipelining数量为负值时，计算需要创建的shadow pod数量</li>
+<li><strong>删除逻辑</strong>：根据shadow pod的空闲时间决定是否删除</li>
+<li><strong>条件检查</strong>：通过PodInUsing条件跟踪GPU使用状态</li>
+</ul>
+<h3 id="3-设备插件（Device-Plugin）">3. 设备插件（Device Plugin）</h3>
+<ul>
+<li><strong>Share Device Plugin</strong>：为share pod提供虚拟GPU设备</li>
+<li>设备ID格式：<code>&#123;namespace&#125;/&#123;shadowpod-name&#125;-&#123;index&#125;</code></li>
+<li>动态更新设备列表，反映当前可用的shadow pod资源</li>
+</ul>
+<h3 id="4-调度器（Solver）">4. 调度器（Solver）</h3>
+<ul>
+<li><strong>ShareGPU Solver</strong>：处理share pod事件，管理share pod与shadow pod的绑定关系</li>
+<li><strong>SpotGPU Solver</strong>：处理spot pod事件，支持低功耗模式和抢占机制</li>
+</ul>
+<h3 id="5-缓存系统（Mapping-Cache）">5. 缓存系统（Mapping Cache）</h3>
+<ul>
+<li>维护三层映射关系：
+<ol>
+<li>Shadow pod → 物理GPU设备</li>
+<li>Share pod → Shadow pod</li>
+<li>设备状态跟踪（健康、使用中、空闲）</li>
+</ol>
+</li>
+</ul>
+<h2 id="工作流程">工作流程</h2>
+<ol>
+<li><strong>资源申请</strong>：用户创建请求共享GPU的pod（share pod）</li>
+<li><strong>配额检查</strong>：quota controller检查当前资源是否充足</li>
+<li><strong>Shadow Pod创建</strong>：如果资源不足，shadow controller创建shadow pod占用物理GPU</li>
+<li><strong>设备注册</strong>：device plugin将shadow pod的GPU注册为虚拟设备</li>
+<li><strong>Pod调度</strong>：share pod被调度到有可用shadow pod的节点</li>
+<li><strong>资源绑定</strong>：shareGPU solver将share pod绑定到具体的shadow pod设备</li>
+<li><strong>使用监控</strong>：通过条件系统和metrics监控GPU使用情况</li>
+<li><strong>资源回收</strong>：当share pod结束或shadow pod空闲超时，自动回收资源</li>
+</ol>
+<h2 id="关键技术点">关键技术点</h2>
+<ul>
+<li><strong>时间片共享</strong>：通过CUDA MPS或时间分片实现GPU计算资源共享</li>
+<li><strong>动态调整</strong>：根据负载动态创建和删除shadow pod</li>
+<li><strong>优先级管理</strong>：支持低功耗模式和抢占机制</li>
+<li><strong>状态同步</strong>：通过Kubernetes条件和annotation保持状态一致性</li>
+</ul>
+<p>这种架构实现了GPU资源的超卖和弹性伸缩，显著提高了GPU利用率，同时保持了与传统Kubernetes调度的兼容性。</p>
+<h2 id="Spot资源抢占机制">Spot资源抢占机制</h2>
+<h3 id="1-抢占触发条件">1. 抢占触发条件</h3>
+<p>spot资源的抢占主要通过以下几种情况触发：</p>
+<h4 id="a-所有者Pod恢复活跃（主要抢占场景）">a) 所有者Pod恢复活跃（主要抢占场景）</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// owner pod alive, evict spot</span></span><br><span class="line"><span class="keyword">if</span> !utils.IsLowPowerEnabled(pod) || !s.enableLowPower &#123;</span><br><span class="line">    ns, name, _ := cache.SplitMetaNamespaceKey(e.Target)</span><br><span class="line">    s.logger.WithFields(logman.Fields&#123;<span class="string">&quot;devices&quot;</span>: e.Devices&#125;).Infof(<span class="string">&quot;device owner alive, evicting pod %s&quot;</span>, name)</span><br><span class="line">    <span class="keyword">if</span> err := s.kubeClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions&#123;&#125;); err != <span class="literal">nil</span> &#123;</span><br><span class="line">        s.logger.Errorf(<span class="string">&quot;failed evicting pod %s: %v&quot;</span>, name, err)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>触发条件</strong>：当GPU的原始所有者pod（非低功耗模式）重新变得活跃时，spot pod会被立即驱逐。</p>
+<h4 id="b-低功耗模式抢占">b) 低功耗模式抢占</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> solveBusy(e detectors.Event) <span class="type">error</span> &#123;</span><br><span class="line">    <span class="comment">// update evict metrics before it happens</span></span><br><span class="line">    evictedUsers := s.cache.GetOwnerUsers(e.Target)</span><br><span class="line">    s.updateEvictCounter(evictedUsers, consts.EvictReasonOwnerBack)</span><br><span class="line"></span><br><span class="line">    <span class="comment">// do evict</span></span><br><span class="line">    <span class="keyword">if</span> err := s.evictProcessFor(e); err != <span class="literal">nil</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> err</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> err := s.evictFor(e.Target); err != <span class="literal">nil</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> err</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>触发条件</strong>：当低功耗pod从空闲状态变为繁忙状态时，会驱逐所有使用其GPU资源的spot pod。</p>
+<h3 id="2-抢占执行方式">2. 抢占执行方式</h3>
+<h4 id="a-容器级别抢占（温和抢占）">a) 容器级别抢占（温和抢占）</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> evictProcessFor(e detectors.Event) <span class="type">error</span> &#123;</span><br><span class="line">    <span class="keyword">for</span> _, container := <span class="keyword">range</span> pod.Status.ContainerStatuses &#123;</span><br><span class="line">        id := strings.TrimPrefix(container.ContainerID, <span class="string">&quot;containerd://&quot;</span>)</span><br><span class="line">        <span class="keyword">go</span> <span class="function"><span class="keyword">func</span><span class="params">(containerID <span class="type">string</span>)</span></span> &#123;</span><br><span class="line">            s.logger.Infof(<span class="string">&quot;evicting container %s for dev %s&quot;</span>, containerID, e.Target)</span><br><span class="line">            <span class="keyword">if</span> err := s.taskClient.Kill(context.Background(), containerID); err != <span class="literal">nil</span> &#123;</span><br><span class="line">                s.logger.WithError(err).Errorf(<span class="string">&quot;evictProcessFor: failed killing user %s&quot;</span>, user)</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;(id)</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>特点</strong>：通过containerd API直接杀死容器进程，实现快速资源回收。</p>
+<h4 id="b-Pod级别抢占（强制抢占）">b) Pod级别抢占（强制抢占）</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> evictFor(target <span class="type">string</span>) <span class="type">error</span> &#123;</span><br><span class="line">    users := s.cache.GetOwnerUsers(target)</span><br><span class="line">    <span class="keyword">for</span> _, user := <span class="keyword">range</span> users &#123;</span><br><span class="line">        ns, name, _ := cache.SplitMetaNamespaceKey(user)</span><br><span class="line">        s.logger.Infof(<span class="string">&quot;evicting pod %s for dev %s&quot;</span>, name, target)</span><br><span class="line">        <span class="keyword">if</span> err := s.kubeClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions&#123;&#125;); err != <span class="literal">nil</span> &#123;</span><br><span class="line">            s.logger.Errorf(<span class="string">&quot;failed evicting pod %s: %v&quot;</span>, user, err)</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>特点</strong>：通过Kubernetes API删除整个pod，确保资源完全释放。</p>
+<h3 id="3-抢占优先级策略">3. 抢占优先级策略</h3>
+<h4 id="a-低功耗模式优先">a) 低功耗模式优先</h4>
+<ul>
+<li>低功耗pod享有最高优先级，不会被spot pod抢占</li>
+<li>只有低功耗pod才能共享GPU给spot pod使用</li>
+<li>当低功耗pod需要资源时，spot pod会被立即驱逐</li>
+</ul>
+<h4 id="b-资源预留机制">b) 资源预留机制</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> evictByDevice(e detectors.Event) <span class="type">error</span> &#123;</span><br><span class="line">    <span class="comment">// 从空闲空间移除设备</span></span><br><span class="line">    <span class="keyword">if</span> err := s.cache.UnUse(consts.IdleSpace, ds.SharingPod, ds.ID); err != <span class="literal">nil</span> &#123;</span><br><span class="line">        s.logger.WithFields(logman.Fields&#123;<span class="string">&quot;user&quot;</span>: ds.SharingPod, <span class="string">&quot;device&quot;</span>: ds.ID&#125;).Errorf(<span class="string">&quot;failed unuse from idle space&quot;</span>, ds.SharingPod)</span><br><span class="line">    &#125;</span><br><span class="line">    users[ds.SharingPod] = <span class="keyword">struct</span>&#123;&#125;&#123;&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h3 id="4-抢占后的状态管理">4. 抢占后的状态管理</h3>
+<h4 id="a-缓存清理">a) 缓存清理</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 更新缓存</span></span><br><span class="line">s.cache.Delete(e.Target)</span><br><span class="line"><span class="comment">// 移除spot gpu（设置为不健康）</span></span><br><span class="line">s.updateDP(e, pluginapi.Unhealthy)</span><br></pre></td></tr></table></figure>
+<h4 id="b-条件更新">b) 条件更新</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 更新活跃条件</span></span><br><span class="line"><span class="keyword">if</span> err := s.kubeClient.UpdateActiveCondition(e.Target, <span class="literal">true</span>); err != <span class="literal">nil</span> &#123;</span><br><span class="line">    s.logger.WithError(err).WithFields(logman.Fields&#123;<span class="string">&quot;active&quot;</span>: <span class="literal">true</span>&#125;).Errorf(<span class="string">&quot;updating active condition&quot;</span>)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h4 id="c-指标记录">c) 指标记录</h4>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 更新驱逐计数器</span></span><br><span class="line">s.updateEvictCounter(evictedUsers, consts.EvictReasonOwnerBack)</span><br></pre></td></tr></table></figure>
+<h3 id="5-抢占策略特点">5. 抢占策略特点</h3>
+<ol>
+<li><strong>实时性</strong>：通过事件驱动机制，实时响应资源状态变化</li>
+<li><strong>分级处理</strong>：先尝试容器级温和抢占，必要时进行pod级强制抢占</li>
+<li><strong>状态一致性</strong>：确保缓存、设备插件、Kubernetes状态的一致性</li>
+<li><strong>可观测性</strong>：记录详细的抢占日志和指标，便于监控和调试</li>
+<li><strong>资源保障</strong>：优先保障高优先级任务（低功耗pod）的资源需求</li>
+</ol>
+<p>这种抢占机制确保了GPU资源的高效利用，同时在需要时能够快速回收资源给高优先级任务使用。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/">http://example.com/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/K8S/">K8S</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/k8s.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2025/09/17/2025-09-17-k8s-%E6%8E%A2%E9%92%88/" title="k8s 探针"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">k8s 探针</div></div><div class="info-2"><div class="info-item-1">k8s 探针 三类探针的作用域 1. 存活探针（Liveness Probe）  作用：判断Pod是否存活 影响：失败时重启Pod 范围：仅影响Pod生命周期  2. 就绪探针（Readiness Probe）  作用：判断Pod是否准备好接收流量 影响：控制Pod是否加入Service的Endpoint 范围：影响Service流量分发  3. 启动探针（Startup Probe）  作用：判断应用是否启动完成 影响：在启动期间禁用其他探针 范围：仅影响Pod启动过程  与Service的关系详解 就绪探针与Service的关联 12345678910apiVersion: v1kind: Servicemetadata:  name: my-servicespec:  selector:    app: my-app  # 选择标签匹配的Pod  ports:  - port: 80    targetPort: 8080 123456789101112131415apiVersion: v1kind: Podmetadata:  labels:    app: my-ap...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/" title="NVIDIA device plugin for Kubernetes原理分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">NVIDIA device plugin for Kubernetes原理分析</div></div><div class="info-2"><div class="info-item-1">NVIDIA device plugin for Kubernetes原理分析 什么是 Device Plugin K8s 原生并没有支持第三方设备厂商的物理设备资源，因此 Device Plugins 给第三方设备厂商提供了相关接口，可以让他们的物理设备资源以 Extended Resources 提供给底层的容器。 当 device plugin 功能启动后，可以令 kubelet 开放 Register 的 gRPC 服务，device plugin 就可以通过这个服务向 kubelet 进行注册，注册成功后 device plugin 就进入了 Serving 模式，提供前面提到的 gRPC 接口调用服务，kubelet 也就可以通过调用 Listandwatch、Allocate 等方法对设备进行操作，可以用下图来描述单一节点上这一过程：  下面以 NVIDIA k8s-device-plugin 为例简单讲讲这一过程。 注册服务 先看 gRPC 注册部分，下面的函数用于启动一个 gRPC 服务器并在 kubelet 中注册 1234567891011121314151...</div></div></div></a><a class="pagination-related" href="/2025/09/14/2025-09-14-k8s%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%9B%B8%E5%85%B3%E5%AD%A6%E4%B9%A0/" title="k8s控制面相关学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-14</div><div class="info-item-2">k8s控制面相关学习</div></div><div class="info-2"><div class="info-item-1">k8s控制面相关学习 informer informer:https://zhuanlan.zhihu.com/p/391465614  https://www.zhihu.com/question/463207052/answer/2377261278 (注意Informer最后也有个controller，跟这个不一样) 对于Informer而言  大步骤1: Reflector 将资源对象的事件添加进 Delta FIFO queue 中  这里先提前介绍一下 Delta FIFO queue。 所谓 Delta 就是变化的意思，什么的变化呢？就是资源对象的变化。 即 资源对象的变化都会被添加到 Delta FIFO queue 中！这样是不是就很好理解了。  大步骤2: Informer 将 Delta FIFO queue 中的对象数据 添加到本地 cache 中。  补充一下这个本地 cache 缓存的就是监听资源对象的最新版。就是缓存的当前集群里面的资源信息。  大步骤3: 使用 workqueue 处理业务逻辑。  Kubernetes 控制面controller基...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">如何通过Pod进入到宿主机?</div></div><div class="info-2"><div class="info-item-1">如何通过Pod进入到宿主机? nsenter -a -t 1 bash 命令的作用是让你在一个新的 shell 会话中，进入 PID 为 1 的进程所在的全部命名空间（Namespace）。 通过这种方式，可以从pod中进入到宿主机（全部的namespace都跟宿主机一样） breakdown 如下：  nsenter: 这是一个 Linux 命令行工具，用于将当前进程“进入”到指定进程的一个或多个命名空间中。 -t 1: 这个选项指定了目标进程的 PID (Process ID)。在这里，1 是 Linux 系统中第一个启动的进程（通常是 init 或 systemd）的 PID。所有其他进程都是由它或它的子进程派生出来的。 -a: 这个选项是 “all namespaces” 的缩写。它告诉 nsenter 将当前进程加入到目标进程（PID 1）所属于的所有类型的命名空间中，包括但不限于：  Mount (mnt) UTS (主机名和域名) IPC (进程间通信) Network PID (进程 ID) User ID Cgroup   bash: 这是要在新加入的命名空间环...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">k8s informer通俗易懂详解</div></div><div class="info-2"><div class="info-item-1">Kubernetes Informer 机制详解 核心概念 Informer 是 Kubernetes 中用于监听和缓存资源对象的核心机制，它通过 ListAndWatch 机制实现高效的资源监控。 核心组件及作用 1. Reflector（反射器）  作用：负责从 Kubernetes API Server 获取资源对象 功能：  List：获取资源的全量数据 Watch：监听资源的增量变化 将数据放入 Delta FIFO 队列    2. Delta FIFO Queue（增量队列）  作用：存储资源对象的变化（增删改） 特点：  保持操作顺序 存储对象的增量变化（Delta） 线程安全    3. Informer（通知器）  作用：从 Delta FIFO 队列中取出对象并处理 功能：  调用 Indexer 更新本地缓存 触发注册的事件处理器    4. Indexer（索引器）  作用：本地缓存，提供快速查询 功能：  存储资源对象的本地副本 提供基于索引的快速查找 线程安全的读写操作    5. Resource Event Handlers（资源事件处理器）  ...</div></div></div></a><a class="pagination-related" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-16</div><div class="info-item-2">sandbox和container对比</div></div><div class="info-2"><div class="info-item-1">sandbox和container对比 Sandbox 和 Container 的区别 基本概念 Sandbox（沙箱）  定义：一种隔离环境，用于安全地运行程序，限制其对系统资源的访问 目的：提供安全隔离，防止恶意代码影响主机系统 范围：通常针对单个应用程序或进程  Container（容器）  定义：一种轻量级虚拟化技术，将应用程序及其依赖打包在一起 目的：提供一致的运行环境，确保应用在不同环境中行为一致 范围：包含完整的应用程序运行时环境  主要区别对比    特性 Sandbox Container     主要目标 安全隔离 环境一致性   隔离级别 高（安全优先） 中等（资源隔离）   资源开销 极低 低到中等   启动速度 极快 快   包含内容 单个应用/进程 完整运行时环境    技术实现差异 Sandbox 实现方式 1234567// 浏览器沙箱示例（概念性）// 运行在受限环境中const sandboxedCode = `  // 无法访问DOM、网络、文件系统  // 只能执行安全的JavaScript代码  return 42;`; 典型技术：  浏...</div></div></div></a><a class="pagination-related" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-16</div><div class="info-item-2">容器运行时扩展方案技术解析</div></div><div class="info-2"><div class="info-item-1">容器运行时扩展方案技术解析 基于对某容器运行时扩展项目的代码分析，现从架构层面提炼其核心技术实现，聚焦三大核心能力：运行时接入机制、容器根文件系统云端持久化、Docker-in-Docker 安全实现方案。  1. 如何接入 Containerd 运行时生态 项目通过 Containerd Proxy Plugin 机制 实现与容器运行时的无缝集成，架构清晰、扩展性强。 ▶ 配置层接入  在 containerd 配置中注册名为 custom-snapshotter 的代理插件，通过 Unix Domain Socket 与本地 Agent 通信； 同时注册自定义 Runtime，指向特定二进制执行程序，实现容器生命周期的定制化控制。  ▶ 运行时层实现  Agent 侧：实现标准 gRPC 服务，响应来自 Containerd 的 Snapshotter 接口调用（如 Prepare、Mount、Remove）； 存储层封装：采用 Wrapper 模式封装原生 OverlayFS Snapshotter，在不破坏原有逻辑的前提下注入自定义行为（如镜像预处理、元数据记录等）； 通...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">142</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">124</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">38</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#GPU%E5%85%B1%E4%BA%AB%E7%9A%84%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84"><span class="toc-number">1.</span> <span class="toc-text">GPU共享的整体架构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-Shadow-Pod%EF%BC%88%E5%BD%B1%E5%AD%90Pod%EF%BC%89"><span class="toc-number">1.1.</span> <span class="toc-text">1. Shadow Pod（影子Pod）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-Share-Pod%EF%BC%88%E5%85%B1%E4%BA%ABPod%EF%BC%89"><span class="toc-number">1.2.</span> <span class="toc-text">2. Share Pod（共享Pod）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E9%80%BB%E8%BE%91%E9%93%BE%E8%B7%AF"><span class="toc-number">2.</span> <span class="toc-text">核心逻辑链路</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E9%85%8D%E9%A2%9D%E7%AE%A1%E7%90%86%EF%BC%88Quota-Controller%EF%BC%89"><span class="toc-number">2.1.</span> <span class="toc-text">1. 配额管理（Quota Controller）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-Shadow-Pod%E7%AE%A1%E7%90%86%EF%BC%88Shadow-Controller%EF%BC%89"><span class="toc-number">2.2.</span> <span class="toc-text">2. Shadow Pod管理（Shadow Controller）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E8%AE%BE%E5%A4%87%E6%8F%92%E4%BB%B6%EF%BC%88Device-Plugin%EF%BC%89"><span class="toc-number">2.3.</span> <span class="toc-text">3. 设备插件（Device Plugin）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E8%B0%83%E5%BA%A6%E5%99%A8%EF%BC%88Solver%EF%BC%89"><span class="toc-number">2.4.</span> <span class="toc-text">4. 调度器（Solver）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E7%BC%93%E5%AD%98%E7%B3%BB%E7%BB%9F%EF%BC%88Mapping-Cache%EF%BC%89"><span class="toc-number">2.5.</span> <span class="toc-text">5. 缓存系统（Mapping Cache）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B7%A5%E4%BD%9C%E6%B5%81%E7%A8%8B"><span class="toc-number">3.</span> <span class="toc-text">工作流程</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E6%8A%80%E6%9C%AF%E7%82%B9"><span class="toc-number">4.</span> <span class="toc-text">关键技术点</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Spot%E8%B5%84%E6%BA%90%E6%8A%A2%E5%8D%A0%E6%9C%BA%E5%88%B6"><span class="toc-number">5.</span> <span class="toc-text">Spot资源抢占机制</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E6%8A%A2%E5%8D%A0%E8%A7%A6%E5%8F%91%E6%9D%A1%E4%BB%B6"><span class="toc-number">5.1.</span> <span class="toc-text">1. 抢占触发条件</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#a-%E6%89%80%E6%9C%89%E8%80%85Pod%E6%81%A2%E5%A4%8D%E6%B4%BB%E8%B7%83%EF%BC%88%E4%B8%BB%E8%A6%81%E6%8A%A2%E5%8D%A0%E5%9C%BA%E6%99%AF%EF%BC%89"><span class="toc-number">5.1.1.</span> <span class="toc-text">a) 所有者Pod恢复活跃（主要抢占场景）</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#b-%E4%BD%8E%E5%8A%9F%E8%80%97%E6%A8%A1%E5%BC%8F%E6%8A%A2%E5%8D%A0"><span class="toc-number">5.1.2.</span> <span class="toc-text">b) 低功耗模式抢占</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E6%8A%A2%E5%8D%A0%E6%89%A7%E8%A1%8C%E6%96%B9%E5%BC%8F"><span class="toc-number">5.2.</span> <span class="toc-text">2. 抢占执行方式</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#a-%E5%AE%B9%E5%99%A8%E7%BA%A7%E5%88%AB%E6%8A%A2%E5%8D%A0%EF%BC%88%E6%B8%A9%E5%92%8C%E6%8A%A2%E5%8D%A0%EF%BC%89"><span class="toc-number">5.2.1.</span> <span class="toc-text">a) 容器级别抢占（温和抢占）</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#b-Pod%E7%BA%A7%E5%88%AB%E6%8A%A2%E5%8D%A0%EF%BC%88%E5%BC%BA%E5%88%B6%E6%8A%A2%E5%8D%A0%EF%BC%89"><span class="toc-number">5.2.2.</span> <span class="toc-text">b) Pod级别抢占（强制抢占）</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E6%8A%A2%E5%8D%A0%E4%BC%98%E5%85%88%E7%BA%A7%E7%AD%96%E7%95%A5"><span class="toc-number">5.3.</span> <span class="toc-text">3. 抢占优先级策略</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#a-%E4%BD%8E%E5%8A%9F%E8%80%97%E6%A8%A1%E5%BC%8F%E4%BC%98%E5%85%88"><span class="toc-number">5.3.1.</span> <span class="toc-text">a) 低功耗模式优先</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#b-%E8%B5%84%E6%BA%90%E9%A2%84%E7%95%99%E6%9C%BA%E5%88%B6"><span class="toc-number">5.3.2.</span> <span class="toc-text">b) 资源预留机制</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E6%8A%A2%E5%8D%A0%E5%90%8E%E7%9A%84%E7%8A%B6%E6%80%81%E7%AE%A1%E7%90%86"><span class="toc-number">5.4.</span> <span class="toc-text">4. 抢占后的状态管理</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#a-%E7%BC%93%E5%AD%98%E6%B8%85%E7%90%86"><span class="toc-number">5.4.1.</span> <span class="toc-text">a) 缓存清理</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#b-%E6%9D%A1%E4%BB%B6%E6%9B%B4%E6%96%B0"><span class="toc-number">5.4.2.</span> <span class="toc-text">b) 条件更新</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#c-%E6%8C%87%E6%A0%87%E8%AE%B0%E5%BD%95"><span class="toc-number">5.4.3.</span> <span class="toc-text">c) 指标记录</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E6%8A%A2%E5%8D%A0%E7%AD%96%E7%95%A5%E7%89%B9%E7%82%B9"><span class="toc-number">5.5.</span> <span class="toc-text">5. 抢占策略特点</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/" title="GPU资源共享/抢占"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="GPU资源共享/抢占"/></a><div class="content"><a class="title" href="/2025/09/18/2025-09-17-GPU%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E6%8A%A2%E5%8D%A0/" title="GPU资源共享/抢占">GPU资源共享/抢占</a><time datetime="2025-09-17T16:00:00.000Z" title="发表于 2025-09-18 00:00:00">2025-09-18</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/17/2025-09-17-Volcano%E8%B0%83%E5%BA%A6%E5%99%A8/" title="Volcano调度器"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Volcano调度器"/></a><div class="content"><a class="title" href="/2025/09/17/2025-09-17-Volcano%E8%B0%83%E5%BA%A6%E5%99%A8/" title="Volcano调度器">Volcano调度器</a><time datetime="2025-09-16T16:00:00.000Z" title="发表于 2025-09-17 00:00:00">2025-09-17</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/17/2025-09-17-NUMA-Aware-Scheduling%E4%BB%8B%E7%BB%8D/" title="NUMA-Aware Scheduling介绍"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="NUMA-Aware Scheduling介绍"/></a><div class="content"><a class="title" href="/2025/09/17/2025-09-17-NUMA-Aware-Scheduling%E4%BB%8B%E7%BB%8D/" title="NUMA-Aware Scheduling介绍">NUMA-Aware Scheduling介绍</a><time datetime="2025-09-16T16:00:00.000Z" title="发表于 2025-09-17 00:00:00">2025-09-17</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/17/2025-09-17-io-uring%E5%AD%A6%E4%B9%A0/" title="io uring学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/iouring.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="io uring学习"/></a><div class="content"><a class="title" href="/2025/09/17/2025-09-17-io-uring%E5%AD%A6%E4%B9%A0/" title="io uring学习">io uring学习</a><time datetime="2025-09-16T16:00:00.000Z" title="发表于 2025-09-17 00:00:00">2025-09-17</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/09/17/2025-09-17-K8s-drain%E5%92%8Ccordon%E7%9A%84%E5%8C%BA%E5%88%AB/" title="K8s drain和cordon的区别"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="K8s drain和cordon的区别"/></a><div class="content"><a class="title" href="/2025/09/17/2025-09-17-K8s-drain%E5%92%8Ccordon%E7%9A%84%E5%8C%BA%E5%88%AB/" title="K8s drain和cordon的区别">K8s drain和cordon的区别</a><time datetime="2025-09-16T16:00:00.000Z" title="发表于 2025-09-17 00:00:00">2025-09-17</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
