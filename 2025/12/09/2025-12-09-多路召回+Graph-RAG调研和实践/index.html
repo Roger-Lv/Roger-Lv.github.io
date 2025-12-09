@@ -1,0 +1,457 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>多路召回+Graph RAG调研和实践 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="多路召回+Graph RAG调研和实践 简介 多路召回简单来说就是指的通过多种途径——包括从已有的Qdrant、Memgraph甚至是web上等去拿到与query相关的上下文信息的过程。 Graph RAG这里有一些文档可以看看：  memgraph+spacy构建知识图谱：https:&#x2F;&#x2F;memgraph.com&#x2F;blog&#x2F;extract-entities-build-knowledge-gra">
+<meta property="og:type" content="article">
+<meta property="og:title" content="多路召回+Graph RAG调研和实践">
+<meta property="og:url" content="http://example.com/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="多路召回+Graph RAG调研和实践 简介 多路召回简单来说就是指的通过多种途径——包括从已有的Qdrant、Memgraph甚至是web上等去拿到与query相关的上下文信息的过程。 Graph RAG这里有一些文档可以看看：  memgraph+spacy构建知识图谱：https:&#x2F;&#x2F;memgraph.com&#x2F;blog&#x2F;extract-entities-build-knowledge-gra">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/graphrag.webp">
+<meta property="article:published_time" content="2025-12-08T16:00:00.000Z">
+<meta property="article:modified_time" content="2025-12-09T06:20:18.119Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="RAG">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/graphrag.webp"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "多路召回+Graph RAG调研和实践",
+  "url": "http://example.com/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/",
+  "image": "http://example.com/img/cover/graphrag.webp",
+  "datePublished": "2025-12-08T16:00:00.000Z",
+  "dateModified": "2025-12-09T06:20:18.119Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '多路召回+Graph RAG调研和实践',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">163</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">145</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">48</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">多路召回+Graph RAG调研和实践</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">多路召回+Graph RAG调研和实践</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2025-12-08T16:00:00.000Z" title="发表于 2025-12-09 00:00:00">2025-12-09</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2025-12-09T06:20:18.119Z" title="更新于 2025-12-09 14:20:18">2025-12-09</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/Agent/">Agent</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/" data-flag-title="多路召回+Graph RAG调研和实践"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>多路召回+Graph RAG调研和实践</h1>
+<h2 id="简介">简介</h2>
+<p>多路召回简单来说就是指的通过多种途径——包括从已有的Qdrant、Memgraph甚至是web上等去拿到与query相关的上下文信息的过程。</p>
+<p>Graph RAG这里有一些文档可以看看：</p>
+<ol>
+<li>memgraph+spacy构建知识图谱：<a target="_blank" rel="noopener" href="https://memgraph.com/blog/extract-entities-build-knowledge-graph-memgraph-spacy">https://memgraph.com/blog/extract-entities-build-knowledge-graph-memgraph-spacy</a></li>
+<li>从知识图谱到 GraphRAG：探索属性图的构建和复杂的数据检索实践：<a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/2441475">https://cloud.tencent.com/developer/article/2441475</a></li>
+<li>利用 LlamaIndex 和 Memgraph 构建知识图谱并查询：<a target="_blank" rel="noopener" href="https://www.llamaindex.ai/blog/constructing-a-knowledge-graph-with-llamaindex-and-memgraph">https://www.llamaindex.ai/blog/constructing-a-knowledge-graph-with-llamaindex-and-memgraph</a></li>
+<li>一篇RAG+知识图谱的博客：<a target="_blank" rel="noopener" href="https://qiankunli.github.io/2024/07/12/llm_graph.html">https://qiankunli.github.io/2024/07/12/llm_graph.html</a></li>
+</ol>
+<h2 id="步骤及调研">步骤及调研</h2>
+<p>其实简单来说，分为两大步：</p>
+<ol>
+<li>知识图谱的构建</li>
+<li>如何去查询</li>
+</ol>
+<h3 id="知识图谱的创建">知识图谱的创建</h3>
+<p>构建知识图谱，这里有几种方式可供参考：</p>
+<ol>
+<li>利用 LlamaIndex 和 Memgraph 构建知识图谱并支持向量查询：<a target="_blank" rel="noopener" href="https://www.llamaindex.ai/blog/constructing-a-knowledge-graph-with-llamaindex-and-memgraph">https://www.llamaindex.ai/blog/constructing-a-knowledge-graph-with-llamaindex-and-memgraph</a>
+<ol>
+<li>但是Llama_Index这里有几个问题：</li>
+<li>严重依赖open ai的api，无法用mass的key。</li>
+<li>这里所用到的索引需要在本地去维护，用起来体验非常不好，感觉就不是一个生产环境能正常使用的东西（具体可以去点开这个链接看看代码）。</li>
+</ol>
+</li>
+<li>调用<code>from langchain_experimental.graph_transformers import LLMGraphTransformer</code>
+<ol>
+<li>这个会自动地将非结构化的document转化成graphDocument，这里会依赖LLM去自动的生成实体和关系，然后可以调用memgraph的api插入到memgraph中</li>
+</ol>
+</li>
+</ol>
+<h3 id="查询">查询</h3>
+<p>几种查询方式：</p>
+<ol>
+<li><strong>LLMSynonymRetriever</strong>：用户查询-&gt;同义词、关键词，关键词搜索，找到最近的节点及其邻居。唯一的缺点是，它使用关键词搜索，不太可靠</li>
+<li><strong>VectorContextRetriever</strong>：使用嵌入和余弦相似性，进行向量相似性搜索，以检索相关的节点。</li>
+<li><strong>Text2Cypher</strong>： LLM 根据用户查询生成 Cypher语句，当然不一定准确，准确性换灵活性的方式，需要微调模型</li>
+<li><strong>CypherTemplateRetriever</strong>：带有特定参数的 Cypher 模板。对于用户查询，我们会使用 LLM 来填充这些参数，以创建用于检索的 Cypher 查询。</li>
+</ol>
+<h2 id="实践及效果">实践及效果</h2>
+<h3 id="知识图谱的创建-2">知识图谱的创建</h3>
+<p>其中从非结构化数据到LPG建模这一步直接调用的<code>langchain_experimental.graph_transformers</code>中的**<code>LLMGraphTransformer</code>。<strong>这个库为进行LPG</strong>（属性图，Property Graph）**帮我们做了这几件事：</p>
+<ol>
+<li>概述：定义任务和目标。</li>
+<li>节点标注：规定节点类型的一致性和基本性。</li>
+<li>关系标注：规定关系类型的一般性和永恒性。</li>
+<li><strong>共指消解</strong>：实体消歧，确保实体一致性。</li>
+<li>严格合规：要求严格遵守规则。</li>
+</ol>
+<p>这里会提取出graphDocument(其中包含实体、实体的关系和原有的引用的文本、引用文本与实体的关系)</p>
+<p>同时，为了方便后续的向量相似度的检索，这里<strong>手动再对graphDocument中各node(包括实体和Document)做了embedding的属性的注入，并建立了索引</strong>。<a target="_blank" rel="noopener" href="https://memgraph.com/docs/querying/vector-search">https://memgraph.com/docs/querying/vector-search</a></p>
+<p>之后调用接口，将这一系列graphDocument通过cypher语句在memgraph中创建，自此完成知识库的创建。</p>
+<h3 id="查询方式">查询方式</h3>
+<ol>
+<li>
+<h4 id="Text2Cypher-CypherTemplateRetriever"><strong>Text2Cypher</strong>/<strong>CypherTemplateRetriever</strong></h4>
+</li>
+</ol>
+<h4 id="方案描述">方案描述</h4>
+<ul>
+<li>从查询中抽取实体名称</li>
+<li>填充到通用的 Cypher 查询模板</li>
+<li>在 Memgraph 中执行查询</li>
+<li>局限：仅返回实体间关系，未利用向量相似度</li>
+</ul>
+<p>这个prompt template内容如下：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line">elf.cypher_prompt = <span class="string">&quot;&quot;&quot;</span></span><br><span class="line"><span class="string">              你是一个Cypher查询生成专家。根据用户查询和图数据库模式，生成一个Memgraph Cypher查询来检索相关节点。</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">              指令：</span></span><br><span class="line"><span class="string">               1. 首先，分析查询以确定感兴趣的实体类型（例如，人物、组织、地点、文档等）。</span></span><br><span class="line"><span class="string">               2. 生成的Cypher语句严格遵循示例，将具体的实体名字进行替换。</span></span><br><span class="line"><span class="string">               3. 确保查询语法正确且安全（避免注入）。</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">              示例：</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">               查询: &quot;爱因斯坦的成就&quot;</span></span><br><span class="line"><span class="string">               Cypher: MATCH (n)-[r]-(m)</span></span><br><span class="line"><span class="string">                        WHERE any(key in keys(n) WHERE toString(n[key]) CONTAINS &#x27;爱因斯坦&#x27;)</span></span><br><span class="line"><span class="string">                        RETURN n, r, m</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">               查询: &quot;苹果公司和微软的关系&quot;</span></span><br><span class="line"><span class="string">               Cypher: MATCH (n)-[r]-&gt;(m)</span></span><br><span class="line"><span class="string">                       WHERE any(key in keys(n) WHERE toString(n[key]) CONTAINS &#x27;苹果&#x27;)</span></span><br><span class="line"><span class="string">                       AND </span></span><br><span class="line"><span class="string">                       any(key in keys(m) WHERE toString(m[key]) CONTAINS &#x27;微软&#x27;)</span></span><br><span class="line"><span class="string">                       RETURN n,r,m</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">               当前查询：&#123;query&#125;</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">               请只返回Cypher查询语句，不要有其他解释。</span></span><br><span class="line"><span class="string">               &quot;&quot;&quot;</span></span><br></pre></td></tr></table></figure>
+<p>这种效果非常差，原因分析如下：</p>
+<ol>
+<li>
+<p><strong>实体匹配困难：<strong>自然语言难以准确映射到知识库中真实存在的实体，导致</strong>什么都查询不到</strong></p>
+</li>
+<li>
+<p>即使查询到了，当返回实体的相关关系时，会因为以下原因导致效果不好：</p>
+<ol>
+<li>**关系提取不完整：**实体之间的有效关系并未被有效提取，在建库时被遗漏（且这种通过LLM as Extractor的方式无法避免这个过程</li>
+<li><strong>Chunk大小悖论：<strong>另外实验发现（同时在另一篇博客中有人提到这个问题）对于同一个样本数据集，通过llm进行抽取实体的方式，抽取实体的数量与chunk token的大小呈一定程度上的反比关系。简单来说，就是chunk_size为600比chunk_size为2000能够抽出的实体和关系要多不少。但将chunk_size减小也并非银弹，又会面临</strong>实体消歧</strong>的问题。）</li>
+<li><strong>信息压缩损失：将原始文本压缩为图结构导致信息丢失</strong></li>
+</ol>
+</li>
+<li>
+<h4 id="VectorContextRetriever"><strong>VectorContextRetriever</strong></h4>
+</li>
+</ol>
+<p>相似度索引引入实体查询反而相对于原信息而言引入了噪声</p>
+<p>mamgraph官方的向量查询：<a target="_blank" rel="noopener" href="https://memgraph.com/docs/querying/vector-search">https://memgraph.com/docs/querying/vector-search</a></p>
+<p>在总结了上面的查询的一些教训之后，这里引入向量查询，并优化了整体查询流程。步骤如下：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">query → 向量检索 → seed 实体 → 图扩展 → 扩展实体 → 回捞 chunks → 排序截断 → 最终证据</span><br></pre></td></tr></table></figure>
+<ol>
+<li>query → 向量检索
+<ol>
+<li>先在向量库里取一个很小的 top-k（比如 3–10）</li>
+<li>这些 chunks 只是 “入口”，不是最后要给 LLM 的全部证据</li>
+</ol>
+</li>
+<li>入口 chunks → seed 实体
+<ol>
+<li>每个入口 chunk 包含哪些实体/与哪些实体相关联？</li>
+<li>合并去重，得到一批 seed 实体，也就是知识图谱上的起点节点</li>
+</ol>
+</li>
+<li>在图上扩展（有限半径）
+<ol>
+<li>从 seed 实体出发，最多走 1–2 跳</li>
+<li>每跳只取 top-N 邻居（理想状态时按边权/共现频次/置信度排序，但这里就按照关系取随机选取+向量相似度的实体）</li>
+<li>得到一批扩展实体：包括
+<ul>
+<li>跟 seed实体 语义上像的实体</li>
+<li>以及“虽然不像但强关联”的实体（即他们之间存在关系的实体，这才是 GraphRAG 的价值）</li>
+</ul>
+</li>
+</ol>
+</li>
+<li>扩展实体 → 回捞 chunks
+<ol>
+<li>对每个扩展实体，找它出现过的证据 chunks</li>
+<li>合并去重，得到一批候选 chunks</li>
+</ol>
+</li>
+<li>排序 + 控制 token 预算 → 选出最终证据 chunks
+<ol>
+<li>按 query 相关性、实体覆盖度、文档权重等重排</li>
+<li>按 token 上限截断，比如最多 6000 tokens</li>
+<li>得到 10~20 个左右的“精华 chunk”</li>
+</ol>
+</li>
+</ol>
+<p>把这些 chunk 拼进 prompt → 让 LLM 回答</p>
+<p>这种方式从理论上避免了查询方式1中的几个问题：</p>
+<ol>
+<li>保证查准率：：这里直接通过相似度查询，是保证能够查询到对应相似的文本+实体的</li>
+<li>信息完整性：
+<ol>
+<li>返回原始文本而非压缩的关系表示</li>
+<li>避免信息提取过程中的损失</li>
+</ol>
+</li>
+<li>关联发现：这里采用通过与chunk的相似度和实体相似度多重匹配+实体扩展且再查询的方式进行查询，在实体之间的有效关系并未被有效提取，最大程度保证了返回相关内容的完整性，即使存在关系提取不完整的情况也能够返回有效信息。</li>
+<li>避免了原有文本再切分成多chunk时导致的实体重复的问题（通过实体相似度扩展实现）</li>
+</ol>
+<h3 id="效果">效果</h3>
+<p>在知识库创建和选择采用查询方式2后，实际上实测下来：</p>
+<ol>
+<li>计算资源消耗巨大：embedding获取，chunk检索，实体检索，实体扩展，chunk再查询，排序</li>
+<li>响应时间过长：在agentic的模式下，平均耗时非常长（是普通rag的三倍以上时间，出现大量超时）</li>
+<li>评估结果较差：eval出来的结果也弱于原有rag的方式</li>
+</ol>
+<p>对于当前graph rag和原有的rag而言，由于返回的都是原有的chunk，所以可以认为只有<strong>当graph rag检索到比原有rag更完整、更相关的chunk时其效果才会优于原有rag</strong>。</p>
+<p>假设简单粗暴地认为通过多路召回（原有rag检索和graph rag两种方式）获取到的eval指标是二者的加权，那么我们引入graph rag的理由肯定是当分别单独进行eval时，至少graph rag的指标要好于原有rag的指标，否则就没有理由引入rag：</p>
+<ol>
+<li>Graph rag返回的上下文相较于原有上下文而言，就<strong>变成了“噪声”</strong></li>
+<li>Graph rag会<strong>消耗大量资源和时间</strong></li>
+</ol>
+<h2 id="总结">总结</h2>
+<h3 id="关键发现">关键发现</h3>
+<ol>
+<li>GraphRAG 非银弹：不能盲目认为引入图结构就能提升效果</li>
+<li>引入噪声风险：在当前的多路召回场景下，GraphRAG 返回的上下文可能成为&quot;噪声&quot;，降低回答质量</li>
+<li>成本效益问题：显著的资源消耗和时间成本 vs 不确定的性能提升</li>
+</ol>
+<h3 id="知识图谱的正确定位">知识图谱的正确定位</h3>
+<blockquote>
+<p>知识图谱 ≠ 答案源</p>
+<p>知识图谱 = 导航工具</p>
+</blockquote>
+<ul>
+<li>核心原则：知识图谱应作为**“引导谁该被召回&quot;的导航工具，而不是直接的&quot;真相来源”**</li>
+<li>实际内容：真正输入给 LLM 的应是原始文本 chunks，而非图结构压缩信息</li>
+<li>信息损失警示：将非结构化文本压缩为知识图谱会导致严重的信息损失</li>
+</ul>
+<h3 id="RAG和Graph-RAG之间的关系">RAG和Graph RAG之间的关系</h3>
+<blockquote>
+<p>RAG 与 GraphRAG 的关系 = 互补而非替代</p>
+</blockquote>
+<ol>
+<li>RAG 优势：
+<ol>
+<li>直接、快速</li>
+<li>保留原始信息</li>
+<li>技术成熟稳定</li>
+</ol>
+</li>
+<li>GraphRAG 优势：
+<ol>
+<li>发现深层关联</li>
+<li>支持复杂的推理路径</li>
+<li>实体关系的显式表示</li>
+</ol>
+</li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/">http://example.com/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/RAG/">RAG</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/graphrag.webp" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2025/12/09/2025-12-09-Agent%E6%A1%86%E6%9E%B6%E9%9B%86%E6%88%90%E5%A4%9A%E6%A8%A1%E6%80%81%E8%83%BD%E5%8A%9B/" title="Agent框架集成多模态能力底层实现"><div class="cover" style="background: /img/cover/langgraph.jepg"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Agent框架集成多模态能力底层实现</div></div><div class="info-2"><div class="info-item-1">Agent框架集成多模态能力底层实现 引言 多模态（Multimodal）AI 已成为智能体系统的核心能力之一。Infini Agent Framework 基于 LangGraph 构建，在架构层面原生支持多模态输入输出。本文将深入剖析框架中多模态能力的底层实现机制，涵盖消息格式定义、传输协议、工具集成等关键技术细节。 1. 多模态消息格式定义 1.1 核心数据模型 框架在 infini_agent_framework.langgraph.schema 模块中定义了多模态消息的核心数据结构： 123456789101112131415161718192021222324252627282930313233343536from pydantic import BaseModel, Fieldfrom typing import Literalimport reclass TextContent(BaseModel):    &quot;&quot;&quot;文本内容模型，遵循 OpenAI 多模态 API 规范&quot;&quot;&quot;    type: Litera...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/08/17/2025-08-15-RAG/" title="多Agent"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-17</div><div class="info-item-2">多Agent</div></div><div class="info-2"><div class="info-item-1">多Agent https://www.zhihu.com/question/642650878/answer/1896282773486011813 https://zhuanlan.zhihu.com/p/1908922657027621854 多Agent系统，任务：https://zhuanlan.zhihu.com/p/1909200989090722209 AutoAgents是一个创新的框架，根据不同任务自适应地生成和协调多个专用代理来构建AI团队。AutoAgents通过动态生成多个所需代理并基于生成的专家代理为当前任务规划解决方案，将任务与角色之间的关系相结合。多个专门的代理相互协作以高效地完成任务。该框架还融入了观察者角色，反映指定计划和代理响应，并对其进行改进。该论文在各种基准测试上的实验证明，AutoAgents生成的解决方案比现有的多代理方法更连贯准确，为处理复杂任务提供了新的视角。 地址：https://http://arxiv.org/pdf/2309.17288 代码：https://http://github.com/LinkSoul-AI/Aut...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">163</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">145</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">48</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">多路召回+Graph RAG调研和实践</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AE%80%E4%BB%8B"><span class="toc-number">1.1.</span> <span class="toc-text">简介</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%AD%A5%E9%AA%A4%E5%8F%8A%E8%B0%83%E7%A0%94"><span class="toc-number">1.2.</span> <span class="toc-text">步骤及调研</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9F%A5%E8%AF%86%E5%9B%BE%E8%B0%B1%E7%9A%84%E5%88%9B%E5%BB%BA"><span class="toc-number">1.2.1.</span> <span class="toc-text">知识图谱的创建</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9F%A5%E8%AF%A2"><span class="toc-number">1.2.2.</span> <span class="toc-text">查询</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AE%9E%E8%B7%B5%E5%8F%8A%E6%95%88%E6%9E%9C"><span class="toc-number">1.3.</span> <span class="toc-text">实践及效果</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9F%A5%E8%AF%86%E5%9B%BE%E8%B0%B1%E7%9A%84%E5%88%9B%E5%BB%BA-2"><span class="toc-number">1.3.1.</span> <span class="toc-text">知识图谱的创建</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9F%A5%E8%AF%A2%E6%96%B9%E5%BC%8F"><span class="toc-number">1.3.2.</span> <span class="toc-text">查询方式</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#Text2Cypher-CypherTemplateRetriever"><span class="toc-number">1.3.2.1.</span> <span class="toc-text">Text2Cypher&#x2F;CypherTemplateRetriever</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%96%B9%E6%A1%88%E6%8F%8F%E8%BF%B0"><span class="toc-number">1.3.2.2.</span> <span class="toc-text">方案描述</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#VectorContextRetriever"><span class="toc-number">1.3.2.3.</span> <span class="toc-text">VectorContextRetriever</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%95%88%E6%9E%9C"><span class="toc-number">1.3.3.</span> <span class="toc-text">效果</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">1.4.</span> <span class="toc-text">总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E5%8F%91%E7%8E%B0"><span class="toc-number">1.4.1.</span> <span class="toc-text">关键发现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9F%A5%E8%AF%86%E5%9B%BE%E8%B0%B1%E7%9A%84%E6%AD%A3%E7%A1%AE%E5%AE%9A%E4%BD%8D"><span class="toc-number">1.4.2.</span> <span class="toc-text">知识图谱的正确定位</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#RAG%E5%92%8CGraph-RAG%E4%B9%8B%E9%97%B4%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.4.3.</span> <span class="toc-text">RAG和Graph RAG之间的关系</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2025/12/09/2025-12-09-Agent%E6%A1%86%E6%9E%B6%E9%9B%86%E6%88%90%E5%A4%9A%E6%A8%A1%E6%80%81%E8%83%BD%E5%8A%9B/" title="Agent框架集成多模态能力底层实现"><div style="background: /img/cover/langgraph.jepg"></div></a><div class="content"><a class="title" href="/2025/12/09/2025-12-09-Agent%E6%A1%86%E6%9E%B6%E9%9B%86%E6%88%90%E5%A4%9A%E6%A8%A1%E6%80%81%E8%83%BD%E5%8A%9B/" title="Agent框架集成多模态能力底层实现">Agent框架集成多模态能力底层实现</a><time datetime="2025-12-08T16:00:00.000Z" title="发表于 2025-12-09 00:00:00">2025-12-09</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/" title="多路召回+Graph RAG调研和实践"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/graphrag.webp" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="多路召回+Graph RAG调研和实践"/></a><div class="content"><a class="title" href="/2025/12/09/2025-12-09-%E5%A4%9A%E8%B7%AF%E5%8F%AC%E5%9B%9E+Graph-RAG%E8%B0%83%E7%A0%94%E5%92%8C%E5%AE%9E%E8%B7%B5/" title="多路召回+Graph RAG调研和实践">多路召回+Graph RAG调研和实践</a><time datetime="2025-12-08T16:00:00.000Z" title="发表于 2025-12-09 00:00:00">2025-12-09</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/12/04/2025-12-04-LangGraph-%E4%B8%AD-checkpoint_id-%E7%9A%84%E6%9B%B4%E6%96%B0%E6%97%B6%E6%9C%BA%EF%BC%9A%E6%AF%8F%E4%B8%AA%E5%AF%B9%E8%AF%9D%E8%BD%AE%E6%AC%A1%E8%BF%98%E6%98%AF%E6%AF%8F%E4%B8%AA%E8%8A%82%E7%82%B9%E6%B5%81%E8%BD%AC%EF%BC%9F/" title="LangGraph 中 checkpoint_id 的更新时机：每个对话轮次还是每个节点流转？"><div style="background: /img/cover/langgraph.jepg"></div></a><div class="content"><a class="title" href="/2025/12/04/2025-12-04-LangGraph-%E4%B8%AD-checkpoint_id-%E7%9A%84%E6%9B%B4%E6%96%B0%E6%97%B6%E6%9C%BA%EF%BC%9A%E6%AF%8F%E4%B8%AA%E5%AF%B9%E8%AF%9D%E8%BD%AE%E6%AC%A1%E8%BF%98%E6%98%AF%E6%AF%8F%E4%B8%AA%E8%8A%82%E7%82%B9%E6%B5%81%E8%BD%AC%EF%BC%9F/" title="LangGraph 中 checkpoint_id 的更新时机：每个对话轮次还是每个节点流转？">LangGraph 中 checkpoint_id 的更新时机：每个对话轮次还是每个节点流转？</a><time datetime="2025-12-03T16:00:00.000Z" title="发表于 2025-12-04 00:00:00">2025-12-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/12/04/2025-12-04-%E4%BB%8E%E7%9F%A5%E8%AF%86%E5%9B%BE%E8%B0%B1%E5%88%B0-GraphRAG%EF%BC%9A%E6%8E%A2%E7%B4%A2%E5%B1%9E%E6%80%A7%E5%9B%BE%E7%9A%84%E6%9E%84%E5%BB%BA%E5%92%8C%E5%A4%8D%E6%9D%82%E7%9A%84%E6%95%B0%E6%8D%AE%E6%A3%80%E7%B4%A2%E5%AE%9E%E8%B7%B5/" title="从知识图谱到 GraphRAG：探索属性图的构建和复杂的数据检索实践"><div style="background: /img/cover/memgraph.jepg"></div></a><div class="content"><a class="title" href="/2025/12/04/2025-12-04-%E4%BB%8E%E7%9F%A5%E8%AF%86%E5%9B%BE%E8%B0%B1%E5%88%B0-GraphRAG%EF%BC%9A%E6%8E%A2%E7%B4%A2%E5%B1%9E%E6%80%A7%E5%9B%BE%E7%9A%84%E6%9E%84%E5%BB%BA%E5%92%8C%E5%A4%8D%E6%9D%82%E7%9A%84%E6%95%B0%E6%8D%AE%E6%A3%80%E7%B4%A2%E5%AE%9E%E8%B7%B5/" title="从知识图谱到 GraphRAG：探索属性图的构建和复杂的数据检索实践">从知识图谱到 GraphRAG：探索属性图的构建和复杂的数据检索实践</a><time datetime="2025-12-03T16:00:00.000Z" title="发表于 2025-12-04 00:00:00">2025-12-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/12/04/2025-12-04-%E6%B7%B1%E5%85%A5-KV-Cache-%E7%9A%84%E8%BF%90%E4%BD%9C%E8%BF%87%E7%A8%8B/" title="深入 KV Cache 的运作过程"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kvcache.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="深入 KV Cache 的运作过程"/></a><div class="content"><a class="title" href="/2025/12/04/2025-12-04-%E6%B7%B1%E5%85%A5-KV-Cache-%E7%9A%84%E8%BF%90%E4%BD%9C%E8%BF%87%E7%A8%8B/" title="深入 KV Cache 的运作过程">深入 KV Cache 的运作过程</a><time datetime="2025-12-03T16:00:00.000Z" title="发表于 2025-12-04 00:00:00">2025-12-04</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2025 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
