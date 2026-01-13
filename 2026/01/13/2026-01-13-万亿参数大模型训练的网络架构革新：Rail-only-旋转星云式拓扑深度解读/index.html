@@ -1,0 +1,576 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读 随着生成式人工智能（GenAI）的爆发，大型语言模型（LLM）的参数规模已从百亿量级迅速跨越至万亿量级 1。2020 年发布的 GPT-3 模型需要 NVIDIA V100 GPU 运行 355 个 GPU 年才能完成训练，而当前的 GPT-4 等模型估计拥有超过一万亿个参数，训练周期长达数月 1。在摩尔定律放缓的背景下">
+<meta property="og:type" content="article">
+<meta property="og:title" content="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读">
+<meta property="og:url" content="http://example.com/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读 随着生成式人工智能（GenAI）的爆发，大型语言模型（LLM）的参数规模已从百亿量级迅速跨越至万亿量级 1。2020 年发布的 GPT-3 模型需要 NVIDIA V100 GPU 运行 355 个 GPU 年才能完成训练，而当前的 GPT-4 等模型估计拥有超过一万亿个参数，训练周期长达数月 1。在摩尔定律放缓的背景下">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/Rail-only.png">
+<meta property="article:published_time" content="2026-01-12T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-01-13T07:09:30.830Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="训练">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/Rail-only.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读",
+  "url": "http://example.com/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/",
+  "image": "http://example.com/img/cover/Rail-only.png",
+  "datePublished": "2026-01-12T16:00:00.000Z",
+  "dateModified": "2026-01-13T07:09:30.830Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">185</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">152</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">52</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-01-12T16:00:00.000Z" title="发表于 2026-01-13 00:00:00">2026-01-13</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-01-13T07:09:30.830Z" title="更新于 2026-01-13 15:09:30">2026-01-13</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E7%BB%84%E7%BD%91/">组网</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" data-flag-title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</h1>
+<p>随着生成式人工智能（GenAI）的爆发，大型语言模型（LLM）的参数规模已从百亿量级迅速跨越至万亿量级 1。2020 年发布的 GPT-3 模型需要 NVIDIA V100 GPU 运行 355 个 GPU 年才能完成训练，而当前的 GPT-4 等模型估计拥有超过一万亿个参数，训练周期长达数月 1。在摩尔定律放缓的背景下，单枚加速器的算力增长速度已无法跟上模型规模及计算需求的指数级飙升，这使得超大规模 GPU 集群的部署成为必然趋势。行业领先的机器学习架构师预测，下一代 LLM 训练可能需要超过 30,000 个 GPU 的计算能力才能在合理时间内完成 1。然而，如何高效、低成本地连接这些数以万计的 GPU，已成为制约人工智能发展的关键基础设施瓶颈。</p>
+<h2 id="算力中心的基石：GPU-互连域的划分">算力中心的基石：GPU 互连域的划分</h2>
+<p>在理解 Rail-only 架构之前，必须深入剖析当前超大规模 GPU 数据中心的设计范式。现代 GPU 集群通常被划分为两个截然不同的通信域：高带宽域（High-Bandwidth Domain, HBD）和网络接口域（NIC Domain） 1。</p>
+<h3 id="高带宽域（HBD）：片上与节点内互连">高带宽域（HBD）：片上与节点内互连</h3>
+<p>高带宽域是指在单一平台（如 NVIDIA DGX H100 节点）内部，通过厂商专有的高速互连技术实现极高吞吐量的区域。NVIDIA 的 NVLink 和 AMD 的 Infinity Fabric 是其中的代表 1。例如，NVIDIA DGX H100 服务器通过第四代 NVLink 和 NVSwitch 技术将 8 个 H100 GPU 连接在一起，提供高达 3.6 Tbps 的非阻塞内部带宽 1。而在最新发布的 GB200 NVL72 系统中，这一规模扩展到了单机柜内 72 个 GPU，每颗 GPU 的内部带宽高达 7.2 Tbps 1。这种 HBD 设计旨在处理延迟敏感、通信密集的操作，如张量并行（Tensor Parallelism），确保在极小范围内实现数据交换的零阻塞 1。</p>
+<h3 id="网络接口域（NIC-Domain）：跨节点扩展">网络接口域（NIC Domain）：跨节点扩展</h3>
+<p>当模型规模超出单个 HBD 的承载能力时，必须通过传统的网络技术（如 InfiniBand 或基于融合以太网的 RDMA，即 RoCE）将数千个 HBD 互连。这一层级的通信被称为 NIC 域。目前，业界最先进的 NIC 域互连方案是所谓的“轨道优化（Rail-optimized）”网络 1。轨道优化网络源自经典的 Clos 拓扑，旨在为集群中的所有 GPU 提供全对全（Any-to-any）的连通性 1。</p>
+<p>在轨道优化架构中，处于不同 HBD 但具有相同局部编号（Rank）的 GPU 被连接到同一组交换机上，形成一个“轨道（Rail）”。例如，所有服务器中的“GPU 1”都接入同一组轨道交换机 1。这种设计利用了深度学习训练中的强局部性：在优化的并行策略下，跨节点的通信绝大多数发生在相同 Rank 的 GPU 之间 1。为了实现跨轨道的全连通，轨道交换机随后会通过多层脊柱交换机（Spine Switches）进一步互连。然而，将这种 Clos 拓扑扩展到数万个 GPU 极具挑战性。大规模无损网络极易受到死锁（Deadlocking）和优先级流控（PFC）风暴的影响，导致性能急剧下降 1。此外，随着规模增加，脊柱层的成本和功耗变得难以承受。例如，为 30,000 个 GPU 提供 400 Gbps 全对全带宽的 Clos 结构，其仅交换机和收发器的成本就高达 2 亿美元，峰值功耗接近 4.6 兆瓦 1。</p>
+<p>说人话就是，<strong>跨节点同Rank通信</strong>，不同服务器中，**位置编号相同（Rank）**的GPU之间需要频繁同步梯度或激活值。</p>
+<p>“轨道优化”网络的精髓就是<strong>为这种最频繁的跨节点通信模式，建立一条“专属高速通道”（Rail）</strong>。</p>
+<h4 id="举例说明"><strong>举例说明</strong></h4>
+<p>假设我们有一个小型集群，包含 <strong>4 台服务器（HBD）</strong>，每台服务器有 <strong>4 个 GPU</strong>。</p>
+<ul>
+<li>GPU的全局编号可以是 <code>服务器号-GPU号</code>，例如 <code>S0-G0</code>, <code>S0-G1</code>, …, <code>S3-G3</code>。</li>
+<li>在数据并行中，所有<code>S0-G0</code>, <code>S1-G0</code>, <code>S2-G0</code>, <code>S3-G0</code> 这四个GPU是同一组的（Rank 0），它们需要频繁同步。</li>
+</ul>
+<p><strong>“轨道优化”设计如下：</strong></p>
+<ol>
+<li>
+<p><strong>创建轨道（Rails）</strong>：</p>
+<ul>
+<li><strong>Rail 0 (红色)</strong>：连接所有服务器的 <strong>GPU 0</strong> （<code>S0-G0</code>, <code>S1-G0</code>, <code>S2-G0</code>, <code>S3-G0</code>）。这个“轨道”由一组专用的交换机（轨道层交换机）组成。</li>
+<li><strong>Rail 1 (绿色)</strong>：连接所有服务器的 <strong>GPU 1</strong> （<code>S0-G1</code>, <code>S1-G1</code>, <code>S2-G1</code>, <code>S3-G1</code>）。</li>
+<li><strong>Rail 2 (蓝色)</strong>：连接所有服务器的 <strong>GPU 2</strong>。</li>
+<li><strong>Rail 3 (黄色)</strong>：连接所有服务器的 <strong>GPU 3</strong>。</li>
+</ul>
+<p><strong>这样，最频繁的“同Rank通信”就被限制在各自的“轨道”内部，变成了一个局部的小型全连接网络，延迟低，拥塞易管理。</strong></p>
+</li>
+<li>
+<p><strong>处理跨轨道通信</strong>：</p>
+<ul>
+<li>虽然不频繁，但不同Rank的GPU之间有时也需要通信（例如模型并行）。</li>
+<li>为了能让 <strong>任何GPU</strong> 都能与 <strong>任何其他GPU</strong> 通信（全对全），这些“轨道交换机”需要被更高层的 <strong>脊柱交换机（Spine Switches）</strong> 连接起来。</li>
+<li>脊柱层形成了轨道的交汇点，提供了跨轨道的连通性。</li>
+</ul>
+</li>
+</ol>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2026/01/13/l6M2WILCxuonRSe.png" alt="switch.png"></p>
+<p><strong>图例与通信流程：</strong></p>
+<ul>
+<li><strong>同轨道通信（高效路径）</strong>：例如，<code>S0-G0</code>（Rank 0）要同步梯度给<code>S2-G0</code>（Rank 0）。数据流为：<code>S0-G0</code> -&gt; <strong>红色Rail 0交换机</strong> -&gt; <code>S2-G0</code>。<strong>这个过程完全在Rail 0内部完成，不经过脊柱层，路径最短。</strong></li>
+<li><strong>跨轨道通信（兜底路径）</strong>：例如，<code>S0-G0</code>（Rank 0）需要发送数据给<code>S1-G1</code>（Rank 1）。数据流为：<code>S0-G0</code> -&gt; <strong>红色Rail 0交换机</strong> -&gt; <strong>脊柱交换机</strong> -&gt; <strong>绿色Rail 1交换机</strong> -&gt; <code>S1-G1</code>。这条路经较长，用于处理不常见的通信模式。</li>
+</ul>
+<ol>
+<li><strong>扩展性挑战</strong>：我们的例子只有4个轨道。在3万GPU的集群中，如果每台服务器有8个GPU，就需要<strong>4000多台服务器和8个轨道</strong>。将Clos拓扑扩展到如此规模，网络层数、交换机数量、连线会变得极其复杂。</li>
+<li><strong>死锁与PFC风暴</strong>：大规模无损网络中，为避免丢包而采用的流量控制（如PFC）可能在多条链路间产生级联的“暂停”信号，导致整个网络停滞（死锁）。</li>
+<li><strong>成本与功耗</strong>：
+<ul>
+<li><strong>脊柱交换机</strong>：需要极高的端口密度和带宽来连接所有轨道交换机。为3万GPU提供全带宽，脊柱交换机本身可能就需要成百上千个800G端口。</li>
+<li><strong>光模块</strong>：图中每一根连接服务器的线缆和连接脊柱交换机的线缆都是昂贵的高速光模块（如400G/800G光学收发器）。数量随规模呈平方级增长。</li>
+<li>文中的 <strong>2亿美元成本</strong> 和 <strong>4.6兆瓦功耗</strong> 主要就来自这些顶级交换机和海量光模块。</li>
+</ul>
+</li>
+</ol>
+<h2 id="训练流量特征：99-的稀疏性">训练流量特征：99% 的稀疏性</h2>
+<p>Rail-only 架构的核心理论基础源于对大模型训练流量模式的深刻洞察。研究表明，高效训练 LLM 并不需要昂贵的全对全全双工网络，即便是在涉及混合并行策略和混合专家（MoE）模型的情况下亦是如此 1。</p>
+<h3 id="3D-并行策略下的通信流向">3D 并行策略下的通信流向</h3>
+<p>现代 LLM 训练通常采用三维（3D）并行策略：张量并行（TP）、流水线并行（PP）和数据并行（DP） 1。</p>
+<ol>
+<li><strong>张量并行（TP）：</strong> 将单层网络的操作分解到多个 GPU 上，通常局限在 HBD 内部运行。其通信频率极高，但由于 NVLink 的存在，绝大部分 TP 流量不会流向 NIC 域 1。</li>
+<li><strong>流水线并行（PP）：</strong> 将模型的不同层分配给不同的 GPU。PP 涉及点对点（P2P）通信。通过对称映射，流水线级之间的流量可以始终保持在相同的轨道内 1。</li>
+<li><strong>数据并行（DP）：</strong> 在多个 GPU 上复制模型副本并分发数据。DP 需要进行梯度聚合（All-Reduce）。虽然 DP 流量跨越集群，但通过分层集体通信算法，其网络需求同样可以被高度限制在特定的轨道或子群组内 1。</li>
+</ol>
+<h3 id="统计稀疏性的实证">统计稀疏性的实证</h3>
+<p>对 146B 到 1T 参数规模的 GPT 模型进行的流量矩阵分析显示，在任意给定的训练步中，超过 99% 的 GPU 对之间完全没有直接通信需求 1。同时，超过 75% 的总传输数据发生在 TP 并行组内，即由内部高带宽互连承担 1。这意味着，构建一个支持全对全全双工连接的 GPU 数据中心，对于 LLM 训练而言是严重的过度设计。传统的脊柱交换机层在绝大多数时间内都处于低效负载状态，却消耗了大量的 CAPEX 和电费 1。</p>
+<h4 id="核心论点：为“全对全”设计的网络，对LLM训练是巨大的浪费"><strong>核心论点：为“全对全”设计的网络，对LLM训练是巨大的浪费</strong></h4>
+<p><strong>1. 流量矩阵分析的发现（数据支撑）：</strong></p>
+<ul>
+<li><strong>“超过 99% 的 GPU 对之间完全没有直接通信需求”</strong>
+<ul>
+<li><strong>想象一下</strong>：一个拥有1万个GPU的集群。如果每对GPU之间都可能要说话，那潜在的通话组合有将近 <strong>5000万</strong> 对。但分析发现，在任何一个时刻，真正需要通话的GPU组合不到1%，即 <strong>不到50万</strong> 对。剩下99%的“电话线”都闲置着。</li>
+<li><strong>这意味着</strong>：网络拓扑根本不需要保证每两个GPU之间都有<strong>直接、高效</strong>的路径。绝大多数GPU一辈子都不会直接对话。</li>
+</ul>
+</li>
+<li><strong>“超过 75% 的总传输数据发生在 TP 并行组内，即由内部高带宽互连承担”</strong>
+<ul>
+<li><strong>TP（张量并行）</strong> 是一种将单个模型层拆分成多个部分，分布在<strong>同一个服务器或机架内</strong>的几个GPU上的并行方式。这些GPU需要极其频繁地交换大量中间计算结果。</li>
+<li><strong>内部高带宽互连</strong> 指的是 <strong>NVLink（GPU间）</strong> 和 <strong>PCIe（GPU与CPU/内存间）</strong>，它们的带宽远高于网络（NIC），延迟也低得多。</li>
+<li><strong>这意味着</strong>：最大的数据流（75%）根本不出服务器或机架，由“内部高速公路”解决了。需要通过网络（NIC域）传输的数据量本身就少了很多。</li>
+</ul>
+</li>
+</ul>
+<p><strong>2. 对现有架构的批判（结论）：</strong></p>
+<ul>
+<li><strong>“构建一个支持全对全全双工连接的 GPU 数据中心，对于 LLM 训练而言是严重的过度设计。”</strong>
+<ul>
+<li><strong>全对全全双工</strong>：这是传统数据中心和HPC集群的经典设计目标。它意味着网络像一张完整的蜘蛛网，任何两个节点（GPU）都能同时、双向、以最大带宽互相通信。这是最通用、最灵活的设计。</li>
+<li><strong>过度设计</strong>：就像为了偶尔需要运送几辆小汽车，却修建了一条可供 <strong>所有汽车同时并排双向行驶</strong> 的超级高速公路。虽然能力超强，但99%的车道和出入口永远空着，修建和维护成本是天价。</li>
+<li><strong>根本原因</strong>：LLM训练的通信模式（由并行策略决定）是 <strong>高度结构化、可预测、且稀疏的</strong>，与通用计算或HPC中常见的、不可预测的任意点对点通信模式截然不同。</li>
+</ul>
+</li>
+<li><strong>“传统的脊柱交换机层在绝大多数时间内都处于低效负载状态，却消耗了大量的 CAPEX 和电费。”</strong>
+<ul>
+<li><strong>脊柱交换机层</strong>：在你之前理解的“轨道优化”Clos拓扑中，脊柱层就是那个负责实现“跨轨道”全连接、最昂贵、最耗电的部分。</li>
+<li><strong>低效负载状态</strong>：因为99%的GPU对不直接通信，且75%的流量不走网络，所以脊柱交换机这些“网络核心枢纽”的绝大部分端口和交换能力 <strong>长期闲置</strong>。它们可能只在不到1%的时间里高负荷运转。</li>
+<li><strong>巨大的浪费</strong>：这些顶级交换机和为其供电、散热所消耗的成本（<strong>CAPEX，资本支出</strong>）和电费（<strong>OPEX，运营支出</strong>）极其高昂（如前文提到的数亿美元和数兆瓦），但利用率极低。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h4 id="一个生动的比喻：公司办公通信"><strong>一个生动的比喻：公司办公通信</strong></h4>
+<p>假设你有一个1万人的超大公司（<strong>GPU集群</strong>）。</p>
+<ul>
+<li><strong>传统全对全网络</strong>：就像给每个员工配了一部能直接拨打其他 <strong>9999人</strong> 中任何一人的专线电话，并假设他们可能随时需要与任何人开最高清的视频会议。这需要建设一个无比复杂、昂贵的电话交换中心（<strong>脊柱交换机</strong>）。</li>
+<li><strong>LLM训练的实际情况（流量矩阵分析）</strong>：
+<ol>
+<li><strong>部门内协作（TP组内）</strong>：超过75%的沟通发生在 <strong>同一个项目小组（4-8人）</strong> 内部。他们挤在一个小会议室里（<strong>NVLink高速互联</strong>），天天面对面高频讨论，基本不占用公司的电话系统。</li>
+<li><strong>跨部门同步（同Rank数据并行）</strong>：剩下的大部分沟通，是每个小组的 <strong>组长（相同Rank的GPU）</strong> 之间，定期开一个简短的电话会议，同步一下各自小组的进度。这个会议有固定的参会人（所有组长）。</li>
+<li><strong>极少数的跨组临时沟通</strong>：只有不到1%的情况，某个小组的普通成员需要临时联系另一个小组的某个成员。这种情况很少。</li>
+</ol>
+</li>
+<li><strong>当前的浪费</strong>：公司花费数十亿，建造和维护了一个能支持 <strong>所有员工同时与所有人进行高清视频通话</strong> 的超级交换中心。但实际上，<strong>99%的直接通话线路从未被使用</strong>，绝大部分时间只有那几十个组长在开固定的短会，交换中心99%的设备在空转、烧电费。</li>
+</ul>
+<h2 id="Rail-only-架构的设计哲学与实现">Rail-only 架构的设计哲学与实现</h2>
+<p>基于对流量稀疏性的实证分析，Rail-only 架构提出了一种颠覆性的设计：彻底移除传统 GPU 集群中的脊柱交换机层（Spine Layer） 1。</p>
+<h3 id="架构构造：独立轨道的非阻塞连接">架构构造：独立轨道的非阻塞连接</h3>
+<p>在 Rail-only 架构中，网络不再试图连接所有 GPU，而仅连接具有显著流量需求的 GPU 集合 1。具体而言，该架构保留了 HBD 的内部高带宽连接，但在 NIC 域，它将每个“轨道”构建为相互独立的非阻塞 Clos 网络 1。原先用于连接脊柱交换机的上行链路被重新配置为下行链路或被完全移除，从而简化了网络层级 1。</p>
+<p>这种设计的直接结果是网络设备的大幅减少。对于一个拥有 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span> 个 GPU、且 HBD 大小为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi></mrow><annotation encoding="application/x-tex">K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span></span></span></span> 的集群，Rail-only 架构实际上创建了 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi></mrow><annotation encoding="application/x-tex">K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span></span></span></span> 个独立的、规模为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi><mi mathvariant="normal">/</mi><mi>K</mi></mrow><annotation encoding="application/x-tex">N/K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mord">/</span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span></span></span></span> 的并行子网。这种结构不仅降低了布线复杂度，还从根本上消除了跨轨道通信可能引起的 ECMP（等价多路径路由）哈希冲突和由此产生的拥塞 1。</p>
+<h3 id="核心思想：拆解网络，隔离流量"><strong>核心思想：拆解网络，隔离流量</strong></h3>
+<p>既然流量分析证明：</p>
+<ol>
+<li><strong>超过75%</strong> 的流量（TP组内）不走网络（走NVLink）。</li>
+<li><strong>剩下绝大多数</strong> 的网络流量都发生在“同Rank GPU”之间。</li>
+<li>跨轨道的通信需求极少。</li>
+</ol>
+<p>那么，<strong>最直接、最极端的优化方法就是：既然你们（不同Rank的GPU）几乎不互相说话，那就干脆把你们的“电话线路”物理上分开吧！</strong></p>
+<h3 id="详细解读"><strong>详细解读</strong></h3>
+<p><strong>1. “网络不再试图连接所有 GPU，而仅连接具有显著流量需求的 GPU 集合。”</strong></p>
+<ul>
+<li><strong>传统思维</strong>：网络的任务是“连接一切”。</li>
+<li><strong>Rail-only思维</strong>：网络的任务是“高效服务<strong>特定</strong>的通信模式”。这里的“特定集合”指的就是 <strong>所有相同Rank的GPU</strong>。例如，把所有服务器的“GPU 0”连成一个网，把所有“GPU 1”连成另一个网，以此类推。</li>
+</ul>
+<p><strong>2. “它将每个‘轨道’构建为相互独立的非阻塞 Clos 网络。”</strong></p>
+<ul>
+<li><strong>相互独立</strong>：这是最关键的一词。红色轨道、绿色轨道、蓝色轨道……它们之间<strong>没有物理连接</strong>。没有脊柱交换机来连接它们。</li>
+<li><strong>非阻塞Clos网络</strong>：在一个轨道内部（例如所有Rank 0的GPU），它们仍然需要一个网络来互相通信。这个网络被设计成一个 <strong>小型的、独立的Clos网络</strong>，确保在这个小网络内部，任何两个GPU都能以最大带宽通信而不会阻塞。</li>
+<li>这就像把原先一个能容纳1万人的巨型电话交换中心，拆分成 <strong>K个</strong> 只能容纳 <strong>N/K</strong> 人的小型、专用的电话交换中心。</li>
+</ul>
+<p><strong>3. “原先用于连接脊柱交换机的上行链路被重新配置为下行链路或被完全移除。”</strong></p>
+<ul>
+<li>在传统Clos拓扑中，轨道交换机需要“向上”连接脊柱交换机（<strong>上行链路</strong>），以实现跨轨道通信。</li>
+<li>在Rail-only架构中，既然不需要跨轨道通信了，这些昂贵的上行链路端口和光模块要么被重新用作为这个独立子网内的下行链路（连接更多相同Rank的GPU），要么直接<strong>移除</strong>。</li>
+<li><strong>效果</strong>：网络层级从 <strong>三层（轨道-脊柱-轨道）</strong> 简化为 <strong>两层（轨道内Clos）</strong>。复杂性、成本和故障点都大幅减少。</li>
+</ul>
+<hr>
+<h3 id="一个更具体的比喻：地铁系统重组"><strong>一个更具体的比喻：地铁系统重组</strong></h3>
+<ul>
+<li><strong>传统Clos网络（全对全）</strong>：就像建设一个庞大的 <strong>综合性交通枢纽</strong>。所有地铁线（轨道）都交汇于此，你可以在这里换乘任何线路去往任何地方。枢纽（脊柱交换机）极其庞大、昂贵且繁忙。</li>
+<li><strong>Rail-only网络</strong>：分析后发现，<strong>超过99%的乘客只在同一条地铁线内往返，几乎没人需要换乘</strong>。那么，一个更经济的方案是：
+<ul>
+<li><strong>拆掉那个昂贵的中央枢纽</strong>。</li>
+<li>为 <strong>每一条地铁线</strong> 独立建设一个 <strong>小型的环线或调度站（独立的非阻塞Clos网络）</strong>，保证这条线上的列车能高效运行。</li>
+<li><strong>不同地铁线之间不设换乘通道</strong>。如果你住在1号线，工作在2号线，那对不起，这个系统不为你服务（因为这种情况在LLM训练中极少发生，可以忽略或通过其他方式解决）。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h3 id="技术优势与数学表达"><strong>技术优势与数学表达</strong></h3>
+<p><strong>“对于一个拥有 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span> 个 GPU、且 HBD 大小为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi></mrow><annotation encoding="application/x-tex">K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span></span></span></span> 的集群，Rail-only 架构实际上创建了 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi></mrow><annotation encoding="application/x-tex">K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span></span></span></span> 个独立的、规模为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi><mi mathvariant="normal">/</mi><mi>K</mi></mrow><annotation encoding="application/x-tex">N/K</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mord">/</span><span class="mord mathnormal" style="margin-right:0.07153em;">K</span></span></span></span> 的并行子网。”</strong></p>
+<ul>
+<li><strong>假设</strong>：一个集群有 <code>N = 4096</code> 个GPU，每个服务器（HBD）有 <code>K = 8</code> 个GPU。</li>
+<li><strong>传统网络</strong>：你需要一个能连接4096个端点的巨型网络。</li>
+<li><strong>Rail-only网络</strong>：你只需要建设 <strong>8个</strong> 独立的小网络。每个小网络只需要连接 <code>4096 / 8 = 512</code> 个GPU（即所有Rank 0的GPU，所有Rank 1的GPU……）。</li>
+<li><strong>设备减少</strong>：网络交换机的端口数、数量，以及互连的光模块数量，都随网络规模的<strong>平方级</strong>增长。将一个大网络拆成多个小网络，总设备开销会<strong>指数级下降</strong>。文中提到的“仅交换机和收发器成本就高达2亿美元”的情况将得到极大缓解。</li>
+</ul>
+<p><strong>“从根本上消除了跨轨道通信可能引起的 ECMP 哈希冲突和由此产生的拥塞。”</strong></p>
+<ul>
+<li><strong>ECMP（等价多路径）</strong>：在传统大网络中，数据包从A到B有<strong>多条</strong>等价路径可选。交换机通过一个哈希算法（比如看数据包的IP和端口号）来决定走哪条路。</li>
+<li><strong>哈希冲突问题</strong>：在LLM训练中，一个巨大的数据流（如All-Reduce梯度同步）会被拆成无数个数据包。如果这些数据包的哈希值都相同，它们就会被全部塞到<strong>同一条物理路径</strong>上，导致这条路径拥塞，而其他并行路径却空闲。这就是“流量不均衡”，严重降低性能。</li>
+<li><strong>Rail-only的解决之道</strong>：既然网络被物理隔离了，<strong>所有属于Rank 0的流量都被限制在Rail 0这个独立的小网络里</strong>。这个小网络内部路径简单、流量模式纯粹（全是同Rank通信），更容易通过定制化的路由算法（而不是依赖通用的ECMP哈希）来保证流量均衡，从而彻底避免了大网络中因ECMP哈希冲突导致的拥塞。</li>
+</ul>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://s2.loli.net/2026/01/13/25Sr7ZhK1iuGYXk.png" alt="deepseek_mermaid_20260113_6ca96a.png"></p>
+<h3 id="经济效益评估">经济效益评估</h3>
+<p>通过移除脊柱层，Rail-only 架构在成本和能效方面表现出巨大的优势。下表详细对比了传统轨道优化网络（SOTA）与 Rail-only 网络在不同规模下的硬件需求及成本节省情况 1。</p>
+<table>
+<thead>
+<tr>
+<th><strong>集群规模 (#GPUs)</strong></th>
+<th><strong>交换机基数 (Radix)</strong></th>
+<th><strong>交换机总数 (Rail-only)</strong></th>
+<th><strong>收发器总数 (Rail-only)</strong></th>
+<th><strong>成本节省 (%)</strong></th>
+<th><strong>功耗节省 (%)</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>32,768</td>
+<td>64</td>
+<td>1,536</td>
+<td>131,072</td>
+<td>38%</td>
+<td>37%</td>
+</tr>
+<tr>
+<td>32,768</td>
+<td>128</td>
+<td>256</td>
+<td>65,536</td>
+<td>77%</td>
+<td>75%</td>
+</tr>
+<tr>
+<td>32,768</td>
+<td>256</td>
+<td>128</td>
+<td>65,536</td>
+<td>62%</td>
+<td>60%</td>
+</tr>
+<tr>
+<td>65,536</td>
+<td>128</td>
+<td>2,560</td>
+<td>262,144</td>
+<td>38%</td>
+<td>37%</td>
+</tr>
+<tr>
+<td>65,536</td>
+<td>256</td>
+<td>256</td>
+<td>131,072</td>
+<td>77%</td>
+<td>75%</td>
+</tr>
+</tbody>
+</table>
+<p>在 32,768 个 GPU 的规模下，采用 128 基数的交换机时，Rail-only 设计可消除多达 1,024 台交换机和 131,072 个收发器，实现高达 77% 的成本削减和 75% 的功耗降低 1。对于运营商而言，这意味着数亿美元的支出节省以及数兆瓦的电力配额释放，极大缓解了现代数据中心在电力和热管理方面的压力 1。</p>
+<h2 id="跨轨道通信：两步转发与-PXN-技术">跨轨道通信：两步转发与 PXN 技术</h2>
+<p>尽管大模型训练流量具有高度稀疏性，但某些特定场景（如混合专家模型 MoE 的全对全通信）仍需跨越轨道的界限。在失去脊柱交换机的情况下，Rail-only 架构采用了“两步转发（Two-step Forwarding）”策略来解决这一问题 1。</p>
+<h3 id="转发机制详解">转发机制详解</h3>
+<p>当 GPU 1（域 A，轨道 1）需要向 GPU 2（域 B，轨道 2）发送数据时，其路径如下：</p>
+<ol>
+<li><strong>第一步（域内转发）：</strong> GPU 1 首先通过高带宽互连（HBI/NVLink）将数据发送给同一域（域 A）内的 GPU 2。由于 HBI 的带宽（Tbps 级别）远高于 NIC 域（数百 Gbps），这一步的延迟极低 1。</li>
+<li><strong>第二步（跨域转发）：</strong> 处于域 A 轨道 2 的 GPU 接收到数据后，通过其所属的轨道 2 交换机，将数据直接发送给处于域 B 轨道 2 的目标 GPU。由于发送方和接收方都在同一个轨道内，通信仅需通过单层交换机即可完成 1。</li>
+</ol>
+<p>这种机制有效地将“跨轨道”的网络任务转化为“域内转发 + 同轨网络传输”。这种思路与 NVIDIA NCCL 2.12 版本引入的 <strong>PXN (PCIe x NVLink)</strong> 功能高度一致 22。PXN 允许 GPU 通过 NVLink 访问节点内的非本地 NIC，从而在不经过 CPU 或跨越脊柱交换机的情况下优化通信路径。研究表明，PXN 可以将消息聚合（最多 8 条消息合一），显著提高全对全操作的吞吐量 22。</p>
+<h3 id="带宽税与性能开销">带宽税与性能开销</h3>
+<p>转发机制通常会带来所谓的“带宽税（Bandwidth-tax）”，即由于数据被多次搬运而产生的开销 1。然而，Rail-only 架构利用了 HBD 与 NIC 域之间的巨大带宽不对称性。在 DGX H100 平台中，内部带宽与外部网络带宽的比值约为 9:1 1。</p>
+<p>通过数学建模分析，对于 MoE 模型产生的均匀全对全流量，Rail-only 架构相比轨道优化 Clos 网络的慢速因子（Slow-down Factor）仅为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>C</mi><mi>S</mi></msub><mi mathvariant="normal">/</mi><msub><mi>C</mi><mi>F</mi></msub></mrow><annotation encoding="application/x-tex">C_S/C_F</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.05764em;">S</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord">/</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.13889em;">F</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>（NIC 带宽/HBD 带宽）。在 DGX A100 和 H100 世代中，全对全任务的完成时间开销仅分别增加 8.2% 和 11.2% 1。考虑到全对全通信仅占 LLM 训练总时间的较小比例，这种微小的性能损失在巨大的经济节省面前几乎可以忽略不计 1。</p>
+<h2 id="性能评估与硬件-FLOPs-利用率-HFU">性能评估与硬件 FLOPs 利用率 (HFU)</h2>
+<p>为了验证 Rail-only 架构的实用性，研究人员使用分析模型对训练迭代时间进行了模拟，并与实际观测到的硬件 FLOPs 利用率（HFU）进行了对比 1。</p>
+<h3 id="建模精度">建模精度</h3>
+<p>实验采用 Calculon 等工具对 GPT-1T 模型进行评估。结果显示，该分析模型对大型模型的预测误差极小。对于 GPT-1T，计算出的 HFU 与真实值仅相差 1.8% 1。这种高精度的建模为 Rail-only 架构的优越性提供了坚实的实证基础。</p>
+<h3 id="HBD-规模的最优解">HBD 规模的最优解</h3>
+<p>直觉上，增加 HBD 的大小会减少跨平台网络的开销。然而，由于摩尔定律和阿姆达尔定律的限制，边际收益会逐渐递减 1。对于 GPT-1T 模型，当 HBD 规模从 1 增加到 32 时，迭代时间显著下降；但当规模超过 32 后，性能趋于平缓 1。这表明在构建万亿参数大模型集群时，未必需要无限大的单节点拓扑，合理配置 HBD 规模（如当前的 8 卡或 72 卡机柜）即可配合 Rail-only 网络达到接近理想的训练效率 1。</p>
+<h3 id="批大小（Batch-Size）的深层影响">批大小（Batch Size）的深层影响</h3>
+<p>研究还发现，全局批大小对网络设计的鲁棒性有重要影响。随着批大小的增加，单步迭代中的计算量增大，而通信量并未成比例增加 1。在 32,768 个 GPU 的集群中，当批大小从 256 增加到 4,096 时，Rail-only 网络相对于理想全连通网络的性能表现从 95% 提升至 99% 1。这意味着在追求更高训练效率的超大规模任务中，Rail-only 架构不仅更便宜，而且其性能几乎与最昂贵的 Clos 方案等同。</p>
+<h2 id="可靠性分析与故障恢复">可靠性分析与故障恢复</h2>
+<p>在拥有数万个组件的超大规模集群中，故障是常态。Rail-only 架构在减少脊柱层后，其故障恢复策略也必须进行相应调整 1。</p>
+<h3 id="链路与交换机故障">链路与交换机故障</h3>
+<p>由于去掉了脊柱层，Rail-only 架构的轨道交换机直接决定了其所属 GPU 的连通性。如果某轨道交换机失效，该轨道内的 GPU 将暂时无法参与 NIC 域通信。然而，由于 Rail-only 使用的交换机总数大幅减少，从统计学角度看，整个集群遭遇交换机故障的概率也随之降低 1。</p>
+<h3 id="GPU-单点故障的处理">GPU 单点故障的处理</h3>
+<p>对于单 GPU 故障，轨道优化网络通常可以从池中调拨闲置 GPU 进行替代。在 Rail-only 架构中，由于网络是轨道隔离的，这种灵活调拨受到一定限制 1。为此，论文提出了两种解决方案：</p>
+<ol>
+<li><strong>任务迁移：</strong> 对于小型 HBD 平台，直接将整个失败的 HBD 任务迁移到备用节点 1。</li>
+<li><strong>光开关重构：</strong> 对于大型 HBD 平台（如 DGX GH200），引入少量的光学可重构交换机（Optical Reconfigurable Switches）。当某 GPU 发生故障时，光学开关可动态调整布线，将一个健康的备用 GPU 接入该轨道，从而在不破坏 HBD 完整性的前提下恢复运行 1。</li>
+</ol>
+<h2 id="行业对比：Rail-only、RailX-与-Fat-Tree">行业对比：Rail-only、RailX 与 Fat-Tree</h2>
+<p>在寻求低成本高性能网络的路径上，Rail-only 并非唯一的探索。近期提出的 <strong>RailX</strong> 架构也受到了学术界和工业界的关注 21。</p>
+<h3 id="技术路线差异">技术路线差异</h3>
+<table>
+<thead>
+<tr>
+<th><strong>维度</strong></th>
+<th><strong>Rail-only (本文)</strong></th>
+<th><strong>RailX (新兴研究)</strong></th>
+<th><strong>传统 Fat-Tree (Clos)</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>拓扑结构</strong></td>
+<td>独立轨道 Clos</td>
+<td>2D 组织的光电环网</td>
+<td>多级全连通树状</td>
+</tr>
+<tr>
+<td><strong>核心机制</strong></td>
+<td>移除脊柱层，依靠 HBD 转发</td>
+<td>汉密尔顿分解理论构建全对全环</td>
+<td>依靠多层脊柱实现非阻塞全对全</td>
+</tr>
+<tr>
+<td><strong>成本节省</strong></td>
+<td>38% - 77%</td>
+<td>&gt;90% (相较于 Fat-Tree 注入带宽)</td>
+<td>基准 (0%)</td>
+</tr>
+<tr>
+<td><strong>主要挑战</strong></td>
+<td>跨轨道通信的转发开销</td>
+<td>光学开关的控制面复杂度及重构延迟</td>
+<td>极高的成本与功耗，易死锁</td>
+</tr>
+</tbody>
+</table>
+<p>RailX 采用了基于哈密顿分解理论的轨道环（Rail-Ring）互连方法，试图通过光电混合技术实现更极致的成本压缩 25。而 Rail-only 的优势在于其极高的“可落地性”——它不依赖尚未完全成熟的大规模光学交换面，而是通过对现有商品化电交换机（Commodity Switches）拓扑的重排，实现了即插即用的效益提升 1。</p>
+<h2 id="深度总结与未来愿景">深度总结与未来愿景</h2>
+<p>大语言模型的发展已使人工智能从算法竞争转向基础设施竞争。Rail-only 网络架构的提出，标志着 GPU 数据中心设计从“通用计算”向“AI 专用”的重大转型。通过深度利用 3D 并行策略下的通信稀疏性，Rail-only 架构成功打破了传统 Clos 网络在超大规模扩展时的成本与能效瓶颈 1。</p>
+<p>其核心贡献可概括为以下三点：</p>
+<ol>
+<li><strong>去伪存真：</strong> 揭示了 99% 的 GPU 对之间存在无效连接，证明了移除全对全全双工网络的物理合理性 1。</li>
+<li><strong>以快补慢：</strong> 巧妙利用 HBD 域内的高带宽（NVLink）弥补了网络层级简化后的转发开销，使 MoE 模型的性能损失控制在 10% 以内 1。</li>
+<li><strong>绿色算力：</strong> 为万亿参数模型训练提供了可持续的演进路径，将网络部分的功耗降低了 75%，极大地提升了大型算力中心的部署可行性 1。</li>
+</ol>
+<p>展望未来，随着单 HBD 规模（如 GB200 系统）的持续扩大，网络层级的进一步压缩将成为趋势。结合光学电路交换（OCS）和更加智能的拓扑感知调度算法（如 Arnold 或 TopoOpt），Rail-only 设计理念将为构建 100,000 枚 GPU 级别的“人工智能工厂”提供核心架构支撑 1。这一架构演进不仅是技术的胜利，更是对数据中心设计哲学的一次深刻重塑。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/">http://example.com/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/%E8%AE%AD%E7%BB%83/">训练</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/Rail-only.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/01/04/2026-01-04-Tongyi-DeepResearch%E6%8A%80%E6%9C%AF%E6%8A%A5%E5%91%8A%E8%A7%A3%E8%AF%BB%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" title="Tongyi DeepResearch技术报告解读及源码分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/tydr.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Tongyi DeepResearch技术报告解读及源码分析</div></div><div class="info-2"><div class="info-item-1">Tongyi DeepResearch技术报告解读及源码分析 https://github.com/Alibaba-NLP/DeepResearch https://zhuanlan.zhihu.com/p/1966914265899329009 </div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/08/06/2024-08-06-WiNGPT2%E7%9A%84%E9%83%A8%E7%BD%B2%E5%92%8C%E6%80%A7%E8%83%BD%E5%AF%B9%E6%AF%94/" title="医疗垂直领域大模型WiNGPT2的部署和性能对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-06</div><div class="info-item-2">医疗垂直领域大模型WiNGPT2的部署和性能对比</div></div><div class="info-2"><div class="info-item-1">医疗垂直领域大模型WiNGPT2的部署和性能对比 WiNGPT2部署和运行 123456git clone https://github.com/winninghealth/WiNGPT2.gitcd WiNGPT2mkdir winninghealthcd winninghealthgit clone https://hf-mirror.com/winninghealth/WiNGPT2-7B-Chatcd .. 若没有以下这三个库，则安装gradio、tiktoken、pip install einops flash_attn 123pip install gradiopip install tiktokenpip install einops flash_attn 选一个目录作为cache（前提是这个目录已经存在且有权限读写） 12# 遇到报错 [Errno 13] Permission denied: &#x27;/data/.cache/huggingface/modules/transformers_modules/WiNGPT2-7B-Chat&#x27;expor...</div></div></div></a><a class="pagination-related" href="/2024/08/07/2024-08-07-%E6%B3%95%E5%BE%8B%E5%9E%82%E7%B1%BB%E5%A4%A7%E6%A8%A1%E5%9E%8BDISC-LawGPT%E7%9A%84%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C%E5%92%8C%E5%AF%B9%E6%AF%94/" title="法律垂类大模型DISC-LawGPT的部署运行和对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-07</div><div class="info-item-2">法律垂类大模型DISC-LawGPT的部署运行和对比</div></div><div class="info-2"><div class="info-item-1">法律垂类大模型DISC-LawGPT的部署运行和对比 部署和运行 123456789101112131415# 部署git clone https://github.com/FudanDISC/DISC-LawLLM.gitcd DISC-LawLLMpip install -r requirements.txtmkdir ShengbinYuecd ShengbinYuegit clone https://hf-mirror.com/ShengbinYue/DISC-LawLLMcd ..mkdir cache# 遇到报错 [Errno 13] Permission denied: &#x27;/data/.cache/huggingface/modules/transformers_modules/DISC-LawLLM&#x27;export HF_HOME=&quot;~/verticalLLM/lzjr/DISC-LawLLM/cache&quot; # 如果遇到CUDA error: out of memory 用 watch -n 0.5 nvidia-smi查看显...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-15-Camel%E6%A1%86%E6%9E%B6/" title="Camel框架"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/camel.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">Camel框架</div></div><div class="info-2"><div class="info-item-1">NeurIPS 2023｜AI Agents先行者CAMEL:第一个基于大模型的多智能体框架 转自：https://zhuanlan.zhihu.com/p/671093582 AI Agents是当下大模型领域备受关注的话题，用户可以引入多个扮演不同角色的LLM Agents参与到实际的任务中，Agents之间会进行竞争和协作等多种形式的动态交互，进而产生惊人的群体智能效果。本文介绍了来自KAUST研究团队的大模型心智交互CAMEL框架（“骆驼”），CAMEL框架是最早基于ChatGPT的autonomous agents知名项目，目前已被顶级人工智能会议NeurIPS 2023录用。  1777dbe9073c4bcd8ab59365481bcafc.png  论文题目： CAMEL: Communicative Agents for “Mind” Exploration of Large Scale Language Model Society 论文链接： https://ghli.org/camel.pdf 代码链接： https://github.com/camel-a...</div></div></div></a><a class="pagination-related" href="/2025/08/17/2025-08-15-RAG/" title="多Agent"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-17</div><div class="info-item-2">多Agent</div></div><div class="info-2"><div class="info-item-1">多Agent https://www.zhihu.com/question/642650878/answer/1896282773486011813 https://zhuanlan.zhihu.com/p/1908922657027621854 多Agent系统，任务：https://zhuanlan.zhihu.com/p/1909200989090722209 AutoAgents是一个创新的框架，根据不同任务自适应地生成和协调多个专用代理来构建AI团队。AutoAgents通过动态生成多个所需代理并基于生成的专家代理为当前任务规划解决方案，将任务与角色之间的关系相结合。多个专门的代理相互协作以高效地完成任务。该框架还融入了观察者角色，反映指定计划和代理响应，并对其进行改进。该论文在各种基准测试上的实验证明，AutoAgents生成的解决方案比现有的多代理方法更连贯准确，为处理复杂任务提供了新的视角。 地址：https://http://arxiv.org/pdf/2309.17288 代码：https://http://github.com/LinkSoul-AI/Aut...</div></div></div></a><a class="pagination-related" href="/2025/08/15/2025-08-15-ray-accelerate-trainer-lightning-pytorch/" title="ray accelerate trainer lightning pytorch"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-15</div><div class="info-item-2">ray accelerate trainer lightning pytorch</div></div><div class="info-2"><div class="info-item-1">ray、accelerate、trainer、lightning、pytorch 转自：https://www.zhihu.com/question/1926849595331318550/answer/1928049512619968205 作者：CodeCrafter 链接：https://www.zhihu.com/question/1926849595331318550/answer/1939450608894608104 来源：知乎 著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。 2025 年，纯 PyTorch 是基本功，你必须得会，而且要熟。 它是你的内力，是你理解一切上层框架的基础。 Hugging Face Trainer 是特定领域（尤其是 NLP）的“版本答案”。 如果你就是做微调、做推理，用它，省心省力，快速出活儿。 Lightning 和 Accelerate 是“效率增强器”。 帮你把 PyTorch 代码写得更规范、更工程化，让你从繁琐的样板代码里解放出来，专注于模型本身。 Ray… 这家伙是个“大杀器”，跟前面几个不是一个维度...</div></div></div></a><a class="pagination-related" href="/2025/08/15/2025-08-15-xpu_timer/" title="xpu_timer"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-15</div><div class="info-item-2">xpu_timer</div></div><div class="info-2"><div class="info-item-1">xpu_timer 转自：https://cloud.tencent.com/developer/article/2418684 背景 随着大型模型的参数量从十亿量级跃升至万亿级别，其训练规模的急剧扩张不仅引发了集群成本的显著上涨，还对系统稳定性构成了挑战，尤其是机器故障的频发成为不可忽视的问题。对于大规模分布式训练任务而言，可观测性能力成为了排查故障、优化性能的关键所在。所以从事大型模型训练领域的技术人，都会不可避免地面临以下挑战：  训练过程中，性能可能会因网络、计算瓶颈等多种因素而不稳定，出现波动甚至衰退； 分布式训练是多个节点协同工作的，任一节点发生故障（无论是软件、硬件、网卡或 GPU 问题），整个训练流程均需暂停，严重影响训练效率，而且浪费宝贵的 GPU 资源。  但在实际的大模型训练过程中，这些问题是很难排查的，主要原因如下：  训练过程为同步操作，很难通过整体性能指标来排除此时哪些机器出现问题，一个机器慢可以拖慢整体训练速度； 训练性能变慢往往不是训练逻辑/框架的问题，通常为环境导致，如果没有训练相关的监控数据，打印 timeline 实际上也没有任何作用，并且同...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">185</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">152</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">52</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AE%97%E5%8A%9B%E4%B8%AD%E5%BF%83%E7%9A%84%E5%9F%BA%E7%9F%B3%EF%BC%9AGPU-%E4%BA%92%E8%BF%9E%E5%9F%9F%E7%9A%84%E5%88%92%E5%88%86"><span class="toc-number">1.1.</span> <span class="toc-text">算力中心的基石：GPU 互连域的划分</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%AB%98%E5%B8%A6%E5%AE%BD%E5%9F%9F%EF%BC%88HBD%EF%BC%89%EF%BC%9A%E7%89%87%E4%B8%8A%E4%B8%8E%E8%8A%82%E7%82%B9%E5%86%85%E4%BA%92%E8%BF%9E"><span class="toc-number">1.1.1.</span> <span class="toc-text">高带宽域（HBD）：片上与节点内互连</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BD%91%E7%BB%9C%E6%8E%A5%E5%8F%A3%E5%9F%9F%EF%BC%88NIC-Domain%EF%BC%89%EF%BC%9A%E8%B7%A8%E8%8A%82%E7%82%B9%E6%89%A9%E5%B1%95"><span class="toc-number">1.1.2.</span> <span class="toc-text">网络接口域（NIC Domain）：跨节点扩展</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%BE%E4%BE%8B%E8%AF%B4%E6%98%8E"><span class="toc-number">1.1.2.1.</span> <span class="toc-text">举例说明</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%AE%AD%E7%BB%83%E6%B5%81%E9%87%8F%E7%89%B9%E5%BE%81%EF%BC%9A99-%E7%9A%84%E7%A8%80%E7%96%8F%E6%80%A7"><span class="toc-number">1.2.</span> <span class="toc-text">训练流量特征：99% 的稀疏性</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3D-%E5%B9%B6%E8%A1%8C%E7%AD%96%E7%95%A5%E4%B8%8B%E7%9A%84%E9%80%9A%E4%BF%A1%E6%B5%81%E5%90%91"><span class="toc-number">1.2.1.</span> <span class="toc-text">3D 并行策略下的通信流向</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BB%9F%E8%AE%A1%E7%A8%80%E7%96%8F%E6%80%A7%E7%9A%84%E5%AE%9E%E8%AF%81"><span class="toc-number">1.2.2.</span> <span class="toc-text">统计稀疏性的实证</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E8%AE%BA%E7%82%B9%EF%BC%9A%E4%B8%BA%E2%80%9C%E5%85%A8%E5%AF%B9%E5%85%A8%E2%80%9D%E8%AE%BE%E8%AE%A1%E7%9A%84%E7%BD%91%E7%BB%9C%EF%BC%8C%E5%AF%B9LLM%E8%AE%AD%E7%BB%83%E6%98%AF%E5%B7%A8%E5%A4%A7%E7%9A%84%E6%B5%AA%E8%B4%B9"><span class="toc-number">1.2.2.1.</span> <span class="toc-text">核心论点：为“全对全”设计的网络，对LLM训练是巨大的浪费</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E7%94%9F%E5%8A%A8%E7%9A%84%E6%AF%94%E5%96%BB%EF%BC%9A%E5%85%AC%E5%8F%B8%E5%8A%9E%E5%85%AC%E9%80%9A%E4%BF%A1"><span class="toc-number">1.2.2.2.</span> <span class="toc-text">一个生动的比喻：公司办公通信</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#Rail-only-%E6%9E%B6%E6%9E%84%E7%9A%84%E8%AE%BE%E8%AE%A1%E5%93%B2%E5%AD%A6%E4%B8%8E%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.3.</span> <span class="toc-text">Rail-only 架构的设计哲学与实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9E%B6%E6%9E%84%E6%9E%84%E9%80%A0%EF%BC%9A%E7%8B%AC%E7%AB%8B%E8%BD%A8%E9%81%93%E7%9A%84%E9%9D%9E%E9%98%BB%E5%A1%9E%E8%BF%9E%E6%8E%A5"><span class="toc-number">1.3.1.</span> <span class="toc-text">架构构造：独立轨道的非阻塞连接</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E6%80%9D%E6%83%B3%EF%BC%9A%E6%8B%86%E8%A7%A3%E7%BD%91%E7%BB%9C%EF%BC%8C%E9%9A%94%E7%A6%BB%E6%B5%81%E9%87%8F"><span class="toc-number">1.3.2.</span> <span class="toc-text">核心思想：拆解网络，隔离流量</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%A6%E7%BB%86%E8%A7%A3%E8%AF%BB"><span class="toc-number">1.3.3.</span> <span class="toc-text">详细解读</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E6%9B%B4%E5%85%B7%E4%BD%93%E7%9A%84%E6%AF%94%E5%96%BB%EF%BC%9A%E5%9C%B0%E9%93%81%E7%B3%BB%E7%BB%9F%E9%87%8D%E7%BB%84"><span class="toc-number">1.3.4.</span> <span class="toc-text">一个更具体的比喻：地铁系统重组</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E4%BC%98%E5%8A%BF%E4%B8%8E%E6%95%B0%E5%AD%A6%E8%A1%A8%E8%BE%BE"><span class="toc-number">1.3.5.</span> <span class="toc-text">技术优势与数学表达</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BB%8F%E6%B5%8E%E6%95%88%E7%9B%8A%E8%AF%84%E4%BC%B0"><span class="toc-number">1.3.6.</span> <span class="toc-text">经济效益评估</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%B7%A8%E8%BD%A8%E9%81%93%E9%80%9A%E4%BF%A1%EF%BC%9A%E4%B8%A4%E6%AD%A5%E8%BD%AC%E5%8F%91%E4%B8%8E-PXN-%E6%8A%80%E6%9C%AF"><span class="toc-number">1.4.</span> <span class="toc-text">跨轨道通信：两步转发与 PXN 技术</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BD%AC%E5%8F%91%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3"><span class="toc-number">1.4.1.</span> <span class="toc-text">转发机制详解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B8%A6%E5%AE%BD%E7%A8%8E%E4%B8%8E%E6%80%A7%E8%83%BD%E5%BC%80%E9%94%80"><span class="toc-number">1.4.2.</span> <span class="toc-text">带宽税与性能开销</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%A7%E8%83%BD%E8%AF%84%E4%BC%B0%E4%B8%8E%E7%A1%AC%E4%BB%B6-FLOPs-%E5%88%A9%E7%94%A8%E7%8E%87-HFU"><span class="toc-number">1.5.</span> <span class="toc-text">性能评估与硬件 FLOPs 利用率 (HFU)</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BB%BA%E6%A8%A1%E7%B2%BE%E5%BA%A6"><span class="toc-number">1.5.1.</span> <span class="toc-text">建模精度</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#HBD-%E8%A7%84%E6%A8%A1%E7%9A%84%E6%9C%80%E4%BC%98%E8%A7%A3"><span class="toc-number">1.5.2.</span> <span class="toc-text">HBD 规模的最优解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%89%B9%E5%A4%A7%E5%B0%8F%EF%BC%88Batch-Size%EF%BC%89%E7%9A%84%E6%B7%B1%E5%B1%82%E5%BD%B1%E5%93%8D"><span class="toc-number">1.5.3.</span> <span class="toc-text">批大小（Batch Size）的深层影响</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%AF%E9%9D%A0%E6%80%A7%E5%88%86%E6%9E%90%E4%B8%8E%E6%95%85%E9%9A%9C%E6%81%A2%E5%A4%8D"><span class="toc-number">1.6.</span> <span class="toc-text">可靠性分析与故障恢复</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%93%BE%E8%B7%AF%E4%B8%8E%E4%BA%A4%E6%8D%A2%E6%9C%BA%E6%95%85%E9%9A%9C"><span class="toc-number">1.6.1.</span> <span class="toc-text">链路与交换机故障</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#GPU-%E5%8D%95%E7%82%B9%E6%95%85%E9%9A%9C%E7%9A%84%E5%A4%84%E7%90%86"><span class="toc-number">1.6.2.</span> <span class="toc-text">GPU 单点故障的处理</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%A1%8C%E4%B8%9A%E5%AF%B9%E6%AF%94%EF%BC%9ARail-only%E3%80%81RailX-%E4%B8%8E-Fat-Tree"><span class="toc-number">1.7.</span> <span class="toc-text">行业对比：Rail-only、RailX 与 Fat-Tree</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E8%B7%AF%E7%BA%BF%E5%B7%AE%E5%BC%82"><span class="toc-number">1.7.1.</span> <span class="toc-text">技术路线差异</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%B7%B1%E5%BA%A6%E6%80%BB%E7%BB%93%E4%B8%8E%E6%9C%AA%E6%9D%A5%E6%84%BF%E6%99%AF"><span class="toc-number">1.8.</span> <span class="toc-text">深度总结与未来愿景</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Rail-only.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"/></a><div class="content"><a class="title" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</a><time datetime="2026-01-12T16:00:00.000Z" title="发表于 2026-01-13 00:00:00">2026-01-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/04/2026-01-04-MOE%E6%B7%B7%E5%90%88%E4%B8%93%E5%AE%B6%E6%A8%A1%E5%9E%8B%E6%80%BB%E7%BB%93/" title="MOE混合专家模型总结"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/moe.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MOE混合专家模型总结"/></a><div class="content"><a class="title" href="/2026/01/04/2026-01-04-MOE%E6%B7%B7%E5%90%88%E4%B8%93%E5%AE%B6%E6%A8%A1%E5%9E%8B%E6%80%BB%E7%BB%93/" title="MOE混合专家模型总结">MOE混合专家模型总结</a><time datetime="2026-01-03T16:00:00.000Z" title="发表于 2026-01-04 00:00:00">2026-01-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/04/2026-01-04-Tongyi-DeepResearch%E6%8A%80%E6%9C%AF%E6%8A%A5%E5%91%8A%E8%A7%A3%E8%AF%BB%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" title="Tongyi DeepResearch技术报告解读及源码分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/tydr.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Tongyi DeepResearch技术报告解读及源码分析"/></a><div class="content"><a class="title" href="/2026/01/04/2026-01-04-Tongyi-DeepResearch%E6%8A%80%E6%9C%AF%E6%8A%A5%E5%91%8A%E8%A7%A3%E8%AF%BB%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" title="Tongyi DeepResearch技术报告解读及源码分析">Tongyi DeepResearch技术报告解读及源码分析</a><time datetime="2026-01-03T16:00:00.000Z" title="发表于 2026-01-04 00:00:00">2026-01-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/12/31/2025-12-31-OpenSkills%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E5%A6%82%E4%BD%95%E8%AE%A9Claude-Code%E8%8E%B7%E5%BE%97%E8%B6%85%E8%83%BD%E5%8A%9B/" title="OpenSkills深度解析：如何让Claude Code获得超能力"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/MemEvolve.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="OpenSkills深度解析：如何让Claude Code获得超能力"/></a><div class="content"><a class="title" href="/2025/12/31/2025-12-31-OpenSkills%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E5%A6%82%E4%BD%95%E8%AE%A9Claude-Code%E8%8E%B7%E5%BE%97%E8%B6%85%E8%83%BD%E5%8A%9B/" title="OpenSkills深度解析：如何让Claude Code获得超能力">OpenSkills深度解析：如何让Claude Code获得超能力</a><time datetime="2025-12-30T16:00:00.000Z" title="发表于 2025-12-31 00:00:00">2025-12-31</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/12/29/2025-12-29-Context-as-a-Tool-Context-Management-for-Long-Horizon-SWE-Agents/" title="Context as a Tool:Context Management for Long-Horizon SWE-Agents"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/context_tool.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Context as a Tool:Context Management for Long-Horizon SWE-Agents"/></a><div class="content"><a class="title" href="/2025/12/29/2025-12-29-Context-as-a-Tool-Context-Management-for-Long-Horizon-SWE-Agents/" title="Context as a Tool:Context Management for Long-Horizon SWE-Agents">Context as a Tool:Context Management for Long-Horizon SWE-Agents</a><time datetime="2025-12-28T16:00:00.000Z" title="发表于 2025-12-29 00:00:00">2025-12-29</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
