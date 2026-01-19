@@ -1,0 +1,392 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="告别 Device Plugin: Kubernetes 下一代异构资源管理利器 —— DRA 在 AI 和 GPU 计算盛行的今天，如何高效地在 Kubernetes 中调度显卡、FPGA 等硬件资源，一直是开发者关注的焦点。过去，我们依赖 Device Plugin 框架，但随着业务复杂化，其局限性（如无法动态共享、缺乏复杂的调度参数）日益凸显。 为了解决这些痛点，Kubernetes 推出了">
+<meta property="og:type" content="article">
+<meta property="og:title" content="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA">
+<meta property="og:url" content="http://example.com/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="告别 Device Plugin: Kubernetes 下一代异构资源管理利器 —— DRA 在 AI 和 GPU 计算盛行的今天，如何高效地在 Kubernetes 中调度显卡、FPGA 等硬件资源，一直是开发者关注的焦点。过去，我们依赖 Device Plugin 框架，但随着业务复杂化，其局限性（如无法动态共享、缺乏复杂的调度参数）日益凸显。 为了解决这些痛点，Kubernetes 推出了">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/DRA.png">
+<meta property="article:published_time" content="2026-01-18T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-01-19T04:01:30.113Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="k8s">
+<meta property="article:tag" content="资源共享">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/DRA.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA",
+  "url": "http://example.com/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/",
+  "image": "http://example.com/img/cover/DRA.png",
+  "datePublished": "2026-01-18T16:00:00.000Z",
+  "dateModified": "2026-01-19T04:01:30.113Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">186</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">153</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">52</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-01-18T16:00:00.000Z" title="发表于 2026-01-19 00:00:00">2026-01-19</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-01-19T04:01:30.113Z" title="更新于 2026-01-19 12:01:30">2026-01-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/k8s/">k8s</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/" data-flag-title="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>告别 Device Plugin: Kubernetes 下一代异构资源管理利器 —— DRA</h1>
+<p>在 AI 和 GPU 计算盛行的今天，如何高效地在 Kubernetes 中调度显卡、FPGA 等硬件资源，一直是开发者关注的焦点。过去，我们依赖 <code>Device Plugin</code> 框架，但随着业务复杂化，其局限性（如无法动态共享、缺乏复杂的调度参数）日益凸显。</p>
+<p>为了解决这些痛点，Kubernetes 推出了 <strong>Dynamic Resource Allocation (DRA)</strong>。该特性在 v1.34 版本中已正式进入 <strong>GA（General Availability）</strong> 阶段，标志着 K8s 进入了异构资源管理的 2.0 时代。</p>
+<h2 id="一、-为什么需要-DRA？（痛点分析）">一、 为什么需要 DRA？（痛点分析）</h2>
+<p>在 DRA 出现之前，<code>Device Plugin</code> 是管理硬件的主力，但它有三个致命伤：</p>
+<ol>
+<li><strong>静态分配</strong>：资源请求只能是整数（如 <code>nvidia.com/gpu: 1</code>），难以实现 GPU 分片或复杂的组合请求。</li>
+<li><strong>网络与存储隔离</strong>：硬件驱动无法深度参与调度决策，导致调度器可能把 Pod 调度到一个虽然有 GPU 但网络带宽不足的节点上。</li>
+<li><strong>API 表达力弱</strong>：用户无法指定“我需要一个显存大于 24GB 且支持 NVLink 的 GPU”这类复杂逻辑。</li>
+</ol>
+<p><strong>DRA 的核心理念是：像管理存储（PVC）一样管理硬件资源。</strong></p>
+<hr>
+<h2 id="二、-DRA-的核心架构：四大支柱">二、 DRA 的核心架构：四大支柱</h2>
+<p>DRA 引入了几个关键的 API 对象，构建了一套声明式的资源分配逻辑：</p>
+<ol>
+<li>
+<p>DeviceClass（设备类）：</p>
+<p>类似于存储的 StorageClass。它定义了某种硬件的统称（如 “high-performance-gpu”），并包含了驱动名称和通用选择逻辑。</p>
+</li>
+<li>
+<p>ResourceClaim（资源申请）：</p>
+<p>类似于 PersistentVolumeClaim (PVC)。Pod 不直接请求硬件数量，而是引用一个 ResourceClaim。它描述了具体的资源需求（如：型号、显存大小、是否需要共享）。</p>
+</li>
+<li>
+<p>ResourceClaimTemplate（申请模板）：</p>
+<p>用于 StatefulSet 或 Deployment。每当创建一个 Pod，控制器就会根据模板自动生成一个独立的 ResourceClaim。</p>
+</li>
+<li>
+<p>ResourceSlice（资源切片）：</p>
+<p>这是驱动程序上报的“账本”。它详细列出了节点上每个设备的属性（如 UUID、频率、显存等），供调度器精准匹配。</p>
+</li>
+</ol>
+<hr>
+<h2 id="三、-DRA-的黑科技特性">三、 DRA 的黑科技特性</h2>
+<h3 id="1-结构化参数与-CEL-过滤">1. 结构化参数与 CEL 过滤</h3>
+<p>DRA 支持使用 <strong>Common Expression Language (CEL)</strong>。你可以写出类似“要求显存 &gt; 16GB 且 驱动版本 &gt;= 535”的表达式。调度器会根据 <code>ResourceSlice</code> 中的属性进行过滤，实现真正的“按需匹配”。</p>
+<h3 id="2-延迟绑定（Late-Binding）">2. 延迟绑定（Late Binding）</h3>
+<p>这解决了著名的“死锁”问题。调度器会等到 Pod 确定了调度节点后，再触发驱动程序进行实际的硬件分配。这保证了硬件资源和计算节点在空间位置上的完美契合。</p>
+<h3 id="3-设备共享与动态拆分（Partitioning）">3. 设备共享与动态拆分（Partitioning）</h3>
+<p>DRA 允许驱动动态地将一个物理设备拆分为多个逻辑设备（如 NVIDIA 的 MIG）。多个 Pod 可以共享同一个 <code>ResourceClaim</code>，或者将一个物理 GPU 动态划分为多个小切片分给不同的容器。</p>
+<h3 id="4-优先级列表（Prioritized-List）">4. 优先级列表（Prioritized List）</h3>
+<p>你可以给调度器一个“备选方案”：首选 A100 GPU，如果没有，给两块 T4 也可以。调度器会按优先级尝试满足你的需求。</p>
+<hr>
+<h2 id="四、-使用示例">四、 使用示例</h2>
+<p>下面是一个使用 DRA 进行 GPU 资源申请的典型配置示例。</p>
+<p>这个例子展示了如何通过 <code>DeviceClass</code>、<code>ResourceClaim</code> 和 <code>Pod</code> 三者联动来请求特定属性的硬件。</p>
+<h3 id="1-定义设备类-DeviceClass">1. 定义设备类 (DeviceClass)</h3>
+<p>这是由集群管理员定义的，用于描述某种类型的资源（类似于定义“黄金级存储”）。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">resource.k8s.io/v1alpha3</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">DeviceClass</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">high-vram-gpu</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">selectors:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">cel:</span></span><br><span class="line">        <span class="comment"># 使用 CEL 表达式筛选：显存大于 20GB 的设备</span></span><br><span class="line">        <span class="attr">expression:</span> <span class="string">device.attributes[&quot;vendor.com/vram-gb&quot;]</span> <span class="string">&gt;</span> <span class="number">20</span></span><br></pre></td></tr></table></figure>
+<p>在 DRA 架构中，<code>DeviceClass</code> 到具体物理资源的“对应”过程，实际上是由 <strong>DRA 驱动程序（Driver）</strong>、<strong>节点资源切片（ResourceSlice）</strong> 和 <strong>控制面（Control Plane）</strong> 共同完成的。</p>
+<p>我们可以把这个过程拆解为以下三个步骤：</p>
+<h4 id="1-资源上报：数据从哪里来？">1. 资源上报：数据从哪里来？</h4>
+<p>在每个带有硬件资源的节点上，都会运行一个该硬件厂商提供的 <strong>DRA Driver</strong>（类似于以前的 Device Plugin Agent）。</p>
+<ul>
+<li>
+<p><strong>驱动扫描硬件</strong>：驱动程序启动后，会扫描节点上的物理设备（如 GPU、FPGA）。</p>
+</li>
+<li>
+<p><strong>创建 ResourceSlice</strong>：驱动会为该节点创建一个名为 <code>ResourceSlice</code> 的资源对象。</p>
+</li>
+<li>
+<p><strong>打标签（Attributes）</strong>：在 <code>ResourceSlice</code> 中，驱动会详细列出每个设备的属性。例如：</p>
+<p>YAML</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"># 这是一个 ResourceSlice 的简化概念图</span><br><span class="line">spec:</span><br><span class="line">  nodeName: &quot;node-1&quot;</span><br><span class="line">  devices:</span><br><span class="line">  - name: &quot;gpu-0&quot;</span><br><span class="line">    attributes:</span><br><span class="line">      &quot;vendor.com/model&quot;: &#123; stringValue: &quot;A100&quot; &#125;</span><br><span class="line">      &quot;vendor.com/vram-gb&quot;: &#123; intValue: 80 &#125;</span><br><span class="line">      &quot;vendor.com/cuda-version&quot;: &#123; stringValue: &quot;12.2&quot; &#125;</span><br></pre></td></tr></table></figure>
+</li>
+</ul>
+<h4 id="2-规则匹配：DeviceClass-扮演什么角色？">2. 规则匹配：DeviceClass 扮演什么角色？</h4>
+<p><code>DeviceClass</code> 就像是一个**“过滤器蓝图”**。它定义了全局通用的筛选规则。</p>
+<ul>
+<li><strong>Selector（选择器）</strong>：当你定义 <code>DeviceClass</code> 时，你会使用 <strong>CEL (Common Expression Language)</strong> 表达式。</li>
+<li><strong>逻辑对应</strong>：当调度器看到一个 <code>ResourceClaim</code> 引用了 <code>DeviceClass</code> 时，它会拿着 <code>DeviceClass</code> 里的表达式，去遍历集群中所有 <code>ResourceSlice</code> 里的设备属性。</li>
+</ul>
+<p><strong>匹配逻辑示例：</strong></p>
+<ul>
+<li><strong>用户请求</strong>：<code>deviceClassName: high-vram-gpu</code></li>
+<li><strong>DeviceClass 定义</strong>：<code>expression: device.attributes[&quot;vendor.com/vram-gb&quot;] &gt;= 40</code></li>
+<li><strong>系统动作</strong>：K8s 控制面会自动匹配那些在 <code>ResourceSlice</code> 中 <code>vram-gb</code> 属性大于等于 40 的设备。</li>
+</ul>
+<h4 id="3-最终绑定：如何锁定到那个“它”？">3. 最终绑定：如何锁定到那个“它”？</h4>
+<p>这个过程被称为 <strong>Structured Parameters（结构化参数）</strong> 处理：</p>
+<ol>
+<li><strong>调度决策</strong>：K8s 调度器通过 <code>ResourceSlice</code> 发现 <code>node-1</code> 的 <code>gpu-0</code> 符合 <code>DeviceClass</code> 的要求。</li>
+<li><strong>分配 (Allocation)</strong>：调度器（或专门的资源管理控制器）会更新 <code>ResourceClaim</code> 的状态，将其 <code>status.allocation</code> 指向具体的节点名和设备 ID（例如 <code>node-1</code> 上的 <code>gpu-0</code>）。</li>
+<li><strong>驱动执行</strong>：当 Pod 调度到 <code>node-1</code> 时，该节点上的 DRA Driver 收到通知，执行最后的“准备工作”（如挂载驱动、配置环境变量、切分显存等），确保容器启动时能看到对应的硬件。</li>
+</ol>
+<hr>
+<h4 id="总结：对应关系的链路">总结：对应关系的链路</h4>
+<ol>
+<li><strong>物理硬件</strong> <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>→</mo></mrow><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.3669em;"></span><span class="mrel">→</span></span></span></span> 由 <strong>Driver</strong> 抽象为 <strong>ResourceSlice</strong>（带有属性标签）。</li>
+<li><strong>ResourceSlice</strong> <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>→</mo></mrow><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.3669em;"></span><span class="mrel">→</span></span></span></span> 由 <strong>DeviceClass</strong>（CEL 表达式）进行筛选过滤。</li>
+<li><strong>DeviceClass</strong> <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>→</mo></mrow><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.3669em;"></span><span class="mrel">→</span></span></span></span> 由 <strong>ResourceClaim</strong> 引用，完成意向表达。</li>
+<li><strong>ResourceClaim</strong> <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>→</mo></mrow><annotation encoding="application/x-tex">\rightarrow</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.3669em;"></span><span class="mrel">→</span></span></span></span> 最终由 <strong>调度器</strong> 锁定到具体的物理节点和设备。</li>
+</ol>
+<p>为什么这种方式比以前高级？</p>
+<p>以前的 Device Plugin 只会数数（节点有几个 GPU），它不知道 GPU 是什么型号。而 DRA 的 DeviceClass 配合 ResourceSlice 实现了**“按属性查货”**，这就像从“我要买一件衣服”进化到了“我要买一件 XL 码、蓝色的、纯棉的衬衫”。</p>
+<h3 id="2-创建资源申请-ResourceClaim">2. 创建资源申请 (ResourceClaim)</h3>
+<p>这是用户定义的，描述具体的 Pod 需要什么资源。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">resource.k8s.io/v1alpha3</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ResourceClaim</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">my-gpu-claim</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">devices:</span></span><br><span class="line">    <span class="attr">requests:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">req-1</span></span><br><span class="line">      <span class="attr">deviceClassName:</span> <span class="string">high-vram-gpu</span></span><br><span class="line">      <span class="attr">count:</span> <span class="number">1</span>  <span class="comment"># 申请 1 个符合上述条件的设备</span></span><br></pre></td></tr></table></figure>
+<h3 id="3-在-Pod-中引用资源-Pod">3. 在 Pod 中引用资源 (Pod)</h3>
+<p>Pod 不再使用 <code>resources.limits</code>，而是通过 <code>resourceClaims</code> 字段引用上面创建的对象。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Pod</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">ai-workload</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">containers:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">cuda-container</span></span><br><span class="line">    <span class="attr">image:</span> <span class="string">nvidia/cuda:12.0-base</span></span><br><span class="line">    <span class="attr">resources:</span></span><br><span class="line">      <span class="attr">claims:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">gpu-resource</span>  <span class="comment"># 这里的名字对应下面的 resourceClaims.name</span></span><br><span class="line">  <span class="attr">resourceClaims:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">gpu-resource</span>     <span class="comment"># Pod 内部逻辑名称</span></span><br><span class="line">    <span class="attr">resourceClaimName:</span> <span class="string">my-gpu-claim</span>  <span class="comment"># 指向外部创建的 ResourceClaim 对象</span></span><br></pre></td></tr></table></figure>
+<hr>
+<h3 id="进阶场景：在-Deployment-中使用模板-ResourceClaimTemplate">进阶场景：在 Deployment 中使用模板 (ResourceClaimTemplate)</h3>
+<p>如果你需要扩容多个副本（Replica），手动创建 ResourceClaim 显然不现实。这时可以使用模板，让 K8s 为每个 Pod 自动创建申请。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">apps/v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Deployment</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">gpu-worker</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">replicas:</span> <span class="number">3</span></span><br><span class="line">  <span class="attr">selector:</span></span><br><span class="line">    <span class="attr">matchLabels:</span></span><br><span class="line">      <span class="attr">app:</span> <span class="string">gpu-worker</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">metadata:</span></span><br><span class="line">      <span class="attr">labels:</span></span><br><span class="line">        <span class="attr">app:</span> <span class="string">gpu-worker</span></span><br><span class="line">    <span class="attr">spec:</span></span><br><span class="line">      <span class="attr">containers:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">worker</span></span><br><span class="line">        <span class="attr">image:</span> <span class="string">my-ai-app:v1</span></span><br><span class="line">        <span class="attr">resources:</span></span><br><span class="line">          <span class="attr">claims:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">ephemeral-gpu</span></span><br><span class="line">      <span class="attr">resourceClaims:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">ephemeral-gpu</span></span><br><span class="line">        <span class="attr">resourceClaimTemplateName:</span> <span class="string">gpu-template</span> <span class="comment"># 引用下面的模板</span></span><br><span class="line"><span class="meta">---</span></span><br><span class="line"><span class="attr">apiVersion:</span> <span class="string">resource.k8s.io/v1alpha3</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ResourceClaimTemplate</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">gpu-template</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">spec:</span></span><br><span class="line">    <span class="attr">devices:</span></span><br><span class="line">      <span class="attr">requests:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">gpu</span></span><br><span class="line">        <span class="attr">deviceClassName:</span> <span class="string">high-vram-gpu</span></span><br></pre></td></tr></table></figure>
+<h3 id="关键点解析：">关键点解析：</h3>
+<ol>
+<li><strong>解耦</strong>：Pod 不再关心具体哪个节点有 GPU，它只声明“我要一个符合 <code>high-vram-gpu</code> 条件的资源”。</li>
+<li><strong>CEL 过滤</strong>：在 <code>DeviceClass</code> 中你可以看到 <code>device.attributes</code>，这允许你根据厂商提供的标签（如显存、架构、驱动版本）进行非常精细的筛选。</li>
+<li><strong>动态生成</strong>：使用 <code>ResourceClaimTemplate</code> 时，当 Pod 销毁，对应的 <code>ResourceClaim</code> 也会自动清理，像管理临时磁盘一样方便。</li>
+</ol>
+<p>这种方式比旧版的 <code>nvidia.com/gpu: 1</code> 提供了更强大的表达能力，支持复杂的资源拓扑和参数。</p>
+<h2 id="五、-迁移与未来：Device-Plugin-还会存在吗？">五、 迁移与未来：Device Plugin 还会存在吗？</h2>
+<p>虽然 DRA 非常强大，但 Kubernetes 社区并没有打算立即废除 <code>Device Plugin</code>。</p>
+<ul>
+<li><strong>兼容性桥接</strong>：DRA 支持将资源暴露为旧版的“扩展资源”，方便旧工作负载平滑过渡。</li>
+<li><strong>现状</strong>：目前 NVIDIA、AMD 等头部厂商已开始推出原生的 DRA 驱动。</li>
+</ul>
+<hr>
+<h2 id="六、-总结">六、 总结</h2>
+<p>DRA 的出现，将 Kubernetes 从简单的“容器编排器”推向了“数据中心级硬件资源调度器”的高度。对于大模型训练、自动驾驶仿真等重资产业务，DRA 提供的灵活性和高利用率将直接转化为<strong>成本的节省</strong>。</p>
+<p>一句话总结：</p>
+<p>如果你还在为 GPU 调度不均、利用率低而苦恼，那么基于 DRA 的新一代基础设施建设已经可以提上日程了！</p>
+<hr>
+<p><em>参考文档：<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/">Kubernetes 官方文档 - Dynamic Resource Allocation</a></em></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/">http://example.com/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/k8s/">k8s</a><a class="post-meta__tags" href="/tags/%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB/">资源共享</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/DRA.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Rail-only.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</div></div><div class="info-2"><div class="info-item-1">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读 随着生成式人工智能（GenAI）的爆发，大型语言模型（LLM）的参数规模已从百亿量级迅速跨越至万亿量级 1。2020 年发布的 GPT-3 模型需要 NVIDIA V100 GPU 运行 355 个 GPU 年才能完成训练，而当前的 GPT-4 等模型估计拥有超过一万亿个参数，训练周期长达数月 1。在摩尔定律放缓的背景下，单枚加速器的算力增长速度已无法跟上模型规模及计算需求的指数级飙升，这使得超大规模 GPU 集群的部署成为必然趋势。行业领先的机器学习架构师预测，下一代 LLM 训练可能需要超过 30,000 个 GPU 的计算能力才能在合理时间内完成 1。然而，如何高效、低成本地连接这些数以万计的 GPU，已成为制约人工智能发展的关键基础设施瓶颈。 算力中心的基石：GPU 互连域的划分 在理解 Rail-only 架构之前，必须深入剖析当前超大规模 GPU 数据中心的设计范式。现代 GPU 集群通常被划分为两个截然不同的通信域：高带宽域（High-Bandwidth Domain, HBD）和网络接口...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/02/16/2025-02-16-k8s%E4%B8%AD%E9%80%9A%E8%BF%87pod%E8%8E%B7%E5%8F%96gpu%E4%BD%BF%E7%94%A8%E8%BF%9B%E7%A8%8B%E5%88%B0pod%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB%20-%20%E5%89%AF%E6%9C%AC/" title="k8s中通过pod获取gpu使用进程到pod的映射关系"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-02-16</div><div class="info-item-2">k8s中通过pod获取gpu使用进程到pod的映射关系</div></div><div class="info-2"><div class="info-item-1">k8s中通过pod获取gpu使用进程到pod的映射关系 背景 该任务的pod为daemonset在集群的每一个节点上，controller pod（只有一个）通过grpc的方式进行调用该daemonset pod获取到该节点上gpu的使用进程到pod的映射关系，传递的参数为使用gpu的pod的id。 该需求涉及到几个部分内容：  如何通过pod id定位到具体的节点  通过controller 的cache机制（包含有pod和node cache）获取到daemonset pod id对应的node ip，在daemonset的pod部分新建grpc server端，根据ip:port构建grpc client即可   如何获取到节点上的gpu-&gt;process的映射关系  调用go-nvml即可   如何获取到节点上的process-&gt;container的映射关系  调用taskClient   container-&gt;pod的映射关系？  controller cache机制获取到对应的node，然后可以获取到该node上的pod和container，做一层映...</div></div></div></a><a class="pagination-related" href="/2025/09/17/2025-09-17-K8s-drain%E5%92%8Ccordon%E7%9A%84%E5%8C%BA%E5%88%AB/" title="K8s drain和cordon的区别"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-17</div><div class="info-item-2">K8s drain和cordon的区别</div></div><div class="info-2"><div class="info-item-1">K8s drain和cordon的区别 Kubernetes中Drain和Cordon的区别 Cordon（封锁节点） 作用  标记节点为不可调度 新的Pod不会被调度到该节点 现有Pod不受影响，继续正常运行  使用场景 12345# 封锁节点kubectl cordon node-name# 解除封锁kubectl uncordon node-name 实际效果 1234节点状态变化：- 调度状态：可调度 → 不可调度- 现有Pod：继续运行- 新Pod：不会调度到此节点 Drain（排空节点） 作用  首先执行Cordon操作（封锁节点） 优雅地驱逐节点上的所有Pod 等待Pod在其他节点上重新启动 节点变为空节点  使用场景 1234567891011# 排空节点（默认行为）kubectl drain node-name# 排空节点并忽略DaemonSetkubectl drain node-name --ignore-daemonsets# 强制删除（不等待优雅终止）kubectl drain node-name --force# 设置优雅终止时间kubectl dri...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">186</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">153</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">52</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">告别 Device Plugin: Kubernetes 下一代异构资源管理利器 —— DRA</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81-DRA%EF%BC%9F%EF%BC%88%E7%97%9B%E7%82%B9%E5%88%86%E6%9E%90%EF%BC%89"><span class="toc-number">1.1.</span> <span class="toc-text">一、 为什么需要 DRA？（痛点分析）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81-DRA-%E7%9A%84%E6%A0%B8%E5%BF%83%E6%9E%B6%E6%9E%84%EF%BC%9A%E5%9B%9B%E5%A4%A7%E6%94%AF%E6%9F%B1"><span class="toc-number">1.2.</span> <span class="toc-text">二、 DRA 的核心架构：四大支柱</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81-DRA-%E7%9A%84%E9%BB%91%E7%A7%91%E6%8A%80%E7%89%B9%E6%80%A7"><span class="toc-number">1.3.</span> <span class="toc-text">三、 DRA 的黑科技特性</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E7%BB%93%E6%9E%84%E5%8C%96%E5%8F%82%E6%95%B0%E4%B8%8E-CEL-%E8%BF%87%E6%BB%A4"><span class="toc-number">1.3.1.</span> <span class="toc-text">1. 结构化参数与 CEL 过滤</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E5%BB%B6%E8%BF%9F%E7%BB%91%E5%AE%9A%EF%BC%88Late-Binding%EF%BC%89"><span class="toc-number">1.3.2.</span> <span class="toc-text">2. 延迟绑定（Late Binding）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E8%AE%BE%E5%A4%87%E5%85%B1%E4%BA%AB%E4%B8%8E%E5%8A%A8%E6%80%81%E6%8B%86%E5%88%86%EF%BC%88Partitioning%EF%BC%89"><span class="toc-number">1.3.3.</span> <span class="toc-text">3. 设备共享与动态拆分（Partitioning）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E4%BC%98%E5%85%88%E7%BA%A7%E5%88%97%E8%A1%A8%EF%BC%88Prioritized-List%EF%BC%89"><span class="toc-number">1.3.4.</span> <span class="toc-text">4. 优先级列表（Prioritized List）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81-%E4%BD%BF%E7%94%A8%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.4.</span> <span class="toc-text">四、 使用示例</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%AE%9A%E4%B9%89%E8%AE%BE%E5%A4%87%E7%B1%BB-DeviceClass"><span class="toc-number">1.4.1.</span> <span class="toc-text">1. 定义设备类 (DeviceClass)</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#1-%E8%B5%84%E6%BA%90%E4%B8%8A%E6%8A%A5%EF%BC%9A%E6%95%B0%E6%8D%AE%E4%BB%8E%E5%93%AA%E9%87%8C%E6%9D%A5%EF%BC%9F"><span class="toc-number">1.4.1.1.</span> <span class="toc-text">1. 资源上报：数据从哪里来？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#2-%E8%A7%84%E5%88%99%E5%8C%B9%E9%85%8D%EF%BC%9ADeviceClass-%E6%89%AE%E6%BC%94%E4%BB%80%E4%B9%88%E8%A7%92%E8%89%B2%EF%BC%9F"><span class="toc-number">1.4.1.2.</span> <span class="toc-text">2. 规则匹配：DeviceClass 扮演什么角色？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#3-%E6%9C%80%E7%BB%88%E7%BB%91%E5%AE%9A%EF%BC%9A%E5%A6%82%E4%BD%95%E9%94%81%E5%AE%9A%E5%88%B0%E9%82%A3%E4%B8%AA%E2%80%9C%E5%AE%83%E2%80%9D%EF%BC%9F"><span class="toc-number">1.4.1.3.</span> <span class="toc-text">3. 最终绑定：如何锁定到那个“它”？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%80%BB%E7%BB%93%EF%BC%9A%E5%AF%B9%E5%BA%94%E5%85%B3%E7%B3%BB%E7%9A%84%E9%93%BE%E8%B7%AF"><span class="toc-number">1.4.1.4.</span> <span class="toc-text">总结：对应关系的链路</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E5%88%9B%E5%BB%BA%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7-ResourceClaim"><span class="toc-number">1.4.2.</span> <span class="toc-text">2. 创建资源申请 (ResourceClaim)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E5%9C%A8-Pod-%E4%B8%AD%E5%BC%95%E7%94%A8%E8%B5%84%E6%BA%90-Pod"><span class="toc-number">1.4.3.</span> <span class="toc-text">3. 在 Pod 中引用资源 (Pod)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%9B%E9%98%B6%E5%9C%BA%E6%99%AF%EF%BC%9A%E5%9C%A8-Deployment-%E4%B8%AD%E4%BD%BF%E7%94%A8%E6%A8%A1%E6%9D%BF-ResourceClaimTemplate"><span class="toc-number">1.4.4.</span> <span class="toc-text">进阶场景：在 Deployment 中使用模板 (ResourceClaimTemplate)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E7%82%B9%E8%A7%A3%E6%9E%90%EF%BC%9A"><span class="toc-number">1.4.5.</span> <span class="toc-text">关键点解析：</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81-%E8%BF%81%E7%A7%BB%E4%B8%8E%E6%9C%AA%E6%9D%A5%EF%BC%9ADevice-Plugin-%E8%BF%98%E4%BC%9A%E5%AD%98%E5%9C%A8%E5%90%97%EF%BC%9F"><span class="toc-number">1.5.</span> <span class="toc-text">五、 迁移与未来：Device Plugin 还会存在吗？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81-%E6%80%BB%E7%BB%93"><span class="toc-number">1.6.</span> <span class="toc-text">六、 总结</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/" title="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DRA.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA"/></a><div class="content"><a class="title" href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/" title="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA">告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA</a><time datetime="2026-01-18T16:00:00.000Z" title="发表于 2026-01-19 00:00:00">2026-01-19</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Rail-only.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"/></a><div class="content"><a class="title" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</a><time datetime="2026-01-12T16:00:00.000Z" title="发表于 2026-01-13 00:00:00">2026-01-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/04/2026-01-04-MOE%E6%B7%B7%E5%90%88%E4%B8%93%E5%AE%B6%E6%A8%A1%E5%9E%8B%E6%80%BB%E7%BB%93/" title="MOE混合专家模型总结"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/moe.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MOE混合专家模型总结"/></a><div class="content"><a class="title" href="/2026/01/04/2026-01-04-MOE%E6%B7%B7%E5%90%88%E4%B8%93%E5%AE%B6%E6%A8%A1%E5%9E%8B%E6%80%BB%E7%BB%93/" title="MOE混合专家模型总结">MOE混合专家模型总结</a><time datetime="2026-01-03T16:00:00.000Z" title="发表于 2026-01-04 00:00:00">2026-01-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/04/2026-01-04-Tongyi-DeepResearch%E6%8A%80%E6%9C%AF%E6%8A%A5%E5%91%8A%E8%A7%A3%E8%AF%BB%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" title="Tongyi DeepResearch技术报告解读及源码分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/tydr.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Tongyi DeepResearch技术报告解读及源码分析"/></a><div class="content"><a class="title" href="/2026/01/04/2026-01-04-Tongyi-DeepResearch%E6%8A%80%E6%9C%AF%E6%8A%A5%E5%91%8A%E8%A7%A3%E8%AF%BB%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" title="Tongyi DeepResearch技术报告解读及源码分析">Tongyi DeepResearch技术报告解读及源码分析</a><time datetime="2026-01-03T16:00:00.000Z" title="发表于 2026-01-04 00:00:00">2026-01-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2025/12/31/2025-12-31-OpenSkills%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E5%A6%82%E4%BD%95%E8%AE%A9Claude-Code%E8%8E%B7%E5%BE%97%E8%B6%85%E8%83%BD%E5%8A%9B/" title="OpenSkills深度解析：如何让Claude Code获得超能力"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/MemEvolve.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="OpenSkills深度解析：如何让Claude Code获得超能力"/></a><div class="content"><a class="title" href="/2025/12/31/2025-12-31-OpenSkills%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E5%A6%82%E4%BD%95%E8%AE%A9Claude-Code%E8%8E%B7%E5%BE%97%E8%B6%85%E8%83%BD%E5%8A%9B/" title="OpenSkills深度解析：如何让Claude Code获得超能力">OpenSkills深度解析：如何让Claude Code获得超能力</a><time datetime="2025-12-30T16:00:00.000Z" title="发表于 2025-12-31 00:00:00">2025-12-31</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
