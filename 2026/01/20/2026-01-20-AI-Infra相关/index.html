@@ -1,0 +1,563 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>AI Infra相关 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="AI Infra相关 K8S 异构容错 会有一些挑战：  大规模分布式训练任务为了适应国产芯片需要更大规模  原因在于国产卡的算力比不上N卡，自然需要更大规模   大模型分布式训练任务频繁中断  目前几乎所有的大模型训练方式都是同步训练（DDP&#x2F;MPI），训练的进程共同使用一个通信拓扑，当某一个进程发生错误时，其他进程也会相继退出 异构芯片及服务器集群的故障率与集群规模成正比，且随着集群规模的扩大">
+<meta property="og:type" content="article">
+<meta property="og:title" content="AI Infra相关">
+<meta property="og:url" content="http://example.com/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="AI Infra相关 K8S 异构容错 会有一些挑战：  大规模分布式训练任务为了适应国产芯片需要更大规模  原因在于国产卡的算力比不上N卡，自然需要更大规模   大模型分布式训练任务频繁中断  目前几乎所有的大模型训练方式都是同步训练（DDP&#x2F;MPI），训练的进程共同使用一个通信拓扑，当某一个进程发生错误时，其他进程也会相继退出 异构芯片及服务器集群的故障率与集群规模成正比，且随着集群规模的扩大">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/DRA.png">
+<meta property="article:published_time" content="2026-01-19T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-01-20T08:04:14.385Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="k8s">
+<meta property="article:tag" content="AIInfra">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/DRA.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "AI Infra相关",
+  "url": "http://example.com/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/",
+  "image": "http://example.com/img/cover/DRA.png",
+  "datePublished": "2026-01-19T16:00:00.000Z",
+  "dateModified": "2026-01-20T08:04:14.385Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'AI Infra相关',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">187</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">153</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">52</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">AI Infra相关</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">AI Infra相关</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-01-19T16:00:00.000Z" title="发表于 2026-01-20 00:00:00">2026-01-20</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-01-20T08:04:14.385Z" title="更新于 2026-01-20 16:04:14">2026-01-20</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/k8s/">k8s</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/" data-flag-title="AI Infra相关"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>AI Infra相关</h1>
+<h2 id="K8S">K8S</h2>
+<h3 id="异构容错">异构容错</h3>
+<p>会有一些挑战：</p>
+<ol>
+<li>大规模分布式训练任务为了适应国产芯片需要更大规模
+<ol>
+<li>原因在于国产卡的算力比不上N卡，自然需要更大规模</li>
+</ol>
+</li>
+<li>大模型分布式训练任务频繁中断
+<ol>
+<li>目前几乎所有的大模型训练方式都是同步训练（DDP/MPI），训练的进程共同使用一个通信拓扑，当某一个进程发生错误时，其他进程也会相继退出</li>
+<li>异构芯片及服务器集群的故障率与集群规模成正比，且随着集群规模的扩大训练任务的中断次数成倍增加
+<ol>
+<li>BLOOM 176B的训练， 在大约400个GPU的新集群上，平均每周都会遇到1-2个GPU故障。</li>
+<li>字节的大规模训练也呈现相应的特征。[from MegaScale]</li>
+</ol>
+</li>
+</ol>
+</li>
+<li>大模型分布式训练任务出错原因难排查
+<ol>
+<li>net ib?</li>
+<li>socket timeout</li>
+<li>gpu ecc error</li>
+<li>这些问题靠重新调度是无法解决的，需要准确定位到节点出错的位置，这需要花费数小时甚至数天的时间（可观测性建设）</li>
+<li>![image-20260120112002896](/Users/lvzhongrenjie/Library/Application Support/typora-user-images/image-20260120112002896.png)</li>
+</ol>
+</li>
+<li>大模型分布式训练任务基于检查点恢复的读写开销大
+<ol>
+<li>所谓容错，就是把检查点快照（优化器状态、模型权重）等持久化到存储中。checkpoint总大小与参数量成正比</li>
+</ol>
+</li>
+</ol>
+<p>解决办法：</p>
+<p>架构如下</p>
+<p>![image-20260120104734758](/Users/lvzhongrenjie/Library/Application Support/typora-user-images/image-20260120104734758.png)</p>
+<ol>
+<li>训练任务的自动容错恢复
+<ol>
+<li>k8s容器层面和调度层面做到在不侵入训练框架的前提下，在训练任务遇到故障时，可以做到worker容器不退出，原地检测异常问题 ，保存训练状态，并针对异常检测出来的错误进行定向重启。</li>
+</ol>
+</li>
+<li>训练任务的异常检测
+<ol>
+<li>聚类算法/机器学习算法：CPU 内存 IO 网络指标</li>
+</ol>
+</li>
+<li>训练任务的异步检查点读写
+<ol>
+<li>限制：存储介质的读写速度 硬盘读写速率和网络传输速率的限制 带宽竞争</li>
+<li>内存缓存机制</li>
+<li>异步读写</li>
+</ol>
+</li>
+</ol>
+<h3 id="基础">基础</h3>
+<p><a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/1628686">https://cloud.tencent.com/developer/article/1628686</a></p>
+<p><a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/721588398">https://zhuanlan.zhihu.com/p/721588398</a></p>
+<h4 id="构成">构成</h4>
+<p><strong>Master节点：</strong></p>
+<p><strong>Kubectl</strong>：客户端<a target="_blank" rel="noopener" href="https://cloud.tencent.com/product/cli?from_column=20065&amp;from=20065">命令行工具</a>，作为整个K8s集群的操作入口；</p>
+<p><strong>Api Server：<strong>在K8s架构中承担的是“桥梁”的角色，作为</strong>资源操作的唯一入口</strong>，它提供了<strong>认证、授权、访问控制、API注册和发现</strong>等机制。客户端与k8s群集及K8s内部组件的通信，都要通过Api Server这个组件；</p>
+<p><strong>Controller-manager</strong>：负责维护群集的状态，比如故障检测、自动扩展、滚动更新等；</p>
+<p>**Scheduler：**负责资源的调度，按照预定的调度策略将pod调度到相应的node节点上；</p>
+<p>**Etcd：**担任数据中心的角色，保存了整个群集的状态；</p>
+<p><strong>Node节点：</strong></p>
+<p>Kubelet：负责维护容器的生命周期，同时也负责Volume和网络的管理，一般运行在所有的节点，<strong>是Node节点的代理</strong>，当Scheduler确定某个node上运行pod之后，会将pod的具体信息（image，volume）等发送给该节点的kubelet，kubelet根据这些信息创建和运行容器，并向master返回运行状态。（自动修复功能：如果某个节点中的容器宕机，它会尝试重启该容器，若重启无效，则会将该pod杀死，然后重新创建一个容器）；</p>
+<p>Kube-proxy：Service在逻辑上代表了后端的多个pod。负责为Service提供cluster内部的服务发现和负载均衡（外界通过Service访问pod提供的服务时，Service接收到的请求后就是通过kube-proxy来转发到pod上的）；</p>
+<p>container-runtime：是负责管理运行容器的软件，比如docker、containerd</p>
+<p>Pod：是k8s集群里面最小的单位。每个pod里边可以运行一个或多个container（容器），如果一个pod中有两个container，那么container的USR（用户）、MNT（挂载点）、PID（进程号）是相互隔离的，UTS（主机名和域名）、IPC（<a target="_blank" rel="noopener" href="https://cloud.tencent.com/product/message-queue-catalog?from_column=20065&amp;from=20065">消息队列</a>）、NET（网络栈）是相互共享的。我比较喜欢把pod来当做豌豆夹，而豌豆就是pod中的container；</p>
+<h4 id="探针">探针</h4>
+<p>三种探针、四种检测方法：<a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/2339948">https://cloud.tencent.com/developer/article/2339948</a></p>
+<h4 id="创建流程">创建流程</h4>
+<p>情况一、使用 <code>kubectl run</code> 命令创建的 pod：</p>
+<p>注意：<br>
+<code>kubectl run</code> 在旧版本中创建的是 deployment，但在新的版本中创建的是 pod，其创建过程不涉及 deployment。如果是单独创建一个 pod，过程如下：</p>
+<ol>
+<li>用户通过 <code>kubectl</code> 或其他 API 客户端工具提交需要创建的 pod 信息给 <code>apiserver</code>；</li>
+<li><code>apiserver</code> 验证用户权限信息，生成 pod 对象信息并存入 <code>etcd</code>，然后返回确认信息给客户端；</li>
+<li><code>apiserver</code> 将 <code>etcd</code> 中的 pod 对象变化反馈给其他组件，其他组件使用 <code>watch</code> 机制跟踪变动；</li>
+<li>调度器 <code>scheduler</code> 发现有新的 pod 对象，调用算法为 pod 分配最佳主机，并将结果更新至 <code>apiserver</code>；</li>
+<li><code>kubelet</code> 通过 <code>watch</code> 机制跟踪到分配给本节点的 pod，调用 Docker 启动容器，并反馈结果给 <code>apiserver</code>；</li>
+<li><code>apiserver</code> 将 pod 状态信息存入 <code>etcd</code>，至此 pod 创建完毕。</li>
+</ol>
+<p>情况二、使用 deployment 创建 pod：</p>
+<ol>
+<li>用户通过 <code>kubectl create</code> 或 <code>kubectl apply</code> 提交创建 deployment 请求；</li>
+<li><code>apiserver</code> 处理请求，进行身份验证，并将 deployment 信息存入 <code>etcd</code>，返回确认信息给客户端；</li>
+<li><code>apiserver</code> 反馈 <code>etcd</code> 中对象的变化，其他组件使用 <code>watch</code> 机制跟踪变动；</li>
+<li><code>controller-manager</code> 监听到 deployment 的创建，生成 ReplicaSet，并由 <code>ReplicaSet Controller</code> 处理；</li>
+<li>调度器 <code>scheduler</code> 通过内部算法为未调度的 pod 分配节点，并反馈结果给 <code>apiserver</code>；</li>
+<li><code>kubelet</code> 监听到本节点分配的 pod，创建 pod 并启动容器，最终将状态反馈至 <code>apiserver</code>；</li>
+<li>Pod 创建成功后，<code>ReplicaSet Controller</code> 持续监控 pod 状态，确保副本数量与期望值一致。</li>
+</ol>
+<h4 id="终止流程">终止流程</h4>
+<ol>
+<li>用户向 <code>apiserver</code> 发送删除 pod 命令；</li>
+<li>pod 对象信息更新，在宽限期内（默认 30 秒），pod 被视为 <code>dead</code>；</li>
+<li>将 pod 标记为 <code>terminating</code> 状态；</li>
+<li><code>kubectl</code> 监控到 <code>terminating</code> 状态，启动 pod 关闭过程；</li>
+<li><code>endpoint</code> 控制器监控到 pod 关闭，将其从 <code>endpoint</code> 列表中删除；</li>
+<li>若定义了 <code>preStop</code> 钩子，执行相关操作；</li>
+<li>容器进程收到停止信息；</li>
+<li>宽限期结束后，若 pod 仍运行，<code>kubelet</code> 请求 <code>apiserver</code> 设置宽限期为 0 完成删除操作。</li>
+</ol>
+<h4 id="pod-的生命周期状态">pod 的生命周期状态</h4>
+<p>Kubernetes 的 pod 具有以下几种生命周期状态：</p>
+<ul>
+<li><strong>Pending</strong>：API server 已创建 pod，但尚有一个或多个容器镜像未创建或正在下载；</li>
+<li><strong>Running</strong>：pod 内的所有容器已经创建，至少有一个容器处于运行状态或正在重启；</li>
+<li><strong>Succeeded</strong>：pod 内所有容器已退出且不会再重启；</li>
+<li><strong>Failed</strong>：pod 内所有容器已退出，且至少有一个容器退出失败；</li>
+<li><strong>Unknown</strong>：<code>apiserver</code> 无法获取 pod 状态，可能由于网络问题导致。</li>
+</ul>
+<h4 id="pending原因排查">pending原因排查</h4>
+<p><strong>调度器调度失败</strong>：</p>
+<p>调度器无法为 pod 分配合适的 node 节点。可能的原因包括：</p>
+<ul>
+<li>Node 节点 CPU、内存不足；</li>
+<li>Pod 的资源请求超出节点可用资源；</li>
+<li>Node 节点存在污点，pod 没有定义容忍；</li>
+<li>Pod 定义了亲和性或反亲和性，无法匹配合适的节点。</li>
+</ul>
+<p><strong>PVC 或 PV 无法动态创建</strong>：<br>
+当 pod 使用 <code>StatefulSet</code> 但未正确配置存储时，pod 可能一直处于 <code>pending</code> 状态。可能的原因包括：</p>
+<ul>
+<li><code>StorageClassName</code> 配置错误；</li>
+<li>PVC 动态创建失败；</li>
+<li>存储供应异常，PV 无法创建。</li>
+</ul>
+<h4 id="pod资源请求限制">pod资源请求限制</h4>
+<ul>
+<li><strong>limits</strong>：限制 Pod 能使用的最大 CPU 和内存。</li>
+<li><strong>requests</strong>：Pod 启动时申请的最小 CPU 和内存。</li>
+</ul>
+<ol>
+<li><strong>Guaranteed（保证型）</strong></li>
+</ol>
+<ul>
+<li><strong>最高优先级</strong>的 QoS 等级</li>
+<li><strong>条件</strong>：Pod 中所有容器<strong>必须同时设置</strong> CPU 和内存的 <code>requests</code> 和 <code>limits</code>，并且<strong>每种资源的 <code>requests</code> 值必须等于 <code>limits</code></strong> 值</li>
+<li><strong>特点</strong>：
+<ul>
+<li>资源得到完全保证，K8s 承诺分配所请求的全部资源</li>
+<li>在节点资源紧张时，最后被驱逐</li>
+<li>内存不足时，OOM Killer 最后考虑杀死这类 Pod</li>
+<li>适用于关键业务、数据库等需要稳定资源保障的应用</li>
+</ul>
+</li>
+</ul>
+<ol start="2">
+<li><strong>Burstable（突发型）</strong></li>
+</ol>
+<ul>
+<li><strong>中等优先级</strong>的 QoS 等级</li>
+<li><strong>条件</strong>：Pod <strong>不符合</strong> Guaranteed 条件，但<strong>至少有一个容器设置了</strong> <code>requests</code> 或 <code>limits</code></li>
+<li><strong>特点</strong>：
+<ul>
+<li>资源有最低保障（<code>requests</code>），但可以按需使用更多资源（不超过 <code>limits</code>）</li>
+<li>在节点资源紧张时，优先级高于 BestEffort，低于 Guaranteed</li>
+<li>内存不足时，OOM Killer 会优先杀死超出 <code>requests</code> 内存使用最多的 Burstable Pod</li>
+<li>适用于大多数生产应用，兼顾资源保障和弹性</li>
+</ul>
+</li>
+</ul>
+<ol start="3">
+<li><strong>BestEffort（尽力而为型）</strong></li>
+</ol>
+<ul>
+<li><strong>最低优先级</strong>的 QoS 等级</li>
+<li><strong>条件</strong>：Pod 中<strong>所有容器都没有设置</strong>任何 <code>requests</code> 和 <code>limits</code></li>
+<li><strong>特点</strong>：
+<ul>
+<li>没有任何资源保障，只能使用节点上剩余的闲置资源</li>
+<li>在节点资源紧张时，<strong>最先被驱逐</strong></li>
+<li>内存不足时，OOM Killer <strong>最先杀死</strong>这类 Pod</li>
+<li>适用于非关键任务、测试环境、批处理作业等可中断的应用</li>
+</ul>
+</li>
+</ul>
+<h4 id="Pod-的定义中有个-command-和-args-参数，这两个参数不会和-Docker-镜像的-ENTRYPOINT-冲突吗？"><strong>Pod 的定义中有个 command 和 args 参数，这两个参数不会和 Docker 镜像的 ENTRYPOINT 冲突吗？</strong></h4>
+<p>不会冲突。</p>
+<p>Kubernetes 中的 <code>command</code> 和 <code>args</code> 参数可以覆盖 Docker 镜像中的 <code>ENTRYPOINT</code> 和 <code>CMD</code>。具体的行为是：</p>
+<ol>
+<li>如果 <code>command</code> 和 <code>args</code> 都没写，使用 Dockerfile 里的 <code>ENTRYPOINT</code> 和 <code>CMD</code>。</li>
+<li>如果只写了 <code>command</code>，会覆盖 <code>ENTRYPOINT</code>，但仍会使用 Dockerfile 里的 <code>CMD</code>。</li>
+<li>如果只写了 <code>args</code>，会覆盖 Dockerfile 里的 <code>CMD</code>，但还是会用 <code>ENTRYPOINT</code>。</li>
+<li>如果 <code>command</code> 和 <code>args</code> 都写了，Dockerfile 里的 <code>ENTRYPOINT</code> 和 <code>CMD</code> 都会被覆盖。</li>
+</ol>
+<p>这意味着，Kubernetes 允许你灵活控制容器启动时的命令和参数。</p>
+<p>ps:竟然command和cmd不是对应的</p>
+<h4 id="k8s监控节点pod资源">k8s监控节点pod资源</h4>
+<p>Kubelet 主要通过 <strong>cAdvisor</strong>（Container Advisor）来监控 Node 节点的资源使用情况。cAdvisor 能够收集和报告容器的 CPU、内存、网络、文件系统等资源的使用数据。</p>
+<p>这些数据不仅可以用于实时监控，还可以为调度决策提供依据，帮助 Kubernetes 更好地分配和管理资源。</p>
+<h4 id="k8s负载均衡器">k8s负载均衡器</h4>
+<p>三种方案：</p>
+<ol>
+<li>kube-proxy（userspace）</li>
+<li><a target="_blank" rel="noopener" href="https://so.csdn.net/so/search?q=iptables&amp;spm=1001.2101.3001.7020">iptables</a>（防火墙）</li>
+<li>ipvs</li>
+</ol>
+<h6 id="1、kube-proxy">1、kube-proxy</h6>
+<p>使用kube-proxy的负载方案是使用kube-proxy来监控pod的状态，如果pod发生了变化，则需要kube-proxy去修改service和pod的映射关系（endpoints），同时修改路由规则，并且由kube-proxy<a target="_blank" rel="noopener" href="https://so.csdn.net/so/search?q=%E8%BD%AC%E5%8F%91%E8%AF%B7%E6%B1%82&amp;spm=1001.2101.3001.7020">转发请求</a>，这种方式kube-proxy的压力比较大，性能可能会出现问题。<br>
+<img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/blog_migrate/3387d6c9062248d75301722ac038ce4f.png" alt="在这里插入图片描述"></p>
+<h6 id="2、IPtables">2、IPtables</h6>
+<p>IPtables是K8S默认采用的负载策略，这种方式中，kube-proxy同样用来监控pod和修改映射关系以及修改路由规则，但是转发请求是采用轮询iptables路由规则的方式进行调用处理的。</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/blog_migrate/24eb6b174f744240ec804d03bec3c62c.png" alt="在这里插入图片描述"><br>
+这种模式kube-proxy主要做好watching Cluster API即可，路由和请求的转发都交给了iptables，但是kube-proxy在请求无响应时会换一个pod进行重试，而iptables则是一条条的路由规则，不会进行重试。</p>
+<p>在iptables中，默认的轮询策略是随机的轮询策略，但是也可以将其设置为轮询。</p>
+<h6 id="（1）设置为随机策略">（1）设置为随机策略</h6>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"># 随机：(Random balancing)</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">iptables -A PREROUTING -t nat -p tcp -d 192.168.1.1 --dport 27017 -m statistic --mode random --probability 0.33  -j DNAT --to-destination 10.0.0.2:1234</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">iptables -A PREROUTING -t nat -p tcp -d 192.168.1.1 --dport 27017 -m statistic --mode random --probability 0.5 -j DNAT --to-destination 10.0.0.3:1234</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">iptables -A PREROUTING -t nat -p tcp -d 192.168.1.1 --dport 27017  -j DNAT --to-destination 10.0.0.4:1234</span><br><span class="line">一键获取完整项目代码</span><br></pre></td></tr></table></figure>
+<p>在iptables命令中，命令的执行和顺序有关，在上述命令中，用–probability 设置了命中几率，第一条设置了纪律是0.33，也就是整个请求的0.33，第二条命中率为0.5，实际是剩余请求的0.5，也就是总请求的0.335，第三条是剩余的流量全部打到该ip上，也就是0.335，基本上就是随机分配了。</p>
+<h6 id="（2）设置为轮询策略">（2）设置为轮询策略</h6>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">#every：每n个包匹配一次规则</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">#packet：从第p个包开始</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">iptables -A PREROUTING -t nat -p tcp -d 192.168.1.1 --dport 27017 -m statistic --mode nth --every 3 --packet 0 -j DNAT --to-destination 10.0.0.2:1234</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">iptables -A PREROUTING -t nat -p tcp -d 192.168.1.1 --dport 27017 -m statistic --mode nth --every 2 --packet 0  -j DNAT --to-destination 10.0.0.3:1234</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">iptables -A PREROUTING -t nat -p tcp -d 192.168.1.1 --dport 27017 -j DNAT --to-destination 10.0.0.4:1234</span><br><span class="line">一键获取完整项目代码</span><br></pre></td></tr></table></figure>
+<h6 id="3、IPVS">3、IPVS</h6>
+<p>ipvs (IP Virtual Server) 实现传输层负载均衡，通常称为第四层LAN交换，是Linux内核的一部分。</p>
+<p>ipvs与iptables的区别：</p>
+<ul>
+<li>ipvs为大型集群提供了更好的可扩展性和性能</li>
+<li>ipvs支持比iptables更复杂的负载均衡算法</li>
+<li>ipvs支持服务器的健康检查和连接重试等。</li>
+</ul>
+<p>对于上述差异做个说明：</p>
+<p>在linux中iptables设计是用于防火墙的，对于比较少的规则，没有太多的性能影响，如果对于一个庞大的K8S集群，会有上千Service服务，Service服务会对应多个pod，每条都是一个iptables规则，那么对于集群来说，每个node上都有大量的规则，简直是噩梦。而IPVS则是使用hash tables来存储网络转发规则的，比iptables更有优势，而且ipvs主要工作在kerbespace，减少了上下文的切换。</p>
+<p>IPVS有轮询（rr）、最小连接数（lc）、目的地址hash（dh）、源地址hash（sh）、最短期望延迟（sed）、无须队列等待（nq）等负载均衡算法，在node上通过 “–ipvs-scheduler”参数，指定kube-proxy的启动算法。</p>
+<p>kube-proxy和IPVS合作的流程：</p>
+<p>（1）kube-proxy仍然是watching Cluster API，获取新建、删除Service或Endpoint pod指令，如果有新的Service建立，kube-proxy回调网络接口，构建IPVS规则。</p>
+<p>（2）kube-proxy会定期同步Service和Pod的转发规则，确保失效的转发可以被及时修复</p>
+<p>（3）有请求转发到后端的集群时，IPVS的负载均衡直接将其转发到对应的Pod上</p>
+<p><strong>四层</strong>：基于 <strong>IP+端口</strong> 转发（传输层）<br>
+<strong>七层</strong>：基于 <strong>应用内容</strong> 转发（应用层）</p>
+<p>七层:ingress-nginx</p>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://i-blog.csdnimg.cn/direct/998c75644598449badfe79f7c52df26e.png" alt="img"></p>
+<p><a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/453338705">https://zhuanlan.zhihu.com/p/453338705</a></p>
+<p>一些保姆级别的说明：<a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/671031276">https://zhuanlan.zhihu.com/p/671031276</a></p>
+<p>对外暴露：nodeport loadbalancer ingress</p>
+<p>客户端- ingress -server ip- node ip - pod ip -&gt; 容器地址</p>
+<h3 id="网络">网络</h3>
+<p><a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/6112293273">https://zhuanlan.zhihu.com/p/6112293273</a></p>
+<p><strong>CNI 插件网络模式</strong></p>
+<ul>
+<li>覆盖网络（Overlay Network）
+<ul>
+<li>CNI 插件通过 Overlay Network 模式，以 VXLAN 或 <a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=250244856&amp;content_type=Article&amp;match_order=1&amp;q=IPIP&amp;zhida_source=entity">IPIP</a> 等再次封装数据包后进行传输的方式，实现集群内 Pod 之间的互相访问，常见的有：
+<ul>
+<li>Flannel 插件的 VXLAN 模式</li>
+<li>Calico 插件的 VXLAN、IPIP 模式</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>底层网络（Underlay Network）
+<ul>
+<li>CNI 插件通过 Underlay Network 模式，以节点作为路由设备、Pod 学习路由条目的方式，实现复杂场景下（如跨集群、跨云环境）集群外部直接访问集群内 Pod，常见的有：
+<ul>
+<li>Flannel 插件的 <a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=250244856&amp;content_type=Article&amp;match_order=1&amp;q=HOST-GW&amp;zhida_source=entity">HOST-GW</a> 模式</li>
+<li>Calico 插件的 <a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=250244856&amp;content_type=Article&amp;match_order=1&amp;q=BGP&amp;zhida_source=entity">BGP</a> 模式</li>
+<li>Cilium 插件的 <a target="_blank" rel="noopener" href="https://zhida.zhihu.com/search?content_id=250244856&amp;content_type=Article&amp;match_order=1&amp;q=Native-Routing&amp;zhida_source=entity">Native-Routing</a> 模式</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p><strong>2、Bridge 与 veth-pair</strong></p>
+<p>Bridge 和 veth-pair 都是 Linux 中的虚拟网络接口。</p>
+<p>Pod 通过 veth-pair 将自己的 Network Namespace 与 Node 节点的 Network Namespace 打通，然后使用 Bridge 将所有 veth-pair 连接在一起，实现大量 Pod 之间的互通和管理。</p>
+<p>常见的 Bridge 有 docker0（Docker 服务启动时自动创建的网桥）、tunl0（由 Calico 插件的 IPIP 模式创建）、vxlan.calico（由 Calico 插件的 VXLAN 模式创建）。</p>
+<p><strong>3、kube-proxy</strong></p>
+<p>kube-proxy 作为 Node 节点的一个组件，主要作用是监视 Service 对象和 Endpoint 对象的变化（添加、移除）并刷新负载均衡，即通过 iptables 或 IPVS 配置 Node 节点的 Netfilter，实现网络流量在不同 Pod 间的负载均衡，并为 Service 提供内部服务发现。</p>
+<p>kube-proxy 和 CNI 插件本质上都只是为 Linux 内核提供配置，而实际的数据包处理仍由内核完成，因此面临以下问题：</p>
+<ul>
+<li>随着集群中 Service 对象和 Pod 对象数量的增长，iptables 的规则匹配效率会下降，即使 IPVS 进行了优化依然面临性能开销</li>
+<li>频繁的 Service 对象和 Pod 对象更新会导致规则重新应用，可能带来网络延迟或中断</li>
+<li>强依赖于 Linux 内核的 Netfilter，一旦内核配置不当或不兼容，可能会引发网络问题</li>
+</ul>
+<p>当前，<strong>Cilium 等插件通过 eBPF 等技术可以绕过 Linux 内核，直接在用户空间处理数据包，实现了无代理的服务流量转发，完全可以替代 kube-proxy</strong>。但需要注意在使用 Istio 的场景下，若出现诸如 Service 对象的 port 与 targetPort 不一致等情况，可能导致 Istio 无法命中对应的路由规则。</p>
+<h3 id="存储">存储</h3>
+<h4 id="pv-pvc-storageclass">pv pvc storageclass</h4>
+<ul>
+<li>PV是集群中的存储资源，通常由集群管理员创建和管理；</li>
+<li>StorageClass用于对PV进行分类，如果配置正确，Storage也可以根据PVC的请求动态创建PV；</li>
+<li>PVC是使用该资源的请求，通常由应用程序提出请求，并指定对应的StorageClass和需求的空间大小；</li>
+<li>PVC可以作为数据卷的一种，被挂载到pod中使用；</li>
+</ul>
+<p><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="https://ask.qcloudimg.com/http-save/yehe-6211103/dtr06yvv1n.png" alt="img"></p>
+<p><strong>在创建pv这个资源对象时，采用的回收策略是清除PV中的数据，然后自动回收，而PV这个资源对象是由PVC来申请使用的，所以不管是容器也好，pod也好，它们的销毁并不会影响用于实现数据持久化的nfs本地目录下的数据，但是，一旦这个PVC被删除，那么本地的数据就会随着PVC的销毁而不复存在，也就是说，采用PV这种数据卷来实现数据的持久化，它这个数据持久化的生命周期是和PVC的生命周期是一致的。</strong></p>
+<h3 id="其他">其他</h3>
+<p>kubectl drain和cordon的区别</p>
+<p>简单来说：</p>
+<ul>
+<li><strong><code>cordon</code> 是“标记”或“隔离”节点</strong>，防止新Pod调度上来，但<strong>不干扰</strong>现有Pod。</li>
+<li><strong><code>drain</code> 是“排空”节点</strong>，在 <code>cordon</code> 的基础上，还会<strong>驱逐或删除</strong>节点上现有的Pod。</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/">http://example.com/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/k8s/">k8s</a><a class="post-meta__tags" href="/tags/AIInfra/">AIInfra</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/DRA.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/" title="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DRA.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA</div></div><div class="info-2"><div class="info-item-1">告别 Device Plugin: Kubernetes 下一代异构资源管理利器 —— DRA 在 AI 和 GPU 计算盛行的今天，如何高效地在 Kubernetes 中调度显卡、FPGA 等硬件资源，一直是开发者关注的焦点。过去，我们依赖 Device Plugin 框架，但随着业务复杂化，其局限性（如无法动态共享、缺乏复杂的调度参数）日益凸显。 为了解决这些痛点，Kubernetes 推出了 Dynamic Resource Allocation (DRA)。该特性在 v1.34 版本中已正式进入 GA（General Availability） 阶段，标志着 K8s 进入了异构资源管理的 2.0 时代。 一、 为什么需要 DRA？（痛点分析） 在 DRA 出现之前，Device Plugin 是管理硬件的主力，但它有三个致命伤：  静态分配：资源请求只能是整数（如 nvidia.com/gpu: 1），难以实现 GPU 分片或复杂的组合请求。 网络与存储隔离：硬件驱动无法深度参与调度决策，导致调度器可能把 Pod 调度到一个虽然有 GPU 但网络带宽不足的节点上。 API...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/02/16/2025-02-16-k8s%E4%B8%AD%E9%80%9A%E8%BF%87pod%E8%8E%B7%E5%8F%96gpu%E4%BD%BF%E7%94%A8%E8%BF%9B%E7%A8%8B%E5%88%B0pod%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB%20-%20%E5%89%AF%E6%9C%AC/" title="k8s中通过pod获取gpu使用进程到pod的映射关系"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-02-16</div><div class="info-item-2">k8s中通过pod获取gpu使用进程到pod的映射关系</div></div><div class="info-2"><div class="info-item-1">k8s中通过pod获取gpu使用进程到pod的映射关系 背景 该任务的pod为daemonset在集群的每一个节点上，controller pod（只有一个）通过grpc的方式进行调用该daemonset pod获取到该节点上gpu的使用进程到pod的映射关系，传递的参数为使用gpu的pod的id。 该需求涉及到几个部分内容：  如何通过pod id定位到具体的节点  通过controller 的cache机制（包含有pod和node cache）获取到daemonset pod id对应的node ip，在daemonset的pod部分新建grpc server端，根据ip:port构建grpc client即可   如何获取到节点上的gpu-&gt;process的映射关系  调用go-nvml即可   如何获取到节点上的process-&gt;container的映射关系  调用taskClient   container-&gt;pod的映射关系？  controller cache机制获取到对应的node，然后可以获取到该node上的pod和container，做一层映...</div></div></div></a><a class="pagination-related" href="/2025/09/17/2025-09-17-K8s-drain%E5%92%8Ccordon%E7%9A%84%E5%8C%BA%E5%88%AB/" title="K8s drain和cordon的区别"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-17</div><div class="info-item-2">K8s drain和cordon的区别</div></div><div class="info-2"><div class="info-item-1">K8s drain和cordon的区别 Kubernetes中Drain和Cordon的区别 Cordon（封锁节点） 作用  标记节点为不可调度 新的Pod不会被调度到该节点 现有Pod不受影响，继续正常运行  使用场景 12345# 封锁节点kubectl cordon node-name# 解除封锁kubectl uncordon node-name 实际效果 1234节点状态变化：- 调度状态：可调度 → 不可调度- 现有Pod：继续运行- 新Pod：不会调度到此节点 Drain（排空节点） 作用  首先执行Cordon操作（封锁节点） 优雅地驱逐节点上的所有Pod 等待Pod在其他节点上重新启动 节点变为空节点  使用场景 1234567891011# 排空节点（默认行为）kubectl drain node-name# 排空节点并忽略DaemonSetkubectl drain node-name --ignore-daemonsets# 强制删除（不等待优雅终止）kubectl drain node-name --force# 设置优雅终止时间kubectl dri...</div></div></div></a><a class="pagination-related" href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/" title="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DRA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-01-19</div><div class="info-item-2">告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA</div></div><div class="info-2"><div class="info-item-1">告别 Device Plugin: Kubernetes 下一代异构资源管理利器 —— DRA 在 AI 和 GPU 计算盛行的今天，如何高效地在 Kubernetes 中调度显卡、FPGA 等硬件资源，一直是开发者关注的焦点。过去，我们依赖 Device Plugin 框架，但随着业务复杂化，其局限性（如无法动态共享、缺乏复杂的调度参数）日益凸显。 为了解决这些痛点，Kubernetes 推出了 Dynamic Resource Allocation (DRA)。该特性在 v1.34 版本中已正式进入 GA（General Availability） 阶段，标志着 K8s 进入了异构资源管理的 2.0 时代。 一、 为什么需要 DRA？（痛点分析） 在 DRA 出现之前，Device Plugin 是管理硬件的主力，但它有三个致命伤：  静态分配：资源请求只能是整数（如 nvidia.com/gpu: 1），难以实现 GPU 分片或复杂的组合请求。 网络与存储隔离：硬件驱动无法深度参与调度决策，导致调度器可能把 Pod 调度到一个虽然有 GPU 但网络带宽不足的节点上。 API...</div></div></div></a><a class="pagination-related" href="/2025/08/15/2025-08-15-ray-accelerate-trainer-lightning-pytorch/" title="ray accelerate trainer lightning pytorch"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-15</div><div class="info-item-2">ray accelerate trainer lightning pytorch</div></div><div class="info-2"><div class="info-item-1">ray、accelerate、trainer、lightning、pytorch 转自：https://www.zhihu.com/question/1926849595331318550/answer/1928049512619968205 作者：CodeCrafter 链接：https://www.zhihu.com/question/1926849595331318550/answer/1939450608894608104 来源：知乎 著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。 2025 年，纯 PyTorch 是基本功，你必须得会，而且要熟。 它是你的内力，是你理解一切上层框架的基础。 Hugging Face Trainer 是特定领域（尤其是 NLP）的“版本答案”。 如果你就是做微调、做推理，用它，省心省力，快速出活儿。 Lightning 和 Accelerate 是“效率增强器”。 帮你把 PyTorch 代码写得更规范、更工程化，让你从繁琐的样板代码里解放出来，专注于模型本身。 Ray… 这家伙是个“大杀器”，跟前面几个不是一个维度...</div></div></div></a><a class="pagination-related" href="/2025/08/15/2025-08-15-xpu_timer/" title="xpu_timer"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-15</div><div class="info-item-2">xpu_timer</div></div><div class="info-2"><div class="info-item-1">xpu_timer 转自：https://cloud.tencent.com/developer/article/2418684 背景 随着大型模型的参数量从十亿量级跃升至万亿级别，其训练规模的急剧扩张不仅引发了集群成本的显著上涨，还对系统稳定性构成了挑战，尤其是机器故障的频发成为不可忽视的问题。对于大规模分布式训练任务而言，可观测性能力成为了排查故障、优化性能的关键所在。所以从事大型模型训练领域的技术人，都会不可避免地面临以下挑战：  训练过程中，性能可能会因网络、计算瓶颈等多种因素而不稳定，出现波动甚至衰退； 分布式训练是多个节点协同工作的，任一节点发生故障（无论是软件、硬件、网卡或 GPU 问题），整个训练流程均需暂停，严重影响训练效率，而且浪费宝贵的 GPU 资源。  但在实际的大模型训练过程中，这些问题是很难排查的，主要原因如下：  训练过程为同步操作，很难通过整体性能指标来排除此时哪些机器出现问题，一个机器慢可以拖慢整体训练速度； 训练性能变慢往往不是训练逻辑/框架的问题，通常为环境导致，如果没有训练相关的监控数据，打印 timeline 实际上也没有任何作用，并且同...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-18-%E6%9E%81%E7%AE%80-Megatron-LM-%E6%A8%A1%E5%9E%8B%E5%B9%B6%E8%A1%8C%E5%88%87%E5%88%86%E4%BB%8B%E7%BB%8D/" title="极简 Megatron-LM 模型并行切分介绍"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Megatron.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">极简 Megatron-LM 模型并行切分介绍</div></div><div class="info-2"><div class="info-item-1">极简 Megatron-LM 模型并行切分介绍 转自：https://zhuanlan.zhihu.com/p/498422407 在大模型流行的年代，我经常需要给同事解释 Megatron-LM 是怎么做的模型并行，自己也经常记不清从头推。而现有大多数的文章都是算法向或者历史向的，信息浓度比较低。为了节省大家的时间，在这里记录一下 Megatron-LM 的切分方式。由于只考虑切分，所以本文忽略 transformer 模型中的各种 elementwise 运算和 layernorm。 下文中，我们规定 b 为 batch size，s 为 sequence length，h 为 hidden size，n 为 num head，p 为切分数，用中括号表示 tensor 形状，例如 [b, s, h] 为常规的 transformer encoder 输入。这种表示方法参考了尤洋老师的 An Efficient 2D Method for Training Super-Large Deep Learning Models。 transformer encoder 结构 tran...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">187</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">153</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">52</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">AI Infra相关</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#K8S"><span class="toc-number">1.1.</span> <span class="toc-text">K8S</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BC%82%E6%9E%84%E5%AE%B9%E9%94%99"><span class="toc-number">1.1.1.</span> <span class="toc-text">异构容错</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9F%BA%E7%A1%80"><span class="toc-number">1.1.2.</span> <span class="toc-text">基础</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%9E%84%E6%88%90"><span class="toc-number">1.1.2.1.</span> <span class="toc-text">构成</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%8E%A2%E9%92%88"><span class="toc-number">1.1.2.2.</span> <span class="toc-text">探针</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%88%9B%E5%BB%BA%E6%B5%81%E7%A8%8B"><span class="toc-number">1.1.2.3.</span> <span class="toc-text">创建流程</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%BB%88%E6%AD%A2%E6%B5%81%E7%A8%8B"><span class="toc-number">1.1.2.4.</span> <span class="toc-text">终止流程</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#pod-%E7%9A%84%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E7%8A%B6%E6%80%81"><span class="toc-number">1.1.2.5.</span> <span class="toc-text">pod 的生命周期状态</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#pending%E5%8E%9F%E5%9B%A0%E6%8E%92%E6%9F%A5"><span class="toc-number">1.1.2.6.</span> <span class="toc-text">pending原因排查</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#pod%E8%B5%84%E6%BA%90%E8%AF%B7%E6%B1%82%E9%99%90%E5%88%B6"><span class="toc-number">1.1.2.7.</span> <span class="toc-text">pod资源请求限制</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Pod-%E7%9A%84%E5%AE%9A%E4%B9%89%E4%B8%AD%E6%9C%89%E4%B8%AA-command-%E5%92%8C-args-%E5%8F%82%E6%95%B0%EF%BC%8C%E8%BF%99%E4%B8%A4%E4%B8%AA%E5%8F%82%E6%95%B0%E4%B8%8D%E4%BC%9A%E5%92%8C-Docker-%E9%95%9C%E5%83%8F%E7%9A%84-ENTRYPOINT-%E5%86%B2%E7%AA%81%E5%90%97%EF%BC%9F"><span class="toc-number">1.1.2.8.</span> <span class="toc-text">Pod 的定义中有个 command 和 args 参数，这两个参数不会和 Docker 镜像的 ENTRYPOINT 冲突吗？</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#k8s%E7%9B%91%E6%8E%A7%E8%8A%82%E7%82%B9pod%E8%B5%84%E6%BA%90"><span class="toc-number">1.1.2.9.</span> <span class="toc-text">k8s监控节点pod资源</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#k8s%E8%B4%9F%E8%BD%BD%E5%9D%87%E8%A1%A1%E5%99%A8"><span class="toc-number">1.1.2.10.</span> <span class="toc-text">k8s负载均衡器</span></a><ol class="toc-child"><li class="toc-item toc-level-6"><a class="toc-link" href="#1%E3%80%81kube-proxy"><span class="toc-number">1.1.2.10.0.1.</span> <span class="toc-text">1、kube-proxy</span></a></li><li class="toc-item toc-level-6"><a class="toc-link" href="#2%E3%80%81IPtables"><span class="toc-number">1.1.2.10.0.2.</span> <span class="toc-text">2、IPtables</span></a></li><li class="toc-item toc-level-6"><a class="toc-link" href="#%EF%BC%881%EF%BC%89%E8%AE%BE%E7%BD%AE%E4%B8%BA%E9%9A%8F%E6%9C%BA%E7%AD%96%E7%95%A5"><span class="toc-number">1.1.2.10.0.3.</span> <span class="toc-text">（1）设置为随机策略</span></a></li><li class="toc-item toc-level-6"><a class="toc-link" href="#%EF%BC%882%EF%BC%89%E8%AE%BE%E7%BD%AE%E4%B8%BA%E8%BD%AE%E8%AF%A2%E7%AD%96%E7%95%A5"><span class="toc-number">1.1.2.10.0.4.</span> <span class="toc-text">（2）设置为轮询策略</span></a></li><li class="toc-item toc-level-6"><a class="toc-link" href="#3%E3%80%81IPVS"><span class="toc-number">1.1.2.10.0.5.</span> <span class="toc-text">3、IPVS</span></a></li></ol></li></ol></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BD%91%E7%BB%9C"><span class="toc-number">1.1.3.</span> <span class="toc-text">网络</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AD%98%E5%82%A8"><span class="toc-number">1.1.4.</span> <span class="toc-text">存储</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#pv-pvc-storageclass"><span class="toc-number">1.1.4.1.</span> <span class="toc-text">pv pvc storageclass</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B6%E4%BB%96"><span class="toc-number">1.1.5.</span> <span class="toc-text">其他</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/" title="AI Infra相关"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DRA.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Infra相关"/></a><div class="content"><a class="title" href="/2026/01/20/2026-01-20-AI-Infra%E7%9B%B8%E5%85%B3/" title="AI Infra相关">AI Infra相关</a><time datetime="2026-01-19T16:00:00.000Z" title="发表于 2026-01-20 00:00:00">2026-01-20</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/" title="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/DRA.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA"/></a><div class="content"><a class="title" href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/" title="告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA">告别 Device Plugin:深度解析 Kubernetes 下一代异构资源管理利器--DRA</a><time datetime="2026-01-18T16:00:00.000Z" title="发表于 2026-01-19 00:00:00">2026-01-19</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Rail-only.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"/></a><div class="content"><a class="title" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</a><time datetime="2026-01-12T16:00:00.000Z" title="发表于 2026-01-13 00:00:00">2026-01-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/04/2026-01-04-MOE%E6%B7%B7%E5%90%88%E4%B8%93%E5%AE%B6%E6%A8%A1%E5%9E%8B%E6%80%BB%E7%BB%93/" title="MOE混合专家模型总结"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/moe.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="MOE混合专家模型总结"/></a><div class="content"><a class="title" href="/2026/01/04/2026-01-04-MOE%E6%B7%B7%E5%90%88%E4%B8%93%E5%AE%B6%E6%A8%A1%E5%9E%8B%E6%80%BB%E7%BB%93/" title="MOE混合专家模型总结">MOE混合专家模型总结</a><time datetime="2026-01-03T16:00:00.000Z" title="发表于 2026-01-04 00:00:00">2026-01-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/01/04/2026-01-04-Tongyi-DeepResearch%E6%8A%80%E6%9C%AF%E6%8A%A5%E5%91%8A%E8%A7%A3%E8%AF%BB%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" title="Tongyi DeepResearch技术报告解读及源码分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/tydr.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Tongyi DeepResearch技术报告解读及源码分析"/></a><div class="content"><a class="title" href="/2026/01/04/2026-01-04-Tongyi-DeepResearch%E6%8A%80%E6%9C%AF%E6%8A%A5%E5%91%8A%E8%A7%A3%E8%AF%BB%E5%8F%8A%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90/" title="Tongyi DeepResearch技术报告解读及源码分析">Tongyi DeepResearch技术报告解读及源码分析</a><time datetime="2026-01-03T16:00:00.000Z" title="发表于 2026-01-04 00:00:00">2026-01-04</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
