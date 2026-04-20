@@ -1,0 +1,381 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>RDMA技术手册：面向AI场景的深度解析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="RDMA技术手册：面向AI场景的深度解析 目录 概述 RDMA原理与架构 2.1 RDMA基本原理 2.2 RDMA网络类型与协议 2.3 RDMA编程模型与Verbs接口 2.4 GPUDirect RDMA技术 RDMA在AI场景的应用实践 3.1 RDMA在分布式训练中的应用 3.2 RDMA在推理服务中的应用 3.3 RDMA在存储与数据IO中的应用 3.4 RDMA在Kubernetes">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RDMA技术手册：面向AI场景的深度解析">
+<meta property="og:url" content="http://example.com/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="RDMA技术手册：面向AI场景的深度解析 目录 概述 RDMA原理与架构 2.1 RDMA基本原理 2.2 RDMA网络类型与协议 2.3 RDMA编程模型与Verbs接口 2.4 GPUDirect RDMA技术 RDMA在AI场景的应用实践 3.1 RDMA在分布式训练中的应用 3.2 RDMA在推理服务中的应用 3.3 RDMA在存储与数据IO中的应用 3.4 RDMA在Kubernetes">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/k8s.png">
+<meta property="article:published_time" content="2026-04-19T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-04-20T04:38:23.228Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="AI Infra">
+<meta property="article:tag" content="k8s">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/k8s.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "RDMA技术手册：面向AI场景的深度解析",
+  "url": "http://example.com/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/",
+  "image": "http://example.com/img/cover/k8s.png",
+  "datePublished": "2026-04-19T16:00:00.000Z",
+  "dateModified": "2026-04-20T04:38:23.228Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'RDMA技术手册：面向AI场景的深度解析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">194</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">159</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">54</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">RDMA技术手册：面向AI场景的深度解析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">RDMA技术手册：面向AI场景的深度解析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-04-19T16:00:00.000Z" title="发表于 2026-04-20 00:00:00">2026-04-20</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-04-20T04:38:23.228Z" title="更新于 2026-04-20 12:38:23">2026-04-20</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/RDMA/">RDMA</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" data-flag-title="RDMA技术手册：面向AI场景的深度解析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>RDMA技术手册：面向AI场景的深度解析</h1>
+<h2 id="目录">目录</h2>
+<p><a href="about:srcdoc#%E7%AC%AC1%E7%AB%A0-%E6%A6%82%E8%BF%B0">概述</a></p>
+<p><a href="about:srcdoc#%E7%AC%AC2%E7%AB%A0-rdma%E5%8E%9F%E7%90%86%E4%B8%8E%E6%9E%B6%E6%9E%84">RDMA原理与架构</a></p>
+<p><a href="about:srcdoc#2.1-rdma%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86">2.1 RDMA基本原理</a></p>
+<p><a href="about:srcdoc#2.2-rdma%E7%BD%91%E7%BB%9C%E7%B1%BB%E5%9E%8B%E4%B8%8E%E5%8D%8F%E8%AE%AE">2.2 RDMA网络类型与协议</a></p>
+<p><a href="about:srcdoc#2.3-rdma%E7%BC%96%E7%A8%8B%E6%A8%A1%E5%9E%8B%E4%B8%8Everbs%E6%8E%A5%E5%8F%A3">2.3 RDMA编程模型与Verbs接口</a></p>
+<p><a href="about:srcdoc#2.4-gpudirect-rdma%E6%8A%80%E6%9C%AF">2.4 GPUDirect RDMA技术</a></p>
+<p><a href="about:srcdoc#%E7%AC%AC3%E7%AB%A0-rdma%E5%9C%A8ai%E5%9C%BA%E6%99%AF%E7%9A%84%E5%BA%94%E7%94%A8%E5%AE%9E%E8%B7%B5">RDMA在AI场景的应用实践</a></p>
+<p><a href="about:srcdoc#3.1-rdma%E5%9C%A8%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E5%BA%94%E7%94%A8">3.1 RDMA在分布式训练中的应用</a></p>
+<p><a href="about:srcdoc#3.2-rdma%E5%9C%A8%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E4%B8%AD%E7%9A%84%E5%BA%94%E7%94%A8">3.2 RDMA在推理服务中的应用</a></p>
+<p><a href="about:srcdoc#3.3-rdma%E5%9C%A8%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AEio%E4%B8%AD%E7%9A%84%E5%BA%94%E7%94%A8">3.3 RDMA在存储与数据IO中的应用</a></p>
+<p><a href="about:srcdoc#3.4-rdma%E5%9C%A8kubernetes%E4%B8%AD%E7%9A%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%AE%9E%E8%B7%B5">3.4 RDMA在Kubernetes中的集成与实践</a><a href="about:srcdoc#%E7%AC%AC4%E7%AB%A0-%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96%E4%B8%8E%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5">性能优化与最佳实践</a></p>
+<p><a href="about:srcdoc#4.1-rdma%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96%E7%AD%96%E7%95%A5">4.1 RDMA性能优化策略</a></p>
+<p><a href="about:srcdoc#4.2-%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95%E4%B8%8E%E5%9F%BA%E5%87%86%E5%B7%A5%E5%85%B7">4.2 性能测试与基准工具</a></p>
+<p><a href="about:srcdoc#4.3-%E5%85%B8%E5%9E%8B%E9%97%AE%E9%A2%98%E4%B8%8E%E8%B0%83%E4%BC%98%E6%A1%88%E4%BE%8B">4.3 典型问题与调优案例</a><a href="about:srcdoc#%E7%AC%AC5%E7%AB%A0-%E6%80%BB%E7%BB%93%E4%B8%8E%E5%B1%95%E6%9C%9B">总结与展望</a></p>
+<h2 id="第1章-概述">第1章 概述</h2>
+<p><strong>背景与需求：</strong> 随着人工智能（AI）模型规模的爆炸式增长，训练和推理过程对网络通信提出了前所未有的高要求。传统基于TCP/IP的网络通信在延迟和带宽上已难以满足大规模分布式训练的需求。远程直接内存访问（Remote Direct Memory Access，RDMA）技术应运而生，它通过绕过操作系统内核，实现网络接口直接访问应用内存，从而极大降低了通信延迟、提高了吞吐量。在现代AI数据中心中，RDMA已成为加速分布式训练和大规模推理的关键网络技术。</p>
+<p><strong>RDMA技术价值：</strong> RDMA提供了低延迟、高吞吐的网络通信能力，特别适合于需要频繁、大量数据交换的场景。例如，在多机多卡的分布式训练中，RDMA可以显著减少参数同步和数据传输的延迟，从而加速模型收敛。在大型语言模型（LLM）的推理服务中，RDMA有助于实现快速的多节点协同推理，降低用户响应延迟。此外，RDMA还可应用于分布式存储和高速数据IO场景，通过消除CPU参与数据搬运的瓶颈，提升整体系统效率。</p>
+<p><strong>手册定位：</strong> 本手册面向AI系统工程师和对RDMA技术感兴趣的开发者，旨在系统讲解RDMA技术原理及其在AI场景下的应用实践。内容涵盖RDMA基础原理、主流网络类型（如InfiniBand与RoCE）、编程模型、在分布式训练和推理中的具体应用，以及性能优化与最佳实践。通过本手册的学习，读者将深入理解RDMA如何赋能AI基础设施，并掌握在实际环境中部署和调优RDMA网络的方法。</p>
+<h2 id="第2章-RDMA原理与架构">第2章 RDMA原理与架构</h2>
+<h3 id="2-1-RDMA基本原理">2.1 RDMA基本原理</h3>
+<p><strong>核心概念：</strong> RDMA是一种让网络接口直接读写应用内存的技术，其核心在于“零拷贝”和“内核旁路”。传统网络通信中，数据需要从应用缓冲区拷贝到内核缓冲区，再由内核协议栈处理并驱动网卡发送；接收端亦然。这涉及多次数据拷贝和内核态/用户态切换，开销较大。RDMA则允许网卡（RNIC）直接与应用内存交互：发送方将数据直接从本地内存“推送”到远程内存，接收方无需CPU参与即可将数据写入预先注册的内存区域。这一过程绕过了操作系统内核，避免了不必要的拷贝，因而实现了极低的延迟和极高的吞吐。</p>
+<p><strong>通信模型：</strong> RDMA通信建立在队列对（Queue Pair, QP）模型之上。每个RDMA应用程序通过创建QP来定义通信端点，QP包含一个发送队列（SQ）和一个接收队列（RQ）。应用程序通过向SQ提交工作请求（Work Request, WR）来发起操作，例如发送（Send）或RDMA写/读操作。网卡负责执行这些WR，并将完成事件放入完成队列（Completion Queue, CQ）。接收方则通过RQ接收数据或被动等待RDMA操作完成。整个过程由网卡硬件驱动，应用程序通过轮询CQ获取完成通知，从而实现异步、高效的通信。</p>
+<p><strong>关键特性：</strong> RDMA提供了两种主要的通信模式：<strong>两 sided</strong>操作和<strong>单 sided</strong>操作。两 sided操作如Send/Receive类似于传统消息传递，需要接收方预先张贴接收缓冲区。单 sided操作则允许一方直接读写另一方的内存，而无需对方CPU参与，这是RDMA高性能的关键。典型的单 sided操作包括RDMA Read和RDMA Write，它们可以在不通知对方应用的情况下直接传输数据。为了安全地进行单 sided操作，发送方需要知道远程内存的地址和访问密钥（R_key），这通常通过之前的控制消息交换获得。RDMA还支持原子操作，如比较并交换（CAS）和获取并增加（FA），用于实现分布式锁等同步原语。</p>
+<h3 id="2-2-RDMA网络类型与协议">2.2 RDMA网络类型与协议</h3>
+<p><strong>InfiniBand网络：</strong> InfiniBand（IB）是最早支持RDMA的网络架构，它从物理层到链路层都专为高性能计算设计。IB网络具有低延迟、高带宽的特点，其链路层提供可靠传输和流量控制，支持原生RDMA操作。IB网络要求专门的交换机和线缆，并运行子网管理器（SM）来管理网络拓扑和路径。IB的优点是性能极致，但缺点是成本较高、兼容性相对封闭。</p>
+<p><strong>RoCE（RDMA over Converged Ethernet）：</strong> 随着以太网的普及，业界提出了RoCE协议，将RDMA承载在以太网之上。RoCEv1通过在以太网帧中封装IB传输头，实现二层网络中的RDMA通信。然而，RoCEv1要求二层网络，限制了规模。RoCEv2进一步将IB传输头封装在UDP/IP包中，使其可以在三层IP网络中传输，从而支持更大规模的部署。RoCE网络复用现有以太网交换机，通过优先级流控（PFC）和数据中心桥接（DCB）等技术来提供无损网络环境，保障RDMA通信的可靠性。相比IB，RoCE网络在成本和兼容性上更有优势，但需要精心调优以太网交换机以避免丢包。</p>
+<p><strong>iWARP：</strong> iWARP是另一种在以太网上实现RDMA的协议，它通过TCP承载RDMA操作。iWARP可运行在标准TCP/IP网络上，无需专门的交换机支持，但其性能（尤其是延迟）通常不及RoCE和InfiniBand，因此在高性能AI场景中应用较少。</p>
+<p><strong>网络选择：</strong> 在AI数据中心中，InfiniBand和RoCEv2是主流选择。InfiniBand提供极致性能，适合对延迟和带宽要求极高的训练集群；RoCEv2则凭借兼容现有以太网基础设施、支持大规模部署的优势，被许多云服务商和企业采用。实际部署时，需要根据成本、规模和性能需求权衡选择网络类型。例如，Meta等公司已成功在规模庞大的AI训练集群中采用RoCEv2网络，通过优化网络拓扑和拥塞控制，实现了接近InfiniBand的性能。</p>
+<h3 id="2-3-RDMA编程模型与Verbs接口">2.3 RDMA编程模型与Verbs接口</h3>
+<p><strong>Verbs接口：</strong> RDMA编程通过<strong>Verbs API</strong>进行，这是由IB规范定义的一套抽象接口。在Linux上，RDMA功能通过<strong>libibverbs</strong>库和内核RDMA子系统实现。开发者使用Verbs API创建QP、CQ、内存区域（Memory Region, MR）等资源，并提交工作请求。Verbs API提供同步和异步两种编程模式，常用的是异步事件驱动模式：应用程序通过事件通道（event channel）等待CQ中的完成事件，然后处理结果。</p>
+<p><strong>连接管理：</strong> 为了简化RDMA连接的建立，社区引入了**RDMA CM (librdmacm)**库。RDMA CM提供类似Socket的API，支持服务器监听连接请求、客户端发起连接等操作。它封装了底层的QP创建、地址解析和连接建立过程，使开发者无需直接处理复杂的IB传输层细节。例如，服务器端可以调用<code>rdma_create_id</code>创建监听端点，<code>rdma_bind_addr</code>绑定地址，<code>rdma_listen</code>开始监听；客户端则通过<code>rdma_resolve_addr</code>和<code>rdma_resolve_route</code>解析服务器地址并建立连接。连接建立后，RDMA CM会通知应用程序，随后即可通过已连接的QP进行RDMA通信。</p>
+<p><strong>示例：</strong> 下面是一个使用Verbs和RDMA CM建立连接并发送消息的简化示例：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 服务器端：创建监听端点并等待连接</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">rdma_cm_id</span> *<span class="title">listen_id</span>;</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">rdma_event_channel</span> *<span class="title">channel</span> =</span> rdma_create_event_channel();</span><br><span class="line">rdma_create_id(channel, &amp;listen_id, <span class="literal">NULL</span>, RDMA_PS_TCP);</span><br><span class="line">rdma_bind_addr(listen_id, (<span class="keyword">struct</span> sockaddr *)&amp;server_addr);</span><br><span class="line">rdma_listen(listen_id, <span class="number">1</span>);  <span class="comment">// 开始监听连接</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 客户端：解析服务器地址并建立连接</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">rdma_cm_id</span> *<span class="title">conn_id</span>;</span></span><br><span class="line">rdma_create_id(channel, &amp;conn_id, <span class="literal">NULL</span>, RDMA_PS_TCP);</span><br><span class="line">rdma_resolve_addr(conn_id, <span class="literal">NULL</span>, (<span class="keyword">struct</span> sockaddr *)&amp;server_addr, <span class="number">2000</span>);</span><br><span class="line"><span class="comment">// 等待RDMA_CM_EVENT_ADDR_RESOLVED事件</span></span><br><span class="line">rdma_resolve_route(conn_id, <span class="number">2000</span>);</span><br><span class="line"><span class="comment">// 等待RDMA_CM_EVENT_ROUTE_RESOLVED事件，然后创建QP并连接</span></span><br><span class="line">rdma_connect(conn_id, <span class="literal">NULL</span>);</span><br></pre></td></tr></table></figure>
+<p>上述代码展示了RDMA CM简化连接建立的过程。一旦连接建立，双方即可通过Verbs API发送和接收数据。例如，发送方创建一个工作请求（WR）并调用<code>ibv_post_send</code>将消息发送出去；接收方预先通过<code>ibv_post_recv</code>张贴接收缓冲区。当通信完成后，应用程序需要调用<code>ibv_poll_cq</code>从CQ获取完成事件，并进行相应的处理。</p>
+<p><strong>高级抽象：</strong> 为了进一步简化RDMA编程，业界还开发了诸如**UCX（Unified Communication X）**这样的通信框架。UCX提供了更高层的API，支持多种传输（包括InfiniBand、RoCE、TCP等）和多种编程模型（消息传递、PGAS等）。许多AI框架（如NCCL、MPI实现）底层使用UCX来屏蔽底层网络差异，从而方便地在不同网络上运行。</p>
+<h3 id="2-4-GPUDirect-RDMA技术">2.4 GPUDirect RDMA技术</h3>
+<p><strong>背景：</strong> 在AI训练和推理中，GPU是主要计算单元，大量数据需要在GPU之间传输。如果采用传统方式，数据需要先从GPU内存拷贝到主机内存，再通过网卡发送；接收端则相反。这种“GPU-主机-网络”的路径引入了额外的拷贝和延迟。为了解决这一问题，NVIDIA推出了<strong>GPUDirect RDMA</strong>技术，它允许RDMA网卡直接访问GPU内存，实现GPU与网络之间的零拷贝数据交换。</p>
+<p><strong>原理：</strong> GPUDirect RDMA利用PCIe总线的一致性特性，将GPU的内存区域映射到网卡的地址空间。发送方GPU可以直接将数据写入网卡的发送缓冲区（或发送队列），接收方网卡可以直接将数据写入GPU内存。整个过程无需CPU介入，也无需将数据拷贝到主机内存，从而极大降低了延迟和CPU负载。</p>
+<p><strong>实现：</strong> 在Linux上启用GPUDirect RDMA需要内核和驱动支持。NVIDIA提供了<code>nvidia-peermem</code>内核模块，用于管理GPU内存的直通访问。应用程序需要使用CUDA的<code>cuMemAlloc</code>等API分配GPU内存，并通过Verbs的<code>ibv_reg_mr</code>将GPU内存注册为RDMA可访问的内存区域。需要注意的是，由于GPU内存的物理地址可能不连续，且涉及PCIe地址空间，注册GPU内存时需要特别处理。NVIDIA在CUDA 5.0及以后的版本中提供了对GPUDirect RDMA的支持，并在CUDA 6.0中引入了<code>cuPointerSetAttribute</code>等API，用于简化GPU内存的注册流程。</p>
+<p><strong>应用：</strong> GPUDirect RDMA在多GPU分布式训练中尤为重要。例如，NVIDIA的NCCL库在多机通信时，如果检测到GPUDirect RDMA支持，会优先使用它来直接在GPU之间传输数据，从而加速AllReduce等集合通信。此外，一些高性能存储方案也利用GPUDirect RDMA，将GPU计算结果直接通过网络写入远程存储，或从存储直接读取数据到GPU，实现GPU与存储的高速直通。</p>
+<h2 id="第3章-RDMA在AI场景的应用实践">第3章 RDMA在AI场景的应用实践</h2>
+<h3 id="3-1-RDMA在分布式训练中的应用">3.1 RDMA在分布式训练中的应用</h3>
+<p><strong>通信模式：</strong> 大规模分布式训练（如数据并行训练）需要在多个工作节点之间频繁同步模型参数。典型的通信模式包括：<strong>AllReduce</strong>（全局归约，如同步梯度）、<strong>AllGather</strong>（全局收集，如广播模型参数）、<strong>ReduceScatter</strong>等集合通信操作。这些操作对网络性能要求极高，因为训练的总时间很大程度上取决于通信开销。</p>
+<p><strong>NCCL与RDMA：</strong> NVIDIA的NCCL（NVIDIA Collective Communication Library）是分布式训练中使用最广泛的集合通信库之一。NCCL针对GPU集群进行了高度优化，支持在单机内部通过NVLink进行高速通信，在多机之间则利用RDMA网络。NCCL会自动检测集群中的网络拓扑和设备能力，选择最优的通信路径。当检测到GPUDirect RDMA可用时，NCCL会尽量让GPU直接通过网络读写远端GPU内存，从而实现接近线性的多机扩展性能。即使在没有GPUDirect RDMA的情况下，NCCL也可以通过主机内存中转进行RDMA通信，但性能会有所下降。</p>
+<p><strong>案例：</strong> 在一个使用PyTorch或TensorFlow进行多机多卡训练的场景中，用户通常通过Horovod或框架自带的分布式模块来启动训练。这些框架底层会调用NCCL或MPI来进行跨节点通信。如果底层网络支持RDMA（例如通过RoCE或IB），NCCL将利用RDMA加速参数同步。实践中，开启RDMA往往能显著缩短训练时间。例如，有报告指出，在使用VGG-16模型训练时，启用RDMA网络可将训练速度提升约30%。</p>
+<p><strong>网络拓扑与规模：</strong> 在大规模训练集群中，网络拓扑设计对通信性能影响巨大。常见的设计是采用胖树（Fat-Tree）或叶脊（Leaf-Spine）架构，确保任意两个节点之间有多条路径、高带宽。对于InfiniBand网络，通常需要部署子网管理器并配置静态路由以优化路径。对于RoCE网络，需要配置PFC和DCB来避免拥塞丢包，并可能需要调整ECN（Explicit Congestion Notification）等拥塞控制策略。随着训练规模从几十GPU扩展到数千GPU，网络拥塞和延迟会成为瓶颈，需要通过多级交换、多路径路由等技术来缓解。</p>
+<h3 id="3-2-RDMA在推理服务中的应用">3.2 RDMA在推理服务中的应用</h3>
+<p><strong>背景：</strong> 在大型语言模型（LLM）的推理服务中，多机协同推理（如模型并行、专家混合MoE架构）变得越来越常见。这要求推理服务器之间能够快速传递中间结果或控制信息。RDMA在推理场景中主要用于两个方面：<strong>模型并行的数据交换</strong>和<strong>请求调度与缓存</strong>。</p>
+<p><strong>模型并行：</strong> 当模型过大无法放入单个GPU内存时，需要将模型分割到多GPU甚至多机上。例如，GPT-3等超大模型在推理时，可能需要跨节点交换激活值或中间表示。RDMA可以为这种跨节点通信提供低延迟通道，减少推理延迟。对于MoE架构，每次前向传播可能涉及动态路由，需要将输入数据发送到不同GPU上的专家网络处理。RDMA的快速数据传输可以加速这种动态调度，使得整体推理延迟更接近单机推理。</p>
+<p><strong>请求调度与缓存：</strong> 在推理服务中，可以使用RDMA来加速请求分发和结果返回。例如，前端调度节点可以将推理请求通过RDMA快速广播到多个后端推理节点，或者将请求参数直接写入推理节点的GPU内存。推理结果也可以通过RDMA快速返回。此外，对于大型模型的KV缓存（如在Transformer推理中缓存的键值对），可以存储在远程节点并通过RDMA按需读取，从而构建分布式的缓存系统，提升推理吞吐。</p>
+<p><strong>案例：</strong> 有研究提出了一种名为<strong>DeepEP</strong>的MoE通信库，它利用RDMA来加速专家网络之间的数据交换。NCCL 2.28版本引入了GPU-Initiated Networking（GIN）架构，允许GPU直接发起网络通信。这为MoE等需要细粒度、低延迟通信的推理场景提供了底层支持。通过GIN，GPU内核可以直接调用RDMA操作，将数据发送给远端GPU，而无需CPU介入，从而进一步降低推理延迟。</p>
+<h3 id="3-3-RDMA在存储与数据IO中的应用">3.3 RDMA在存储与数据IO中的应用</h3>
+<p><strong>高性能存储访问：</strong> 在AI训练中，数据的读取速度往往成为瓶颈。RDMA可用于构建高速的分布式存储系统，如NVMe over Fabrics（NVMe-oF）和分布式文件系统。通过RDMA，存储服务器可以直接将数据通过网络传输到训练节点的内存或GPU，无需经过存储服务器的CPU。这大大提升了数据加载速度，特别适合需要频繁读取大型数据集的训练场景。</p>
+<p><strong>GPU直连存储：</strong> NVIDIA的<strong>GPUDirect Storage</strong>技术进一步将RDMA引入到存储领域。它允许GPU直接通过RDMA从存储设备读取数据，或将数据写入存储。这通过在GPU和存储之间建立直接的数据通道，避免了数据在主机内存的拷贝，从而加速了数据IO。例如，在一个使用GPU训练的深度学习作业中，可以使用GPUDirect Storage直接将存储中的训练样本读入GPU内存，大幅缩短数据加载时间。</p>
+<p><strong>高速网络文件系统：</strong> 一些并行文件系统（如Lustre、GPFS）和对象存储（如MinIO）已经支持RDMA。通过RDMA，客户端可以更快地读写存储服务器上的数据。对于训练数据集存储在高性能并行文件系统上的场景，启用RDMA可以减少I/O等待时间，提高GPU利用率。</p>
+<h3 id="3-4-RDMA在Kubernetes中的集成与实践">3.4 RDMA在Kubernetes中的集成与实践</h3>
+<p><strong>Kubernetes网络挑战：</strong> Kubernetes默认的网络模型（Pod网络）并不直接支持RDMA。常规的容器网络接口（CNI）插件（如Flannel、Calico）主要针对TCP/IP通信，无法满足RDMA对底层硬件访问的需求。因此，在Kubernetes上运行RDMA工作负载，需要特殊的技术和插件支持。</p>
+<p><strong>SR-IOV与设备插件：</strong> 一个主流方案是利用SR-IOV（Single Root I/O Virtualization）技术，将物理RDMA网卡虚拟成多个虚拟功能（VF），然后将VF作为设备直通给Pod使用。Kubernetes通过<strong>SR-IOV Network Device Plugin</strong>来管理这些VF资源。该插件会将VF以扩展资源的形式注册到Kubernetes，Pod可以通过请求这些资源来获得RDMA网卡的使用权。同时，需要配合<strong>Multus CNI</strong>等多网络插件，为Pod附加SR-IOV网络接口。</p>
+<p><strong>RDMA CNI插件：</strong> 为了简化在容器中使用RDMA的流程，社区开发了<strong>RDMA CNI</strong>插件。RDMA CNI通常与SR-IOV CNI配合使用：SR-IOV CNI负责将VF移入Pod的网络命名空间，而RDMA CNI则负责将该VF对应的RDMA设备也移入Pod命名空间，从而实现RDMA设备的隔离。这样，Pod内的应用可以直接使用Verbs API访问RDMA设备，而不会与宿主机的RDMA资源冲突。</p>
+<p><strong>实践案例：</strong> 在自建的Kubernetes集群上部署RDMA支持，通常需要以下步骤：</p>
+<ol>
+<li><strong>安装驱动与插件：</strong> 在所有节点上安装RDMA网卡驱动（如Mellanox OFED）和Kubernetes设备插件。部署SR-IOV Network Device Plugin，配置资源池（例如<code>mellanox.com/sriov_rdma</code>）以暴露VF资源。</li>
+<li><strong>配置网络附件：</strong> 使用Multus CNI为集群添加SR-IOV网络附件定义。该定义指定了VF资源池、IPAM等信息，并指定使用<code>sriov</code>和<code>rdma</code>两个CNI插件链式调用。</li>
+<li><strong>创建网络对象：</strong> 根据使用的网络插件（如 whereabouts 作为IPAM），创建NetworkAttachmentDefinition资源，供Pod引用。</li>
+<li><strong>运行RDMA Pod：</strong> 在Pod的YAML中，通过注解请求SR-IOV网络附件，并在容器内使用RDMA设备进行通信。例如，可以在容器内运行NCCL测试工具，验证多Pod之间的RDMA通信是否正常。</li>
+</ol>
+<p>通过上述方式，可以在Kubernetes上运行分布式训练或推理任务，让Pod享有接近裸机的RDMA网络性能。这为在云原生环境中部署高性能AI应用提供了可能。</p>
+<h2 id="第4章-性能优化与最佳实践">第4章 性能优化与最佳实践</h2>
+<h3 id="4-1-RDMA性能优化策略">4.1 RDMA性能优化策略</h3>
+<p><strong>网络拓扑优化：</strong> 在多机训练中，节点之间的网络拓扑会显著影响性能。尽量减少跨交换机的通信、增加路径冗余，可以降低拥塞和延迟。对于InfiniBand网络，可以通过子网管理器配置路由，使通信尽量在本地交换机内部完成。对于RoCE网络，合理设计Spine-Leaf架构，避免单点瓶颈。同时，启用ECN和DCQCN等拥塞控制机制，可以缓解多打一场景下的拥塞。</p>
+<p><strong>内存注册与缓存：</strong> RDMA要求通信前将内存注册到网卡。频繁的内存注册/注销会带来开销。最佳实践是预先注册大块内存，并重复使用它们。对于GPU内存，可以利用CUDA的流顺序分配和异步注册来减少开销。同时，应避免在通信路径上进行不必要的内存拷贝。</p>
+<p><strong>QP和CQ配置：</strong> QP的发送/接收队列深度、CQ的大小等参数会影响性能。通常，增大QP深度可以提高流水线并行度，但会占用更多内存。应根据实际负载调整。在高并发场景下，可以考虑使用多个QP并行通信。此外，启用工作请求的<strong>内联</strong>（inline）发送可以减少小消息的延迟，但会占用更多网卡内存。</p>
+<p><strong>多路径与负载均衡：</strong> 在大型集群中，启用多路径RDMA可以提高带宽利用率。例如，InfiniBand支持多路径（Multipath）机制，RoCE网络也可以通过ECMP（等价多路径路由）来分散流量。合理配置交换机哈希算法，确保流量均匀分布，避免热点。</p>
+<p><strong>GPU通信优化：</strong> 对于多GPU通信，应尽量利用NVLink进行节点内通信，因为NVLink带宽远高于网络带宽。在节点间通信时，优先使用GPUDirect RDMA，并确保GPU与网卡之间有足够带宽的PCIe连接。避免在GPU和网卡之间经过多次PCIe交换。例如，将GPU和网卡插入相同的PCIe Root Complex下，可以减少跨域访问延迟。</p>
+<h3 id="4-2-性能测试与基准工具">4.2 性能测试与基准工具</h3>
+<p><strong>perftest工具集：</strong> <strong>perftest</strong>是Linux RDMA社区提供的标准性能测试工具集，包含多种基准测试程序。常用的工具包括：</p>
+<p>常用RDMA性能测试工具：</p>
+<ul>
+<li><code>ib_send_lat</code> / <code>ib_send_bw</code>：测试发送/接收操作的延迟和带宽。</li>
+<li><code>ib_write_lat</code> / <code>ib_write_bw</code>：测试RDMA Write操作的延迟和带宽。</li>
+<li><code>ib_read_lat</code> / <code>ib_read_bw</code>：测试RDMA Read操作的延迟和带宽。</li>
+<li><code>ib_atomic_lat</code> / <code>ib_atomic_bw</code>：测试原子操作的延迟和带宽。</li>
+</ul>
+<p>这些工具使用简单，命令行参数丰富。例如，运行<code>ib_write_bw -a</code>可以在两个节点间测试RDMA Write带宽，自动扫描不同消息大小的性能。<code>ib_send_lat -H</code>可以生成延迟直方图，帮助分析延迟分布。</p>
+<p><strong>ibping/ibtraceroute：</strong> <strong>ibping</strong>是用于检测RDMA网络连通性的简单工具，类似于IP网络中的ping命令。<strong>ibtraceroute</strong>则用于追踪RDMA路径。这些工具在诊断网络问题时非常有用。</p>
+<p><strong>NCCL Tests：</strong> NCCL提供了一套测试程序（如nccl-tests）来评估多机通信性能。这些测试模拟了AllReduce、AllGather等集合通信，并报告带宽和延迟。通过这些测试，可以验证NCCL在RDMA网络上的实际性能，并调优NCCL参数。</p>
+<p><strong>性能指标：</strong> 在评估RDMA性能时，常用的指标包括：<strong>带宽</strong>（吞吐量，GB/s或Gb/s）、<strong>延迟</strong>（通常以微秒计）、<strong>消息速率</strong>（消息/秒）。不同场景下关注的重点不同：大模型训练更关注带宽，而在线推理更关注延迟。通过基准测试，可以找出性能瓶颈并进行针对性优化。</p>
+<h3 id="4-3-典型问题与调优案例">4.3 典型问题与调优案例</h3>
+<p><strong>问题1：启用RDMA后性能未达预期。</strong> 可能原因包括：网络拓扑不合理，存在拥塞点；内存注册开销大；QP配置不当。解决方法：优化网络拓扑，例如增加交换机互联带宽，调整路由策略；使用内存缓存技术减少注册开销；增大QP深度或启用多QP并行。</p>
+<p><strong>问题2：GPU利用率低，通信等待时间长。</strong> 这可能是由于网络带宽不足或延迟高导致。检查RDMA链路状态，确保使用了GPUDirect RDMA。如果网络带宽已饱和，考虑增加网络链路或使用更高速的网卡。如果延迟高，检查是否有拥塞或网卡中断开销。</p>
+<p><strong>问题3：RoCE网络出现丢包或性能下降。</strong> RoCE要求无损网络环境，如果PFC配置不当或交换机缓冲不足，可能导致丢包。解决方法：确保交换机启用了PFC和DCB，并正确配置了优先级映射。对于大规模RoCE网络，可能需要启用ECN和DCQCN来避免拥塞。</p>
+<p><strong>案例：</strong> 某研究团队在自建Kubernetes集群上部署了多机RDMA训练环境。初期测试发现，两节点间的RDMA带宽远低于预期。经过排查，发现是由于两个节点分别连接到不同的交换机，跨交换机通信存在瓶颈。调整拓扑，将两个节点连接到同一交换机后，带宽显著提升。该案例说明了网络拓扑对RDMA性能的影响。</p>
+<p><strong>最佳实践总结：</strong></p>
+<ol>
+<li><strong>规划网络拓扑：</strong> 根据集群规模选择合适的网络架构，确保高带宽、低延迟和无阻塞。</li>
+<li><strong>启用无损网络：</strong> 对于RoCE网络，务必配置PFC和DCB，避免丢包。</li>
+<li><strong>利用GPUDirect RDMA：</strong> 在GPU通信场景下，尽量使用GPUDirect RDMA，减少主机参与。</li>
+<li><strong>调优Verbs参数：</strong> 根据负载调整QP深度、内联大小等参数，找到性能与资源占用的平衡。</li>
+<li><strong>使用高效通信库：</strong> 优先使用NCCL、UCX等经过优化的通信库，而不是直接使用Verbs API，以简化开发并获得较好性能。</li>
+<li><strong>定期基准测试：</strong> 使用perftest和NCCL Tests等工具定期评估网络性能，及时发现并解决问题。</li>
+</ol>
+<h2 id="第5章-总结与展望">第5章 总结与展望</h2>
+<p><strong>总结：</strong> RDMA技术通过硬件直接访问内存，实现了低延迟、高吞吐的网络通信，已成为现代AI基础设施中的关键组成部分。本手册系统地介绍了RDMA的基本原理、网络类型、编程模型，以及在分布式训练、推理服务和存储IO等AI场景中的具体应用。我们探讨了如何在Kubernetes云原生环境中集成RDMA，并提供了性能优化和故障排查的最佳实践。通过学习本手册，读者应已掌握RDMA技术的核心概念和实战技巧，能够在实际项目中部署和调优RDMA网络，从而加速AI工作负载的运行。</p>
+<p><strong>展望：</strong> 随着AI模型规模的持续增长，对网络通信的需求也将不断提升。未来，我们可以预见以下趋势：</p>
+<ol>
+<li><strong>更高速的网络：</strong> 200Gbps甚至400Gbps的InfiniBand和RoCE网络将逐步普及，以满足更大规模模型的通信需求。</li>
+<li><strong>更紧密的GPU-NIC集成：</strong> 新一代GPU和网卡将提供更紧密的耦合，如NVLink网络接口、GPU原生支持RDMA等，进一步降低通信延迟。</li>
+<li><strong>智能网卡与可编程网络：</strong> 智能网卡（如NVIDIA BlueField DPU）将承担更多网络功能，减轻主机CPU负担。同时，可编程交换机和网络设备将允许更灵活的通信模式，如在网络中直接进行梯度聚合等。</li>
+<li><strong>统一通信框架：</strong> UCX等框架将进一步发展，提供更丰富的API和更广泛的设备支持，使开发者能够以统一的方式利用各种高速网络（包括RDMA、CXL等）。</li>
+<li><strong>容器与边缘：</strong> 随着Kubernetes成为AI部署的主流平台，RDMA在容器化环境中的支持将更加完善。同时，在边缘计算场景下，也可能出现对低延迟通信的需求，RDMA技术在边缘的适用性值得关注。</li>
+</ol>
+<p>总之，RDMA技术仍在不断演进，与AI的结合也将更加紧密。掌握RDMA技术，对于构建下一代高性能AI系统至关重要。希望本手册能为读者奠定坚实的基础，并在实践中不断探索和创新，推动AI基础设施的发展。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/">http://example.com/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/AI-Infra/">AI Infra</a><a class="post-meta__tags" href="/tags/k8s/">k8s</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/k8s.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/04/20/2026-04-20-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1%E4%B8%8E%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E7%BC%96%E6%8E%92%E3%80%81%E7%A6%BB%E7%BA%BF%E6%B7%B7%E9%83%A8%E5%8F%8A%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C/" title="大规模训练任务与推理服务编排、离线混部及资源调度技术手册"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">大规模训练任务与推理服务编排、离线混部及资源调度技术手册</div></div><div class="info-2"><div class="info-item-1">大规模训练任务与推理服务编排、离线混部及资源调度技术手册 目录 概述 原理基础 2.1 Kubernetes调度基础 2.2 大规模训练任务的调度挑战 2.3 推理服务调度的特殊需求 2.4 离线混部的基本原理核心技术与实现 3.1 Kubernetes在训练任务编排中的应用 3.2 Kubernetes在推理服务调度中的应用 3.3 离线混部的实现方式案例与实践 4.1 案例一：基于Kubeflow和Volcano的分布式训练任务编排 4.2 案例二：基于KServe和Triton的推理服务部署与自动扩缩 4.3 案例三：离线混部场景下的资源调度优化总结与展望 第1章 概述 随着人工智能（AI）和深度学习的飞速发展，训练大规模模型和部署高并发推理服务已成为常态。这些工作负载对底层基础设施提出了独特且严苛的要求，远非传统Web应用可比。在训练任务方面，一个深度学习训练作业往往由成百上千个协同工作的子任务组成，需要同时调度大量计算节点，可能涉及GPU等异构资源，并且训练周期长、资源需求波动大。而推理服务则要求低延迟、高吞吐，需要根据请求流量动态扩缩容，并确保服务级别协议（SLA）。...</div></div></div></a><a class="pagination-related" href="/2026/03/13/2026-03-13-%E8%AE%B0%E5%BD%95%E4%B8%80%E6%AC%A1claude-code-litellm-openrouter-claudegpt%E6%A8%A1%E5%9E%8B%E8%B0%83%E7%94%A8bug%E7%9A%84%E4%BF%AE%E5%A4%8D/" title="记录一次claude code-&gt;litellm-&gt;openrouter-&gt;claude/gpt模型调用bug的修复"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E6%8A%A5%E9%94%99.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">记录一次claude code->litellm->openrouter->claude/gpt模型调用bug的修复</div></div><div class="info-2"><div class="info-item-1">记录一次claude code-&gt;litellm-&gt;openrouter-&gt;claude/gpt模型调用bug的修复 12345678910111213141516171819 lvzhongrenjie@MacBook-Pro  ~/python_project/litellm-roger   main  claude ▐▛███▜▌   Claude Code v2.1.69▝▜█████▛▘  claude-opus-4.6 · API Usage Billing  ▘▘ ▝▝    ~/python_project/litellm-roger  /model to try Opus 4.6❯ list the files in the directory  ⎿  API Error: 400 &#123;&quot;error&quot;:&#123;&quot;message&quot;:&quot;litellm.BadRequestError: OpenAIException -     &#123;\&quot;error\&quot;:...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/20/2024-09-20-AI%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/" title="AI资源调度"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/aiinfra.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-20</div><div class="info-item-2">AI资源调度</div></div><div class="info-2"><div class="info-item-1">AI资源调度 100道k8s面试题：https://zhuanlan.zhihu.com/p/721588398 [云原生 AI 的资源调度和 AI 工作流引擎设计分享_paddleflow-CSDN博客](https://blog.csdn.net/lihui49/article/details/129260286?ops_request_misc={&quot;request_id&quot;%3A&quot;81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&quot;%2C&quot;scm&quot;%3A&quot;20140713.130102334..&quot;}&amp;request_id=81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-3-129260286-null-null.142^v100^pc_search_re...</div></div></div></a><a class="pagination-related" href="/2024/09/24/2024-09-24-%E4%B8%80%E7%A7%8D%E5%9F%BA%E4%BA%8E%E7%BB%8F%E9%AA%8C%E7%9A%84%E5%8A%A8%E6%80%81%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%EF%BC%9AStraightLine-An-End-to-End-Resource-Aware-Scheduler-for-Machine-Learning-Application-Requests/" title="一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/dynamic.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-24</div><div class="info-item-2">一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests</div></div><div class="info-2"><div class="info-item-1">StraightLine: An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests  摘要： 提出了一个端到端的资源感知调度器，用于在混合基础设施中调度机器学习应用请求的最优资源。 关键词： 机器学习部署、异构资源、资源放置、容器化、无服务器计算。 主要内容：  ML应用的生命周期包括模型开发和模型部署两个阶段。 传统ML系统通常只关注生命周期中的一个特定阶段或阶段。 StraightLine通过一个基于经验的动态放置算法，根据请求的独特特征（如请求频率、输入数据大小和数据分布）智能地放置请求。 包括三个层次：模型开发抽象、多种实现部署、实时资源调度。  模型容器化：   使用NVIDIA-Docker实现模型开发的容器化。   为模型训练构建了强大的NVIDIA-Docker，为模型验证构建了轻量级的NVIDIA-Docker。 深度学习docker环境配置之nvidia-docker安装使用_nvidia docker-CSDN博客   容器定制：  根据不同的压缩ML模...</div></div></div></a><a class="pagination-related" href="/2024/10/01/2024-10-01-CUDA%E5%AE%B9%E5%99%A8%E5%8C%96&Container-runtime%E7%9B%B8%E5%85%B3%E6%8A%80%E6%9C%AF%E6%A2%B3%E7%90%86/" title="CUDA容器化&amp;Container runtime相关技术梳理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-10-01</div><div class="info-item-2">CUDA容器化&amp;Container runtime相关技术梳理</div></div><div class="info-2"><div class="info-item-1">CUDA容器化&amp;Container runtime相关技术梳理 整体结构 CUDA API体系  CUDA Driver API：GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）； CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度； CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。 因此要实现 NVIDIA 容器化，也就是要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内应用程序内可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 NVIDIA CONTAINER TOOLKIT 具体结构  GPU 容器底层实现 GPU 容器相关概念 一些背景知识  什么是运行时？什么是高级运行时（high-level runtime）和低级运行时(low-level runtime):  参考：ht...</div></div></div></a><a class="pagination-related" href="/2025/11/10/2025-11-10-NCCL%E9%80%9A%E4%BF%A1%E5%8E%9F%E8%AF%AD/" title="NCCL通信原语"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-11-10</div><div class="info-item-2">NCCL通信原语</div></div><div class="info-2"><div class="info-item-1">NCCL通信原语 参考： https://blog.csdn.net/2401_84208172/article/details/142610913?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=142610913&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link 1. Broadcast 其实就是把自己卡上面的东西让所有卡都知道 2. Scatter 其实就是把自己的东西分成多块，按照顺序向其他GPU发送data block 3. Reduce 就是把所有卡的部分在自己卡上面作一个sum。注意这里只有自己的卡作sum 4. Gather 其实对应于Scatter，是把分布在其他卡上的data block在自己卡上面拼起来。注意，这里也是只有自己这一张卡 5. AllReduce 每张卡都对所有卡作一个sum=reduce scatter+all gather, 通信成本也等于这俩加起来 官方说法：将每个节点的数据规约并...</div></div></div></a><a class="pagination-related" href="/2025/02/16/2025-02-16-k8s%E4%B8%AD%E9%80%9A%E8%BF%87pod%E8%8E%B7%E5%8F%96gpu%E4%BD%BF%E7%94%A8%E8%BF%9B%E7%A8%8B%E5%88%B0pod%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB%20-%20%E5%89%AF%E6%9C%AC/" title="k8s中通过pod获取gpu使用进程到pod的映射关系"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-02-16</div><div class="info-item-2">k8s中通过pod获取gpu使用进程到pod的映射关系</div></div><div class="info-2"><div class="info-item-1">k8s中通过pod获取gpu使用进程到pod的映射关系 背景 该任务的pod为daemonset在集群的每一个节点上，controller pod（只有一个）通过grpc的方式进行调用该daemonset pod获取到该节点上gpu的使用进程到pod的映射关系，传递的参数为使用gpu的pod的id。 该需求涉及到几个部分内容：  如何通过pod id定位到具体的节点  通过controller 的cache机制（包含有pod和node cache）获取到daemonset pod id对应的node ip，在daemonset的pod部分新建grpc server端，根据ip:port构建grpc client即可   如何获取到节点上的gpu-&gt;process的映射关系  调用go-nvml即可   如何获取到节点上的process-&gt;container的映射关系  调用taskClient   container-&gt;pod的映射关系？  controller cache机制获取到对应的node，然后可以获取到该node上的pod和container，做一层映...</div></div></div></a><a class="pagination-related" href="/2025/09/17/2025-09-17-K8s-drain%E5%92%8Ccordon%E7%9A%84%E5%8C%BA%E5%88%AB/" title="K8s drain和cordon的区别"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-17</div><div class="info-item-2">K8s drain和cordon的区别</div></div><div class="info-2"><div class="info-item-1">K8s drain和cordon的区别 Kubernetes中Drain和Cordon的区别 Cordon（封锁节点） 作用  标记节点为不可调度 新的Pod不会被调度到该节点 现有Pod不受影响，继续正常运行  使用场景 12345# 封锁节点kubectl cordon node-name# 解除封锁kubectl uncordon node-name 实际效果 1234节点状态变化：- 调度状态：可调度 → 不可调度- 现有Pod：继续运行- 新Pod：不会调度到此节点 Drain（排空节点） 作用  首先执行Cordon操作（封锁节点） 优雅地驱逐节点上的所有Pod 等待Pod在其他节点上重新启动 节点变为空节点  使用场景 1234567891011# 排空节点（默认行为）kubectl drain node-name# 排空节点并忽略DaemonSetkubectl drain node-name --ignore-daemonsets# 强制删除（不等待优雅终止）kubectl drain node-name --force# 设置优雅终止时间kubectl dri...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">194</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">159</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">54</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">RDMA技术手册：面向AI场景的深度解析</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%9B%AE%E5%BD%95"><span class="toc-number">1.1.</span> <span class="toc-text">目录</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC1%E7%AB%A0-%E6%A6%82%E8%BF%B0"><span class="toc-number">1.2.</span> <span class="toc-text">第1章 概述</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC2%E7%AB%A0-RDMA%E5%8E%9F%E7%90%86%E4%B8%8E%E6%9E%B6%E6%9E%84"><span class="toc-number">1.3.</span> <span class="toc-text">第2章 RDMA原理与架构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-RDMA%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 RDMA基本原理</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-RDMA%E7%BD%91%E7%BB%9C%E7%B1%BB%E5%9E%8B%E4%B8%8E%E5%8D%8F%E8%AE%AE"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 RDMA网络类型与协议</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-RDMA%E7%BC%96%E7%A8%8B%E6%A8%A1%E5%9E%8B%E4%B8%8EVerbs%E6%8E%A5%E5%8F%A3"><span class="toc-number">1.3.3.</span> <span class="toc-text">2.3 RDMA编程模型与Verbs接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-GPUDirect-RDMA%E6%8A%80%E6%9C%AF"><span class="toc-number">1.3.4.</span> <span class="toc-text">2.4 GPUDirect RDMA技术</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC3%E7%AB%A0-RDMA%E5%9C%A8AI%E5%9C%BA%E6%99%AF%E7%9A%84%E5%BA%94%E7%94%A8%E5%AE%9E%E8%B7%B5"><span class="toc-number">1.4.</span> <span class="toc-text">第3章 RDMA在AI场景的应用实践</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-RDMA%E5%9C%A8%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E5%BA%94%E7%94%A8"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 RDMA在分布式训练中的应用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-RDMA%E5%9C%A8%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E4%B8%AD%E7%9A%84%E5%BA%94%E7%94%A8"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 RDMA在推理服务中的应用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-RDMA%E5%9C%A8%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AEIO%E4%B8%AD%E7%9A%84%E5%BA%94%E7%94%A8"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 RDMA在存储与数据IO中的应用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-RDMA%E5%9C%A8Kubernetes%E4%B8%AD%E7%9A%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%AE%9E%E8%B7%B5"><span class="toc-number">1.4.4.</span> <span class="toc-text">3.4 RDMA在Kubernetes中的集成与实践</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC4%E7%AB%A0-%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96%E4%B8%8E%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">1.5.</span> <span class="toc-text">第4章 性能优化与最佳实践</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-RDMA%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96%E7%AD%96%E7%95%A5"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 RDMA性能优化策略</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95%E4%B8%8E%E5%9F%BA%E5%87%86%E5%B7%A5%E5%85%B7"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 性能测试与基准工具</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E5%85%B8%E5%9E%8B%E9%97%AE%E9%A2%98%E4%B8%8E%E8%B0%83%E4%BC%98%E6%A1%88%E4%BE%8B"><span class="toc-number">1.5.3.</span> <span class="toc-text">4.3 典型问题与调优案例</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC5%E7%AB%A0-%E6%80%BB%E7%BB%93%E4%B8%8E%E5%B1%95%E6%9C%9B"><span class="toc-number">1.6.</span> <span class="toc-text">第5章 总结与展望</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="RDMA技术手册：面向AI场景的深度解析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="RDMA技术手册：面向AI场景的深度解析"/></a><div class="content"><a class="title" href="/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="RDMA技术手册：面向AI场景的深度解析">RDMA技术手册：面向AI场景的深度解析</a><time datetime="2026-04-19T16:00:00.000Z" title="发表于 2026-04-20 00:00:00">2026-04-20</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/04/20/2026-04-20-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1%E4%B8%8E%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E7%BC%96%E6%8E%92%E3%80%81%E7%A6%BB%E7%BA%BF%E6%B7%B7%E9%83%A8%E5%8F%8A%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C/" title="大规模训练任务与推理服务编排、离线混部及资源调度技术手册"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="大规模训练任务与推理服务编排、离线混部及资源调度技术手册"/></a><div class="content"><a class="title" href="/2026/04/20/2026-04-20-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1%E4%B8%8E%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E7%BC%96%E6%8E%92%E3%80%81%E7%A6%BB%E7%BA%BF%E6%B7%B7%E9%83%A8%E5%8F%8A%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C/" title="大规模训练任务与推理服务编排、离线混部及资源调度技术手册">大规模训练任务与推理服务编排、离线混部及资源调度技术手册</a><time datetime="2026-04-19T16:00:00.000Z" title="发表于 2026-04-20 00:00:00">2026-04-20</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/03/13/2026-03-13-%E8%AE%B0%E5%BD%95%E4%B8%80%E6%AC%A1claude-code-litellm-openrouter-claudegpt%E6%A8%A1%E5%9E%8B%E8%B0%83%E7%94%A8bug%E7%9A%84%E4%BF%AE%E5%A4%8D/" title="记录一次claude code-&gt;litellm-&gt;openrouter-&gt;claude/gpt模型调用bug的修复"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E6%8A%A5%E9%94%99.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="记录一次claude code-&gt;litellm-&gt;openrouter-&gt;claude/gpt模型调用bug的修复"/></a><div class="content"><a class="title" href="/2026/03/13/2026-03-13-%E8%AE%B0%E5%BD%95%E4%B8%80%E6%AC%A1claude-code-litellm-openrouter-claudegpt%E6%A8%A1%E5%9E%8B%E8%B0%83%E7%94%A8bug%E7%9A%84%E4%BF%AE%E5%A4%8D/" title="记录一次claude code-&gt;litellm-&gt;openrouter-&gt;claude/gpt模型调用bug的修复">记录一次claude code-&gt;litellm-&gt;openrouter-&gt;claude/gpt模型调用bug的修复</a><time datetime="2026-03-12T16:00:00.000Z" title="发表于 2026-03-13 00:00:00">2026-03-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/03/07/2026-03-07-%E5%85%AB%E5%AD%97%E5%91%BD%E7%90%86%E4%B9%8B%E8%B4%B5%E4%BA%BA%E7%AF%87/" title="八字命理之贵人篇"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E8%B4%B5%E4%BA%BA.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="八字命理之贵人篇"/></a><div class="content"><a class="title" href="/2026/03/07/2026-03-07-%E5%85%AB%E5%AD%97%E5%91%BD%E7%90%86%E4%B9%8B%E8%B4%B5%E4%BA%BA%E7%AF%87/" title="八字命理之贵人篇">八字命理之贵人篇</a><time datetime="2026-03-06T16:00:00.000Z" title="发表于 2026-03-07 00:00:00">2026-03-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/03/03/2026-03-03-%F0%9F%A6%8C-DeerFlow---%E5%AD%97%E8%8A%82%E8%B7%B3%E5%8A%A8%E5%BC%80%E6%BA%90%E7%9A%84%E8%B6%85%E7%BA%A7%E6%99%BA%E8%83%BD%E4%BD%93%E6%A1%86%E6%9E%B6/" title="🦌 DeerFlow - 字节跳动开源的超级智能体框架"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/deepflow.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="🦌 DeerFlow - 字节跳动开源的超级智能体框架"/></a><div class="content"><a class="title" href="/2026/03/03/2026-03-03-%F0%9F%A6%8C-DeerFlow---%E5%AD%97%E8%8A%82%E8%B7%B3%E5%8A%A8%E5%BC%80%E6%BA%90%E7%9A%84%E8%B6%85%E7%BA%A7%E6%99%BA%E8%83%BD%E4%BD%93%E6%A1%86%E6%9E%B6/" title="🦌 DeerFlow - 字节跳动开源的超级智能体框架">🦌 DeerFlow - 字节跳动开源的超级智能体框架</a><time datetime="2026-03-02T16:00:00.000Z" title="发表于 2026-03-03 00:00:00">2026-03-03</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
