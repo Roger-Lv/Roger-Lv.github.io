@@ -1,0 +1,758 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>SkillClaw技能集体进化框架深度代码解析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从代码层面深度解析 SkillClaw 的&quot;技能集体进化&quot;框架——evolver 算法、认识论锚点、更新频率与粒度、冲突解决、错误累积、隐私隔离与检索规模，逐项对照源码给出证据。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="SkillClaw技能集体进化框架深度代码解析">
+<meta property="og:url" content="http://example.com/2026/07/13/2026-07-13-SkillClaw%E6%8A%80%E8%83%BD%E9%9B%86%E4%BD%93%E8%BF%9B%E5%8C%96%E6%A1%86%E6%9E%B6%E6%B7%B1%E5%BA%A6%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从代码层面深度解析 SkillClaw 的&quot;技能集体进化&quot;框架——evolver 算法、认识论锚点、更新频率与粒度、冲突解决、错误累积、隐私隔离与检索规模，逐项对照源码给出证据。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-12T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-13T03:18:36.902Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Agent">
+<meta property="article:tag" content="OpenClaw">
+<meta property="article:tag" content="SkillClaw">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "SkillClaw技能集体进化框架深度代码解析",
+  "url": "http://example.com/2026/07/13/2026-07-13-SkillClaw%E6%8A%80%E8%83%BD%E9%9B%86%E4%BD%93%E8%BF%9B%E5%8C%96%E6%A1%86%E6%9E%B6%E6%B7%B1%E5%BA%A6%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-12T16:00:00.000Z",
+  "dateModified": "2026-07-13T03:18:36.902Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/13/2026-07-13-SkillClaw%E6%8A%80%E8%83%BD%E9%9B%86%E4%BD%93%E8%BF%9B%E5%8C%96%E6%A1%86%E6%9E%B6%E6%B7%B1%E5%BA%A6%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'SkillClaw技能集体进化框架深度代码解析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">202</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">163</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">54</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">SkillClaw技能集体进化框架深度代码解析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">SkillClaw技能集体进化框架深度代码解析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-12T16:00:00.000Z" title="发表于 2026-07-13 00:00:00">2026-07-13</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-13T03:18:36.902Z" title="更新于 2026-07-13 11:18:36">2026-07-13</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/Agent/">Agent</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/13/2026-07-13-SkillClaw%E6%8A%80%E8%83%BD%E9%9B%86%E4%BD%93%E8%BF%9B%E5%8C%96%E6%A1%86%E6%9E%B6%E6%B7%B1%E5%BA%A6%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90/" data-flag-title="SkillClaw技能集体进化框架深度代码解析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>SkillClaw 技能集体进化框架深度代码解析</h1>
+<h2 id="摘要">摘要</h2>
+<p>SkillClaw（arXiv:2604.08377）提出了一种让 LLM Agent 的技能在多用户环境中持续进化的框架，核心洞察是：当前 Agent 系统（如 OpenClaw）的技能在部署后基本静态，不同用户重复踩同样的坑、重复发现相似工作流。SkillClaw 把跨用户、跨时间的交互轨迹作为信号，通过&quot;自主 evolver&quot;自动识别模式并更新共享技能库，实现&quot;一次改进，全系统受益&quot;的累积式能力提升。</p>
+<p>本文不重复论文摘要，而是<strong>直接对照项目源码</strong>，回答一篇针对该论文的评审所提出的若干关键疑问：evolver 的算法到底是什么？是否引入了外部验证器作为&quot;认识论锚点&quot;？更新频率和粒度如何控制？技能冲突如何仲裁？错误累积与隐私隔离如何处理？技能库规模增大后检索效率如何保障？</p>
+<p>读完本文你会发现：代码基本印证了评审基于摘要的推测，并把其中几个&quot;摘要未说明&quot;的点坐实了——<strong>evolver 是 LLM 反思式自举而非 RL，默认路径无外部锚点，冲突仲裁极浅，无 PII 脱敏，检索无工程化保障</strong>。但版本化与发布门设计相对扎实。</p>
+<blockquote>
+<p>项目地址：<a target="_blank" rel="noopener" href="https://github.com/AMAP-ML/SkillClaw">https://github.com/AMAP-ML/SkillClaw</a><br>
+论文：<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2604.08377">https://arxiv.org/abs/2604.08377</a></p>
+</blockquote>
+<h2 id="1-整体架构：两个组件，两套引擎">1. 整体架构：两个组件，两套引擎</h2>
+<p>SkillClaw 由两个解耦组件构成，二者只通过共享存储（Alibaba OSS / S3 / 本地文件系统）和统一的技能格式（<code>SKILL.md</code> 目录）交互。</p>
+<pre class="mermaid">graph LR
+    U[用户 + Agent<br/>Hermes/Codex/Claude Code/OpenClaw] -->|OpenAI 兼容 API| P[Client Proxy<br/>skillclaw/]
+    P -->|自动记录轨迹| S[(共享存储<br/>OSS/S3/local)]
+    S -->|读 sessions| E[Evolve Server<br/>evolve_server/]
+    E -->|写 evolved SKILL.md| S
+    S -->|pull/reload| P
+    P -->|注入技能 catalog| U</pre>
+<ul>
+<li><strong>Client Proxy</strong>（<code>skillclaw/</code>）：本地 API 代理（<code>/v1/chat/completions</code>、<code>/v1/messages</code>、<code>/v1/responses</code>），拦截 agent 请求、记录会话产物、管理本地技能库。这是单用户起步所需的全部。</li>
+<li><strong>Evolve Server</strong>（<code>evolve_server/</code>）：可选服务，从共享存储读 session 数据，演化或创建技能再写回。它支持两种引擎：
+<ul>
+<li><code>workflow</code>（默认）：固定 3 阶段 LLM 管线（Summarize → Aggregate → Execute）</li>
+<li><code>agent</code>：OpenClaw 驱动的工作区，agent 直接编辑技能</li>
+</ul>
+</li>
+</ul>
+<p>部署模型是渐进的：先单机用客户端，需要自动演化时加一台 evolve server，团队共享时多个客户端指向同一共享存储 + 一台 server。客户端与服务端<strong>只在共享存储里相遇</strong>。</p>
+<h2 id="2-Evolver-算法剖析：LLM-反思式自举，不是-RL">2. Evolver 算法剖析：LLM 反思式自举，不是 RL</h2>
+<p>这是评审最关心的一个问题——“摘要未说明 evolver 的具体算法（是基于 LLM 的反思？规则引擎？还是 RL？）”。代码给出的答案非常明确：<strong>本质是 LLM 反思式自举 + 薄层规则记账，没有任何 RL。</strong></p>
+<p><code>workflow</code> 引擎的编排位于 <code>evolve_server/engines/workflow.py:894</code> 的 <code>run_once()</code>，每个&quot;认知&quot;步骤都是一次 OpenAI 兼容 API 调用（客户端 <code>evolve_server/core/llm_client.py:19</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>文件:行</th>
+<th>机制</th>
+<th>温度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>轨迹构建</td>
+<td><code>summarizer.py:114</code></td>
+<td><strong>规则</strong>（字符串格式化）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>元数据抽取</td>
+<td><code>summarizer.py:349</code></td>
+<td><strong>规则</strong>（字典扫描，提取 read/modified skills、prm 分、tool 错误）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>摘要</td>
+<td><code>summarizer.py:390</code></td>
+<td><strong>LLM 调用</strong>（每 session 一次）</td>
+<td>0.2</td>
+</tr>
+<tr>
+<td>会话裁判</td>
+<td><code>session_judge.py:362</code></td>
+<td><strong>LLM 调用</strong>，固定权重打分</td>
+<td>0.1</td>
+</tr>
+<tr>
+<td>聚合</td>
+<td><code>aggregation.py:16</code></td>
+<td><strong>规则</strong>（按技能名分桶）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>演化（决策+产出合一）</td>
+<td><code>execution.py:366</code></td>
+<td><strong>单次 LLM 调用</strong>，同时决定动作并产出新技能</td>
+<td>0.4</td>
+</tr>
+<tr>
+<td>冲突合并</td>
+<td><code>execution.py:265</code></td>
+<td><strong>LLM 调用</strong></td>
+<td>0.3</td>
+</tr>
+<tr>
+<td>技能验证器</td>
+<td><code>skill_verifier.py:154</code></td>
+<td><strong>LLM 调用</strong>（门禁）</td>
+<td>0.1</td>
+</tr>
+</tbody>
+</table>
+<p>关键点：<strong>决策与产出在同一次 LLM 调用里完成</strong>（<code>evolve_skill_from_sessions</code>，<code>execution.py:366</code>），动作枚举只有四种（<code>evolve_server/core/constants.py:35-41</code>）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">CREATE      = &quot;create_skill&quot;</span><br><span class="line">IMPROVE     = &quot;improve_skill&quot;</span><br><span class="line">OPTIMIZE_DESC = &quot;optimize_description&quot;</span><br><span class="line">SKIP        = &quot;skip&quot;</span><br></pre></td></tr></table></figure>
+<p>演化系统提示词反复强调&quot;做针对性编辑，不要重写&quot;“宁可 skip 也别投机性编辑”，并有一条很关键的反模式警告（<code>execution.py:125</code>）：</p>
+<blockquote>
+<p>如果技能里已有正确 API 信息而 agent 没用上，那是 agent 的问题不是技能的问题，<strong>不要删掉正确信息</strong>。</p>
+</blockquote>
+<p>会话裁判的打分权重是硬编码的（<code>session_judge.py:90-95</code>）：<code>task_completion 0.55 / response_quality 0.30 / efficiency 0.05 / tool_usage 0.10</code>，且 <code>session_judge.py:137</code> 会用固定权重<strong>重算</strong> overall 而不信任模型自报的 overall——这是个小的确定性保护。</p>
+<p><strong>关于 RL——完全没有。</strong> PRM/裁判打出的分数只是存进元数据、作为文本喂给后续 prompt，不存在任何梯度、参数更新或策略优化。准确表述是：<strong>LLM-as-judge 驱动的离线反思式技能编辑</strong>，规则只负责记账（SHA-256、版本号、slug 正则），不负责认知。</p>
+<h2 id="3-认识论锚点之问：是-LLM-自举，还是引入了外部验证器？">3. 认识论锚点之问：是 LLM 自举，还是引入了外部验证器？</h2>
+<p>这是评审最尖锐的问题，代码层面的答案是：<strong>默认配置下纯 LLM 自举，没有任何外部锚点。</strong> 系统里三层所谓&quot;验证&quot;都是 LLM 判 LLM：</p>
+<pre class="mermaid">graph TD
+    T[session 轨迹] --> SUM[LLM 摘要]
+    SUM --> EV[LLM 演化<br/>决策+产出]
+    EV --> V1{skill_verifier?}
+    V1 -->|默认关| PUB1[直接发布]
+    V1 -->|opt-in 开| LLMJ[LLM-as-judge 门禁]
+    LLMJ --> PUB2[发布/拒绝]
+    EV --> V2{publish_mode?}
+    V2 -->|validated opt-in| REPLAY[重放 A/B<br/>LLM 重答+PRM 判分]
+    REPLAY --> PUB3[≥baseline 才发布]</pre>
+<h3 id="3-1-PRM-Scorer">3.1 PRM Scorer</h3>
+<p><code>skillclaw/prm_scorer.py:116</code>：让模型对每轮回答投票 <code>+1/-1/0</code>，多数表决（<code>prm_m</code> 路并行，默认 3）。<strong>纯 LLM judge，无 ground-truth、无程序化正确性校验。</strong></p>
+<h3 id="3-2-Skill-Verifier">3.2 Skill Verifier</h3>
+<p><code>evolve_server/pipeline/skill_verifier.py:154</code>：又一个 LLM 调用，作为&quot;发布门禁&quot;。但 <code>use_skill_verifier</code> <strong>默认 False</strong>（<code>config.py:105</code>）。开启后是&quot;LLM 判 LLM 产物是否值得发布&quot;，唯一确定性的部分是 <code>min_score=0.75</code> 的数值阈值比较（<code>skill_verifier.py:228</code>）。verifier 提示词明确：“你的工作不是改进技能，只是判断候选是否安全且值得发布”，并要求 fail-closed——verifier 调用失败/JSON 非法时也判 reject（<code>skill_verifier.py:197-220</code>）。</p>
+<h3 id="3-3-重放-A-B-验证">3.3 重放 A/B 验证</h3>
+<p>这是最接近&quot;锚点&quot;的东西，但也是 opt-in（<code>publish_mode=&quot;validated&quot;</code>，默认 <code>direct</code>，<code>config.py:107</code>）。做法（<code>skillclaw/validation_worker.py:170</code>）：</p>
+<ol>
+<li>拿候选技能和当前技能分别注入 prompt，让 LLM 重答同一指令（<code>_run_replay_branch</code>，<code>validation_worker.py:142</code>）；</li>
+<li>用 PRM judge 给两个回答打分；</li>
+<li>候选须 <code>candidate_mean &gt;= baseline_mean 且 &gt;= 0.75</code> 才算赢（<code>validation_worker.py:208-210</code>）。</li>
+</ol>
+<p><strong>问题在于</strong>：重放的&quot;环境&quot;只是 LLM 重新回答原始 user 指令，<strong>不重跑 agent 的工具、不对照 ground-truth 输出校验程序化正确性</strong>。更糟的是，重放案例还刻意偏好&quot;无工具调用&quot;的纯文本轮次（<code>workflow.py:514</code>）——即恰恰是工具/事实正确性无法校验的那类轮次。重放 worker 只在<strong>opted-in 的空闲客户端</strong>上跑（<code>validation_worker.py:80</code>/<code>94-103</code>，要求 idle + sharing + group_id）。</p>
+<h3 id="3-4-结论：默认路径欠债">3.4 结论：默认路径欠债</h3>
+<ul>
+<li><strong>默认</strong>（<code>publish_mode=&quot;direct&quot;</code> + <code>use_skill_verifier=False</code>）：LLM 演化技能 → 直接写共享库，<strong>零</strong>非 LLM 校验。纯 LLM 自举，且形成闭环：<strong>LLM 写技能 → 写进共享库 → 该 LLM 未来又读这些技能</strong>。</li>
+<li><strong>开 verifier</strong>：多一道 LLM-as-judge 门，仍无外部锚点。</li>
+<li><strong>validated 模式</strong>：LLM 重放 A/B + LLM PRM 判分，最接近 grounding，但仍全 LLM 判、偏好无工具轮次。</li>
+</ul>
+<p>按&quot;信任被验证取代、需要异源锚点&quot;的视角，SkillClaw 默认路径正是评审担心的&quot;LLM 自举无锚点&quot;形态。确定性逻辑只存在于记账层（SHA-256 去重 <code>workflow.py:338</code>、版本自增 <code>skill_registry.py:123</code>、slug 正则），都不校验语义正确性。<code>agent</code> 引擎的 “self-validation” 也只要求 agent 写一份 <code>history/vN_evidence.md</code>，是 prompt 约束不是代码约束——测试只断言 markdown 里含规定字符串。</p>
+<blockquote>
+<p>顺带回答&quot;是否需要用户显式反馈&quot;：<strong>不需要</strong>。proxy 自动记录每轮（prompt、响应、工具调用/结果/错误），按 user-turn modulo 自动上传 session（<code>api_server.py:3055</code>），PRM 打分也是后台自动。摘要说的&quot;limited interaction and feedback&quot;成立——它从原始轨迹工作，不向用户索要 thumbs-up。</p>
+</blockquote>
+<h2 id="4-更新频率与粒度控制：多层节流，但默认偏激进">4. 更新频率与粒度控制：多层节流，但默认偏激进</h2>
+<p>频率是<strong>多层独立节流叠加</strong>，粒度由 LLM 每组自选。评审问&quot;过于激进导致不稳定&quot;——确实存在缺口。</p>
+<h3 id="4-1-触发与节流（多层-Gate）">4.1 触发与节流（多层 Gate）</h3>
+<table>
+<thead>
+<tr>
+<th>Gate</th>
+<th>文件:行</th>
+<th>作用</th>
+<th>默认</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A. user-turn 取模</td>
+<td><code>api_server.py:3104-3114</code></td>
+<td>主防抖门，只有 <code>final</code> 轮计入计数</td>
+<td><code>sharing_session_upload_interval=0</code>（禁用）</td>
+</tr>
+<tr>
+<td>B. 定时轮询</td>
+<td><code>workflow.py:1015-1023</code></td>
+<td>server 周期 <code>run_once</code></td>
+<td><code>interval_seconds=600s</code></td>
+</tr>
+<tr>
+<td>C. 技能重载轮询</td>
+<td><code>api_server.py:2005-2028</code></td>
+<td>proxy 拉取技能更新</td>
+<td>30s + 10% 抖动 + 失败退避封顶 60s</td>
+</tr>
+<tr>
+<td>D. 内容 SHA 去重</td>
+<td><code>workflow.py:338-352</code></td>
+<td>内容未变直接 skip</td>
+<td>—</td>
+</tr>
+<tr>
+<td>E. fail-closed 验证器 + validated 门</td>
+<td>见第 3 节</td>
+<td>发布前质量门</td>
+<td>均默认关</td>
+</tr>
+</tbody>
+</table>
+<p>Gate A 是主防抖：设为 2 即每 2 个用户轮上传一次快照并触发 evolve（commit <code>064de4a</code>）；只有 <code>final</code> 轮计入，内部 tool_use 轮不推进（<code>api_server.py:239-241</code>），避免每步上传。上传成功后才 POST <code>&#123;evolve_server&#125;/trigger</code>，且若响应报 <code>uploaded_skills &gt; 0</code> 则立即拉新技能并 reload（commit <code>0995fc9</code>）。</p>
+<h3 id="4-2-缺口：无-cooldown、无-min-sessions">4.2 缺口：无 cooldown、无 min-sessions</h3>
+<p><strong>没有显式 cooldown 计时器</strong>，<strong>没有&quot;至少 N 个 session 才演化&quot;的阈值</strong>。<code>run_once</code> 会处理单个 drain 出来的 session；一个 skill group 可以只由一个 session 构成。唯一上游上限是 <code>evolve_batch_size</code>（默认 20，<code>config.py:102</code>），限制每组喂给 summarizer 的 session 数。</p>
+<h3 id="4-3-粒度与工作版-发布版">4.3 粒度与工作版/发布版</h3>
+<p>LLM 每组在四种动作里选（create/improve/optimize_desc/skip）。Nacos 后端有明确的<strong>工作版 vs 发布版</strong>区分（测试 <code>test_nacos_working_version_push.py</code>、<code>test_nacos_skill_lifecycle.py</code> 确认）：</p>
+<ul>
+<li><strong>发布版</strong> = <code>latest</code> 标签指向的版本；运行时 pull 只取发布版（<code>nacos_skill_hub.py:529-536</code>）。</li>
+<li><strong>工作版</strong> = editing/reviewing 状态、未打 <code>latest</code>，<strong>对运行时客户端不可见</strong>。</li>
+<li><code>nacos_publish_mode</code> 默认 <code>review</code>（<code>config.py:123</code>）：上传+submit 后停在 <code>uploaded_pending_review</code>，要 Nacos 发布管线/人工 approve 才上线。<code>direct</code> 才直接打 <code>latest</code>。</li>
+<li>硬安全规则：同名 reviewing 工作版内容不同则<strong>抛 RuntimeError 拒绝覆盖</strong>（<code>nacos_skill_hub.py:439-443</code>）。</li>
+</ul>
+<h3 id="4-4-回滚">4.4 回滚</h3>
+<ul>
+<li>Nacos：保留所有版本 + <code>skillclaw skills publish NAME VERSION</code> 手动重指 <code>latest</code>（<code>cli.py:868-885</code>）。</li>
+<li>对象存储：版本历史（<code>skill_registry.py:133-149</code>，history 封顶 20 条）+ <code>pull_skills</code> 前<strong>整目录备份</strong>、失败即从备份恢复（<code>skill_hub.py:700-796</code>，保留 3 份备份）。</li>
+<li>注意：<strong>Nacos 后端的 pull 没有备份/恢复逻辑</strong>，安全性完全依赖&quot;只拉 published 版本&quot;。<strong>没有自动回滚已发布远端版本的命令。</strong></li>
+</ul>
+<h2 id="5-技能冲突解决：很浅，且只在同名哈希碰撞时触发">5. 技能冲突解决：很浅，且只在同名哈希碰撞时触发</h2>
+<p>评审担心&quot;不同用户经验推出矛盾更新如何仲裁&quot;。代码给出的答案是：<strong>没有真正的仲裁机制，只有 LLM 自行裁量 + 哈希判断是否需要调 LLM。</strong></p>
+<ul>
+<li>演化端<strong>唯一</strong>的冲突检测是 byte 级 SHA-256 比较（<code>workflow.py:338-352</code> <code>_detect_conflict</code>）。两个<strong>语义等价但措辞不同</strong>的技能<strong>不会</strong>被判重复；两个<strong>针对同名技能的矛盾编辑</strong>才进合并路径。</li>
+<li>合并由 LLM <code>execute_merge</code> 完成（<code>execution.py:265</code>），提示词（<code>execution.py:25-56</code>）让 LLM&quot;矛盾时偏好更具体/具体的指引&quot;——<strong>仲裁完全交给 LLM 判断</strong>，无确定性规则、无投票、无 per-user 权重。</li>
+<li><strong>致命的 last-write-wins 兜底</strong>（<code>workflow.py:354-381</code> <code>_resolve_and_upload</code>）：若 LLM merge 失败，<strong>直接用 incoming 版本覆盖</strong>（“keeping incoming version”），无拒绝、无重试、无人工门。</li>
+<li>聚合按<strong>技能名</strong>分桶（<code>aggregation.py:16-46</code>），不做跨用户去重、不做嵌入聚类、不检测&quot;两个不同名字的技能其实是一回事&quot;。新技能创建时靠 prompt 让 LLM 起不撞名的名字，若还是撞了，代码悄悄把 <code>create_skill</code> 降级成 <code>improve_skill</code>（<code>execution.py:456-465</code>）。</li>
+<li>嵌入去重<strong>只</strong>在客户端注入时跑（<code>skill_manager.py:433-477</code>），演化端从不调用——不能阻止重复/重叠技能被写进共享库。</li>
+</ul>
+<h2 id="6-错误累积风险：最强护栏默认关闭">6. 错误累积风险：最强护栏默认关闭</h2>
+<p>评审担心&quot;早期用户的错误模式被固化进共享技能库&quot;。代码证实：<strong>默认路径下一个候选技能只经过一次 <code>evolve_skill_from_sessions</code> LLM 调用就直写共享库。</strong> 三层 gate 里只有 session judge 默认开，且它只打分不阻断：</p>
+<table>
+<thead>
+<tr>
+<th>Gate</th>
+<th>默认</th>
+<th>机制</th>
+<th>是否阻断发布</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session judge</td>
+<td><strong>开</strong></td>
+<td>LLM 打 overall 分，固定权重重算</td>
+<td>否，只作为 evidence 文本</td>
+</tr>
+<tr>
+<td>Skill verifier</td>
+<td><strong>关</strong></td>
+<td>LLM-as-judge 门禁，<code>min_score=0.75</code></td>
+<td>开启后阻断</td>
+</tr>
+<tr>
+<td>重放 A/B 验证</td>
+<td><strong>关</strong></td>
+<td>候选须 ≥ baseline 且 ≥ 0.75</td>
+<td>开启后阻断</td>
+</tr>
+</tbody>
+</table>
+<p>effectiveness 统计（<code>skill_manager.py:244-284</code>）会回写 <code>skill_stats.json</code> 并在检索排序里降权低效技能、push 时可过滤（<code>skill_hub.py:350-363</code>），但这只是<strong>客户端 push 过滤</strong>，不删除共享库里已有的坏技能。</p>
+<p><strong>reject 后无自动重试</strong>——同一 evidence 被消费删除（<code>workflow.py:946-952</code> 处理成功即删 session key），候选不再有第二次机会。所以&quot;错误累积 → 系统性偏差&quot;的风险是真实存在的，不是摘要没说清——是默认没护栏。</p>
+<h2 id="7-隐私与隔离：无-PII-脱敏">7. 隐私与隔离：无 PII 脱敏</h2>
+<p>代码里<strong>没有任何 PII 清洗/脱敏</strong>。<code>grep 'pii|redact|scrub|anonym|pseudonym|mask'</code> 全仓零代码命中。</p>
+<ul>
+<li><strong>原始用户内容被原样上传共享存储</strong>（<code>api_server.py:3073-3083</code>）：完整 <code>turns</code>（含 <code>prompt_text</code> 原始输入、<code>response_text</code>、<code>tool_calls</code> 含参数、<code>tool_results</code>、<code>tool_errors</code>）verbatim 上传到 <code>&#123;group_id&#125;/sessions/&#123;session_id&#125;.json</code>。唯一身份字段是 <code>user_alias</code>——<strong>自填句柄，不是伪匿名哈希</strong>，两个都叫 “alice” 的人会撞名。</li>
+<li><strong>写技能的 LLM 看到真实（裁剪过的）用户内容</strong>：summarizer 把每字段裁到 ~400 字（<code>summarizer.py:29-33</code>），产出 8-15 句 LLM 摘要，然后 <code>_trajectory</code>+<code>_summary</code> 经 <code>execution.py:302-349</code> <code>_build_session_evidence</code> 喂给演化 LLM。裁剪是主要（且非刻意的）抽象层，但不是隐私机制，trajectory 里仍含真实裁剪后的 prompt 和工具 I/O。</li>
+<li><strong>技能本身没护栏防泄密</strong>：技能 prompt 让 LLM&quot;压缩环境信息（API endpoint、端口、payload 格式）&quot;，但<strong>没有指令清洗 PII，也没有后处理扫描 <a target="_blank" rel="noopener" href="http://SKILL.md">SKILL.md</a> 是否泄露用户内容</strong>。若 LLM 把用户的 API key/邮箱/文件路径原样写进技能，没有任何环节能拦住。verifier 的 “safe to publish” 指发布质量，不是隐私。</li>
+<li><strong>隔离是 group 级、非 user 级</strong>：组内所有人能读所有人的 session 和技能，无 per-user ACL。唯一按 alias 隔离的是验证结果（<code>validation_store.py:77-78</code>），防一人多投，但候选技能内容本身组内共享。</li>
+<li>稍好一点的是 <code>agent</code> 引擎：<code>agent_workspace.py:152-167</code> 写 compact session（trajectory+summary，<strong>刻意排除原始 turns</strong>），这是唯一刻意的抽象边界——但默认 <code>workflow</code> 引擎不走这条路径。</li>
+<li>session 处理后从队列删除（<code>workflow.py:946-952</code>），但若 <code>had_processing_error</code> 则保留重试；演化出的技能内容永久存于 <code>&#123;group_id&#125;/skills/</code>。</li>
+</ul>
+<p>评审&quot;跨用户共享涉及隐私边界&quot;在企业场景是真的踩雷——代码层面没有任何脱敏，靠的是&quot;用户自觉别把敏感数据喂给 agent&quot;。</p>
+<h2 id="8-检索与规模：无工程化保障，RAG-是死代码">8. 检索与规模：无工程化保障，RAG 是死代码</h2>
+<p>这是评审又一个被代码证伪的点。<strong>当前实现没有工程化检索，规模线性膨胀，且嵌入检索代码是死代码。</strong></p>
+<p>任务时 SkillClaw <strong>不做任何检索/匹配</strong>：它把<strong>全部合格技能</strong>作为一个 XML catalog 注入 system prompt，让模型自己扫 <code>&lt;description&gt;</code> 决定读哪个 <code>SKILL.md</code>（<code>skill_manager.py:650-669</code> <code>build_injection_prompt</code> → <code>get_all_skills</code> 全量）。匹配规则写在注入提示里（<code>skill_manager.py:620-648</code>）：“扫 available_skills 的 description，至多读一个 <a target="_blank" rel="noopener" href="http://SKILL.md">SKILL.md</a>”。</p>
+<h3 id="8-1-死代码证据">8.1 死代码证据</h3>
+<p>语义检索 <code>retrieve()</code>（<code>skill_manager.py:483</code>）和 <code>_embedding_retrieve</code>（line 455）在全仓<strong>没有任何调用方</strong>——<code>grep '\.retrieve('</code> 只命中它自己的定义。SentenceTransformer 嵌入、余弦相似、0.9 去重、effectiveness 加权打分（<code>_weighted_score</code> line 428-431）都写好了，但 request path 根本不走它。<code>config.skill_top_k=6</code>、<code>retrieval_mode</code> 开关也是惰性的。</p>
+<h3 id="8-2-规模后果">8.2 规模后果</h3>
+<table>
+<thead>
+<tr>
+<th>关切</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>top-k 检索</td>
+<td>配置存在（<code>skill_top_k=6</code>）但 <code>retrieve()</code> 从不被调用，惰性</td>
+</tr>
+<tr>
+<td>嵌入/RAG</td>
+<td>已实现但不可达</td>
+</tr>
+<tr>
+<td>catalog 上限</td>
+<td>单一软上限 <code>max_skills_prompt_chars</code>（默认 30KB，<code>config.py:37</code>）</td>
+</tr>
+<tr>
+<td>超限降级</td>
+<td>compact 模式<strong>丢掉 <code>&lt;description&gt;</code> 只留 name+location</strong>（<code>skill_manager.py:592-618</code>），模型只能按名字匹配</td>
+</tr>
+<tr>
+<td>对话历史</td>
+<td><code>_truncate_messages</code>（<code>api_server.py:3181-3216</code>）削到 <code>max_context_tokens</code>（默认 20K）；catalog 在 system message 里<strong>永不被截断</strong></td>
+</tr>
+<tr>
+<td>排序</td>
+<td>注入时无排序</td>
+</tr>
+<tr>
+<td>缓存</td>
+<td>embedding 缓存只在未用的嵌入模式下生效；<code>refresh_if_changed()</code> 靠 generation 指纹避免重解析</td>
+</tr>
+</tbody>
+</table>
+<p>具体后果：catalog 在 system message 里无界增长，超 30KB 后丢 description 降级到 name-only 匹配，再往后 <code>_truncate_messages</code> 会越来越多地吃对话历史来压总长，而技能 catalog 仍占着 system message 不让。<strong>无分页、无 top-k、无索引、无 RAG</strong>，reload 时整目录重扫重解析 O(N) 非增量。可检索性几乎全压在 <code>description</code> 这一个短文本字段上。</p>
+<h2 id="9-总评与思考">9. 总评与思考</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>评价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>evolver 算法</td>
+<td>LLM 反思式自举，非 RL；决策与产出在同一次调用</td>
+</tr>
+<tr>
+<td>认识论锚点</td>
+<td>默认无外部锚点，重放验证是 LLM 判 LLM 且 opt-in</td>
+</tr>
+<tr>
+<td>更新频率/粒度</td>
+<td>多层节流但默认偏激进；无 cooldown、无 min-sessions</td>
+</tr>
+<tr>
+<td>冲突解决</td>
+<td>极浅，SHA-only 触发，LLM 裁量 + last-write-wins 兜底</td>
+</tr>
+<tr>
+<td>错误累积</td>
+<td>真实风险，最强护栏默认关，reject 无重试</td>
+</tr>
+<tr>
+<td>隐私隔离</td>
+<td>无 PII 脱敏，group 级非 user 级隔离</td>
+</tr>
+<tr>
+<td>检索规模</td>
+<td>无工程化保障，RAG 死代码，30KB 后降级 name-only</td>
+</tr>
+<tr>
+<td><strong>版本化与发布门</strong></td>
+<td><strong>扎实</strong>：工作版/发布版分离、review 模式默认、pull 备份恢复、SHA 去重</td>
+</tr>
+</tbody>
+</table>
+<p>代码基本印证了评审基于摘要的推测，并坐实了几个&quot;摘要未说明&quot;的点。相对更扎实的设计集中在<strong>版本化与发布门</strong>——Nacos 工作版/发布版分离、<code>review</code> 模式默认、对象存储 pull 备份恢复、SHA 去重——这部分工程上能站住脚。</p>
+<p>而从 Agent Infra 文章&quot;验证债&quot;的视角看，SkillClaw 最该追问的&quot;认识论锚点&quot;恰恰是它最薄弱的环节：默认配置下确实欠债。一个被污染的技能会被所有用户继承，而唯一的&quot;异源锚点&quot;候选（重放 A/B）本身仍是 LLM 判 LLM，且偏好无法校验工具正确性的纯文本轮次。</p>
+<p>这给后续工作留下清晰方向：</p>
+<ol>
+<li><strong>引入真正的外部锚点</strong>：把技能里的代码/命令做可执行校验（编译、lint、dry-run），而非 LLM 自评。</li>
+<li><strong>冲突解决升级</strong>：从 SHA-only 升级到语义去重（激活已写的嵌入路径），引入投票/per-user 权重仲裁。</li>
+<li><strong>检索工程化</strong>：把 <code>retrieve()</code> 接入注入路径，让 catalog 不再全量塞 system prompt。</li>
+<li><strong>隐私层</strong>：在 session 上传前加脱敏，在 <a target="_blank" rel="noopener" href="http://SKILL.md">SKILL.md</a> 发布前扫描泄露。</li>
+<li><strong>默认开启发布门</strong>：让 <code>validated</code> / <code>use_skill_verifier</code> 默认开，把&quot;集体进化&quot;的安全网做实。</li>
+</ol>
+<p>SkillClaw 的&quot;集体进化视角&quot;理念是对的——把技能更新从单用户单会话扩展到多用户跨时间的生态层面，这在方向上区别于传统 RAG 和 DSPy。但理念落地到代码，目前的实现是&quot;理念先行、护栏后置&quot;，留给安全/可靠性的债并不小。</p>
+<h2 id="附：关键文件索引">附：关键文件索引</h2>
+<table>
+<thead>
+<tr>
+<th>关注点</th>
+<th>文件</th>
+<th>行</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>编排主循环</td>
+<td><code>evolve_server/engines/workflow.py</code></td>
+<td>894</td>
+</tr>
+<tr>
+<td>冲突检测（SHA only）</td>
+<td><code>evolve_server/engines/workflow.py</code></td>
+<td>338-352</td>
+</tr>
+<tr>
+<td>合并 + last-write-wins 兜底</td>
+<td><code>evolve_server/engines/workflow.py</code></td>
+<td>354-381</td>
+</tr>
+<tr>
+<td>verifier reject 路径（无重试）</td>
+<td><code>evolve_server/engines/workflow.py</code></td>
+<td>766-791</td>
+</tr>
+<tr>
+<td>重放验证 finalize 阈值</td>
+<td><code>evolve_server/engines/workflow.py</code></td>
+<td>596-616</td>
+</tr>
+<tr>
+<td>LLM 演化决策+产出</td>
+<td><code>evolve_server/pipeline/execution.py</code></td>
+<td>366</td>
+</tr>
+<tr>
+<td>LLM 合并提示词</td>
+<td><code>evolve_server/pipeline/execution.py</code></td>
+<td>25-56</td>
+</tr>
+<tr>
+<td>create→improve 降级</td>
+<td><code>evolve_server/pipeline/execution.py</code></td>
+<td>456-465</td>
+</tr>
+<tr>
+<td>按技能名聚合</td>
+<td><code>evolve_server/pipeline/aggregation.py</code></td>
+<td>16-46</td>
+</tr>
+<tr>
+<td>skill verifier（默认关）</td>
+<td><code>evolve_server/pipeline/skill_verifier.py</code></td>
+<td>154-241</td>
+</tr>
+<tr>
+<td>session judge（默认开）</td>
+<td><code>evolve_server/pipeline/session_judge.py</code></td>
+<td>185-200, 362</td>
+</tr>
+<tr>
+<td>配置默认值（verifier 关、direct 发布）</td>
+<td><code>evolve_server/core/config.py</code></td>
+<td>104-111</td>
+</tr>
+<tr>
+<td>动作枚举</td>
+<td><code>evolve_server/core/constants.py</code></td>
+<td>35-41</td>
+</tr>
+<tr>
+<td>OpenAI 兼容 LLM 客户端</td>
+<td><code>evolve_server/core/llm_client.py</code></td>
+<td>19</td>
+</tr>
+<tr>
+<td>版本/SHA 记账</td>
+<td><code>evolve_server/core/skill_registry.py</code></td>
+<td>105-151</td>
+</tr>
+<tr>
+<td>PRM 多数表决 judge</td>
+<td><code>skillclaw/prm_scorer.py</code></td>
+<td>116</td>
+</tr>
+<tr>
+<td>重放 A/B（≥baseline 才赢）</td>
+<td><code>skillclaw/validation_worker.py</code></td>
+<td>170-210</td>
+</tr>
+<tr>
+<td>原始 session 上传（无脱敏）</td>
+<td><code>skillclaw/api_server.py</code></td>
+<td>3073-3083</td>
+</tr>
+<tr>
+<td>user-turn modulo 节流</td>
+<td><code>skillclaw/api_server.py</code></td>
+<td>3104-3114</td>
+</tr>
+<tr>
+<td>技能重载轮询</td>
+<td><code>skillclaw/api_server.py</code></td>
+<td>2005-2028</td>
+</tr>
+<tr>
+<td>全量注入 + catalog</td>
+<td><code>skillclaw/skill_manager.py</code></td>
+<td>650-669</td>
+</tr>
+<tr>
+<td>死代码 retrieve()</td>
+<td><code>skillclaw/skill_manager.py</code></td>
+<td>483</td>
+</tr>
+<tr>
+<td>嵌入去重（仅注入时）</td>
+<td><code>skillclaw/skill_manager.py</code></td>
+<td>433-477</td>
+</tr>
+<tr>
+<td>Nacos pull 只取发布版</td>
+<td><code>skillclaw/nacos_skill_hub.py</code></td>
+<td>529-536</td>
+</tr>
+<tr>
+<td>Nacos 工作版 vs 发布版</td>
+<td><code>skillclaw/nacos_skill_hub.py</code></td>
+<td>249-299</td>
+</tr>
+<tr>
+<td>pull 前备份/失败恢复</td>
+<td><code>skillclaw/skill_hub.py</code></td>
+<td>700-796</td>
+</tr>
+</tbody>
+</table>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/13/2026-07-13-SkillClaw%E6%8A%80%E8%83%BD%E9%9B%86%E4%BD%93%E8%BF%9B%E5%8C%96%E6%A1%86%E6%9E%B6%E6%B7%B1%E5%BA%A6%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90/">http://example.com/2026/07/13/2026-07-13-SkillClaw%E6%8A%80%E8%83%BD%E9%9B%86%E4%BD%93%E8%BF%9B%E5%8C%96%E6%A1%86%E6%9E%B6%E6%B7%B1%E5%BA%A6%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Agent/">Agent</a><a class="post-meta__tags" href="/tags/OpenClaw/">OpenClaw</a><a class="post-meta__tags" href="/tags/SkillClaw/">SkillClaw</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/07/09/2026-07-09-GPFS-Fileset-%E8%AF%A6%E8%A7%A3%EF%BC%9A%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%AD%E7%9A%84%E7%B2%BE%E7%BB%86%E5%8C%96%E8%BF%90%E8%90%A5%E4%B9%8B%E9%81%93/" title="GPFS Fileset 详解：并行文件系统中的精细化运营之道"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/GPFS.jpg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">GPFS Fileset 详解：并行文件系统中的精细化运营之道</div></div><div class="info-2"><div class="info-item-1">GPFS Fileset 详解：并行文件系统中的精细化运营之道 在AI大模型训练和高性能计算（HPC）场景中，数据存储系统往往面临着前所未有的压力。成百上千个计算节点同时读写海量小文件或超大文件，对文件系统的性能和可管理性提出了苛刻要求。 IBM GPFS（通用并行文件系统，现称 IBM Storage Scale） 凭借其出色的横向扩展能力和并行访问性能，成为了这一领域的基石。但在日常运维中，一个大麻烦始终困扰着管理员：如何对庞大的共享存储空间进行精细化管理？ 答案，就藏在 GPFS 的 Fileset 功能里。 什么是 Fileset？ 从用户视角看，Fileset 可能只是一个普通目录。但从管理员视角看，Fileset 是 GPFS 文件系统命名空间中的一个逻辑子树，但在很多方面，它表现得像一个独立的文件系统。 你可以把它形象地理解为一个大型存储池里，可以被独立&quot;关照&quot;和&quot;管理&quot;的容器。 为什么需要 Fileset？ 传统文件系统缺乏细粒度的管理手段。当数百个用户或项目共享一个巨大的 GPFS 文件系统时，以下痛点尤为突出：  配额管...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/02/04/2026-02-04-OpenClaw%E8%A7%A3%E6%9E%90/" title="OpenClaw解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/openclaw.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-02-04</div><div class="info-item-2">OpenClaw解析</div></div><div class="info-2"><div class="info-item-1">OpenClaw解析 https://zhuanlan.zhihu.com/p/2000850539936765122 记忆系统尤其关注下 https://zhuanlan.zhihu.com/p/1999989672403812713  </div></div></div></a><a class="pagination-related" href="/2026/02/04/2026-02-04-OpenClaw%E8%AE%B0%E5%BF%86%E7%B3%BB%E7%BB%9F%E5%88%86%E6%9E%90/" title="OpenClaw记忆系统分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/openclaw.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-02-04</div><div class="info-item-2">OpenClaw记忆系统分析</div></div><div class="info-2"><div class="info-item-1">OpenClaw记忆系统深度解析：构建AI代理的长期记忆能力 摘要 OpenClaw作为一个多通道AI代理平台，其核心能力之一就是为AI代理提供长期记忆功能。本文深入分析OpenClaw记忆系统的架构设计、实现原理和技术细节，涵盖从本地向量存储到外部记忆系统集成的完整技术栈。 1. 记忆系统架构概览 OpenClaw的记忆系统采用分层架构设计，主要包含以下核心组件： 1.1 核心架构图 graph TB     A[记忆系统] --> B[MemoryIndexManager]     B --> C[嵌入向量层]     B --> D[存储引擎层]     B --> E[搜索算法层]          C --> C1[OpenAI嵌入]     C --> C2[Gemini嵌入]     C --> C3[本地模型]          D --> D1[SQLite向量存储]     D --> D2[FTS5全文检索]     D --> D3[文件系统索引]          E --> E1[混合搜索算法]     E --> E2[相关性排序]     E --...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-15-Camel%E6%A1%86%E6%9E%B6/" title="Camel框架"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/camel.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">Camel框架</div></div><div class="info-2"><div class="info-item-1">NeurIPS 2023｜AI Agents先行者CAMEL:第一个基于大模型的多智能体框架 转自：https://zhuanlan.zhihu.com/p/671093582 AI Agents是当下大模型领域备受关注的话题，用户可以引入多个扮演不同角色的LLM Agents参与到实际的任务中，Agents之间会进行竞争和协作等多种形式的动态交互，进而产生惊人的群体智能效果。本文介绍了来自KAUST研究团队的大模型心智交互CAMEL框架（“骆驼”），CAMEL框架是最早基于ChatGPT的autonomous agents知名项目，目前已被顶级人工智能会议NeurIPS 2023录用。  1777dbe9073c4bcd8ab59365481bcafc.png  论文题目： CAMEL: Communicative Agents for “Mind” Exploration of Large Scale Language Model Society 论文链接： https://ghli.org/camel.pdf 代码链接： https://github.com/camel-a...</div></div></div></a><a class="pagination-related" href="/2025/08/13/2025-08-13-MCP-Zero%EF%BC%9ALLM%E6%99%BA%E8%83%BD%E4%BD%93%E4%B8%BB%E5%8A%A8%E5%B7%A5%E5%85%B7%E5%8F%91%E7%8E%B0%E7%9A%84%E6%96%B0%E8%8C%83%E5%BC%8F/" title="MCP-Zero：LLM智能体主动工具发现的新范式"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-13</div><div class="info-item-2">MCP-Zero：LLM智能体主动工具发现的新范式</div></div><div class="info-2"><div class="info-item-1">MCP-Zero：LLM智能体主动工具发现的新范式 转自：https://zhuanlan.zhihu.com/p/1928760473630798292 引言 大语言模型（LLMs）在处理复杂任务时，通常需要借助外部工具来扩展其能力范围。然而，当前 LLM 智能体与工具集成的主流范式存在显著局限性：它们往往将预定义的工具模式注入到系统提示中，导致模型扮演被动选择者的角色，而非主动发现所需能力。这种方法不仅造成了巨大的上下文开销，也限制了模型的决策自主性。 为了解决这些问题，本文引入了 MCP-Zero，一个旨在恢复 LLM 智能体工具发现自主性的主动框架。MCP-Zero 的核心思想是，智能体能够主动识别自身能力差距，并按需请求特定工具，从而将自身从大规模检索器转变为真正的自主智能体。该框架通过三大核心机制运行：主动工具请求、分层语义路由和迭代能力扩展。这些机制共同作用，使得 MCP-Zero 能够在最小化上下文开销和保持高准确性的前提下，动态构建多步工具链。   图：LLM 智能体的工具选择范例比较。(a) 基于系统提示的方法将所有 MCP 工具模式注入上下文，导致提示过长，...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AgenticRL.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">Agentic RL</div></div><div class="info-2"><div class="info-item-1">转自：https://zhuanlan.zhihu.com/p/1913905349284591240 通过蒙特卡洛树搜索、过程监督与结果监督、强化学习来提高 LLM 的推理能力，从本质上来说，都是尽可能榨取 LLM 本身的能力，区别可能在于多次尝试、反馈信号、训练方法而已，这类方法可称之为“求诸内”。而由 scaling law 可知，模型的能力是有限的，那么该如何进一步提高LLM在具体问题上的表现呢？近期的答案是，类似 RAG，Multi-Agent 系统，让 LLM 学会使用工具，毕竟人与动物的关键区别也只是“能制造并使用工具”，这种方式则是“求诸外”。那么本篇就以此为中心，重点讨论以下问题：  Agentic LLM 的算法逻辑、具体方法与实际表现？ RL 如何训练 Agentic LLM，其与 tool using 的 SFT 的差异在哪？ Agentic RL 的工程化问题  一、Agentic RL 的算法设计 Agent 和 RL 都并非新鲜事物，而使用 RL 训练基于 LLM 的 agent 则是近期的研究的热点，那么，从算法角度来说，如何理解二者结合的动机、场...</div></div></div></a><a class="pagination-related" href="/2025/08/27/2025-08-27-InfiGUIAgent-A-Multimodal-Generalist-GUI-Agent-with-Native-Reasoning-and-Reflection/" title="InfiGUIAgent:A Multimodal Generalist GUI Agent with Native Reasoning and Reflection"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/InfiGUIAgent.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-27</div><div class="info-item-2">InfiGUIAgent:A Multimodal Generalist GUI Agent with Native Reasoning and Reflection</div></div><div class="info-2"><div class="info-item-1">InfiGUIAgent: A Multimodal Generalist GUI Agent with Native Reasoning and Reflection 2025-01-08｜ZJU, DLUT, Reallm Labs, ByteDance Inc, PolyU| 15 http://arxiv.org/abs/2501.04575v1 https://huggingface.co/papers/2501.04575 https://github.com/Reallm-Labs/InfiGUIAgent 研究背景与意义  在当今数字化时代，图形用户界面（GUI）智能体的应用愈发广泛，成为自动化任务的重要工具。现有的多模态大语言模型（MLLMs）为GUI智能体的智能化提供了基础，但其在多步骤推理和对文本注释的依赖上仍存在显著局限。本研究提出的InfiGUIAgent旨在解决这些挑战，强调了原生推理能力在提升GUI交互效率中的重要性，为自动化任务的执行提供了新的可能性。  当前挑战：现有的MLLM基础的GUI智能体在处理复杂操作时，往往受限于单步推理能力，无法有效利...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">202</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">163</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">54</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">SkillClaw 技能集体进化框架深度代码解析</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%91%98%E8%A6%81"><span class="toc-number">1.1.</span> <span class="toc-text">摘要</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84%EF%BC%9A%E4%B8%A4%E4%B8%AA%E7%BB%84%E4%BB%B6%EF%BC%8C%E4%B8%A4%E5%A5%97%E5%BC%95%E6%93%8E"><span class="toc-number">1.2.</span> <span class="toc-text">1. 整体架构：两个组件，两套引擎</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-Evolver-%E7%AE%97%E6%B3%95%E5%89%96%E6%9E%90%EF%BC%9ALLM-%E5%8F%8D%E6%80%9D%E5%BC%8F%E8%87%AA%E4%B8%BE%EF%BC%8C%E4%B8%8D%E6%98%AF-RL"><span class="toc-number">1.3.</span> <span class="toc-text">2. Evolver 算法剖析：LLM 反思式自举，不是 RL</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E8%AE%A4%E8%AF%86%E8%AE%BA%E9%94%9A%E7%82%B9%E4%B9%8B%E9%97%AE%EF%BC%9A%E6%98%AF-LLM-%E8%87%AA%E4%B8%BE%EF%BC%8C%E8%BF%98%E6%98%AF%E5%BC%95%E5%85%A5%E4%BA%86%E5%A4%96%E9%83%A8%E9%AA%8C%E8%AF%81%E5%99%A8%EF%BC%9F"><span class="toc-number">1.4.</span> <span class="toc-text">3. 认识论锚点之问：是 LLM 自举，还是引入了外部验证器？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-PRM-Scorer"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 PRM Scorer</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-Skill-Verifier"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 Skill Verifier</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E9%87%8D%E6%94%BE-A-B-%E9%AA%8C%E8%AF%81"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 重放 A&#x2F;B 验证</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E7%BB%93%E8%AE%BA%EF%BC%9A%E9%BB%98%E8%AE%A4%E8%B7%AF%E5%BE%84%E6%AC%A0%E5%80%BA"><span class="toc-number">1.4.4.</span> <span class="toc-text">3.4 结论：默认路径欠债</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-%E6%9B%B4%E6%96%B0%E9%A2%91%E7%8E%87%E4%B8%8E%E7%B2%92%E5%BA%A6%E6%8E%A7%E5%88%B6%EF%BC%9A%E5%A4%9A%E5%B1%82%E8%8A%82%E6%B5%81%EF%BC%8C%E4%BD%86%E9%BB%98%E8%AE%A4%E5%81%8F%E6%BF%80%E8%BF%9B"><span class="toc-number">1.5.</span> <span class="toc-text">4. 更新频率与粒度控制：多层节流，但默认偏激进</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E8%A7%A6%E5%8F%91%E4%B8%8E%E8%8A%82%E6%B5%81%EF%BC%88%E5%A4%9A%E5%B1%82-Gate%EF%BC%89"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 触发与节流（多层 Gate）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E7%BC%BA%E5%8F%A3%EF%BC%9A%E6%97%A0-cooldown%E3%80%81%E6%97%A0-min-sessions"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 缺口：无 cooldown、无 min-sessions</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E7%B2%92%E5%BA%A6%E4%B8%8E%E5%B7%A5%E4%BD%9C%E7%89%88-%E5%8F%91%E5%B8%83%E7%89%88"><span class="toc-number">1.5.3.</span> <span class="toc-text">4.3 粒度与工作版&#x2F;发布版</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E5%9B%9E%E6%BB%9A"><span class="toc-number">1.5.4.</span> <span class="toc-text">4.4 回滚</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E6%8A%80%E8%83%BD%E5%86%B2%E7%AA%81%E8%A7%A3%E5%86%B3%EF%BC%9A%E5%BE%88%E6%B5%85%EF%BC%8C%E4%B8%94%E5%8F%AA%E5%9C%A8%E5%90%8C%E5%90%8D%E5%93%88%E5%B8%8C%E7%A2%B0%E6%92%9E%E6%97%B6%E8%A7%A6%E5%8F%91"><span class="toc-number">1.6.</span> <span class="toc-text">5. 技能冲突解决：很浅，且只在同名哈希碰撞时触发</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-%E9%94%99%E8%AF%AF%E7%B4%AF%E7%A7%AF%E9%A3%8E%E9%99%A9%EF%BC%9A%E6%9C%80%E5%BC%BA%E6%8A%A4%E6%A0%8F%E9%BB%98%E8%AE%A4%E5%85%B3%E9%97%AD"><span class="toc-number">1.7.</span> <span class="toc-text">6. 错误累积风险：最强护栏默认关闭</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E9%9A%90%E7%A7%81%E4%B8%8E%E9%9A%94%E7%A6%BB%EF%BC%9A%E6%97%A0-PII-%E8%84%B1%E6%95%8F"><span class="toc-number">1.8.</span> <span class="toc-text">7. 隐私与隔离：无 PII 脱敏</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E6%A3%80%E7%B4%A2%E4%B8%8E%E8%A7%84%E6%A8%A1%EF%BC%9A%E6%97%A0%E5%B7%A5%E7%A8%8B%E5%8C%96%E4%BF%9D%E9%9A%9C%EF%BC%8CRAG-%E6%98%AF%E6%AD%BB%E4%BB%A3%E7%A0%81"><span class="toc-number">1.9.</span> <span class="toc-text">8. 检索与规模：无工程化保障，RAG 是死代码</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E6%AD%BB%E4%BB%A3%E7%A0%81%E8%AF%81%E6%8D%AE"><span class="toc-number">1.9.1.</span> <span class="toc-text">8.1 死代码证据</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-%E8%A7%84%E6%A8%A1%E5%90%8E%E6%9E%9C"><span class="toc-number">1.9.2.</span> <span class="toc-text">8.2 规模后果</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E6%80%BB%E8%AF%84%E4%B8%8E%E6%80%9D%E8%80%83"><span class="toc-number">1.10.</span> <span class="toc-text">9. 总评与思考</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%EF%BC%9A%E5%85%B3%E9%94%AE%E6%96%87%E4%BB%B6%E7%B4%A2%E5%BC%95"><span class="toc-number">1.11.</span> <span class="toc-text">附：关键文件索引</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/13/2026-07-13-SkillClaw%E6%8A%80%E8%83%BD%E9%9B%86%E4%BD%93%E8%BF%9B%E5%8C%96%E6%A1%86%E6%9E%B6%E6%B7%B1%E5%BA%A6%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90/" title="SkillClaw技能集体进化框架深度代码解析">SkillClaw技能集体进化框架深度代码解析</a><time datetime="2026-07-12T16:00:00.000Z" title="发表于 2026-07-13 00:00:00">2026-07-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/07/09/2026-07-09-GPFS-Fileset-%E8%AF%A6%E8%A7%A3%EF%BC%9A%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%AD%E7%9A%84%E7%B2%BE%E7%BB%86%E5%8C%96%E8%BF%90%E8%90%A5%E4%B9%8B%E9%81%93/" title="GPFS Fileset 详解：并行文件系统中的精细化运营之道"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/GPFS.jpg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="GPFS Fileset 详解：并行文件系统中的精细化运营之道"/></a><div class="content"><a class="title" href="/2026/07/09/2026-07-09-GPFS-Fileset-%E8%AF%A6%E8%A7%A3%EF%BC%9A%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%AD%E7%9A%84%E7%B2%BE%E7%BB%86%E5%8C%96%E8%BF%90%E8%90%A5%E4%B9%8B%E9%81%93/" title="GPFS Fileset 详解：并行文件系统中的精细化运营之道">GPFS Fileset 详解：并行文件系统中的精细化运营之道</a><time datetime="2026-07-08T16:00:00.000Z" title="发表于 2026-07-09 00:00:00">2026-07-09</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/05/15/Jetson%20AGX%20Orin%20USB%20%E7%BD%91%E7%BB%9C%E5%85%B1%E4%BA%AB%E9%85%8D%E7%BD%AE%EF%BC%88%E9%80%9A%E8%BF%87%20Mac%20%E4%B8%8A%E7%BD%91%EF%BC%89/" title="Jetson AGX Orin USB 网络共享配置"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/jetson.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Jetson AGX Orin USB 网络共享配置"/></a><div class="content"><a class="title" href="/2026/05/15/Jetson%20AGX%20Orin%20USB%20%E7%BD%91%E7%BB%9C%E5%85%B1%E4%BA%AB%E9%85%8D%E7%BD%AE%EF%BC%88%E9%80%9A%E8%BF%87%20Mac%20%E4%B8%8A%E7%BD%91%EF%BC%89/" title="Jetson AGX Orin USB 网络共享配置">Jetson AGX Orin USB 网络共享配置</a><time datetime="2026-05-14T16:00:00.000Z" title="发表于 2026-05-15 00:00:00">2026-05-15</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/05/07/2026-05-07-QEMU-%E4%B8%8E-KVM%EF%BC%9A%E9%BB%84%E9%87%91%E6%90%AD%E6%A1%A3%E7%9A%84%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F%E5%8F%8A%E5%BF%AB%E9%80%9F%E4%B8%8A%E6%89%8B%E6%8C%87%E5%8D%97/" title="QEMU 与 KVM：黄金搭档的前世今生及快速上手指南"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/qemu-kvm.webp" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="QEMU 与 KVM：黄金搭档的前世今生及快速上手指南"/></a><div class="content"><a class="title" href="/2026/05/07/2026-05-07-QEMU-%E4%B8%8E-KVM%EF%BC%9A%E9%BB%84%E9%87%91%E6%90%AD%E6%A1%A3%E7%9A%84%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F%E5%8F%8A%E5%BF%AB%E9%80%9F%E4%B8%8A%E6%89%8B%E6%8C%87%E5%8D%97/" title="QEMU 与 KVM：黄金搭档的前世今生及快速上手指南">QEMU 与 KVM：黄金搭档的前世今生及快速上手指南</a><time datetime="2026-05-06T16:00:00.000Z" title="发表于 2026-05-07 00:00:00">2026-05-07</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/05/06/2026-05-06-AI-Agent-%E7%9A%84%E5%AE%89%E5%85%A8%E6%B8%B8%E4%B9%90%E5%9C%BA%EF%BC%9A%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3-Agent-%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E6%B2%99%E7%AE%B1%E6%8A%80%E6%9C%AF/" title="AI Agent 的&quot;&quot;安全游乐场&quot;：深入理解 Agent 场景下的沙箱技术"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="AI Agent 的&quot;&quot;安全游乐场&quot;：深入理解 Agent 场景下的沙箱技术"/></a><div class="content"><a class="title" href="/2026/05/06/2026-05-06-AI-Agent-%E7%9A%84%E5%AE%89%E5%85%A8%E6%B8%B8%E4%B9%90%E5%9C%BA%EF%BC%9A%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3-Agent-%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E6%B2%99%E7%AE%B1%E6%8A%80%E6%9C%AF/" title="AI Agent 的&quot;&quot;安全游乐场&quot;：深入理解 Agent 场景下的沙箱技术">AI Agent 的&quot;&quot;安全游乐场&quot;：深入理解 Agent 场景下的沙箱技术</a><time datetime="2026-05-05T16:00:00.000Z" title="发表于 2026-05-06 00:00:00">2026-05-06</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
