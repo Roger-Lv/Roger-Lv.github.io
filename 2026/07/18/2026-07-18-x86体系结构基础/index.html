@@ -1,0 +1,529 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>x86 体系结构基础——特权级、中断异常、内存与总线 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="x86 体系结构基础——特权级、中断异常、内存与总线  本文目标：给机器学习系统工程师&#x2F;虚拟化初学者打底——把 x86 上&quot;软件如何与硬件协作&quot;的全链路讲清。从特权级 ring0~ring3 出发，串到用户态&#x2F;内核态切换、中断与异常、MMU 与页表、DMA、PCIe 总线、最后到 IOMMU。读完你能解释&quot;为什么虚拟化需要 VT-x&#x2F;EPT、为什么容器隔离要靠内核、为">
+<meta property="og:type" content="article">
+<meta property="og:title" content="x86 体系结构基础——特权级、中断异常、内存与总线">
+<meta property="og:url" content="http://example.com/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="x86 体系结构基础——特权级、中断异常、内存与总线  本文目标：给机器学习系统工程师&#x2F;虚拟化初学者打底——把 x86 上&quot;软件如何与硬件协作&quot;的全链路讲清。从特权级 ring0~ring3 出发，串到用户态&#x2F;内核态切换、中断与异常、MMU 与页表、DMA、PCIe 总线、最后到 IOMMU。读完你能解释&quot;为什么虚拟化需要 VT-x&#x2F;EPT、为什么容器隔离要靠内核、为">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-17T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-17T16:39:10.321Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="x86">
+<meta property="article:tag" content="体系结构">
+<meta property="article:tag" content="操作系统">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "x86 体系结构基础——特权级、中断异常、内存与总线",
+  "url": "http://example.com/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-17T16:00:00.000Z",
+  "dateModified": "2026-07-17T16:39:10.321Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'x86 体系结构基础——特权级、中断异常、内存与总线',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">211</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">184</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">60</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">x86 体系结构基础——特权级、中断异常、内存与总线</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">x86 体系结构基础——特权级、中断异常、内存与总线</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-17T16:39:10.321Z" title="更新于 2026-07-18 00:39:10">2026-07-18</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84/">体系结构</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/" data-flag-title="x86 体系结构基础——特权级、中断异常、内存与总线"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>x86 体系结构基础——特权级、中断异常、内存与总线</h1>
+<blockquote>
+<p>本文目标：给机器学习系统工程师/虚拟化初学者打底——把 x86 上&quot;软件如何与硬件协作&quot;的全链路讲清。从特权级 ring0~ring3 出发，串到用户态/内核态切换、中断与异常、MMU 与页表、DMA、PCIe 总线、最后到 IOMMU。读完你能解释&quot;为什么虚拟化需要 VT-x/EPT、为什么容器隔离要靠内核、为什么 GPU 能直接读写内存&quot;。</p>
+</blockquote>
+<hr>
+<h2 id="一、全景：一次系统调用穿越了多少层">一、全景：一次系统调用穿越了多少层</h2>
+<p>先给一张全景，后面逐层拆：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">应用(用户态, ring3)</span><br><span class="line">   │  write(fd, buf, n)        ← 软中断/syscall 指令</span><br><span class="line">   ▼</span><br><span class="line">内核(内核态, ring0)              ← 特权切换: 保存现场、查页表、设驱动</span><br><span class="line">   │  驱动程序</span><br><span class="line">   ▼</span><br><span class="line">设备(网卡/GPU/磁盘, DMA)        ← 通过 PCIe 总线直接读写内存</span><br><span class="line">   │  ← MMU 翻译 CPU 地址, IOMMU 翻译设备地址</span><br><span class="line">   ▼</span><br><span class="line">物理内存(DRAM)</span><br></pre></td></tr></table></figure>
+<p>这五件事——特权级、用户/内核态、中断异常、MMU 页表、DMA/PCIe/IOMMU——就是 x86 软硬件协作的全部地基。下面逐个讲。</p>
+<hr>
+<h2 id="二、特权级-ring0-ring3">二、特权级 ring0~ring3</h2>
+<p>x86 提供 4 个特权级（Protection Rings），用 CPL（Current Privilege Level，当前特权级）表示 CPU 当前在哪个环：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">ring0  ← 内核 / hypervisor：可执行所有指令、访问所有寄存器与硬件</span><br><span class="line">ring1  ← 系统服务（实际很少用）</span><br><span class="line">ring2  ← 设备驱动（实际很少用）</span><br><span class="line">ring3  ← 应用程序：受限，不能直接碰硬件</span><br></pre></td></tr></table></figure>
+<p>现代操作系统<strong>只用了 ring0 和 ring3 两级</strong>（Linux/Windows 都是），ring1/ring2 历史上设计给微内核用，实际基本闲置。所以日常说的&quot;内核态=ring0、用户态=ring3&quot;。</p>
+<h3 id="2-1-为什么需要特权级">2.1 为什么需要特权级</h3>
+<p>核心矛盾：<strong>应用不可信，但应用又必须能用硬件资源（网络、磁盘、内存）</strong>。解决方式是把指令分成两类：</p>
+<ul>
+<li><strong>普通指令</strong>：任何环都能执行（加法、访存、逻辑运算）。</li>
+<li><strong>特权指令 / 敏感指令</strong>：只有 ring0 能执行，ring3 执行会触发 <strong>General Protection Fault（#GP，异常 13）</strong> 陷入内核。例如：
+<ul>
+<li><code>hlt</code>（停 CPU）、<code>cli</code>/<code>sti</code>（关/开中断）</li>
+<li>修改 CR0/CR3（控制寄存器、页表基址）</li>
+<li><code>lgdt</code>/<code>lidt</code>（加载 GDT/IDT）</li>
+<li><code>IN</code>/<code>OUT</code>（端口 IO，操作设备寄存器）</li>
+<li><code>WRMSR</code>/<code>RDMSR</code>（读写 model-specific register）</li>
+</ul>
+</li>
+</ul>
+<h3 id="2-2-DPL-与访问控制">2.2 DPL 与访问控制</h3>
+<p>每个<strong>段描述符</strong>（在 GDT/LDT 里）有 DPL（Descriptor Privilege Level，描述符特权级），表示&quot;允许哪个最低级别的 CPL 访问它&quot;。访问规则简化为：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mtext>允许访问</mtext><mtext>  </mtext><mo>⟺</mo><mtext>  </mtext><mi>max</mi><mo>⁡</mo><mo stretchy="false">(</mo><mtext>CPL</mtext><mo separator="true">,</mo><mtext>RPL</mtext><mo stretchy="false">)</mo><mo>≤</mo><mtext>DPL</mtext></mrow><annotation encoding="application/x-tex">\text{允许访问} \iff \max(\text{CPL}, \text{RPL}) \leq \text{DPL}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7073em;vertical-align:-0.024em;"></span><span class="mord text"><span class="mord cjk_fallback">允许访问</span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">⟺</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mop">max</span><span class="mopen">(</span><span class="mord text"><span class="mord">CPL</span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord text"><span class="mord">RPL</span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">≤</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord text"><span class="mord">DPL</span></span></span></span></span></span></p>
+<p>RPL（Requested Privilege Level）是段选择子里可由软件设定的字段，用来&quot;自降特权&quot;防止越权。</p>
+<blockquote>
+<p>面试要点：<strong>ring 机制的本质 = 给指令分级 + 给段描述符标 DPL，硬件在执行时做 CPL vs DPL 校验，不满足就 #GP 陷入内核</strong>。这是&quot;应用不能直接碰硬件&quot;的硬件级保障。</p>
+</blockquote>
+<h3 id="2-3-64-位下的-扁平模型">2.3 64 位下的&quot;扁平模型&quot;</h3>
+<p>x86-64 进入长模式后，段机制大幅弱化——<strong>代码段/数据段基址都设为 0、界限都设为全空间</strong>，叫&quot;扁平内存模型&quot;。所有段覆盖整个 64 位地址空间，CS/DS 只是装个 DPL 标签做权限，寻址完全交给<strong>分页（MMU 页表）</strong>。所以现代 x86 的隔离<strong>主要靠页表，不是靠分段</strong>。</p>
+<hr>
+<h2 id="三、用户态与内核态、系统调用">三、用户态与内核态、系统调用</h2>
+<p>&quot;用户态/内核态&quot;是 ring0/ring3 在操作系统语义层的叫法。</p>
+<h3 id="3-1-两种执行上下文">3.1 两种执行上下文</h3>
+<ul>
+<li><strong>用户态（ring3）</strong>：跑应用代码，权限受限，不能直接执行特权指令、不能直接访问物理硬件、不能访问内核内存。</li>
+<li><strong>内核态（ring0）</strong>：跑内核代码，全权。</li>
+</ul>
+<h3 id="3-2-特权级切换：系统调用">3.2 特权级切换：系统调用</h3>
+<p>应用要读文件、发包，必须进内核。过程：</p>
+<ol>
+<li>应用把参数放进寄存器（Linux：<code>rax</code> 放系统调用号，<code>rdi/rsi/rdx...</code> 放参数），执行 <strong><code>syscall</code></strong> 指令（64 位；老式用 <code>int 0x80</code> 软中断）。</li>
+<li><code>syscall</code> 由硬件完成特权级切换：
+<ul>
+<li>保存用户态 <code>RIP/RFLAGS</code> 到内核栈（或 MSRs）。</li>
+<li>从 <code>IA32_LSTAR</code> MSR 加载内核入口地址，跳过去。</li>
+<li>CPL 从 3 变 0，切到内核栈。</li>
+</ul>
+</li>
+<li>内核执行系统调用处理函数，校验参数（<strong>关键安全点：内核绝不信任用户指针，要 <code>copy_from_user</code> 校验</strong>）。</li>
+<li>返回时执行 <code>sysret</code>/<code>iret</code>，恢复用户态现场。</li>
+</ol>
+<h3 id="3-3-切换的代价">3.3 切换的代价</h3>
+<p>每次系统调用都有：<strong>上下文切换 + 特权级切换 + 栈切换 + TLB 可能失效</strong> 的开销，约几百纳秒到微秒级。这就是为什么：</p>
+<ul>
+<li>高吞吐网络要 <code>io_uring</code>/DPDK/zero-copy 绕开系统调用。</li>
+<li>内存数据库要把数据常驻用户态避免反复 <code>read</code>。</li>
+<li>RDMA 要 kernel bypass（参见 RDMA 那篇）。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“ring0/ring3 是硬件特权级，用户态/内核态是 OS 语义；系统调用是两者唯一的合法桥梁，桥梁的代价就是上下文切换——所有绕内核技术（RDMA、DPDK、io_uring）本质都是少过这座桥。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="四、中断与异常">四、中断与异常</h2>
+<p>CPU 在执行时会被两类事件打断：<strong>中断</strong>（异步，外部来）和<strong>异常</strong>（同步，当前指令引发）。</p>
+<h3 id="4-1-区别">4.1 区别</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>中断（Interrupt）</th>
+<th>异常（Exception）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>来源</td>
+<td>外部硬件（网卡、定时器、键盘）</td>
+<td>CPU 执行当前指令引发</td>
+</tr>
+<tr>
+<td>时机</td>
+<td>异步，指令边界</td>
+<td>同步，当前指令</td>
+</tr>
+<tr>
+<td>举例</td>
+<td>网卡收包 IRQ、时钟 tick</td>
+<td>缺页 #PF、除零 #DE、非法指令 #UD、#GP</td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-2-中断向量与-IDT">4.2 中断向量与 IDT</h3>
+<p>x86 用 <strong>0~255 号向量</strong>标识每个中断/异常。关键向量：</p>
+<ul>
+<li>0 <code>#DE</code> 除零、6 <code>#UD</code> 非法指令、13 <code>#GP</code> 通用保护、14 <code>#PF</code> 缺页、</li>
+<li>32~255 是 <strong>可屏蔽硬件中断</strong>（由 IO-APIC/Local APIC 投递）。</li>
+</ul>
+<p><strong>IDT（Interrupt Descriptor Table，中断描述符表）</strong>：一张 256 项的表，每项是一个门描述符（中断门/陷阱门），记录该向量的处理函数地址 + DPL。<code>IDTR</code> 寄存器存 IDT 基址。</p>
+<h3 id="4-3-处理流程（中断-异常通用）">4.3 处理流程（中断/异常通用）</h3>
+<ol>
+<li>CPU 确定向量号 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span>。</li>
+<li>查 IDT[<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span>] 拿到处理函数地址和目标 CS（决定目标特权级）。</li>
+<li>若需要特权级提升（如用户态中断进内核），切换栈到内核栈。</li>
+<li>压入 <code>RFLAGS/RIP/CS</code>（和可能的错误码）。</li>
+<li>跳到处理函数执行。</li>
+<li><code>iret</code> 返回，恢复现场和特权级。</li>
+</ol>
+<h3 id="4-4-缺页异常-PF（重点，连虚拟化）">4.4 缺页异常 #PF（重点，连虚拟化）</h3>
+<p>访问一个<strong>未映射或权限不对</strong>的虚拟页时触发 #PF，CR2 寄存器存引发缺页的虚拟地址。内核 page fault 处理：</p>
+<ul>
+<li>地址合法但页不在内存 → 从磁盘换入（demand paging）。</li>
+<li>地址非法 → <code>SIGSEGV</code> 段错误杀进程。</li>
+<li>写只读页但 COW（copy-on-write）→ 复制页改可写。</li>
+</ul>
+<blockquote>
+<p>虚拟化关联：在 **EPT（扩展页表）**下，Guest 的地址翻译有两级——GVA→GPA（Guest 页表）和 GPA→HPA（EPT）。<strong>Guest 页表缺页</strong>走 Guest 自己的 #PF；<strong>EPT 缺页</strong>（GPA 没映射到物理页）触发 <strong>EPT Violation</strong>，陷入 hypervisor 处理。两者截然不同，是 KVM 内存虚拟化的核心。</p>
+</blockquote>
+<h3 id="4-5-中断控制器：PIC-→-APIC">4.5 中断控制器：PIC → APIC</h3>
+<ul>
+<li>老 PIC（8259）：最多 15 个中断。</li>
+<li><strong>APIC</strong>：Local APIC（每 CPU 一个，处理本地中断、IPI 核间中断）+ IO-APIC（收设备中断转发给 CPU）。多核必备。</li>
+<li><strong>MSI/MSI-X</strong>：设备直接写 Local APIC 寄存器发中断，绕过 IO-APIC 和电平信号， PCIe 设备主流方式。中断数更多、更快、更省中断引脚。</li>
+</ul>
+<hr>
+<h2 id="五、MMU-与页表（虚拟内存的地基）">五、MMU 与页表（虚拟内存的地基）</h2>
+<p>现代系统里&quot;内存隔离&quot;主要靠<strong>分页</strong>：每个进程有自己的虚拟地址空间，靠页表翻译到物理地址，页表项带权限位，越权访问 → #PF。</p>
+<h3 id="5-1-虚拟地址-→-物理地址翻译">5.1 虚拟地址 → 物理地址翻译</h3>
+<p>x86-64 用 <strong>4 级页表</strong>（48 位虚拟地址，普通 4KB 页；5 级页表支持 57 位）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">虚拟地址(48bit): [ 签名(高位) | PML4(9) | PDPT(9) | PD(9) | PT(9) | 页内偏移(12) ]</span><br><span class="line"></span><br><span class="line">CR3 ──► PML4 表(512项)</span><br><span class="line">            │ 选第 PML4 项</span><br><span class="line">            ▼</span><br><span class="line">        PDPT 表 ──► 选第 PDPT 项</span><br><span class="line">            ▼</span><br><span class="line">        PD 表 ──► 选第 PD 项</span><br><span class="line">            ▼</span><br><span class="line">        PT 表 ──► 选第 PT 项 ──► 物理页基址 + 偏移 = 物理地址</span><br></pre></td></tr></table></figure>
+<p>每级 9 位索引（512 项），页内偏移 12 位（4KB）。**每张表 4KB，一个进程完整映射 48 位空间要 4 级表全展开——实际靠 lazy 分配，按需建表。</p>
+<h3 id="5-2-页表项-PTE-的权限位（隔离核心）">5.2 页表项 PTE 的权限位（隔离核心）</h3>
+<p>PTE 关键位：</p>
+<ul>
+<li><strong>R/W</strong>：读写位。写只读页 → #PF。</li>
+<li><strong>U/S</strong>：User/Supervisor 位。U=1 用户态可访问；U=0 只有 ring0 能访问。<strong>这就是&quot;内核内存对用户态不可见&quot;的硬件机制</strong>——内核页 PTE 的 U=0。</li>
+<li><strong>NX</strong>：No-eXecute，不可执行位。数据页设 NX 防代码注入（DEP/W^X）。</li>
+<li><strong>P</strong>：Present，页是否在内存。P=0 触发缺页。</li>
+<li><strong>A/D</strong>：Accessed/Dirty，访问/写过位。</li>
+</ul>
+<h3 id="5-3-TLB-与-PCID">5.3 TLB 与 PCID</h3>
+<p>页表是 4 级内存查表，每次访存要 4 次内存读 → 太慢。<strong>TLB（Translation Lookaside Buffer）</strong> 是 CPU 内缓存最近翻译的 PTE，命中就一步拿到物理地址。TLB 失效（miss）才走 4 级表。</p>
+<ul>
+<li>进程切换换页表（CR3）→ TLB 大量失效。<strong>PCID（Process Context ID）</strong> 给每个进程一个 ID，TLB 项带 PCID 标记，切换时不刷别的进程的 TLB，加速上下文切换。</li>
+<li>大页（2MB/1GB HugePages）：减少页表层级、减少 TLB miss，适合大内存工作负载（数据库、ML 显存映射）。</li>
+</ul>
+<h3 id="5-4-虚拟内存的意义">5.4 虚拟内存的意义</h3>
+<ul>
+<li><strong>隔离</strong>：进程地址空间独立，互不踩踏。</li>
+<li><strong>按需分配</strong>：<code>mmap</code> 只建 VMA，真访问才分配物理页（demand paging）。</li>
+<li><strong>共享</strong>：共享库、COW fork 都靠映射同一物理页。</li>
+<li><strong>交换</strong>：内存压力下换出到磁盘，突破物理内存上限（但慢）。</li>
+</ul>
+<hr>
+<h2 id="六、DMA：设备直接读写内存">六、DMA：设备直接读写内存</h2>
+<h3 id="6-1-没有-DMA-的世界">6.1 没有 DMA 的世界</h3>
+<p>CPU 用 <code>IN</code>/<code>OUT</code> 指令逐字节/逐字从设备寄存器读数据到寄存器再存内存——PIO（Port IO）。吞吐极低、CPU 全程搬运。1Gbps 网卡能把 CPU 跑满。</p>
+<h3 id="6-2-DMA-的解法">6.2 DMA 的解法</h3>
+<p><strong>DMA（Direct Memory Access，直接内存访问）</strong>：让设备里的 DMA 引擎自己读写内存，CPU 只下命令&quot;把这块内存发出去&quot;或&quot;收到数据放到这块内存&quot;，然后 CPU 去干别的，DMA 完成后用<strong>中断</strong>通知 CPU。</p>
+<p>数据流：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">CPU 下发 DMA 描述符(含内存地址、长度、方向)</span><br><span class="line">   │</span><br><span class="line">   ▼</span><br><span class="line">DMA 引擎 ──直接读写──► 物理内存(DRAM)        ← CPU 不参与搬运</span><br><span class="line">   │</span><br><span class="line">   ▼</span><br><span class="line">完成 → 中断通知 CPU</span><br></pre></td></tr></table></figure>
+<h3 id="6-3-DMA-用的地址是物理地址">6.3 DMA 用的地址是物理地址</h3>
+<p>关键点：<strong>DMA 引擎直接操作物理地址，不走 CPU MMU 页表</strong>。也就是说设备看到的是物理地址（或经 IOMMU 翻译后的 IOVA，见下文）。所以驱动要给设备<strong>物理地址或 IOVA</strong>，不能给虚拟地址。这就是为什么驱动要先把用户态虚拟地址 pin 住并翻译（参见 RDMA MR 注册）。</p>
+<h3 id="6-4-一致性与缓存问题">6.4 一致性与缓存问题</h3>
+<ul>
+<li><strong>DMA coherence</strong>：DMA 写内存时，CPU cache 里可能有旧数据。x86 默认 cache coherent（硬件保证 DMA 与 cache 一致），软件省心；某些架构（ARM、嵌入式）需要显式 cache flush。</li>
+<li>流式映射 vs 一致性映射：Linux DMA API 区分 <code>dma_alloc_coherent</code>（一致性，自动同步）和 <code>dma_map_single</code>（流式，需手动 sync）。</li>
+</ul>
+<hr>
+<h2 id="七、PCIe-总线：设备挂在哪里">七、PCIe 总线：设备挂在哪里</h2>
+<p>DMA 设备通过 <strong>PCIe（Peripheral Component Interconnect Express）</strong> 连到 CPU。</p>
+<h3 id="7-1-拓扑">7.1 拓扑</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">      CPU ── Root Complex(RC) ──┬── Switch ──┬── Endpoint(网卡/GPU/SSD)</span><br><span class="line">                               │             └── Endpoint</span><br><span class="line">                               └── Endpoint(直连RC的设备)</span><br><span class="line"></span><br><span class="line">RC: 根复合体, CPU 内存控制器的 PCIe 入口</span><br><span class="line">Switch: PCIe 交换机, 多端口转发, 内部不暴露给软件</span><br><span class="line">Endpoint: 终端设备(网卡/GPU/NVMe), 每个有独立配置空间</span><br><span class="line">Bridge: 桥接器</span><br></pre></td></tr></table></figure>
+<h3 id="7-2-配置空间与-BAR">7.2 配置空间与 BAR</h3>
+<p>每个 PCIe 设备有 <strong>256B/4KB 配置空间</strong>，含厂商/设备 ID、BAR（Base Address Register）。<strong>BAR</strong> 是设备向系统申请一段地址空间（MMIO 空间）的寄存器——CPU 往这段 MMIO 地址写数据，就等于写设备寄存器。这就是 CPU 访问设备的两种方式：</p>
+<ul>
+<li><strong>MMIO</strong>：把设备寄存器映射到一段物理地址，CPU 用普通访存指令访问（主流，现代设备）。</li>
+<li><strong>Port IO</strong>：用 <code>IN</code>/<code>OUT</code> 指令访问独立端口地址（老式设备，如 8259 PIC、IDE）。</li>
+</ul>
+<h3 id="7-3-PCIe-的两种事务">7.3 PCIe 的两种事务</h3>
+<ul>
+<li><strong>TLP（Transaction Layer Packet）</strong>：PCIe 上传的报文，分 Memory Read/Write、Configuration、Message 等。</li>
+<li><strong>P2P（Peer-to-Peer）</strong>：两个 endpoint 之间直接传数据，不经过主内存（CPU 不参与）。<strong>GPU Direct RDMA 就是 PCIe P2P</strong>——网卡直接 DMA GPU 显存。要求两个设备在 PCIe 拓扑上能 P2P（最好同 Switch 下）。</li>
+</ul>
+<h3 id="7-4-MSI-MSI-X">7.4 MSI/MSI-X</h3>
+<p>PCIe 设备用 <strong>MSI/MSI-X</strong> 发中断：设备写一个特定内存地址（Local APIC 的 MMIO 区域），APIC 自动给 CPU 发中断。比传统 INTx 引脚快、中断数多（MSI-X 可达 2048 个向量），网卡每收发队列一个中断、GPU Direct 一个完成中断都用它。</p>
+<hr>
+<h2 id="八、IOMMU：给-DMA-上权限（虚拟化的安全基石）">八、IOMMU：给 DMA 上权限（虚拟化的安全基石）</h2>
+<h3 id="8-1-问题：DMA-不受-ring-限制">8.1 问题：DMA 不受 ring 限制</h3>
+<p>DMA 绕开 CPU，也绕开 ring0/ring3——<strong>设备一旦拿到物理地址，能读写整块物理内存，包括内核</strong>。如果一台机器上多个 VM 共享设备，或一个设备分给某 VM，怎么办？需要给 DMA 也加一层&quot;页表 + 权限&quot;，这就是 <strong>IOMMU</strong>（Intel 称 VT-d，AMD 称 AMD-Vi，ARM 称 SMMU）。</p>
+<h3 id="8-2-IOMMU-做两件事">8.2 IOMMU 做两件事</h3>
+<ol>
+<li><strong>地址翻译</strong>：设备用的是 <strong>IOVA（I/O Virtual Address）</strong>，IOMMU 有一张类似页表的表，把 IOVA 翻译成 HPA。驱动给设备的是 IOVA，IOMMU 翻译后真去访问物理内存。</li>
+<li><strong>隔离与权限</strong>：只允许设备访问它被授权的 IOVA 范围，越权 → IOMMU 阻断并报错（fault）。这样<strong>一个 VM 的设备只能访问这个 VM 的内存</strong>。</li>
+</ol>
+<h3 id="8-3-IOMMU-的关键能力">8.3 IOMMU 的关键能力</h3>
+<ul>
+<li><strong>VFIO（设备直通）</strong>：把一块物理设备<strong>独占地分配给一个 VM</strong>，VM 里跑原生驱动直接操作真硬件，性能近裸机。靠 IOMMU 保证这个 VM 的设备 DMA 只能碰到这个 VM 的内存，不会越界到 host 或别的 VM。<strong>GPU 直通就是 VFIO + IOMMU。</strong></li>
+<li><strong>SR-IOV</strong>：把一块物理网卡切成多个 <strong>VF（Virtual Function）</strong>，每个 VF 是一个轻量 PCIe 设备，各有独立配置空间和 DMA 队列，分给不同 VM/容器，硬件级隔离。云网络高频。</li>
+<li><strong>共享 IOMMU 组</strong>：同 IOMMU 组的设备互相可见、可 P2P，跨组不可见——<strong>GPU Direct RDMA 要求网卡和 GPU 在同一 IOMMU 组（同一 PCIe Switch 下的 P2P 才安全）</strong>。</li>
+</ul>
+<h3 id="8-4-DMA-Remapping-与中断重映射">8.4 DMA Remapping 与中断重映射</h3>
+<ul>
+<li><strong>DMA Remapping</strong>：IOMMU 的核心，按设备 BDF（Bus/Device/Function）查对应翻译表，重写 DMA 地址。</li>
+<li><strong>Interrupt Remapping</strong>：设备 MSI/MSI-X 的中断也经 IOMMU 校验和重映射后再投递给 CPU，防止恶意设备伪造中断。虚拟化中断隔离靠它。</li>
+</ul>
+<h3 id="8-5-串起虚拟化全图">8.5 串起虚拟化全图</h3>
+<p>把今天所有概念连起来看&quot;一个 VM 怎么发出一个网络包&quot;：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">VM 里 Guest 应用调用 send()</span><br><span class="line">  → Guest 内核(在 VMX non-root, ring0)执行</span><br><span class="line">  → 通过 virtio 把数据放进 virtqueue(Guest 物理内存)</span><br><span class="line">  → 触发 VM-Exit(CPU 虚拟化: VMCS 保存现场) 回到 host 的 QEMU/KVM</span><br><span class="line">  → host 把数据通过 tap/网卡发出</span><br><span class="line">     网卡 DMA 读 host 内存: 地址经 IOMMU 翻译+校验</span><br><span class="line">  → 网卡发完触发 MSI-X 中断 → IOMMU 中断重映射 → 投递给 CPU</span><br><span class="line">  → CPU 进内核态(ring0)处理中断</span><br><span class="line">  → 唤醒等待的应用(ring3)</span><br></pre></td></tr></table></figure>
+<p>每一步都用到了今天讲的：特权级、用户/内核态、中断、MMU 页表、DMA、PCIe、IOMMU。<strong>这就是为什么这些是虚拟化和系统开发的地基。</strong></p>
+<hr>
+<h2 id="九、面试速答清单">九、面试速答清单</h2>
+<p><strong>Q1：ring0/ring3 是什么，为什么需要？</strong></p>
+<blockquote>
+<p>x86 的 4 级特权（实际用 2 级），ring0 内核全权、ring3 应用受限。硬件在执行特权/敏感指令时校验 CPL vs 段描述符 DPL，不满足触发 #GP 陷入内核。作用是防止不可信应用直接碰硬件和内核内存。</p>
+</blockquote>
+<p><strong>Q2：系统调用是怎么从用户态进内核态的？</strong></p>
+<blockquote>
+<p>应用执行 <code>syscall</code> 指令，硬件完成特权级切换：保存 RIP/RFLAGS、从 LSTAR MSR 取内核入口、CPL 3→0、切内核栈；内核处理完用 <code>sysret</code>/<code>iret</code> 返回。代价是上下文+特权+栈切换，所以高吞吐场景要绕开系统调用（RDMA/DPDK/io_uring）。</p>
+</blockquote>
+<p><strong>Q3：中断和异常的区别？缺页是哪个？</strong></p>
+<blockquote>
+<p>中断异步来自外部设备，异常同步由当前指令引发。缺页 #PF 是异常——访问未映射/越权虚拟页时由 MMU 触发，CR2 存出错地址。内核按合法/非法/COW 分流处理。</p>
+</blockquote>
+<p><strong>Q4：页表怎么实现内存隔离？</strong></p>
+<blockquote>
+<p>每进程独立页表，PTE 有 U/S 位：内核页 U=0，用户态访问就 #PF。R/W 位管读写、NX 位管执行。进程切换换 CR3 → TLB 失效（PCID 可缓解）。虚拟内存靠这套做隔离、按需分页、共享、交换。</p>
+</blockquote>
+<p><strong>Q5：DMA 为什么快？它用的什么地址？</strong></p>
+<blockquote>
+<p>DMA 让设备 DMA 引擎直接搬数据进/出内存，CPU 不参与逐字搬运，只在开始下命令、结束收中断时参与。DMA 用物理地址（或经 IOMMU 的 IOVA），不走 CPU MMU 页表，所以驱动要给设备物理地址/IOVA。</p>
+</blockquote>
+<p><strong>Q6：IOMMU 解决什么问题？和 MMU 什么关系？</strong></p>
+<blockquote>
+<p>MMU 管 CPU 访存的翻译隔离，但 DMA 绕开 MMU 也能读写物理内存。IOMMU 是&quot;给设备用的 MMU&quot;——按设备 BDF 查表把 IOVA 翻译成物理地址，并校验权限，越权报 fault。这样设备直通给 VM 时，VM 的 DMA 只能碰自己的内存。GPU 直通、SR-IOV、GPU Direct RDMA 的安全地基都是 IOMMU。</p>
+</blockquote>
+<p><strong>Q7：GPU Direct RDMA 为什么要求网卡和 GPU 在同一 PCIe Switch 下？</strong></p>
+<blockquote>
+<p>GDR 走 PCIe P2P（网卡直接 DMA GPU 显存，不经主内存）。P2P 要求两端在 PCIe 拓扑上可达且在同一 IOMMU 组（同 Switch 下最安全、性能最好）；跨 PCIe root/跨 NUMA 会引入桥接和地址翻译开销，性能下降明显。</p>
+</blockquote>
+<hr>
+<h2 id="十、一张图收口">十、一张图收口</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">特权:  ring3(用户) ──syscall──► ring0(内核) ──驱动──► 设备</span><br><span class="line">中断:  设备 ─MSI-X─► IOMMU中断重映射 ─► Local APIC ─► CPU进内核态处理</span><br><span class="line">访存:  CPU用虚拟地址 ─► MMU(4级页表) ─► 物理内存  [PTE: U/S R/W NX]</span><br><span class="line">DMA :  设备用IOVA ─► IOMMU(DMA Remapping) ─► 物理内存  [按BDF隔离]</span><br><span class="line">总线:  CPU─RC─Switch─Endpoint(网卡/GPU/NVMe)   BAR申请MMIO, P2P同组可直连</span><br></pre></td></tr></table></figure>
+<p>记住主线：<strong>特权级把指令分了层，中断异常是软硬件的打断通道，MMU 页表管 CPU 访存隔离，DMA 让设备直连内存，PCIe 是设备挂载的血管，IOMMU 是给 DMA 上的锁。</strong> 这五块是 x86 软硬协作的地基，也是虚拟化、容器、RDMA、GPU 直通等所有上层技术的根。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>Intel ® 64 and IA-32 Architectures Software Developer’s Manual, Vol.3（特权级/中断/分页/VMX/EPT 权威来源）</li>
+<li>Intel ® Virtualization Technology for Directed I/O (VT-d) Specification（IOMMU）</li>
+<li>PCI Express Base Specification</li>
+<li>《深入理解 Linux 内核》《Linux 设备驱动程序》</li>
+<li><a target="_blank" rel="noopener" href="http://kernel.org">kernel.org</a> 文档：<code>Documentation/x86/</code>, <code>Documentation/driver-api/</code></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/">http://example.com/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/x86/">x86</a><a class="post-meta__tags" href="/tags/%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84/">体系结构</a><a class="post-meta__tags" href="/tags/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F/">操作系统</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/07/17/2026-07-17-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%98%BE%E5%AD%98%E8%AE%A1%E7%AE%97%E6%B3%95%E5%88%99/" title="大模型显存计算法则——训练与推理全景图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">大模型显存计算法则——训练与推理全景图</div></div><div class="info-2"><div class="info-item-1">大模型显存计算法则——训练与推理全景图  本文目标：面试官问&quot;一个 70B 模型 fp16 训练要多少显存？为什么混合精度训练 Adam 优化器要 16 bytes/参数？ZeRO-3 之后能降到多少？推理 KV cache 占多大？&quot;——你能张口就算、并且讲清每个数的来源。 全文以**“算清训练显存 → 算清推理显存 → 进阶优化对显存的影响 → 面试速算题”**为主线。   一、前置：精度与字节换算（所有计算的基石）    精度 1 个参数占多少字节 常见用途     FP64 / double 8 B 几乎不用   FP32 4 B 优化器状态、master weight、科学计算   TF32 4 B（存储同 fp32，计算用 19 bit 尾数） A100 训练加速，存储仍 4B   BF16 / FP16 2 B 训练前向/反向权重、推理权重   FP8 (E4M3/E5M2) 1 B H100+ 训练/推理加速   INT8 1 B 推理量化、部分训练激活量化   INT4 0.5 B 推理量化（W4A16、GPTQ/AWQ）   INT3 / ...</div></div></div></a></nav><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">211</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">184</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">60</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">x86 体系结构基础——特权级、中断异常、内存与总线</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%A8%E6%99%AF%EF%BC%9A%E4%B8%80%E6%AC%A1%E7%B3%BB%E7%BB%9F%E8%B0%83%E7%94%A8%E7%A9%BF%E8%B6%8A%E4%BA%86%E5%A4%9A%E5%B0%91%E5%B1%82"><span class="toc-number">1.1.</span> <span class="toc-text">一、全景：一次系统调用穿越了多少层</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E7%89%B9%E6%9D%83%E7%BA%A7-ring0-ring3"><span class="toc-number">1.2.</span> <span class="toc-text">二、特权级 ring0~ring3</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81%E7%89%B9%E6%9D%83%E7%BA%A7"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 为什么需要特权级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-DPL-%E4%B8%8E%E8%AE%BF%E9%97%AE%E6%8E%A7%E5%88%B6"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 DPL 与访问控制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-64-%E4%BD%8D%E4%B8%8B%E7%9A%84-%E6%89%81%E5%B9%B3%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 64 位下的&quot;扁平模型&quot;</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E7%94%A8%E6%88%B7%E6%80%81%E4%B8%8E%E5%86%85%E6%A0%B8%E6%80%81%E3%80%81%E7%B3%BB%E7%BB%9F%E8%B0%83%E7%94%A8"><span class="toc-number">1.3.</span> <span class="toc-text">三、用户态与内核态、系统调用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E4%B8%A4%E7%A7%8D%E6%89%A7%E8%A1%8C%E4%B8%8A%E4%B8%8B%E6%96%87"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 两种执行上下文</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E7%89%B9%E6%9D%83%E7%BA%A7%E5%88%87%E6%8D%A2%EF%BC%9A%E7%B3%BB%E7%BB%9F%E8%B0%83%E7%94%A8"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 特权级切换：系统调用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E5%88%87%E6%8D%A2%E7%9A%84%E4%BB%A3%E4%BB%B7"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 切换的代价</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%AD%E6%96%AD%E4%B8%8E%E5%BC%82%E5%B8%B8"><span class="toc-number">1.4.</span> <span class="toc-text">四、中断与异常</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%8C%BA%E5%88%AB"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 区别</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E4%B8%AD%E6%96%AD%E5%90%91%E9%87%8F%E4%B8%8E-IDT"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 中断向量与 IDT</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E5%A4%84%E7%90%86%E6%B5%81%E7%A8%8B%EF%BC%88%E4%B8%AD%E6%96%AD-%E5%BC%82%E5%B8%B8%E9%80%9A%E7%94%A8%EF%BC%89"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 处理流程（中断&#x2F;异常通用）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E7%BC%BA%E9%A1%B5%E5%BC%82%E5%B8%B8-PF%EF%BC%88%E9%87%8D%E7%82%B9%EF%BC%8C%E8%BF%9E%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89"><span class="toc-number">1.4.4.</span> <span class="toc-text">4.4 缺页异常 #PF（重点，连虚拟化）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E4%B8%AD%E6%96%AD%E6%8E%A7%E5%88%B6%E5%99%A8%EF%BC%9APIC-%E2%86%92-APIC"><span class="toc-number">1.4.5.</span> <span class="toc-text">4.5 中断控制器：PIC → APIC</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81MMU-%E4%B8%8E%E9%A1%B5%E8%A1%A8%EF%BC%88%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E7%9A%84%E5%9C%B0%E5%9F%BA%EF%BC%89"><span class="toc-number">1.5.</span> <span class="toc-text">五、MMU 与页表（虚拟内存的地基）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E8%99%9A%E6%8B%9F%E5%9C%B0%E5%9D%80-%E2%86%92-%E7%89%A9%E7%90%86%E5%9C%B0%E5%9D%80%E7%BF%BB%E8%AF%91"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 虚拟地址 → 物理地址翻译</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E9%A1%B5%E8%A1%A8%E9%A1%B9-PTE-%E7%9A%84%E6%9D%83%E9%99%90%E4%BD%8D%EF%BC%88%E9%9A%94%E7%A6%BB%E6%A0%B8%E5%BF%83%EF%BC%89"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 页表项 PTE 的权限位（隔离核心）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-TLB-%E4%B8%8E-PCID"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 TLB 与 PCID</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E7%9A%84%E6%84%8F%E4%B9%89"><span class="toc-number">1.5.4.</span> <span class="toc-text">5.4 虚拟内存的意义</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81DMA%EF%BC%9A%E8%AE%BE%E5%A4%87%E7%9B%B4%E6%8E%A5%E8%AF%BB%E5%86%99%E5%86%85%E5%AD%98"><span class="toc-number">1.6.</span> <span class="toc-text">六、DMA：设备直接读写内存</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E6%B2%A1%E6%9C%89-DMA-%E7%9A%84%E4%B8%96%E7%95%8C"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 没有 DMA 的世界</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-DMA-%E7%9A%84%E8%A7%A3%E6%B3%95"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 DMA 的解法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-DMA-%E7%94%A8%E7%9A%84%E5%9C%B0%E5%9D%80%E6%98%AF%E7%89%A9%E7%90%86%E5%9C%B0%E5%9D%80"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 DMA 用的地址是物理地址</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-%E4%B8%80%E8%87%B4%E6%80%A7%E4%B8%8E%E7%BC%93%E5%AD%98%E9%97%AE%E9%A2%98"><span class="toc-number">1.6.4.</span> <span class="toc-text">6.4 一致性与缓存问题</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81PCIe-%E6%80%BB%E7%BA%BF%EF%BC%9A%E8%AE%BE%E5%A4%87%E6%8C%82%E5%9C%A8%E5%93%AA%E9%87%8C"><span class="toc-number">1.7.</span> <span class="toc-text">七、PCIe 总线：设备挂在哪里</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E6%8B%93%E6%89%91"><span class="toc-number">1.7.1.</span> <span class="toc-text">7.1 拓扑</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-%E9%85%8D%E7%BD%AE%E7%A9%BA%E9%97%B4%E4%B8%8E-BAR"><span class="toc-number">1.7.2.</span> <span class="toc-text">7.2 配置空间与 BAR</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-PCIe-%E7%9A%84%E4%B8%A4%E7%A7%8D%E4%BA%8B%E5%8A%A1"><span class="toc-number">1.7.3.</span> <span class="toc-text">7.3 PCIe 的两种事务</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-MSI-MSI-X"><span class="toc-number">1.7.4.</span> <span class="toc-text">7.4 MSI&#x2F;MSI-X</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81IOMMU%EF%BC%9A%E7%BB%99-DMA-%E4%B8%8A%E6%9D%83%E9%99%90%EF%BC%88%E8%99%9A%E6%8B%9F%E5%8C%96%E7%9A%84%E5%AE%89%E5%85%A8%E5%9F%BA%E7%9F%B3%EF%BC%89"><span class="toc-number">1.8.</span> <span class="toc-text">八、IOMMU：给 DMA 上权限（虚拟化的安全基石）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E9%97%AE%E9%A2%98%EF%BC%9ADMA-%E4%B8%8D%E5%8F%97-ring-%E9%99%90%E5%88%B6"><span class="toc-number">1.8.1.</span> <span class="toc-text">8.1 问题：DMA 不受 ring 限制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-IOMMU-%E5%81%9A%E4%B8%A4%E4%BB%B6%E4%BA%8B"><span class="toc-number">1.8.2.</span> <span class="toc-text">8.2 IOMMU 做两件事</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-3-IOMMU-%E7%9A%84%E5%85%B3%E9%94%AE%E8%83%BD%E5%8A%9B"><span class="toc-number">1.8.3.</span> <span class="toc-text">8.3 IOMMU 的关键能力</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-4-DMA-Remapping-%E4%B8%8E%E4%B8%AD%E6%96%AD%E9%87%8D%E6%98%A0%E5%B0%84"><span class="toc-number">1.8.4.</span> <span class="toc-text">8.4 DMA Remapping 与中断重映射</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-5-%E4%B8%B2%E8%B5%B7%E8%99%9A%E6%8B%9F%E5%8C%96%E5%85%A8%E5%9B%BE"><span class="toc-number">1.8.5.</span> <span class="toc-text">8.5 串起虚拟化全图</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E9%9D%A2%E8%AF%95%E9%80%9F%E7%AD%94%E6%B8%85%E5%8D%95"><span class="toc-number">1.9.</span> <span class="toc-text">九、面试速答清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E4%B8%80%E5%BC%A0%E5%9B%BE%E6%94%B6%E5%8F%A3"><span class="toc-number">1.10.</span> <span class="toc-text">十、一张图收口</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.10.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/" title="x86 体系结构基础——特权级、中断异常、内存与总线">x86 体系结构基础——特权级、中断异常、内存与总线</a><time datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生">虚拟化技术学习路线——从原理到云原生</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" title="RDMA 技术栈全解——ML 系统研发面试通关">RDMA 技术栈全解——ML 系统研发面试通关</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2026-07-17-SQL%E8%AF%AD%E5%8F%A5%E5%AD%A6%E4%B9%A0%E6%89%8B%E5%86%8C/" title="SQL 语句学习手册——从入门到面试通关">SQL 语句学习手册——从入门到面试通关</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2026-07-17-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%98%BE%E5%AD%98%E8%AE%A1%E7%AE%97%E6%B3%95%E5%88%99/" title="大模型显存计算法则——训练与推理全景图">大模型显存计算法则——训练与推理全景图</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
