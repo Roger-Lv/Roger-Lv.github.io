@@ -1,0 +1,508 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>CPU 虚拟化——从 trap-and-emulate 到 VT-x | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="CPU 虚拟化——从 trap-and-emulate 到 VT-x  本文目标：把 CPU 虚拟化的完整脉络讲透——从 Popek-Goldberg 理论、软件 trap-and-emulate、到硬件辅助 VT-x，再到 KVM 的工程实现。读完你能回答&quot;为什么 x86 早期不能做高效虚拟化&quot;“VT-x 的 root&#x2F;non-root 是什么”“VMCS 存什么”“一次 V">
+<meta property="og:type" content="article">
+<meta property="og:title" content="CPU 虚拟化——从 trap-and-emulate 到 VT-x">
+<meta property="og:url" content="http://example.com/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="CPU 虚拟化——从 trap-and-emulate 到 VT-x  本文目标：把 CPU 虚拟化的完整脉络讲透——从 Popek-Goldberg 理论、软件 trap-and-emulate、到硬件辅助 VT-x，再到 KVM 的工程实现。读完你能回答&quot;为什么 x86 早期不能做高效虚拟化&quot;“VT-x 的 root&#x2F;non-root 是什么”“VMCS 存什么”“一次 V">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-17T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-17T17:48:46.149Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="虚拟化">
+<meta property="article:tag" content="CPU">
+<meta property="article:tag" content="VT-x">
+<meta property="article:tag" content="KVM">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "CPU 虚拟化——从 trap-and-emulate 到 VT-x",
+  "url": "http://example.com/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-17T16:00:00.000Z",
+  "dateModified": "2026-07-17T17:48:46.149Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'CPU 虚拟化——从 trap-and-emulate 到 VT-x',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">213</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">188</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">61</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">CPU 虚拟化——从 trap-and-emulate 到 VT-x</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">CPU 虚拟化——从 trap-and-emulate 到 VT-x</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-17T17:48:46.149Z" title="更新于 2026-07-18 01:48:46">2026-07-18</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E8%99%9A%E6%8B%9F%E5%8C%96/">虚拟化</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/" data-flag-title="CPU 虚拟化——从 trap-and-emulate 到 VT-x"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>CPU 虚拟化——从 trap-and-emulate 到 VT-x</h1>
+<blockquote>
+<p>本文目标：把 CPU 虚拟化的完整脉络讲透——从 Popek-Goldberg 理论、软件 trap-and-emulate、到硬件辅助 VT-x，再到 KVM 的工程实现。读完你能回答&quot;为什么 x86 早期不能做高效虚拟化&quot;“VT-x 的 root/non-root 是什么”“VMCS 存什么”“一次 VM-Exit 的开销和优化”“嵌套虚拟化怎么实现”。</p>
+</blockquote>
+<hr>
+<h2 id="一、要解决的问题：一个物理-CPU-怎么变成多个虚拟-CPU">一、要解决的问题：一个物理 CPU 怎么变成多个虚拟 CPU</h2>
+<p>CPU 虚拟化的本质是：<strong>让多个 Guest OS 以为自己在独占一个物理 CPU，实际由 hypervisor（VMM）时分复用一个或多个物理核。</strong></p>
+<p>核心难点在于&quot;<strong>特权指令</strong>&quot;。Guest OS 内核要执行 <code>hlt</code>（停 CPU）、<code>cli</code>（关中断）、改 <code>CR3</code>（切页表）、<code>lgdt</code>（加载 GDT）这些指令——这些指令一旦真在物理 CPU 上执行，会真的关掉中断、真的换掉页表、真的停下 CPU，整机就乱了。所以必须<strong>让 Guest 不能直接执行这些指令，或执行后能被截获交给 VMM 处理</strong>。</p>
+<p>这就是 1974 年 Popek-Goldberg 虚拟化定理的核心：</p>
+<blockquote>
+<p><strong>一个体系结构要支持虚拟化，所有敏感指令必须是特权指令（即能被 trap 陷入 VMM 模拟）。</strong></p>
+</blockquote>
+<p>满足这条的架构叫&quot;可虚拟化架构&quot;（如 IBM PowerPC、MIPS）。x86 早期<strong>不满足</strong>，下面讲它怎么&quot;先天不足&quot;以及硬件怎么补回来。</p>
+<hr>
+<h2 id="二、软件方案：trap-and-emulate（陷入再模拟）">二、软件方案：trap-and-emulate（陷入再模拟）</h2>
+<h3 id="2-1-基本思想">2.1 基本思想</h3>
+<p>让 Guest OS 运行在<strong>非 ring0</strong>（如 ring1 或 ring3），特权指令一执行就自动 <strong>trap</strong>（陷入）到 ring0 的 VMM，VMM 模拟这条指令的语义后返回 Guest。</p>
+<p>这套&quot;运行在非最高特权级、敏感指令触发陷入、VMM 模拟&quot;的模型叫 <strong>trap-and-emulate</strong>，也叫<strong>软件虚拟化</strong>。</p>
+<h3 id="2-2-x86-的先天缺陷：敏感非特权指令">2.2 x86 的先天缺陷：敏感非特权指令</h3>
+<p>Popek-Goldberg 要求&quot;敏感指令都是特权指令&quot;。但 x86 有约 <strong>17 条敏感指令不是特权指令</strong>——它们在 ring1/ring3 执行也<strong>不会触发 trap</strong>，而是默默执行或返回错误结果。典型代表：</p>
+<table>
+<thead>
+<tr>
+<th>指令</th>
+<th>问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POPF</code>/<code>POPFD</code>（弹标志）</td>
+<td>在非 ring0 执行时不恢复 IF（中断标志），Guest 关中断的语义丢失</td>
+</tr>
+<tr>
+<td><code>PUSHF</code>（压标志）</td>
+<td>读不到真实 IF</td>
+</tr>
+<tr>
+<td><code>SGDT</code>/<code>SIDT</code>/<code>SLDT</code>/<code>SMSW</code>/<code>STR</code></td>
+<td>在非 ring0 也能读 GDT/IDT/LDT/状态字地址，<strong>泄露 host 信息</strong></td>
+</tr>
+<tr>
+<td><code>CPUID</code></td>
+<td>直接返回真实 CPU 信息</td>
+</tr>
+<tr>
+<td><code>CLTS</code>（清 TS 位）</td>
+<td>部分场景不 trap</td>
+</tr>
+</tbody>
+</table>
+<p>这些指令&quot;静默执行&quot;破坏了 trap-and-emulate 的前提——Guest 跑了敏感操作 VMM 却截获不到，要么信息泄露、要么语义错误、要么直接崩溃。<strong>所以早期 x86 在理论上是&quot;不可虚拟化&quot;的。</strong></p>
+<h3 id="2-3-三种软件绕过方案（历史）">2.3 三种软件绕过方案（历史）</h3>
+<p>为绕过这个缺陷，早期 VMM 用三类技术：</p>
+<ol>
+<li><strong>二进制翻译（Binary Translation, BT）</strong>——VMware 的看家本领。在 Guest 代码执行前，扫描并把敏感指令翻译成等价的、能 trap 或安全执行的代码块。开销大、实现复杂，但能做到&quot;全虚拟化&quot;（Guest 不用改）。</li>
+<li><strong>半虚拟化（Para-Virtualization, PV）</strong>——Xen 的路线。<strong>直接改 Guest 内核</strong>，让它知道自己活在虚拟机里，主动用 hypercall（类似系统调用，但陷 VMM）替代敏感指令。性能好但要改内核，Linux 早期有 Xen 的 pvops 分支。</li>
+<li><strong>限制 Guest 特权级 + 模拟</strong>：妥协方案，性能/兼容性折中。</li>
+</ol>
+<blockquote>
+<p>面试金句：<strong>“软件虚拟化有 BT（全虚拟化、Guest 不改但 VMM 复杂）和 PV（半虚拟化、改 Guest 用 hypercall、性能好但侵入）两条路；它们的存在就是因为 x86 没满足 Popek-Goldberg。直到 VT-x 出现，硬件把缺口补上，才有了今天的硬件辅助虚拟化。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="三、硬件辅助：Intel-VT-x-AMD-V">三、硬件辅助：Intel VT-x / AMD-V</h2>
+<p>2005 年起 Intel 和 AMD 分别加入硬件虚拟化扩展，<strong>直接在 CPU 层面补上 Popek-Goldberg 的缺口</strong>，从此 x86 可原生高效虚拟化，软件 trap-and-emulate 和 BT 退出主流。</p>
+<h3 id="3-1-核心思想：两套特权级——root-与-non-root">3.1 核心思想：两套特权级——root 与 non-root</h3>
+<p>VT-x 在原 ring0~3 之上再加一层维度，引入<strong>两种操作模式</strong>：</p>
+<ul>
+<li><strong>VMX Root Mode（root）</strong>：hypervisor/VMM 跑在这里，拥有对所有资源的完全控制。</li>
+<li><strong>VMX Non-Root Mode（non-root）</strong>：Guest 跑在这里，<strong>即使 Guest 在 ring0，它的特权也是&quot;被限制的 ring0&quot;</strong>——能管 Guest 自己，但敏感操作会触发 VM-Exit 回 root。</li>
+</ul>
+<p>关键点：<strong>Guest 的 ring0 不等于物理的 ring0</strong>。Guest 内核以为自己握有最高特权，实际被困在 non-root 里，任何敏感指令/事件都会&quot;破壳&quot;回到 root 的 VMM。这就解决了&quot;敏感非特权指令不 trap&quot;的老问题——现在不管什么敏感指令，都在 non-root 下被强制陷入。</p>
+<h3 id="3-2-VM-Entry-与-VM-Exit">3.2 VM-Entry 与 VM-Exit</h3>
+<ul>
+<li><strong>VM-Entry</strong>：VMM 执行 <code>VMLAUNCH</code>/<code>VMRESUME</code>，从 root 切到 non-root，开始跑 Guest。CPU 状态从 VMCS 的 Guest-state 区加载。</li>
+<li><strong>VM-Exit</strong>：Guest 执行敏感指令、发生异常、外部中断、IO 等&quot;需要 VMM 介入&quot;的事件时，CPU 自动切回 root，把控制权交还 VMM。CPU 把 Guest 现场存进 VMCS 的 Guest-state，并加载 Host-state。</li>
+</ul>
+<p>这套 <code>VMLAUNCH/VMRESUME → 跑 Guest → VM-Exit → VMM 处理 → VMRESUME</code> 的循环就是 KVM 跑一个 vCPU 的本质。</p>
+<h3 id="3-3-触发-VM-Exit-的常见原因（面试常问）">3.3 触发 VM-Exit 的常见原因（面试常问）</h3>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>举例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>敏感指令</td>
+<td><code>hlt</code>、<code>cli</code>、<code>lgdt</code>、<code>mov CR3</code>、<code>wrmsr</code></td>
+</tr>
+<tr>
+<td>异常</td>
+<td>Guest 内的 #PF、#GP 等（可设是否注入回 Guest）</td>
+</tr>
+<tr>
+<td>外部中断</td>
+<td>物理设备中断到达，需 VMM 分发</td>
+</tr>
+<tr>
+<td>IO 访问</td>
+<td>Guest 访问 IO 端口/MMIO（默认 trap）</td>
+</tr>
+<tr>
+<td>主动 hypercall</td>
+<td>Guest 主动 <code>VMCALL</code> 请求 VMM 服务</td>
+</tr>
+<tr>
+<td>EPT 相关</td>
+<td>EPT Violation（GPA 未映射）</td>
+</tr>
+<tr>
+<td>控制位触发</td>
+<td>预设的&quot;无条件 exit&quot;控制位</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>VMM 可通过 <strong>VM-Exit Control</strong> 字段精细配置哪些事件触发 exit，做性能权衡——exit 越少越快，但要让 Guest 更多地&quot;自跑&quot;。</p>
+</blockquote>
+<hr>
+<h2 id="四、VMCS：虚拟机的-控制台">四、VMCS：虚拟机的&quot;控制台&quot;</h2>
+<p><strong>VMCS（Virtual Machine Control Structure）</strong> 是 VT-x 的核心数据结构——每个 vCPU 一个 VMCS，是一块 4KB 对齐的内存区域，由硬件识别，存三类信息：</p>
+<ol>
+<li><strong>Guest-state area</strong>：Guest 的寄存器现场（通用寄存器、段寄存器、CR/DR、RFLAGS、RIP 等）。VM-Exit 时 CPU 把 Guest 现场存进来，VM-Entry 时从这里恢复。</li>
+<li><strong>Host-state area</strong>：VMM 的寄存器现场。VM-Exit 时 CPU 从这里恢复 Host 状态（RIP、CR3、段等），决定&quot;exit 后跳到 VMM 哪里执行&quot;。</li>
+<li><strong>Control fields</strong>：控制 VM-Entry/VM-Exit 行为的位域：
+<ul>
+<li>VM-Execution Controls：决定 non-root 下哪些指令/事件触发 exit（如是否拦截 <code>hlt</code>、是否用 EPT）。</li>
+<li>VM-Entry Controls：进入时是否加载特定 MSR、注入事件等。</li>
+<li>VM-Exit Controls：退出时存哪些、是否 ack 中断等。</li>
+<li>还有 <strong>VM-Exit Information</strong>：本次 exit 的原因、限定信息（如哪个 IO 端口、什么异常向量），VMM 据此分派。</li>
+</ul>
+</li>
+</ol>
+<p>VMCS 字段的读写只能用专用指令 <code>VMREAD</code>/<code>VMWRITE</code>，<strong>不能直接当内存访问</strong>。这也是 VMCS 操作开销的来源之一。</p>
+<blockquote>
+<p>面试金句：<strong>“VMCS 是硬件为每个 vCPU 维护的一块结构，存 Guest 现场、Host 现场、和控制位；VM-Exit 把现场存进 Guest 区、从 Host 区恢复，VM-Entry 反过来。VMM 靠 VMREAD/VMWRITE 改控制位和取 exit 原因。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="五、一次-VM-Exit-的开销与优化（性能核心）">五、一次 VM-Exit 的开销与优化（性能核心）</h2>
+<p>VM-Exit 是 CPU 虚拟化的性能税。每次 exit/entry 都要：</p>
+<ol>
+<li>CPU 保存 Guest 现场到 VMCS（写一堆寄存器）。</li>
+<li>加载 Host 现场从 VMCS（RIP、CR3、段、栈）。</li>
+<li>切换到 VMM 代码，VMM 读 exit reason（VMREAD），分派处理。</li>
+<li>处理完（可能要改 VMCS 控制位），再 VMRESUME 回去。</li>
+</ol>
+<p>单次开销约 <strong>1000~2000 个周期（几百纳秒）</strong>。对 IO 密集或频繁陷入的负载，exit 频率高时 CPU 大量时间花在 root/ non-root 切换上，性能塌方。</p>
+<h3 id="优化手段（工程重点）">优化手段（工程重点）</h3>
+<ul>
+<li><strong>减少 exit 次数</strong>：用控制位放掉 Guest 能自处理的（如 <code>hlt</code> 配合 VMX preemption timer、<code>cli</code>/<code>sti</code> 用 interrupt-window exiting 替代每次拦截）。</li>
+<li><strong>EPT 免除内存虚拟化陷入</strong>：Guest 访问内存走 EPT 硬件翻译，不必每次访存都 exit（详见内存虚拟化篇）。</li>
+<li><strong>APIC-v / virtual interrupt</strong>：硬件虚拟化本地 APIC，收发中断不 exit。</li>
+<li><strong>posted interrupt</strong>：VMM 把中断&quot;投递&quot;给 Guest，硬件直接在 non-root 注入，免 exit。</li>
+<li><strong>virtio + ioeventfd</strong>：Guest 写 virtio queue 的 kick 寄存器被 ioeventfd 捕获，KVM 不必走完整 VMM 路径，IO 性能大增。</li>
+<li><strong>vCPU 绑核 + 大页</strong>：减少 TLB/调度抖动。</li>
+<li><strong>VMFUNC / #VE</strong>：更细粒度的功能切换，进一步少 exit。</li>
+</ul>
+<blockquote>
+<p>面试区分点：<strong>“调优 KVM 的本质就是降 exit 频率、降单次 exit 代价。”</strong> 用 <code>perf kvm stat</code>/<code>kvm_stat</code> 看 exit 原因分布，热点通常是 <code>hlt</code>、<code>PIO</code>、<code>MMIO</code>、<code>MSR read/write</code>，对症优化。</p>
+</blockquote>
+<hr>
+<h2 id="六、KVM：把-VT-x-用起来的工程实现">六、KVM：把 VT-x 用起来的工程实现</h2>
+<p>KVM 是 Linux 内核里的虚拟化框架，它和 QEMU 的分工是云虚拟化的标准答案：</p>
+<ul>
+<li><strong>KVM（内核模块 <code>/dev/kvm</code>）</strong>：薄薄一层，负责<strong>CPU 与内存虚拟化</strong>——用 VT-x 管 vCPU（VMCS、VM-Entry/Exit、调度 vCPU 线程）、用 EPT 管内存翻译。它把&quot;创建 VM/跑 vCPU/注册内存区&quot;作为 ioctl 暴露给用户态。</li>
+<li><strong>QEMU（用户态进程）</strong>：负责<strong>设备模拟</strong>（磁盘、网卡、显卡、串口）、<strong>IO 路径</strong>（virtio/tap）、<strong>vCPU 线程的封装与调度</strong>。一个 VM = 一个 QEMU 进程，每个 vCPU = 该进程的一个线程。</li>
+</ul>
+<h3 id="KVM-核心-ioctl（呼应操作系统接口篇）">KVM 核心 ioctl（呼应操作系统接口篇）</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">fd = open(<span class="string">&quot;/dev/kvm&quot;</span>);            <span class="comment">// 拿到 KVM fd</span></span><br><span class="line">vmfd = ioctl(fd, KVM_CREATE_VM);  <span class="comment">// 建一个 VM(对应一个地址空间)</span></span><br><span class="line">ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, ...);  <span class="comment">// 给 Guest 注册一段 host 内存</span></span><br><span class="line">vcpufd = ioctl(vmfd, KVM_CREATE_VCPU);         <span class="comment">// 建 vCPU</span></span><br><span class="line">mmap(small run area per vcpu);</span><br><span class="line">ioctl(vcpufd, KVM_RUN);           <span class="comment">// 跑 Guest: 内部 VMLAUNCH/VMRESUME</span></span><br><span class="line">                                  <span class="comment">// VM-Exit 后返回, QEMU 按 exit reason 处理</span></span><br></pre></td></tr></table></figure>
+<p><code>KVM_RUN</code> 内部就是那个 <code>VMLAUNCH/VMRESUME → 跑 Guest → VM-Exit</code> 的循环——exit 后控制权回到 QEMU 线程，它按 exit reason（IO、MMIO、MMIO virtio kick、异常）分派，处理完再 <code>KVM_RUN</code>。</p>
+<blockquote>
+<p>面试金句：<strong>“KVM 管芯，QEMU 管壳。KVM 用 VT-x 做 CPU/内存虚拟化并把能力以 /dev/kvm 的 ioctl 暴露，QEMU 作为用户态进程通过这些 ioctl 驱动 KVM、并负责设备模拟和 IO 路径。”</strong> 这就是为什么&quot;一个虚拟机是宿主机上的一个进程、一个 vCPU 是一个线程&quot;。</p>
+</blockquote>
+<hr>
+<h2 id="七、嵌套虚拟化：在-VM-里再开-VM">七、嵌套虚拟化：在 VM 里再开 VM</h2>
+<p>要在 Guest 里跑 hypervisor（如 KVM-in-KVM、容器里跑 VM），需要<strong>L0（真硬件）支持 L1（Guest hypervisor）也跑 VMX 指令</strong>。难点：L1 执行 <code>VMLAUNCH</code> 时它处于 non-root，不能直接真触发硬件 VM-Entry。</p>
+<h3 id="思路：指令-trap-模拟">思路：指令 trap + 模拟</h3>
+<ul>
+<li>L0 把 L1 对 VMX 指令（<code>VMLAUNCH</code>/<code>VMREAD</code>/<code>VMWRITE</code> 等）的执行<strong>拦截</strong>（trap），在 L0 里<strong>软件模拟</strong>这些指令对 L2 的效果——即 L0 帮 L1 维护 L2 的&quot;虚拟 VMCS&quot;，把 L1 想对 L2 做的 entry/exit 翻译成 L0 对 L2 的真实操作。</li>
+<li>现代 Intel 有 <strong>VMCS Shadowing</strong>（<code>VMREAD</code>/<code>VMWRITE</code> 在 shadow VMCS 上直接生效少陷入）和 <strong>VMCS Shadow + VMFUNC</strong> 等硬件加速，降低嵌套开销。</li>
+<li>AMD 有 <strong>AVIC/nVMCB</strong> 路线，性能更好。</li>
+</ul>
+<blockquote>
+<p>嵌套虚拟化性能损失通常明显（exit 翻译放大），生产一般不嵌套，但开发/测试/CI、在云 VM 里跑 Kata 容器+VM 等场景会用到。</p>
+</blockquote>
+<hr>
+<h2 id="八、AMD-V-与-ARM-的对照（横向认知）">八、AMD-V 与 ARM 的对照（横向认知）</h2>
+<ul>
+<li><strong>AMD-V（AMD-V/SVM）</strong>：AMD 的等价物，用 <code>VMRUN</code>/<code>VMLOAD</code>/<code>VMSAVE</code> 和 <strong>VMCB</strong>（类似 VMCS）做 root/non-root 切换。概念对偶 VT-x。</li>
+<li><strong>ARMv8 VHE / ARMv9 RME</strong>：ARM 用 EL0~EL3 异常等级，hypervisor 跑 EL2，Guest 跑 EL0/1；VHE（Virtualization Host Extension）让 host 内核直接在 EL2 跑减少切换。Stage-2 页表等价 EPT。</li>
+</ul>
+<blockquote>
+<p>跨平台共识：<strong>两套特权级 + 现场容器（VMCS/VMCB）+ 陷入再恢复</strong> 是 CPU 虚拟化的通用范式，x86/AMD/ARM 都是这个骨架，只是命名和细节不同。</p>
+</blockquote>
+<hr>
+<h2 id="九、面试速答清单">九、面试速答清单</h2>
+<p><strong>Q1：为什么 x86 早期不能高效虚拟化？</strong></p>
+<blockquote>
+<p>Popek-Goldberg 要求&quot;敏感指令都是特权指令&quot;，但 x86 有约 17 条&quot;敏感非特权指令&quot;（如 <code>POPF</code>、<code>SGDT</code>、<code>CPUID</code>），在非 ring0 执行也不 trap，会静默执行或泄露 host 信息，破坏 trap-and-emulate 前提。只能靠软件 BT（全虚拟化）或改 Guest 的 PV（半虚拟化）绕过，代价大。</p>
+</blockquote>
+<p><strong>Q2：VT-x 的 root/non-root 是什么？解决了什么？</strong></p>
+<blockquote>
+<p>VT-x 在 ring 之上加一层模式维度：root 跑 VMM、non-root 跑 Guest。<strong>Guest 的 ring0 不等于物理 ring0</strong>，任何敏感指令/事件在 non-root 下都会强制触发 VM-Exit 回 root。这就把&quot;敏感非特权指令不 trap&quot;的缺口从硬件补上，从此 x86 可原生高效虚拟化，BT/PV 退出主流。</p>
+</blockquote>
+<p><strong>Q3：VMCS 存什么？VMREAD/VMWRITE 为什么慢？</strong></p>
+<blockquote>
+<p>每个 vCPU 一个 VMCS（4KB 结构），存三类：Guest 现场、Host 现场、控制位 + exit 信息。VM-Exit 时存 Guest 现场、加载 Host 现场，VM-Entry 反之。VMCS 字段不能当内存直接访问，只能用 <code>VMREAD</code>/<code>VMWRITE</code> 专用指令逐个读写，这是 VMCS 操作开销的来源。</p>
+</blockquote>
+<p><strong>Q4：一次 VM-Exit 多贵？怎么优化？</strong></p>
+<blockquote>
+<p>约 1000~2000 周期（几百 ns）。优化围绕&quot;降 exit 频率 + 降单次代价&quot;：用 EPT 免除访存陷入、APIC-v/虚拟中断免中断 exit、posted interrupt 硬件注入中断、ioeventfd 加速 virtio、放掉能自处理的控制位、绑核大页。用 <code>perf kvm stat</code>/<code>kvm_stat</code> 看 exit 原因热点对症调。</p>
+</blockquote>
+<p><strong>Q5：KVM 和 QEMU 各自负责什么？</strong></p>
+<blockquote>
+<p>KVM 是内核模块（/dev/kvm），用 VT-x 做 CPU 和内存虚拟化，把创建 VM/跑 vCPU/注册内存以 ioctl 暴露；QEMU 是用户态进程，通过这些 ioctl 驱动 KVM，并负责设备模拟、IO 路径、vCPU 线程封装。一个 VM = 一个 QEMU 进程，一个 vCPU = 一个线程。</p>
+</blockquote>
+<p><strong>Q6：触发 VM-Exit 的常见原因有哪些？</strong></p>
+<blockquote>
+<p>敏感指令（hlt/cli/lgdt/mov CR3）、Guest 异常（#PF/#GP）、外部中断、IO/MMIO 访问、Guest 主动 VMCALL、EPT Violation、以及控制位预设的无条件 exit。VMM 通过 VM-Exit Control 精细配置哪些触发，做性能权衡。</p>
+</blockquote>
+<p><strong>Q7：嵌套虚拟化怎么实现？</strong></p>
+<blockquote>
+<p>L0 把 L1（Guest hypervisor）对 VMX 指令的执行拦截，在 L0 软件模拟——帮 L1 维护 L2 的虚拟 VMCS，把 L1 想 entry/exit L2 翻译成 L0 对 L2 的真实操作。VMCS Shadowing 等硬件特性降低陷入开销。性能损失明显，一般只用于开发/测试/CI。</p>
+</blockquote>
+<hr>
+<h2 id="十、一张图收口">十、一张图收口</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">软件时代:  Guest(ring1/3) ─敏感指令─► trap ─► VMM(ring0)模拟 ─► 返回</span><br><span class="line">           (x86 缺口: 敏感非特权指令不 trap → 只能 BT/PV 绕过)</span><br><span class="line"></span><br><span class="line">硬件时代:  VMM 在 VMX root, Guest 在 VMX non-root</span><br><span class="line">           Guest ring0 ≠ 物理 ring0, 任何敏感事件强制 VM-Exit</span><br><span class="line">           VMCS(每vCPU一个): Guest现场 | Host现场 | 控制位+exit信息</span><br><span class="line">           循环: VMLAUNCH/VMRESUME → 跑Guest → VM-Exit → VMM处理 → 再回去</span><br><span class="line"></span><br><span class="line">工程落地:  KVM(/dev/kvm, 内核) 用VT-x, ioctl暴露能力</span><br><span class="line">           QEMU(用户态进程) 驱动KVM + 模拟设备 + 封装vCPU线程</span><br><span class="line">           一个VM = 一个进程, 一个vCPU = 一个线程</span><br></pre></td></tr></table></figure>
+<p>主线一句话：<strong>CPU 虚拟化 = 让 Guest 的 ring0 不等于物理 ring0，靠&quot;两套特权级(root/non-root) + 现场容器(VMCS) + 陷入再恢复(VM-Entry/Exit)&quot;把 Guest 关在笼子里自由跑、敏感事件随时能被 VMM 接管。</strong> KVM 把这套硬件能力包成 /dev/kvm 的 ioctl，QEMU 在用户态驱动它并模拟设备——这就是当代云虚拟化的全部地基。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>Intel ® 64 and IA-32 Architectures SDM, Vol.3C, Ch.23~34（VMX 架构权威）</li>
+<li>AMD64 Architecture Programmer’s Manual, Vol.2（SVM/AMD-V）</li>
+<li>KVM 源码与文档：<code>Documentation/virt/kvm/</code>, <code>arch/x86/kvm/</code></li>
+<li>KVM Forum 历年 slides（嵌套虚拟化、性能优化）</li>
+<li>《系统虚拟化：原理与实现》</li>
+<li>Popek &amp; Goldberg, <em>Formal Requirements for Virtualizable Third Generation Architectures</em>, 1974</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/">http://example.com/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E8%99%9A%E6%8B%9F%E5%8C%96/">虚拟化</a><a class="post-meta__tags" href="/tags/CPU/">CPU</a><a class="post-meta__tags" href="/tags/VT-x/">VT-x</a><a class="post-meta__tags" href="/tags/KVM/">KVM</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/07/18/2026-07-18-%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%8E%A5%E5%8F%A3fork-exec-mmap-ioctl-epoll/" title="操作系统接口——fork/exec/wait、mmap、ioctl、epoll 与共享内存"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">操作系统接口——fork/exec/wait、mmap、ioctl、epoll 与共享内存</div></div><div class="info-2"><div class="info-item-1">操作系统接口——fork/exec/wait、mmap、ioctl、epoll 与共享内存  本文目标：把 Linux 系统编程最核心的几个接口讲透——进程生命周期（fork/exec/wait）、内存映射（mmap）、设备控制（ioctl）、I/O 多路复用（epoll）、以及共享内存。这些是理解容器、虚拟化、RDMA、高性能网络、ML 推理框架的底层地基。读完你能回答&quot;为什么 fork 后 exec 是两步&quot;“mmap 怎么实现零拷贝”“epoll 为什么比 select 快”“共享内存为什么是最快 IPC”。   一、全景：进程的一生 先把进程的全生命周期摆出来，几个接口各司其职： 123456789101112131415父进程  │  │ fork()            ── 复制自己，产生子进程(复制页表,COW)  ├──────────► 子进程  │               │  │               │ exec()      ── 替换代码段，加载新程序(此时子进程&quot;变身&quot;)  │          ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/20/2024-09-20-AI%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/" title="AI资源调度"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/aiinfra.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-20</div><div class="info-item-2">AI资源调度</div></div><div class="info-2"><div class="info-item-1">AI资源调度 100道k8s面试题：https://zhuanlan.zhihu.com/p/721588398 [云原生 AI 的资源调度和 AI 工作流引擎设计分享_paddleflow-CSDN博客](https://blog.csdn.net/lihui49/article/details/129260286?ops_request_misc={&quot;request_id&quot;%3A&quot;81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&quot;%2C&quot;scm&quot;%3A&quot;20140713.130102334..&quot;}&amp;request_id=81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-3-129260286-null-null.142^v100^pc_search_re...</div></div></div></a><a class="pagination-related" href="/2024/09/24/2024-09-24-%E4%B8%80%E7%A7%8D%E5%9F%BA%E4%BA%8E%E7%BB%8F%E9%AA%8C%E7%9A%84%E5%8A%A8%E6%80%81%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%EF%BC%9AStraightLine-An-End-to-End-Resource-Aware-Scheduler-for-Machine-Learning-Application-Requests/" title="一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/dynamic.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-24</div><div class="info-item-2">一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests</div></div><div class="info-2"><div class="info-item-1">StraightLine: An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests  摘要： 提出了一个端到端的资源感知调度器，用于在混合基础设施中调度机器学习应用请求的最优资源。 关键词： 机器学习部署、异构资源、资源放置、容器化、无服务器计算。 主要内容：  ML应用的生命周期包括模型开发和模型部署两个阶段。 传统ML系统通常只关注生命周期中的一个特定阶段或阶段。 StraightLine通过一个基于经验的动态放置算法，根据请求的独特特征（如请求频率、输入数据大小和数据分布）智能地放置请求。 包括三个层次：模型开发抽象、多种实现部署、实时资源调度。  模型容器化：   使用NVIDIA-Docker实现模型开发的容器化。   为模型训练构建了强大的NVIDIA-Docker，为模型验证构建了轻量级的NVIDIA-Docker。 深度学习docker环境配置之nvidia-docker安装使用_nvidia docker-CSDN博客   容器定制：  根据不同的压缩ML模...</div></div></div></a><a class="pagination-related" href="/2024/10/01/2024-10-01-CUDA%E5%AE%B9%E5%99%A8%E5%8C%96&Container-runtime%E7%9B%B8%E5%85%B3%E6%8A%80%E6%9C%AF%E6%A2%B3%E7%90%86/" title="CUDA容器化&amp;Container runtime相关技术梳理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-10-01</div><div class="info-item-2">CUDA容器化&amp;Container runtime相关技术梳理</div></div><div class="info-2"><div class="info-item-1">CUDA容器化&amp;Container runtime相关技术梳理 整体结构 CUDA API体系  CUDA Driver API：GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）； CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度； CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。 因此要实现 NVIDIA 容器化，也就是要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内应用程序内可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 NVIDIA CONTAINER TOOLKIT 具体结构  GPU 容器底层实现 GPU 容器相关概念 一些背景知识  什么是运行时？什么是高级运行时（high-level runtime）和低级运行时(low-level runtime):  参考：ht...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">虚拟化技术学习路线——从原理到云原生</div></div><div class="info-2"><div class="info-item-1">虚拟化技术学习路线——从原理到云原生  本文目标：给你一条从零到能独立设计/运维虚拟化平台的清晰路径。覆盖 CPU/内存/IO 虚拟化、QEMU/KVM、容器与 namesapce/cgroup、网络与存储虚拟化、云编排，最后落到大模型训练/推理场景下的 GPU 虚拟化与云原生调度。 学习哲学：先吃透&quot;一个虚拟机是怎么被造出来的&quot;，再学&quot;容器是怎么隔离的&quot;，最后学&quot;云平台怎么把它们编排起来&quot;。原理是地基，工程是楼层，地基不稳楼越高越晃。   学习路线总览（六个阶段） 12345678910111213阶段0  打地基：操作系统与硬件基础   │阶段1  虚拟化原理：CPU / 内存 / IO 三大虚拟化   │阶段2  Type-1 / Type-2 与 QEMU-KVM 全栈   │阶段3  容器虚拟化：namespace + cgroup + rootfs   │阶段4  网络与存储虚拟化：virtio / SDN / 分布式存储   │阶段5  云编排：OpenStack / Kubernetes / 调度   │...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">213</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">188</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">61</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">CPU 虚拟化——从 trap-and-emulate 到 VT-x</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%A6%81%E8%A7%A3%E5%86%B3%E7%9A%84%E9%97%AE%E9%A2%98%EF%BC%9A%E4%B8%80%E4%B8%AA%E7%89%A9%E7%90%86-CPU-%E6%80%8E%E4%B9%88%E5%8F%98%E6%88%90%E5%A4%9A%E4%B8%AA%E8%99%9A%E6%8B%9F-CPU"><span class="toc-number">1.1.</span> <span class="toc-text">一、要解决的问题：一个物理 CPU 怎么变成多个虚拟 CPU</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E8%BD%AF%E4%BB%B6%E6%96%B9%E6%A1%88%EF%BC%9Atrap-and-emulate%EF%BC%88%E9%99%B7%E5%85%A5%E5%86%8D%E6%A8%A1%E6%8B%9F%EF%BC%89"><span class="toc-number">1.2.</span> <span class="toc-text">二、软件方案：trap-and-emulate（陷入再模拟）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E5%9F%BA%E6%9C%AC%E6%80%9D%E6%83%B3"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 基本思想</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-x86-%E7%9A%84%E5%85%88%E5%A4%A9%E7%BC%BA%E9%99%B7%EF%BC%9A%E6%95%8F%E6%84%9F%E9%9D%9E%E7%89%B9%E6%9D%83%E6%8C%87%E4%BB%A4"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 x86 的先天缺陷：敏感非特权指令</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E4%B8%89%E7%A7%8D%E8%BD%AF%E4%BB%B6%E7%BB%95%E8%BF%87%E6%96%B9%E6%A1%88%EF%BC%88%E5%8E%86%E5%8F%B2%EF%BC%89"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 三种软件绕过方案（历史）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E7%A1%AC%E4%BB%B6%E8%BE%85%E5%8A%A9%EF%BC%9AIntel-VT-x-AMD-V"><span class="toc-number">1.3.</span> <span class="toc-text">三、硬件辅助：Intel VT-x &#x2F; AMD-V</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E6%A0%B8%E5%BF%83%E6%80%9D%E6%83%B3%EF%BC%9A%E4%B8%A4%E5%A5%97%E7%89%B9%E6%9D%83%E7%BA%A7%E2%80%94%E2%80%94root-%E4%B8%8E-non-root"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 核心思想：两套特权级——root 与 non-root</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-VM-Entry-%E4%B8%8E-VM-Exit"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 VM-Entry 与 VM-Exit</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E8%A7%A6%E5%8F%91-VM-Exit-%E7%9A%84%E5%B8%B8%E8%A7%81%E5%8E%9F%E5%9B%A0%EF%BC%88%E9%9D%A2%E8%AF%95%E5%B8%B8%E9%97%AE%EF%BC%89"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 触发 VM-Exit 的常见原因（面试常问）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81VMCS%EF%BC%9A%E8%99%9A%E6%8B%9F%E6%9C%BA%E7%9A%84-%E6%8E%A7%E5%88%B6%E5%8F%B0"><span class="toc-number">1.4.</span> <span class="toc-text">四、VMCS：虚拟机的&quot;控制台&quot;</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E4%B8%80%E6%AC%A1-VM-Exit-%E7%9A%84%E5%BC%80%E9%94%80%E4%B8%8E%E4%BC%98%E5%8C%96%EF%BC%88%E6%80%A7%E8%83%BD%E6%A0%B8%E5%BF%83%EF%BC%89"><span class="toc-number">1.5.</span> <span class="toc-text">五、一次 VM-Exit 的开销与优化（性能核心）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BC%98%E5%8C%96%E6%89%8B%E6%AE%B5%EF%BC%88%E5%B7%A5%E7%A8%8B%E9%87%8D%E7%82%B9%EF%BC%89"><span class="toc-number">1.5.1.</span> <span class="toc-text">优化手段（工程重点）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81KVM%EF%BC%9A%E6%8A%8A-VT-x-%E7%94%A8%E8%B5%B7%E6%9D%A5%E7%9A%84%E5%B7%A5%E7%A8%8B%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.6.</span> <span class="toc-text">六、KVM：把 VT-x 用起来的工程实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#KVM-%E6%A0%B8%E5%BF%83-ioctl%EF%BC%88%E5%91%BC%E5%BA%94%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%8E%A5%E5%8F%A3%E7%AF%87%EF%BC%89"><span class="toc-number">1.6.1.</span> <span class="toc-text">KVM 核心 ioctl（呼应操作系统接口篇）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%B5%8C%E5%A5%97%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%9A%E5%9C%A8-VM-%E9%87%8C%E5%86%8D%E5%BC%80-VM"><span class="toc-number">1.7.</span> <span class="toc-text">七、嵌套虚拟化：在 VM 里再开 VM</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%80%9D%E8%B7%AF%EF%BC%9A%E6%8C%87%E4%BB%A4-trap-%E6%A8%A1%E6%8B%9F"><span class="toc-number">1.7.1.</span> <span class="toc-text">思路：指令 trap + 模拟</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81AMD-V-%E4%B8%8E-ARM-%E7%9A%84%E5%AF%B9%E7%85%A7%EF%BC%88%E6%A8%AA%E5%90%91%E8%AE%A4%E7%9F%A5%EF%BC%89"><span class="toc-number">1.8.</span> <span class="toc-text">八、AMD-V 与 ARM 的对照（横向认知）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E9%9D%A2%E8%AF%95%E9%80%9F%E7%AD%94%E6%B8%85%E5%8D%95"><span class="toc-number">1.9.</span> <span class="toc-text">九、面试速答清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E4%B8%80%E5%BC%A0%E5%9B%BE%E6%94%B6%E5%8F%A3"><span class="toc-number">1.10.</span> <span class="toc-text">十、一张图收口</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.10.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/" title="x86 体系结构基础——特权级、中断异常、内存与总线">x86 体系结构基础——特权级、中断异常、内存与总线</a><time datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/18/2026-07-18-%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%8E%A5%E5%8F%A3fork-exec-mmap-ioctl-epoll/" title="操作系统接口——fork/exec/wait、mmap、ioctl、epoll 与共享内存">操作系统接口——fork/exec/wait、mmap、ioctl、epoll 与共享内存</a><time datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/" title="CPU 虚拟化——从 trap-and-emulate 到 VT-x">CPU 虚拟化——从 trap-and-emulate 到 VT-x</a><time datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生">虚拟化技术学习路线——从原理到云原生</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" title="RDMA 技术栈全解——ML 系统研发面试通关">RDMA 技术栈全解——ML 系统研发面试通关</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
