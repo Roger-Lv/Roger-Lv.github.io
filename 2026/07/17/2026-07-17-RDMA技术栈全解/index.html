@@ -1,0 +1,627 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>RDMA 技术栈全解——ML 系统研发面试通关 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="RDMA 技术栈全解——ML 系统研发面试通关  本文目标：让你在面试官问&quot;你们大模型训练集群用的什么网络、为什么用 RDMA、RDMA 怎么做到零拷贝、RoCEv2 和 InfiniBand 区别、NCCL 里 RDMA 起什么作用&quot;时，能从原理到工程对答如流。 全文按&quot;为什么 → 是什么 → 怎么用 → 在 ML 系统里怎么用 → 面试问答&quot;组织。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RDMA 技术栈全解——ML 系统研发面试通关">
+<meta property="og:url" content="http://example.com/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="RDMA 技术栈全解——ML 系统研发面试通关  本文目标：让你在面试官问&quot;你们大模型训练集群用的什么网络、为什么用 RDMA、RDMA 怎么做到零拷贝、RoCEv2 和 InfiniBand 区别、NCCL 里 RDMA 起什么作用&quot;时，能从原理到工程对答如流。 全文按&quot;为什么 → 是什么 → 怎么用 → 在 ML 系统里怎么用 → 面试问答&quot;组织。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-16T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-17T03:53:56.839Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="网络">
+<meta property="article:tag" content="ML系统">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "RDMA 技术栈全解——ML 系统研发面试通关",
+  "url": "http://example.com/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-16T16:00:00.000Z",
+  "dateModified": "2026-07-17T03:53:56.839Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'RDMA 技术栈全解——ML 系统研发面试通关',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">211</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">181</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">59</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">RDMA 技术栈全解——ML 系统研发面试通关</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">RDMA 技术栈全解——ML 系统研发面试通关</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-17T03:53:56.839Z" title="更新于 2026-07-17 11:53:56">2026-07-17</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E7%BD%91%E7%BB%9C/">网络</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" data-flag-title="RDMA 技术栈全解——ML 系统研发面试通关"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>RDMA 技术栈全解——ML 系统研发面试通关</h1>
+<blockquote>
+<p>本文目标：让你在面试官问&quot;你们大模型训练集群用的什么网络、为什么用 RDMA、RDMA 怎么做到零拷贝、RoCEv2 和 InfiniBand 区别、NCCL 里 RDMA 起什么作用&quot;时，能从原理到工程对答如流。</p>
+<p>全文按&quot;<strong>为什么 → 是什么 → 怎么用 → 在 ML 系统里怎么用 → 面试问答</strong>&quot;组织。</p>
+</blockquote>
+<hr>
+<h2 id="一、为什么需要-RDMA：传统网络栈的瓶颈">一、为什么需要 RDMA：传统网络栈的瓶颈</h2>
+<p>先看传统 TCP/IP 协议栈一次发送数据的完整路径（以应用 A 发数据到应用 B 为例）：</p>
+<ol>
+<li>A 应用调用 <code>send()</code>，数据从<strong>用户态缓冲区</strong>通过 <code>copy_to_user</code>-like 的拷贝进入<strong>内核态 socket buffer</strong>（第一次拷贝）。</li>
+<li>协议栈（TCP/IP）逐层封装报文头，经过内核协议栈处理。</li>
+<li>数据通过 DMA 从内核缓冲区拷到网卡（NIC）的发送环（第二次拷贝）。</li>
+<li>网卡把数据发到网线上。</li>
+<li>B 端网卡收到数据，DMA 拷到内核 socket buffer。</li>
+<li>B 应用调用 <code>recv()</code>，数据从内核态拷回用户态（第三次拷贝）。</li>
+</ol>
+<p><strong>问题有三个</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>瓶颈</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>多次内存拷贝</strong></td>
+<td>用户态↔内核态、内核↔网卡至少 2~3 次 memcpy，CPU 要全程搬运。</td>
+</tr>
+<tr>
+<td><strong>全程内核参与</strong></td>
+<td>每个报文都要走一次系统调用、进一次内核协议栈，中断、上下文切换开销大。</td>
+</tr>
+<tr>
+<td><strong>CPU 成瓶颈</strong></td>
+<td>网络吞吐越高，CPU 被中断/协议栈处理占满得越狠——网络越快 CPU 反而越累，这就是&quot;CPU overhead grows with bandwidth&quot;问题。在 100Gbps/400Gbps 的 AI 训练网络里，传统栈根本喂不饱链路，CPU 先被打爆。</td>
+</tr>
+</tbody>
+</table>
+<p><strong>RDMA（Remote Direct Memory Access）的解法</strong>：让<strong>网卡（RNIC/HCA）自己</strong>去读写远端机器的内存，绕开两端的操作系统内核和 CPU。一句话：</p>
+<blockquote>
+<p><strong>数据直接从一台机器的用户态内存，经过网卡，落到另一台机器的用户态内存，中间不进内核、不经协议栈、不需要 CPU 搬运。</strong></p>
+</blockquote>
+<p>这就是 RDMA 的两个核心特性：</p>
+<ul>
+<li><strong>Kernel Bypass（内核旁路）</strong>：应用直接在用户态操作网卡，不进 OS 协议栈，不走系统调用。</li>
+<li><strong>Zero-Copy（零拷贝）</strong>：数据在收发两端都不在用户态/内核态之间拷贝，网卡用 DMA 直接操作应用注册的内存。</li>
+</ul>
+<p>后果：<strong>吞吐越高，CPU 反而越闲</strong>。这正是大模型训练 all-reduce 通信所需要的——把 CPU 留给算子、留给框架，通信交给网卡硬件。</p>
+<hr>
+<h2 id="二、RDMA-的三类承载协议：IB、RoCE、iWARP">二、RDMA 的三类承载协议：IB、RoCE、iWARP</h2>
+<p>RDMA 是一种能力，承载它的网络协议有三套，面试必考：</p>
+<h3 id="2-1-InfiniBand（IB）">2.1 InfiniBand（IB）</h3>
+<ul>
+<li>由 IBTA（InfiniBand Trade Association）制定，<strong>专用网络</strong>：需要专用 IB 网卡（HCA，Host Channel Adapter）和专用 IB 交换机。</li>
+<li><strong>链路层就原生支持 RDMA</strong>，不依赖 IP/Ethernet。</li>
+<li>性能最好、延迟最低（亚微秒级）、有原生的<strong>硬件可靠传输</strong>和<strong>拥塞控制（CC）</strong>。</li>
+<li>缺点：贵、组网封闭、与现有以太网不互通。典型厂商：Mellanox/NVIDIA、Intel（Omni-Path 已式微）。</li>
+<li>大模型训练的事实标准之一（如 NVIDIA 的 IB + SuperPOD）。</li>
+</ul>
+<h3 id="2-2-RoCE（RDMA-over-Converged-Ethernet）">2.2 RoCE（RDMA over Converged Ethernet）</h3>
+<p>把 RDMA 跑在以太网上，分两版：</p>
+<ul>
+<li><strong>RoCE v1</strong>：只在以太网链路层上跑 IB 传输层，<strong>不可路由</strong>（L2 only），基本已淘汰。</li>
+<li><strong>RoCE v2（重点）</strong>：在 IB 传输层外面再包一层 <strong>UDP + IP</strong>，可三层路由，能跨子网、可走标准以太网交换机。<strong>今天说 RoCE 基本都指 RoCEv2。</strong></li>
+<li>UDP 目的端口 <strong>4791</strong> 是 IB 传输层的标识（面试常问）。</li>
+<li>优势：用便宜通用的以太网交换机，复用现有基础设施。</li>
+<li>代价：以太网本身<strong>没有原生可靠传输和拥塞控制</strong>，必须靠 <strong>PFC（Priority Flow Control）+ ECN + DCQCN/HPCC</strong> 等机制补齐，否则在 AI 训练这种 incast/all-reduce 场景下会丢包成灾、性能塌方。这也是 RoCEv2 工程上最难调的部分。</li>
+</ul>
+<h3 id="2-3-iWARP">2.3 iWARP</h3>
+<ul>
+<li>RDMA over TCP，可路由，但实现复杂、厂商支持少，基本淡出主流，知道有这东西即可。</li>
+</ul>
+<p><strong>三者一句话对比</strong>：</p>
+<blockquote>
+<p>IB = 专用高性能；RoCEv2 = 以太网 + RDMA 的折中、可路由、是当下数据中心主流；iWARP = 没存在感。</p>
+</blockquote>
+<hr>
+<h2 id="三、RDMA-的通信模型：传输服务类型">三、RDMA 的通信模型：传输服务类型</h2>
+<p>RDMA 通过 <strong>QP（Queue Pair）</strong> 建立连接后通信，QP 有若干<strong>传输服务类型（Transport Service Type）</strong>，面试常考 RC/UD：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>全称</th>
+<th>连接</th>
+<th>可靠性</th>
+<th>典型用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RC</strong></td>
+<td>Reliable Connection</td>
+<td>点对点连接</td>
+<td>可靠（硬件保证按序、重传）</td>
+<td>ML 训练最常用，NCCL/RDMA Write/Read 默认走 RC</td>
+</tr>
+<tr>
+<td><strong>UC</strong></td>
+<td>Unreliable Connection</td>
+<td>点对点连接</td>
+<td>不可靠、保序</td>
+<td>少见</td>
+</tr>
+<tr>
+<td><strong>UD</strong></td>
+<td>Unreliable Datagram</td>
+<td>无连接</td>
+<td>不可靠、不保序</td>
+<td>多播、发现协议、小消息（如 RDMA CM 建链前的握手）</td>
+</tr>
+<tr>
+<td><strong>RD</strong></td>
+<td>Reliable Datagram</td>
+<td>可靠数据报</td>
+<td>可靠但无连接</td>
+<td>硬件要求高，实际产品很少支持</td>
+</tr>
+</tbody>
+</table>
+<p><strong>面试要点</strong>：</p>
+<ul>
+<li>RC 是<strong>一对一</strong>的，意味着如果有 N 台机器两两要通信，每台机器上要建 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><mi>N</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(N)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mclose">)</span></span></span></span> 个 QP，QP 是网卡硬件资源（context、收发状态），N 大了 QP 数量爆炸，成为扩展瓶颈。</li>
+<li>UD 是无连接、支持多播的，一个 QP 可与多个对端通信，但不可靠，适合控制面/广播。</li>
+<li>ML 训练（NCCL）默认用 <strong>RC</strong>，因为需要可靠、按序的大块数据传输；近年为了减少 QP 数、支持更大集群，也有 <strong>MST (Multi-Path Transport) / RPC-style over UD</strong> 的探索，但主流仍是 RC。</li>
+</ul>
+<h3 id="连接管理：RDMA-CM-vs-内存管理">连接管理：RDMA CM vs 内存管理</h3>
+<ul>
+<li><strong>RDMA CM（Connection Manager）</strong>：提供类似 socket 的建链 API（<code>rdma_connect</code>/<code>rdma_accept</code>），底层通常先走 UD 交换地址信息（QPN、GID 等），再建立 RC。可类比 TCP 的三次握手。</li>
+<li>也可不建链，直接用 UD 通信。</li>
+</ul>
+<hr>
+<h2 id="四、RDMA-核心对象：PD-MR-QP-CQ-WR（必背名词解释）">四、RDMA 核心对象：PD / MR / QP / CQ / WR（必背名词解释）</h2>
+<p>这部分是面试&quot;你懂不懂 RDMA 编程模型&quot;的试金石。把这张关系图背下来：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">应用 (user space)</span><br><span class="line">  │</span><br><span class="line">  │  注册内存 (告诉网卡：这块内存可以让你 DMA 读写)</span><br><span class="line">  ├─► PD (Protection Domain)  ── 保护域，隔离不同 QP/MR，安全边界</span><br><span class="line">  │       │</span><br><span class="line">  │       ├──► MR (Memory Region)  ── 一段被注册的连续内存</span><br><span class="line">  │       │       返回 lkey (本地访问钥匙) / rkey (远程访问钥匙)</span><br><span class="line">  │       │</span><br><span class="line">  │       └──► QP (Queue Pair) = SQ (Send Queue) + RQ (Recv Queue)</span><br><span class="line">  │                   │</span><br><span class="line">  │                   ├── SQ: 放 Send/Rdma Write/Rdma Read 的 WQE</span><br><span class="line">  │                   └── RQ: 放 Receive 请求的 WQE</span><br><span class="line">  │</span><br><span class="line">  └─► CQ (Completion Queue)  ── 完成队列，WQE 完成后产生 CQE</span><br><span class="line">                                   应用 poll CQ 拿到完成事件</span><br></pre></td></tr></table></figure>
+<p>逐个名词：</p>
+<ul>
+<li><strong>PD（Protection Domain，保护域）</strong>：隔离单位。一个 PD 下的 QP 和 MR 互相可见；不同 PD 之间互相不可见。防止一个 QP 去操作不该操作的内存。</li>
+<li><strong>MR（Memory Region，内存区域）</strong>：应用要先把数据缓冲区&quot;注册&quot;给网卡（pin 住物理页、建立虚拟→物理地址映射表），网卡才能对它做 DMA。注册成功返回：
+<ul>
+<li><strong>lkey（local key）</strong>：本地操作（自己网卡 DMA 本机内存）用的钥匙。</li>
+<li><strong>rkey（remote key）</strong>：<strong>远端</strong>操作（让对方网卡通过 RDMA Write/Read 写/读我这块内存）用的钥匙——这是 RDMA “远端直接读写” 的关键凭证。</li>
+</ul>
+</li>
+<li><strong>QP（Queue Pair）</strong>：通信端点，由 <strong>SQ + RQ</strong> 组成。
+<ul>
+<li><strong>SQ（Send Queue）</strong>：放主动发起的请求（Send / RDMA Write / RDMA Read）。</li>
+<li><strong>RQ（Receive Queue）</strong>：放&quot;我准备好接收&quot;的请求，告诉网卡收到数据后放哪个 buffer。只有 <code>Send/Recv</code> 模式需要预先 post receive；<code>RDMA Write/Read</code> 是单边的，<strong>不消耗对端 RQ</strong>。</li>
+</ul>
+</li>
+<li><strong>WQE（Work Queue Element）/ WR（Work Request）</strong>：投递到 SQ/RQ 里的工作请求。</li>
+<li><strong>CQ（Completion Queue）/ CQE（Completion Queue Entry）</strong>：WQE 完成后网卡往 CQ 里塞一个 CQE，应用轮询（<code>ibv_poll_cq</code>）拿到结果。<strong>这就是 RDMA 异步、事件驱动的核心</strong>。</li>
+<li><strong>GID（Global Identifier）/ QPN（QP Number）</strong>：标识一个远端 QP 的地址，建链时要交换，相当于&quot;RDMA 的 IP+端口&quot;。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“RDMA 通信的本质是：双方各注册好 MR，交换 lkey/rkey 和 QPN/GID 后，一方把一个 WQE post 到自己的 SQ，网卡硬件完成 DMA 收发，完成后产生 CQE 通知应用；全程不进内核、不拷贝数据、不占 CPU。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="五、四种-RDMA-操作语义（必背，含数据流）">五、四种 RDMA 操作语义（必背，含数据流）</h2>
+<h3 id="5-1-Send-Recv（双边操作）">5.1 Send / Recv（双边操作）</h3>
+<ul>
+<li>发送方 post 一个 Send WQE 到 SQ，接收方<strong>必须提前</strong> post 一个 Recv WQE 到 RQ，指明收到的数据放哪。</li>
+<li>接收方网卡收到数据后 DMA 写到 Recv 指定的 buffer，产生 CQE。</li>
+<li><strong>两边都要参与、消耗 RQ</strong>，类似传统 socket。</li>
+<li>适合小消息、控制流；大块数据传输用 RDMA Write。</li>
+</ul>
+<h3 id="5-2-RDMA-Write（单边操作，零拷贝利器）">5.2 RDMA Write（单边操作，零拷贝利器）</h3>
+<ul>
+<li>发送方直接把数据<strong>写到远端内存</strong>，远端 CPU <strong>完全不知情、不参与、不进内核</strong>——远端甚至不需要在 RQ 上 post 任何东西。</li>
+<li>发送方需要知道远端的：远程内存地址（remote addr）+ <strong>rkey</strong>（前面注册 MR 得到的）。</li>
+<li>数据流：<code>本地 buffer → 本地网卡 DMA → 网线 → 远端网卡 DMA → 远端 buffer</code>。零拷贝、内核旁路、CPU 不参与。</li>
+<li><strong>ML 训练中最常用</strong>：reduce/scatter 时把本地梯度直接写到对端机器的对应梯度 buffer。</li>
+<li>还有 <strong>RDMA Write with Immediate</strong>：写完同时给远端 RQ 产一个 CQE，用来做&quot;数据写完了&quot;的信号通知。</li>
+</ul>
+<h3 id="5-3-RDMA-Read（单边读）">5.3 RDMA Read（单边读）</h3>
+<ul>
+<li>发送方<strong>主动从远端内存读数据</strong>到本地，远端 CPU 同样不参与。</li>
+<li>同样需要远端 addr + rkey。</li>
+<li>适合&quot;拉&quot;模型：比如 GPU Direct RDMA 里某些场景，或参数同步时拉取。</li>
+<li><strong>注意</strong>：RC 模式下 RDMA Read 的吞吐通常不如 Write，因为 Read 是请求-应答往返，网卡要维护 outstanding read 上下文，深度受限。</li>
+</ul>
+<h3 id="5-4-Atomic（原子操作）">5.4 Atomic（原子操作）</h3>
+<ul>
+<li><code>Compare-and-Swap</code>、<code>Fetch-and-Add</code>，作用在远端内存上，硬件保证原子。</li>
+<li>用于分布式锁、计数器、同步原语。ML 场景用得少，但面试提到分布式同步时是个加分点。</li>
+</ul>
+<h3 id="一张对比表">一张对比表</h3>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>边性</th>
+<th>远端 CPU 是否参与</th>
+<th>远端 RQ</th>
+<th>典型 ML 用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Send/Recv</td>
+<td>双边</td>
+<td>参与（post recv）</td>
+<td>消耗</td>
+<td>小消息、建链握手</td>
+</tr>
+<tr>
+<td>RDMA Write</td>
+<td>单边</td>
+<td>不参与</td>
+<td>不消耗</td>
+<td>大块梯度/激活传输（主力）</td>
+</tr>
+<tr>
+<td>RDMA Read</td>
+<td>单边</td>
+<td>不参与</td>
+<td>不消耗</td>
+<td>参数拉取</td>
+</tr>
+<tr>
+<td>Atomic</td>
+<td>单边</td>
+<td>不参与</td>
+<td>不消耗</td>
+<td>分布式同步原语</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>面试高分点</strong>：强调&quot;单边操作是 RDMA 的精髓&quot;——远端 CPU 不参与，才是它能在 GPU 训练里把通信开销从 CPU 卸载到网卡的根本原因。结合后面的 GPU Direct RDMA，这一点会被反复问到。</p>
+</blockquote>
+<hr>
+<h2 id="六、零拷贝与内核旁路的工程细节（高频追问）">六、零拷贝与内核旁路的工程细节（高频追问）</h2>
+<ol>
+<li><strong>内存必须 pin 住</strong>：因为网卡用 DMA 直接访问物理内存，操作系统不能在网卡 DMA 过程中把页换出（swap）或重新映射，所以注册 MR 时内核会把这段内存<strong>锁定在物理内存</strong>（pin page）。代价：锁定的内存不能再被换出，占用物理内存。</li>
+<li><strong>虚拟→物理映射表下发给网卡</strong>：网卡要靠这张表把应用给的<strong>虚拟地址</strong>翻译成<strong>物理地址</strong>去做 DMA，这张表就是 MR 注册时建好的。所以 MR 注册有开销，不能对每个 token 都注册——<strong>MR 要复用、要尽量大块注册</strong>。</li>
+<li><strong>ODP（On-Demand Paging）</strong>：较新的网卡支持按需 paging，不必一开始就 pin 全部内存，缓解 pin 的成本，但性能略低于全 pin。</li>
+<li><strong>不进协议栈 = 不用 TCP</strong>：RoCEv2 虽然包了 UDP/IP，但那是网卡硬件封装的，<strong>不走 OS 的 TCP/IP 栈</strong>，UDP 也只是个承载壳，不保证可靠性——可靠性由 <strong>IB 传输层（RC）的硬件重传</strong>保证。</li>
+<li><strong>CPU 释放</strong>：因为搬数据的是网卡的 DMA 引擎和 RISC 芯片，主 CPU 只在 post WQE 和 poll CQE 时参与极少量工作，所以&quot;带宽越高 CPU 越闲&quot;，与传统栈正好相反。</li>
+</ol>
+<hr>
+<h2 id="七、拥塞控制与无损网络：RoCEv2-的工程命门">七、拥塞控制与无损网络：RoCEv2 的工程命门</h2>
+<p>IB 原生有硬件 CC，但 RoCEv2 跑在以太网上，<strong>以太网默认是有损的（会丢包）</strong>，而 RDMA 对丢包敏感（一旦丢包靠重传，RC 重传代价高），所以必须打造<strong>无损以太网（lossless Ethernet）</strong>。三件套：</p>
+<ol>
+<li><strong>PFC（Priority Flow Control，基于优先级的流控）</strong>：以太网流控的细化版，给不同优先级（8 个）单独的暂停，避免 head-of-line blocking 连累无关流量。本质：接收方缓存快满时，反压让发送方暂停。<strong>配置在交换机和网卡上，per-priority。</strong></li>
+<li><strong>ECN（Explicit Congestion Notification）</strong>：交换机在队列拥塞时，在 IP 头打 ECN 标记（把 IP TOS 两位设为 11）告诉端点&quot;我拥塞了&quot;。</li>
+<li><strong>DCQCN</strong>（Data Center QCN）：RoCEv2 端到端拥塞控制算法——<strong>交换机打 ECN → 接收端网卡识别 → 回发 CNP（Congestion Notification Packets）给发送端 → 发送端降速</strong>，是一套基于 ECN 反馈的速率调节闭环。是当前 RoCEv2 事实标准。
+<ul>
+<li>进阶还有 <strong>HPCC</strong>（High Precision Congestion Control，阿里），用 INT（In-Band Network Telemetry）拿到精确队列长度，比 DCQCN 更准但需交换机支持。</li>
+</ul>
+</li>
+<li><strong>DSCP / 优先级映射</strong>：RDMA 流量打特定 DSCP，映射到 PFC 优先级，确保 RDMA 报文走无损队列。</li>
+</ol>
+<p><strong>面试易问</strong>：“RoCEv2 怎么做到不丢包？”</p>
+<blockquote>
+<p>答：靠 <strong>PFC 做链路级反压防丢包 + ECN/DCQCN 做端到端降速避免持续拥塞 + 正确的 DSCP→优先级映射</strong>。PFC 是兜底防丢，DCQCN 是治本降速，两者配合。但 PFC 配错会出现 <strong>PFC 死锁</strong>（head-of-line 循环暂停），需要拓扑无环设计，这是运维痛点。</p>
+</blockquote>
+<p><strong>为什么 AI 训练对这个特别敏感</strong>：训练时 all-reduce / all-gather 是同步的 collective，<strong>incast</strong> 严重（N 个节点同时往一个节点打），瞬时微突发极大，没有无损网络+合理 CC，尾部延迟会爆炸，直接拖慢整个 iter 时间。</p>
+<hr>
+<h2 id="八、RDMA-在-ML-系统里的真实落地（面试重头戏）">八、RDMA 在 ML 系统里的真实落地（面试重头戏）</h2>
+<h3 id="8-1-NCCL-与-RDMA">8.1 NCCL 与 RDMA</h3>
+<ul>
+<li><strong>NCCL（NVIDIA Collective Communications Library）</strong> 是多 GPU 集合通信库，训练框架（PyTorch DDP、Megatron、DeepSpeed）底层都调它。</li>
+<li>NCCL 的 transport 层支持多种：<strong>NVLink（GPU↔GPU）、PCIe/NVSwitch、SHM（同机进程）、Socket、IB Verbs / RoCE Verbs</strong>。</li>
+<li>跨机时，NCCL 默认走 <strong>RDMA Verbs（IB 或 RoCEv2）</strong>，通常用 <strong>RDMA Write</strong>（高频、单边）做 ring/tree 的 all-reduce，配合 GPU Direct RDMA 让 GPU 显存直连网卡。</li>
+<li>可用 <code>NCCL_DEBUG=INFO</code> 看它选了哪个 transport（面试常问怎么排查 NCCL 没走 RDMA：看日志里 <code>Channel 00 : xth[index] via xth[index]</code> 是否是 <code>IB</code>/<code>NET</code>，以及是否出现 <code>GPUDirect RDMA</code>）。</li>
+<li>关键环境变量：<code>NCCL_IB_DISABLE</code>（禁用 IB，退回 socket）、<code>NCCL_IB_HCA</code>（指定网卡）、<code>NCCL_NET_GDR_LEVEL</code> 等。</li>
+</ul>
+<h3 id="8-2-GPU-Direct-RDMA（GDR）——把-零拷贝-进行到底">8.2 GPU Direct RDMA（GDR）——把&quot;零拷贝&quot;进行到底</h3>
+<p>普通 RDMA 通信 GPU 数据的路径是：<br>
+<code>GPU 显存 → (DMA over PCIe) → CPU 内存 → (MR 注册) → 网卡 DMA → 网线 → 对端网卡 → CPU 内存 → PCIe → 对端 GPU 显存</code></p>
+<p>中间还要过一次&quot; bounced 到 host 内存&quot;。<strong>GPU Direct RDMA</strong> 让网卡<strong>直接 DMA 读写 GPU 显存</strong>：</p>
+<p><code>GPU 显存 ←(PCIe BAR1/Peer-to-Peer)→ 网卡 → 网线 → 对端网卡 → 对端 GPU 显存</code></p>
+<ul>
+<li>好处：<strong>省掉 host 内存这一跳</strong>，CPU 不参与，延迟更低、带宽更满。</li>
+<li>要求：网卡和 GPU 在 PCIe 拓扑上要支持 <strong>P2P（Peer-to-Peer DMA）</strong>；NVIDIA 组合（ConnectX + GPU）原生支持；需开启 <code>nvidia-peermem</code>（旧版 <code>nv_peer_mem</code>）内核模块，让 MR 可以注册到 GPU 显存。</li>
+<li>调优点：把 GPU 和网卡放在<strong>同一个 PCIe Switch/NVSwitch 下</strong>，P2P 不跨 NUMA/不跨 PCIe root，性能最好。这就是为什么训练服务器网卡插法有讲究。</li>
+<li><strong>GPU Direct Storage (GDS)</strong> 是同类思路，让 GPU 直连 NVMe/存储，绕过 CPU，用于加载 checkpoint。</li>
+</ul>
+<h3 id="8-3-通信拓扑与集合通信算法">8.3 通信拓扑与集合通信算法</h3>
+<ul>
+<li>大模型训练通信主战场是 <strong>all-reduce</strong>（DDP 梯度同步）、<strong>all-gather</strong>（TP/MoE）、<strong>reduce-scatter</strong>（ZeRO/梯度分片）。</li>
+<li>算法层面：<strong>Ring All-Reduce</strong>（带宽最优，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mo stretchy="false">(</mo><mi>N</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mi>N</mi></mrow><annotation encoding="application/x-tex">2(N-1)/N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">2</span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">)</span><span class="mord">/</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span> 倍单链路带宽）、<strong>Tree</strong>（低延迟）、<strong>Halving-Doubling</strong>。这些在 NCCL 里自动选，但理解原理能在面试讲&quot;为什么 ring 在带宽受限网络最优&quot;。</li>
+<li>硬件层面：<strong>NVLink（GPU 间，900GB/s 级）&gt; NVSwitch &gt; PCIe &gt; IB/RoCE（跨机，400/800Gbps）</strong>。一台机内尽量用 NVLink，跨机才用 RDMA——这就是 <strong>8 机/千卡 GPU 节点内高速、节点间 RDMA</strong> 的两层网络架构来源。</li>
+<li>NVLink 和 RDMA 不冲突，NCCL 会按拓扑自动分层：机内 NVLink ring + 跨机 IB ring。</li>
+</ul>
+<h3 id="8-4-典型集群网络参数（心里要有数）">8.4 典型集群网络参数（心里要有数）</h3>
+<ul>
+<li>单卡训练时 all-reduce 通信量 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>∝</mo></mrow><annotation encoding="application/x-tex">\propto</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mrel">∝</span></span></span></span> 模型参数量。一个 70B 模型 fp16 约 140GB 参数，每步 all-gather 要传 140GB。</li>
+<li>RoCEv2/IB 单口 400Gbps = 50GB/s，要传 140GB 即便带宽全打满也 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>≈</mo><mn>2.8</mn></mrow><annotation encoding="application/x-tex">\approx 2.8</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4831em;"></span><span class="mrel">≈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">2.8</span></span></span></span> 秒，所以通信开销真实存在、不可忽略，<strong>梯度分桶（bucket）/ 重叠计算通信（overlap）/ ZeRO 分片</strong>都是为此而生。</li>
+<li>面试可顺势引到你对<strong>通信计算重叠、bucketing 大小调优、张量并行 vs 数据并行的网络选择</strong>的理解，体现&quot;懂网络也懂训练&quot;。</li>
+</ul>
+<hr>
+<h2 id="九、常用命令与排障（实操题必背）">九、常用命令与排障（实操题必背）</h2>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 查看网卡/状态</span></span><br><span class="line">ibv_devinfo                 <span class="comment"># 列出所有 RDMA 设备，看端口状态、速率、是否 Active</span></span><br><span class="line">ibstatus                    <span class="comment"># 简要设备与链路状态</span></span><br><span class="line">ibdev2netdev                <span class="comment"># RDMA 设备 ↔ 以太网卡名 ↔ 状态映射（运维神器）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 看拓扑与拓扑健康</span></span><br><span class="line">ibv_devinfo -v              <span class="comment"># 详细，含 GID 表</span></span><br><span class="line">iblinkinfo                  <span class="comment"># IB 链路信息（速率、宽度、误码）</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 测试 RDMA 连通性（必会）</span></span><br><span class="line"><span class="comment"># 1) 先起服务端</span></span><br><span class="line">rdma_server -p 18515</span><br><span class="line"><span class="comment"># 或用 rping：</span></span><br><span class="line">rping -s -C 10</span><br><span class="line"><span class="comment"># 2) 客户端</span></span><br><span class="line">rdma_client -s &lt;server_ip&gt; -p 18515</span><br><span class="line">rping -c -s &lt;server_ip&gt; -C 10</span><br><span class="line"></span><br><span class="line"><span class="comment"># 带宽/延迟测试（perftest 系列，面试常点名）</span></span><br><span class="line">ib_send_bw   -d &lt;dev&gt;       <span class="comment"># Send/Recv 带宽</span></span><br><span class="line">ib_write_bw  -d &lt;dev&gt;       <span class="comment"># RDMA Write 带宽</span></span><br><span class="line">ib_read_lat  -d &lt;dev&gt;       <span class="comment"># RDMA Read 延迟</span></span><br><span class="line">ib_write_lat -d &lt;dev&gt;       <span class="comment"># Write 延迟</span></span><br><span class="line"><span class="comment"># 一台做 server (-s)，另一台做 client 指明 -d 和 server IP</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># NCCL 排障</span></span><br><span class="line">NCCL_DEBUG=INFO python train.py 2&gt;nccl.log</span><br><span class="line"><span class="comment"># 在 nccl.log 里搜：</span></span><br><span class="line">grep -E <span class="string">&quot;via|Channel|GDR|NET|IB&quot;</span> nccl.log</span><br><span class="line"><span class="comment"># 关键判断：是否出现 &quot;GPUDirect RDMA&quot;、transport 是否为 IB/NET（而非 P2P/SHM/SOCKET）</span></span><br></pre></td></tr></table></figure>
+<p><strong>常见坑</strong>：</p>
+<ul>
+<li>NCCL 没走 RDMA → 检查 <code>NCCL_IB_DISABLE</code>、网卡是否被 <code>NCCL_IB_HCA</code> 正确选中、peermem 模块是否加载。</li>
+<li>PFC/ECN 没配好 → 用 <code>ethtool -S &lt;iface&gt;</code> 看 <code>rx_ppp_xxx</code>（pause）和 ECN 计数，训练慢但带宽利用率低时优先怀疑拥塞/丢包。</li>
+<li>跨 NUMA 装网卡 → <code>numactl</code> 看网卡和 GPU 的 NUMA 亲和性，跨 NUMA 的 P2P 性能显著下降，需要重插或绑定进程 NUMA。</li>
+</ul>
+<hr>
+<h2 id="十、面试高频问答（Q-A-速记）">十、面试高频问答（Q&amp;A 速记）</h2>
+<p><strong>Q1：RDMA 为什么比 TCP 快？</strong></p>
+<blockquote>
+<p>两点：kernel bypass（不进 OS 协议栈、不走系统调用、无上下文切换）+ zero-copy（用户态内存直接被网卡 DMA，不在用户态/内核态间拷贝）。结果是吞吐高且 CPU 不被占用——带宽越高 CPU 反而越闲，这是和 TCP 栈最大的不同。</p>
+</blockquote>
+<p><strong>Q2：RoCEv2 和 InfiniBand 有什么区别？</strong></p>
+<blockquote>
+<p>IB 是专用网络，链路层原生支持 RDMA，性能最好但贵且封闭；RoCEv2 把 IB 传输层封装在 UDP/IP（端口 4791）上跑标准以太网，可三层路由、复用以太网交换机，便宜通用，但要在以太网上补 PFC+ECN+DCQCN 做无损。性能 IB 略优，工程上 RoCEv2 是当下 AI 数据中心主流。</p>
+</blockquote>
+<p><strong>Q3：什么是零拷贝？内存为什么要注册（MR）？</strong></p>
+<blockquote>
+<p>零拷贝指数据从一端用户态内存到另一端用户态内存全程不在内核态拷贝。MR 注册是因为网卡要用 DMA 直接访问物理内存，必须：①把内存 pin 在物理页（不能被 swap/重映射）；②建立虚拟→物理地址映射表下发给网卡，并返回 lkey/rkey 作为访问凭证。所以 MR 有开销，要复用、大块注册，避免频繁注册。</p>
+</blockquote>
+<p><strong>Q4：RDMA Write 和 Send 有什么区别？为什么训练里用 Write 多？</strong></p>
+<blockquote>
+<p>Send 是双边，对端必须 post Receive 接收、消耗对端 RQ、对端 CPU 参与；RDMA Write 是单边，只要知道对端 addr+rkey 就直接 DMA 写过去，对端 CPU/RQ 完全不参与。训练里数据块大、对端 GPU 忙着算、希望通信完全卸载，所以单边 Write 最合适。</p>
+</blockquote>
+<p><strong>Q5：你们训练集群为什么网卡和 GPU 在同一个 PCIe switch 下要特意安排？</strong></p>
+<blockquote>
+<p>为了 GPU Direct RDMA 的 P2P DMA 性能最优。GDR 让网卡直接 DMA GPU 显存、省掉 host 内存中转；但 P2P 走 PCIe，跨 PCIe root/跨 NUMA 性能下降明显，所以把通信的 GPU 和网卡放在同一个 PCIe switch（同 NUMA）下，P2P 不出 switch，延迟和带宽最好。</p>
+</blockquote>
+<p><strong>Q6：RoCEv2 怎么做到无损？DCQCN 和 PFC 各管什么？</strong></p>
+<blockquote>
+<p>PFC 做链路级反压防丢包（接收端快满就反压发送端暂停），是兜底；ECN+DCQCN 做端到端拥塞控制（交换机拥塞打 ECN→接收端回 CNP→发送端降速），是治本。配合 DSCP→优先级映射让 RDMA 流量走无损队列。AI 训练 incast 大，没这套尾部延迟会爆炸。</p>
+</blockquote>
+<p><strong>Q7：NCCL 是怎么用 RDMA 的？怎么排查没走 RDMA？</strong></p>
+<blockquote>
+<p>NCCL transport 层跨机默认走 IB/RoCE Verbs，集合通信用 RDMA Write 做 ring/tree。排查：<code>NCCL_DEBUG=INFO</code>，日志里看 transport 是 <code>IB</code>/<code>NET</code> 还是 <code>SOCKET</code>，是否出现 <code>GPUDirect RDMA</code>，以及 <code>NCCL_IB_DISABLE</code>、<code>NCCL_IB_HCA</code>、peermem 模块是否加载正确。</p>
+</blockquote>
+<p><strong>Q8：RC 和 UD 怎么选？RC 的扩展性瓶颈是什么？</strong></p>
+<blockquote>
+<p>RC 可靠按序点对点，ML 训练主力；UD 不可靠不保序、无连接、支持多播，适合控制面/发现/小消息。RC 的瓶颈是<strong>点对点连接</strong>——N 台机器两两通信每台要 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><mi>N</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(N)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mclose">)</span></span></span></span> 个 QP，QP 是网卡硬件资源，N 大了 QP 爆炸，扩展受限。这也是近年有&quot;over UD 的可靠消息层&quot;&quot;多 path/多 QP 分片&quot;等优化方向的原因。</p>
+</blockquote>
+<p><strong>Q9：Ring All-Reduce 通信量是多少，为什么带宽最优？</strong></p>
+<blockquote>
+<p>Ring All-Reduce 把 reduce-scatter 和 all-gather 各走一遍环，每步每节点传 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>V</mi><mi mathvariant="normal">/</mi><mi>N</mi></mrow><annotation encoding="application/x-tex">V/N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span><span class="mord">/</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span>（<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>V</mi></mrow><annotation encoding="application/x-tex">V</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span></span></span></span> 总数据量，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span> 节点数），共 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mo stretchy="false">(</mo><mi>N</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">2(N-1)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">2</span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">)</span></span></span></span> 步，总通信量 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mo stretchy="false">(</mo><mi>N</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mo>⋅</mo><mi>V</mi><mi mathvariant="normal">/</mi><mi>N</mi></mrow><annotation encoding="application/x-tex">2(N-1) \cdot V/N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">2</span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span><span class="mord">/</span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span>，摊到每节点每步用满单链路带宽，所以带宽利用率高。对比树形，ring 在带宽受限网络更优，树形在延迟受限网络更优，NCCL 按拓扑自动选。</p>
+</blockquote>
+<p><strong>Q10：无损、不丢包就能保证 RDMA 性能吗？</strong></p>
+<blockquote>
+<p>不能只靠不丢包。PFC 不丢包但会 head-of-line blocking，甚至 PFC 死锁；DCQCN 降速但参数难调。真正性能还依赖：①拓扑无环避免 PFC 死锁；②合理 buffer/ECN 阈值；③端侧 GDR+P2P 拓扑；④QP/qp_depth/outstanding read 调优。无损是底线，调优才是性能。</p>
+</blockquote>
+<hr>
+<h2 id="十一、一张图总结全栈">十一、一张图总结全栈</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">应用层:   PyTorch / Megatron / DeepSpeed</span><br><span class="line">              │</span><br><span class="line">通信库层: NCCL (ring/tree, all-reduce, all-gather)</span><br><span class="line">              │ transport 自动选: NVLink(机内) / IB-RoCE(跨机)</span><br><span class="line">              │</span><br><span class="line">RDMA API: libibverbs / librdmacm (Verbs API，用户态直接调)</span><br><span class="line">              │</span><br><span class="line">硬件接口: GPUDirect RDMA (网卡⇄GPU显存 P2P) + peermem</span><br><span class="line">              │</span><br><span class="line">网卡层:   ConnectX (HCA) — SQ/RQ/CQ/MR/DMA 引擎/RoCE/IB 传输层</span><br><span class="line">              │</span><br><span class="line">链路层:   IB 链路 / 以太网 (RoCEv2: UDP+IP, 端口4791)</span><br><span class="line">              │</span><br><span class="line">无损保证: PFC + ECN + DCQCN + DSCP映射 (RoCEv2 专属命门)</span><br></pre></td></tr></table></figure>
+<p>记住：<strong>kernel bypass + zero-copy 是根，单边操作是魂，无损网络是 RoCEv2 的命门，GDR/NCCL 是 ML 落地的两把钥匙。</strong> 把这套讲顺，机器学习系统研发岗的 RDMA 这关基本稳过。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>InfiniBand Architecture Specification, IBTA.</li>
+<li>RDMA over Converged Ethernet (RoCE) v2 Spec, IBTA.</li>
+<li><em>Investigating the PCIe in Modern GPU Accelerators</em> / NVIDIA GPUDirect RDMA 白皮书.</li>
+<li>NCCL 文档与源码：<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/">https://docs.nvidia.com/deeplearning/nccl/</a></li>
+<li>DCQCN: <em>Congestion Control for Large-Scale RDMA Deployments</em>, SIGCOMM 2015.</li>
+<li>HPCC: <em>HPCC: High Precision Congestion Control</em>, SIGCOMM 2019.</li>
+<li>DeepMind / Meta / 阿里 关于 AI 训练网络的工程博客。</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/">http://example.com/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/%E7%BD%91%E7%BB%9C/">网络</a><a class="post-meta__tags" href="/tags/ML%E7%B3%BB%E7%BB%9F/">ML系统</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/17/2026-07-17-SQL%E8%AF%AD%E5%8F%A5%E5%AD%A6%E4%B9%A0%E6%89%8B%E5%86%8C/" title="SQL 语句学习手册——从入门到面试通关"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">SQL 语句学习手册——从入门到面试通关</div></div><div class="info-2"><div class="info-item-1">SQL 语句学习手册——从入门到面试通关  本文目标：从零到能在面试里手写复杂 SQL、讲清执行计划与索引优化。按&quot;基础语法 → 多表查询 → 聚合与窗口函数 → 进阶 → 性能优化 → 面试高频题&quot;组织，每段配可运行示例。 全文示例基于 MySQL（最常考），并在涉及 PostgreSQL/标准 SQL 差异处注明。   一、SQL 三大门类 先建立全局观，SQL 语句分三大类：    类 关键字 作用     DDL（Data Definition） CREATE / DROP / ALTER / TRUNCATE 定义结构（库、表、索引、视图）   DML（Data Manipulation） INSERT / UPDATE / DELETE / SELECT 操作数据（查增改删）   DCL（Data Control） GRANT / REVOKE / COMMIT / ROLLBACK 权限与事务控制     注：严格说 SELECT 属 DQL，但日常归到 DML。TRUNCATE 是 DDL 不是 DML——它是删表重建，不逐行删除，不能回滚，面...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">虚拟化技术学习路线——从原理到云原生</div></div><div class="info-2"><div class="info-item-1">虚拟化技术学习路线——从原理到云原生  本文目标：给你一条从零到能独立设计/运维虚拟化平台的清晰路径。覆盖 CPU/内存/IO 虚拟化、QEMU/KVM、容器与 namesapce/cgroup、网络与存储虚拟化、云编排，最后落到大模型训练/推理场景下的 GPU 虚拟化与云原生调度。 学习哲学：先吃透&quot;一个虚拟机是怎么被造出来的&quot;，再学&quot;容器是怎么隔离的&quot;，最后学&quot;云平台怎么把它们编排起来&quot;。原理是地基，工程是楼层，地基不稳楼越高越晃。   学习路线总览（六个阶段） 12345678910111213阶段0  打地基：操作系统与硬件基础   │阶段1  虚拟化原理：CPU / 内存 / IO 三大虚拟化   │阶段2  Type-1 / Type-2 与 QEMU-KVM 全栈   │阶段3  容器虚拟化：namespace + cgroup + rootfs   │阶段4  网络与存储虚拟化：virtio / SDN / 分布式存储   │阶段5  云编排：OpenStack / Kubernetes / 调度   │...</div></div></div></a></nav><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">211</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">181</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">59</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">RDMA 技术栈全解——ML 系统研发面试通关</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81-RDMA%EF%BC%9A%E4%BC%A0%E7%BB%9F%E7%BD%91%E7%BB%9C%E6%A0%88%E7%9A%84%E7%93%B6%E9%A2%88"><span class="toc-number">1.1.</span> <span class="toc-text">一、为什么需要 RDMA：传统网络栈的瓶颈</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81RDMA-%E7%9A%84%E4%B8%89%E7%B1%BB%E6%89%BF%E8%BD%BD%E5%8D%8F%E8%AE%AE%EF%BC%9AIB%E3%80%81RoCE%E3%80%81iWARP"><span class="toc-number">1.2.</span> <span class="toc-text">二、RDMA 的三类承载协议：IB、RoCE、iWARP</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-InfiniBand%EF%BC%88IB%EF%BC%89"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 InfiniBand（IB）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-RoCE%EF%BC%88RDMA-over-Converged-Ethernet%EF%BC%89"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 RoCE（RDMA over Converged Ethernet）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-iWARP"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 iWARP</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81RDMA-%E7%9A%84%E9%80%9A%E4%BF%A1%E6%A8%A1%E5%9E%8B%EF%BC%9A%E4%BC%A0%E8%BE%93%E6%9C%8D%E5%8A%A1%E7%B1%BB%E5%9E%8B"><span class="toc-number">1.3.</span> <span class="toc-text">三、RDMA 的通信模型：传输服务类型</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%9E%E6%8E%A5%E7%AE%A1%E7%90%86%EF%BC%9ARDMA-CM-vs-%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86"><span class="toc-number">1.3.1.</span> <span class="toc-text">连接管理：RDMA CM vs 内存管理</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81RDMA-%E6%A0%B8%E5%BF%83%E5%AF%B9%E8%B1%A1%EF%BC%9APD-MR-QP-CQ-WR%EF%BC%88%E5%BF%85%E8%83%8C%E5%90%8D%E8%AF%8D%E8%A7%A3%E9%87%8A%EF%BC%89"><span class="toc-number">1.4.</span> <span class="toc-text">四、RDMA 核心对象：PD &#x2F; MR &#x2F; QP &#x2F; CQ &#x2F; WR（必背名词解释）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%9B%9B%E7%A7%8D-RDMA-%E6%93%8D%E4%BD%9C%E8%AF%AD%E4%B9%89%EF%BC%88%E5%BF%85%E8%83%8C%EF%BC%8C%E5%90%AB%E6%95%B0%E6%8D%AE%E6%B5%81%EF%BC%89"><span class="toc-number">1.5.</span> <span class="toc-text">五、四种 RDMA 操作语义（必背，含数据流）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-Send-Recv%EF%BC%88%E5%8F%8C%E8%BE%B9%E6%93%8D%E4%BD%9C%EF%BC%89"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 Send &#x2F; Recv（双边操作）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-RDMA-Write%EF%BC%88%E5%8D%95%E8%BE%B9%E6%93%8D%E4%BD%9C%EF%BC%8C%E9%9B%B6%E6%8B%B7%E8%B4%9D%E5%88%A9%E5%99%A8%EF%BC%89"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 RDMA Write（单边操作，零拷贝利器）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-RDMA-Read%EF%BC%88%E5%8D%95%E8%BE%B9%E8%AF%BB%EF%BC%89"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 RDMA Read（单边读）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-Atomic%EF%BC%88%E5%8E%9F%E5%AD%90%E6%93%8D%E4%BD%9C%EF%BC%89"><span class="toc-number">1.5.4.</span> <span class="toc-text">5.4 Atomic（原子操作）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E5%BC%A0%E5%AF%B9%E6%AF%94%E8%A1%A8"><span class="toc-number">1.5.5.</span> <span class="toc-text">一张对比表</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E9%9B%B6%E6%8B%B7%E8%B4%9D%E4%B8%8E%E5%86%85%E6%A0%B8%E6%97%81%E8%B7%AF%E7%9A%84%E5%B7%A5%E7%A8%8B%E7%BB%86%E8%8A%82%EF%BC%88%E9%AB%98%E9%A2%91%E8%BF%BD%E9%97%AE%EF%BC%89"><span class="toc-number">1.6.</span> <span class="toc-text">六、零拷贝与内核旁路的工程细节（高频追问）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E6%8B%A5%E5%A1%9E%E6%8E%A7%E5%88%B6%E4%B8%8E%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9C%EF%BC%9ARoCEv2-%E7%9A%84%E5%B7%A5%E7%A8%8B%E5%91%BD%E9%97%A8"><span class="toc-number">1.7.</span> <span class="toc-text">七、拥塞控制与无损网络：RoCEv2 的工程命门</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81RDMA-%E5%9C%A8-ML-%E7%B3%BB%E7%BB%9F%E9%87%8C%E7%9A%84%E7%9C%9F%E5%AE%9E%E8%90%BD%E5%9C%B0%EF%BC%88%E9%9D%A2%E8%AF%95%E9%87%8D%E5%A4%B4%E6%88%8F%EF%BC%89"><span class="toc-number">1.8.</span> <span class="toc-text">八、RDMA 在 ML 系统里的真实落地（面试重头戏）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-NCCL-%E4%B8%8E-RDMA"><span class="toc-number">1.8.1.</span> <span class="toc-text">8.1 NCCL 与 RDMA</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-GPU-Direct-RDMA%EF%BC%88GDR%EF%BC%89%E2%80%94%E2%80%94%E6%8A%8A-%E9%9B%B6%E6%8B%B7%E8%B4%9D-%E8%BF%9B%E8%A1%8C%E5%88%B0%E5%BA%95"><span class="toc-number">1.8.2.</span> <span class="toc-text">8.2 GPU Direct RDMA（GDR）——把&quot;零拷贝&quot;进行到底</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-3-%E9%80%9A%E4%BF%A1%E6%8B%93%E6%89%91%E4%B8%8E%E9%9B%86%E5%90%88%E9%80%9A%E4%BF%A1%E7%AE%97%E6%B3%95"><span class="toc-number">1.8.3.</span> <span class="toc-text">8.3 通信拓扑与集合通信算法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-4-%E5%85%B8%E5%9E%8B%E9%9B%86%E7%BE%A4%E7%BD%91%E7%BB%9C%E5%8F%82%E6%95%B0%EF%BC%88%E5%BF%83%E9%87%8C%E8%A6%81%E6%9C%89%E6%95%B0%EF%BC%89"><span class="toc-number">1.8.4.</span> <span class="toc-text">8.4 典型集群网络参数（心里要有数）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E5%B8%B8%E7%94%A8%E5%91%BD%E4%BB%A4%E4%B8%8E%E6%8E%92%E9%9A%9C%EF%BC%88%E5%AE%9E%E6%93%8D%E9%A2%98%E5%BF%85%E8%83%8C%EF%BC%89"><span class="toc-number">1.9.</span> <span class="toc-text">九、常用命令与排障（实操题必背）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%97%AE%E7%AD%94%EF%BC%88Q-A-%E9%80%9F%E8%AE%B0%EF%BC%89"><span class="toc-number">1.10.</span> <span class="toc-text">十、面试高频问答（Q&amp;A 速记）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E4%B8%80%E5%BC%A0%E5%9B%BE%E6%80%BB%E7%BB%93%E5%85%A8%E6%A0%88"><span class="toc-number">1.11.</span> <span class="toc-text">十一、一张图总结全栈</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.11.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生">虚拟化技术学习路线——从原理到云原生</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" title="RDMA 技术栈全解——ML 系统研发面试通关">RDMA 技术栈全解——ML 系统研发面试通关</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2026-07-17-SQL%E8%AF%AD%E5%8F%A5%E5%AD%A6%E4%B9%A0%E6%89%8B%E5%86%8C/" title="SQL 语句学习手册——从入门到面试通关">SQL 语句学习手册——从入门到面试通关</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/17/2026-07-17-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%98%BE%E5%AD%98%E8%AE%A1%E7%AE%97%E6%B3%95%E5%88%99/" title="大模型显存计算法则——训练与推理全景图">大模型显存计算法则——训练与推理全景图</a><time datetime="2026-07-16T16:00:00.000Z" title="发表于 2026-07-17 00:00:00">2026-07-17</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/16/2026-07-16-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8A%95%E6%9C%BA%E8%A7%A3%E7%A0%81%E4%B8%8E%E6%8B%92%E7%BB%9D%E9%87%87%E6%A0%B7%E6%97%A0%E6%8D%9F/" title="大模型投机解码与拒绝采样为何无损">大模型投机解码与拒绝采样为何无损</a><time datetime="2026-07-15T16:00:00.000Z" title="发表于 2026-07-16 00:00:00">2026-07-16</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
