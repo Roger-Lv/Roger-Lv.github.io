@@ -1,0 +1,616 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解  本文目标：把&quot;GPU 在跑 kernel&quot;这件事从原理讲到工程——kernel 是什么、CPU&#x2F;GPU 怎么协作、为什么 launch 是异步、synchronize 和 stream 怎么用、为什么要融合 kernel、怎么写&#x2F;怎么调。读完你能回答面试官&quot;你说的 kernel 是什">
+<meta property="og:type" content="article">
+<meta property="og:title" content="GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解">
+<meta property="og:url" content="http://example.com/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解  本文目标：把&quot;GPU 在跑 kernel&quot;这件事从原理讲到工程——kernel 是什么、CPU&#x2F;GPU 怎么协作、为什么 launch 是异步、synchronize 和 stream 怎么用、为什么要融合 kernel、怎么写&#x2F;怎么调。读完你能回答面试官&quot;你说的 kernel 是什">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-19T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-19T09:42:21.816Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="GPU">
+<meta property="article:tag" content="CUDA">
+<meta property="article:tag" content="性能">
+<meta property="article:tag" content="大模型系统">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解",
+  "url": "http://example.com/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-19T16:00:00.000Z",
+  "dateModified": "2026-07-19T09:42:21.816Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">218</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">196</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">62</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-19T09:42:21.816Z" title="更新于 2026-07-19 17:42:21">2026-07-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/GPU/">GPU</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/" data-flag-title="GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解</h1>
+<blockquote>
+<p>本文目标：把&quot;GPU 在跑 kernel&quot;这件事从原理讲到工程——kernel 是什么、CPU/GPU 怎么协作、为什么 launch 是异步、<code>synchronize</code> 和 <code>stream</code> 怎么用、为什么要融合 kernel、怎么写/怎么调。读完你能回答面试官&quot;你说的 kernel 是什么&quot;“为什么 PyTorch op 测时间要 sync”“stream 是干什么的”“为什么要融合算子”。</p>
+<p>和前面几篇呼应：Megatron Timer 反复强调 <code>cuda.synchronize()</code>，本篇讲清它为什么是命门。</p>
+</blockquote>
+<hr>
+<h2 id="一、先澄清：此-kernel-非彼-kernel">一、先澄清：此 kernel 非彼 kernel</h2>
+<p>“kernel” 有两个常见含义，别混：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>操作系统内核</th>
+<th>GPU kernel</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>是什么</td>
+<td>OS 的核心，常驻 ring0 管硬件</td>
+<td>一段在 GPU 上并行执行的函数</td>
+</tr>
+<tr>
+<td>谁跑</td>
+<td>CPU</td>
+<td>GPU 上成千上万个线程</td>
+</tr>
+<tr>
+<td>例子</td>
+<td>Linux kernel、Windows kernel</td>
+<td><code>vector_add</code>、<code>matmul</code>、<code>flash_attention</code></td>
+</tr>
+</tbody>
+</table>
+<p>本文讲的是 <strong>GPU kernel</strong>。一句话定义：</p>
+<blockquote>
+<p><strong>kernel 是你写的一段被编译成 GPU 指令、由 GPU 上成千上万个线程并行执行的函数。CPU 调用它时只是&quot;派单&quot;，真正干活的是 GPU。</strong></p>
+</blockquote>
+<p>最小例子，矩阵加法 <code>C = A + B</code>，CPU 写一行 <code>C = A + B</code>，底层翻译成 CUDA kernel：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 这就是一个 kernel: 被 GPU 上几万个线程同时执行的函数</span></span><br><span class="line">__global__ <span class="type">void</span> <span class="title function_">vector_add</span><span class="params">(<span class="type">float</span>* A, <span class="type">float</span>* B, <span class="type">float</span>* C, <span class="type">int</span> N)</span> &#123;</span><br><span class="line">    <span class="type">int</span> i = blockIdx.x * blockDim.x + threadIdx.x;  <span class="comment">// 我是第几个线程</span></span><br><span class="line">    <span class="keyword">if</span> (i &lt; N) C[i] = A[i] + B[i];                   <span class="comment">// 每个线程算一个元素</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>CPU 调用 <code>vector_add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(...)</code>：</p>
+<ul>
+<li><strong>立刻返回</strong>（异步），只是把这个 kernel 丢进 GPU 的执行队列。</li>
+<li>GPU 的 SM（流多处理器）拿到 kernel，启动成千上万线程，每个算一个 <code>C[i]</code>，全部并行。</li>
+</ul>
+<hr>
+<h2 id="二、CPU-GPU-协作模型：派单与施工">二、CPU/GPU 协作模型：派单与施工</h2>
+<p>把 CPU 当项目经理、GPU 当工地，最能记住：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">CPU(项目经理)                    GPU(工地)</span><br><span class="line">   │</span><br><span class="line">   │ 1. 准备数据在显存(或交给 DMA 搬)</span><br><span class="line">   │ 2. 填派工单: kernel名 + 线程数 + 参数  ──► [GPU 执行队列] ──► SM 开始跑</span><br><span class="line">   │ 3. 立刻继续往下写下一张派工单          (异步, CPU 不等)</span><br><span class="line">   │    ...又一个 kernel 丢进队列...</span><br><span class="line">   │</span><br><span class="line">   │ 需要结果时: cuda.synchronize() ─────► 阻塞 CPU, 等队列全跑完</span><br><span class="line">   ▼                                          │</span><br><span class="line">   拿到结果 ◄─────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>关键事实：</p>
+<ul>
+<li><strong>CPU 提交 kernel（launch）极快</strong>（微秒级），它只填一个&quot;派工单&quot;丢进队列。</li>
+<li><strong>GPU 跑 kernel 慢</strong>（毫秒~秒级），但成千上万线程并行。</li>
+<li>因为 launch 快、GPU 慢，<strong>CPU 会一口气把一串 kernel 全丢进队列</strong>，GPU 按顺序慢慢跑。这就是&quot;异步 pipeline&quot;——CPU 和 GPU 重叠工作，GPU 不空等、CPU 不干等。</li>
+</ul>
+<h3 id="为什么必须异步（不异步就慢）">为什么必须异步（不异步就慢）</h3>
+<p>如果每次 launch 都同步等 GPU 跑完再返回，CPU 要傻等——GPU 算 1ms，CPU 也要等 1ms 才能发下一个 kernel。异步则 CPU 可以在 GPU 跑第 1 个 kernel 的同时把第 2、3、4 个都丢进队列，<strong>CPU 的 launch 时间和 GPU 的计算时间重叠</strong>。这是 GPU 编程高性能的基础：<strong>让 CPU 永远在 launch、GPU 永远在算，两者谁都不闲着</strong>。</p>
+<hr>
+<h2 id="三、异步-Launch-与-synchronize（Timer-的命门）">三、异步 Launch 与 <code>synchronize</code>（Timer 的命门）</h2>
+<h3 id="3-1-异步带来的-测不准">3.1 异步带来的&quot;测不准&quot;</h3>
+<p>回到 Megatron Timer 为什么必须 sync：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">start_time = time.time()       <span class="comment"># CPU 此刻</span></span><br><span class="line">C = A + B                      <span class="comment"># launch 一个 matmul kernel, CPU 立刻继续</span></span><br><span class="line">end_time = time.time()         <span class="comment"># CPU 几微秒后就到了这里</span></span><br><span class="line"><span class="built_in">print</span>(end_time - start_time)   <span class="comment"># 几微秒 ← 完全错! GPU 可能还没开始跑</span></span><br></pre></td></tr></table></figure>
+<p>不 sync 时，<code>time.time()</code> 测的是 <strong>“CPU 提交 kernel 的时间”</strong>，而 GPU 上这个 kernel 可能还在队列里排队、甚至还没开始。测出来的值可能是真实 GPU 计算时间的零头——完全不可信。</p>
+<h3 id="3-2-torch-cuda-synchronize-的作用">3.2 <code>torch.cuda.synchronize()</code> 的作用</h3>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">torch.cuda.synchronize()      <span class="comment"># 阻塞 CPU, 等 GPU 把队列里所有 kernel 全跑完</span></span><br></pre></td></tr></table></figure>
+<p>调用后 CPU 卡住，直到 GPU 把当前 stream 上所有已 launch 的 kernel 全部执行完。这时再取 <code>time.time()</code>，才反映 GPU 真实完成时间。</p>
+<p>所以 Megatron Timer 的 <code>start</code>/<code>stop</code> 都先 <code>synchronize()</code>：</p>
+<ul>
+<li><code>start</code> 前 sync：确保起点是&quot;GPU 之前全干完了&quot;的时刻，不被前面残留 kernel 污染。</li>
+<li><code>stop</code> 前 sync：确保终点是&quot;这段 kernel 真跑完&quot;的时刻。</li>
+</ul>
+<h3 id="3-3-sync-的代价">3.3 sync 的代价</h3>
+<p><code>synchronize()</code> 会让 CPU 停下来等 GPU，<strong>打破异步重叠</strong>——CPU 不能在 GPU 跑时继续 launch 后续 kernel，于是 CPU 和 GPU 串行化，性能下降。所以：</p>
+<ul>
+<li><strong>生产训练不要乱插 sync</strong>（除非必要）。</li>
+<li><strong>测时间时才 sync</strong>（且要能用 log_level 关掉，见 Megatron Timer 的 DummyTimer）。</li>
+<li><strong>需要拿 GPU 结果到 CPU 用时才 sync</strong>（如 <code>loss.item()</code> 打印、判断是否 NaN、控制流分支）。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“CUDA op 异步 launch，CPU 侧时间戳测的是提交时间不是计算时间，必须 <code>synchronize()</code> 等队列排空才可信；但 sync 会打破 CPU/GPU 重叠拖慢训练，所以只在测时间、取结果到 CPU、做控制流时用，生产里要尽量少。”</strong></p>
+</blockquote>
+<h3 id="3-4-何时该-sync（经验）">3.4 何时该 sync（经验）</h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>要不要 sync</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>测一段 op 耗时</td>
+<td>要（前后各一次）</td>
+</tr>
+<tr>
+<td><code>loss.item()</code> 打印 / 检查 NaN</td>
+<td>要（隐式 sync：<code>.item()</code>/<code>.cpu()</code> 会触发）</td>
+</tr>
+<tr>
+<td>控制流：if 某条件 launch 不同 kernel</td>
+<td>要（拿条件值到 CPU）</td>
+</tr>
+<tr>
+<td>正常前向/反向一串 op</td>
+<td><strong>不要</strong>，保持异步</td>
+</tr>
+<tr>
+<td><code>print</code> 一个 GPU tensor</td>
+<td>隐式 sync</td>
+</tr>
+</tbody>
+</table>
+<p>注意 <strong><code>.item()</code>、<code>.cpu()</code>、<code>.tolist()</code>、对 GPU tensor 做 <code>print</code>、<code>if</code> 判断 GPU tensor 值</strong>——这些操作<strong>会隐式触发 sync</strong>，是训练慢的常见暗坑。推理/训练代码里循环内 <code>loss.item()</code> 每步都 sync 一次，会显著拖慢。</p>
+<hr>
+<h2 id="四、CUDA-Stream-与-Event：谁先谁后、能不能并行">四、CUDA Stream 与 Event：谁先谁后、能不能并行</h2>
+<h3 id="4-1-Stream（流）是什么">4.1 Stream（流）是什么</h3>
+<p><strong>stream 是 GPU kernel 的执行队列</strong>。同一 stream 里的 kernel <strong>严格按 launch 顺序串行执行</strong>；不同 stream 的 kernel <strong>可以并行执行</strong>（如果 GPU 资源够）。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">stream A:  [k1] → [k2] → [k3]      (串行)</span><br><span class="line">stream B:  [m1] → [m2]             (和 A 里的可以重叠并行)</span><br></pre></td></tr></table></figure>
+<ul>
+<li>默认所有 op 走 <strong>default stream</strong>（stream 0），全串行。</li>
+<li>想让两段独立计算重叠（如&quot;算梯度&quot;和&quot;搬数据&quot;重叠），把它们放不同 stream：<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">s1 = torch.cuda.Stream()</span><br><span class="line">s2 = torch.cuda.Stream()</span><br><span class="line"><span class="keyword">with</span> torch.cuda.stream(s1):</span><br><span class="line">    <span class="comment"># 这些 kernel 进 s1 队列</span></span><br><span class="line">    grad = model(x)</span><br><span class="line"><span class="keyword">with</span> torch.cuda.stream(s2):</span><br><span class="line">    <span class="comment"># 这些 kernel 进 s2 队列, 可和 s1 并行</span></span><br><span class="line">    data.copy_(host_data)</span><br><span class="line">torch.cuda.synchronize()   <span class="comment"># 等两条都跑完</span></span><br></pre></td></tr></table></figure>
+</li>
+</ul>
+<h3 id="4-2-典型用途：计算-通信重叠、H2D-计算重叠">4.2 典型用途：计算/通信重叠、H2D/计算重叠</h3>
+<p>这是 stream 最有价值的场景：</p>
+<ul>
+<li><strong>计算与通信重叠</strong>：一边 GPU 算梯度（stream A），一边 NCCL all-reduce 上一段梯度（stream B，通信 kernel 也在 GPU 上但走不同 stream），两者并行——这就是 Megatron DDP “bucket ready 触发 async all-reduce 与反向 overlap” 的底层。</li>
+<li><strong>Host-to-Device 搬数据和计算重叠</strong>：下一 batch 的数据 H2D 拷贝（stream B）和当前 batch 前向（stream A）并行，CPU/PCIe 传输藏进算力里。</li>
+<li><strong>prefill/decode 分流</strong>：vLLM、推理引擎里有时把 prefill 和 decode 放不同 stream 重叠。</li>
+</ul>
+<h3 id="4-3-Event（事件）：跨-stream-同步">4.3 Event（事件）：跨 stream 同步</h3>
+<p>不同 stream 要同步&quot;等 A 这步完成 B 才开始&quot;，用 <strong>event</strong>：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">e = torch.cuda.Event()</span><br><span class="line"><span class="keyword">with</span> torch.cuda.stream(s1):</span><br><span class="line">    work()</span><br><span class="line">    e.record()        <span class="comment"># 在 s1 这里插个标记</span></span><br><span class="line"><span class="keyword">with</span> torch.cuda.stream(s2):</span><br><span class="line">    e.wait()          <span class="comment"># s2 等到 s1 的标记点再继续</span></span><br><span class="line">    depend_on_work()</span><br></pre></td></tr></table></figure>
+<p><code>Event</code> 还可用来<strong>测 GPU 时间</strong>（比 <code>time.time()</code>+sync 更精细）：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">start = torch.cuda.Event(enable_timing=<span class="literal">True</span>)</span><br><span class="line">end   = torch.cuda.Event(enable_timing=<span class="literal">True</span>)</span><br><span class="line">start.record()</span><br><span class="line"><span class="meta">... </span> <span class="comment"># 一串 op</span></span><br><span class="line">end.record()</span><br><span class="line">torch.cuda.synchronize()</span><br><span class="line"><span class="built_in">print</span>(start.elapsed_time(end))   <span class="comment"># 毫秒, 只测这段 GPU kernel 时间</span></span><br></pre></td></tr></table></figure>
+<p>Event 记录的是 GPU 时间线上的点，不受 CPU launch 异步干扰，是<strong>测 GPU kernel 耗时的正确姿势</strong>。Megatron Timer 用 <code>time.time()+sync</code> 是更简单粗粒度的版本，精细 profile 用 Event 或 nsys/ncu。</p>
+<blockquote>
+<p>面试金句：<strong>“stream 是 kernel 执行队列，同 stream 串行、跨 stream 可并行；计算/通信重叠、H2D/计算重叠靠多 stream。跨 stream 同步用 Event，Event 也能精确测 GPU kernel 时间（不受 launch 异步干扰）。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="五、Grid-Block-Thread：kernel-的并行结构">五、Grid / Block / Thread：kernel 的并行结构</h2>
+<p>一个 kernel 启动时，要告诉 GPU 派多少线程、怎么组织。CUDA 用三层结构：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Grid  ──► 一堆 Block ──► 每个 Block 一堆 Thread</span><br><span class="line"></span><br><span class="line">       Grid (整个 kernel 的线程网格)</span><br><span class="line">       ┌──────────┐</span><br><span class="line">       │ Block(0,0)│ Block(1,0) │ ...     ← GridDim, 通常按数据形状分</span><br><span class="line">       │ Block(0,1)│ Block(1,1) │ ...</span><br><span class="line">       └──────────┘</span><br><span class="line">       每个 Block 里:</span><br><span class="line">       Thread(0) Thread(1) ... Thread(255)  ← BlockDim, 通常 128/256</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>Thread</strong>：最小执行单元，每个 thread 跑一份 kernel 代码、算一个/几个元素。</li>
+<li><strong>Block</strong>：一组 thread，<strong>同一 block 内 thread 可共享 shared memory、可 <code>__syncthreads()</code> 同步</strong>。一个 block 跑在一个 SM 上。</li>
+<li><strong>Grid</strong>：所有 block 的集合，跨 SM 调度。</li>
+</ul>
+<p>典型配法：每个 thread 算一个输出元素，blockDim=256，gridDim=ceil(N/256)。</p>
+<h3 id="关键：算力靠-喂饱-SM">关键：算力靠&quot;喂饱 SM&quot;</h3>
+<p>GPU 有几十上百个 SM，每个 SM 能同时跑成千上万线程。kernel 要派<strong>足够多的 thread</strong> 才能占满 SM——这叫** occupancy（占用率）<strong>。如果 kernel 只派几百个 thread（比如 batch=1 推理），SM 大量空闲，算力浪费，这就是 decode 阶段</strong>算力受限不足、访存受限为主**的根源。vLLM 用 continuous batching 把多个请求的 decode token 攒一起喂 GPU、用 CUDA Graph 跳 launch，都是为了解决这个。</p>
+<h3 id="SM-内的存储层次（影响-kernel-性能）">SM 内的存储层次（影响 kernel 性能）</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">寄存器 (per-thread, 最快, 几 KB)       ← thread 私有, ~1 cycle</span><br><span class="line">Shared Memory (per-block, 快, ~100KB)  ← block 内共享, 用 __syncthreads 同步</span><br><span class="line">L1/L2 Cache (SM 内/全局)               ← 硬件管</span><br><span class="line">Global Memory (显存 HBM, 慢)           ← 所有人可访问, 带宽高但延迟大</span><br></pre></td></tr></table></figure>
+<p>写高性能 kernel 的核心是：<strong>把热点数据放 shared memory/寄存器、少访问 global memory（HBM）</strong>。这就是 FlashAttention 的精髓——把 attention 的中间 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>s</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">s^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span> 矩阵不写回 HBM、用 shared memory/寄存器在线算 softmax，把 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><msup><mi>s</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s^2)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0641em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span> HBM 访存降到 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord mathnormal">s</span><span class="mclose">)</span></span></span></span>。</p>
+<blockquote>
+<p>显存篇提过&quot;训练访存受限、推理 decode 访存受限&quot;——kernel 跑多快，不是看你算多快，而是看你<strong>从 HBM 读数据快不快</strong>。访存受限下，优化方向是&quot;少读 HBM&quot;（融合 kernel、tile+shared memory、减少中间结果落地），不是&quot;算更快&quot;。</p>
+</blockquote>
+<hr>
+<h2 id="六、融合-Kernel：为什么要把多个算子合成一个">六、融合 Kernel：为什么要把多个算子合成一个</h2>
+<h3 id="6-1-朴素-op-链的问题">6.1 朴素 op 链的问题</h3>
+<p>一段 <code>Y = activation(BiasAdd(MatMul(X, W)))</code>，朴素实现是三个独立 kernel：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">launch matmul      → GPU 算 → 写结果到 HBM</span><br><span class="line">launch bias_add    → 从 HBM 读结果 → 加 bias → 写回 HBM</span><br><span class="line">launch activation  → 从 HBM 读 → 激活 → 写回 HBM</span><br></pre></td></tr></table></figure>
+<p>三个问题：</p>
+<ol>
+<li><strong>多次 HBM 读写</strong>：中间结果 <code>matmul 输出</code> 被写 HBM 又被下一 kernel 读 HBM，带宽浪费、延迟叠加。访存受限下这是性能杀手。</li>
+<li><strong>launch 开销</strong>：每个 kernel launch 有固定 CPU 开销（几微秒）+ GPU 启动开销。算子小、launch 多时（decode 阶段每步几十个小算子），launch 开销占比极高。</li>
+<li><strong>不能跨 kernel 优化</strong>：每个 kernel 独立编译，没法把&quot;读-算-写&quot;合并优化。</li>
+</ol>
+<h3 id="6-2-融合的解法">6.2 融合的解法</h3>
+<p><strong>融合 kernel（fused kernel）</strong>：把多个算子合成一个 kernel，中间结果留在寄存器/shared memory，不落地 HBM，一次 launch 跑完。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">launch fused_kernel  → 线程读 X, W → 算 matmul → 直接在寄存器里 add bias → 激活 → 写最终 Y</span><br></pre></td></tr></table></figure>
+<p>收益：</p>
+<ul>
+<li><strong>少 HBM 读写</strong>（最大头，访存受限下决定性提速）。</li>
+<li><strong>少 launch 开销</strong>。</li>
+<li><strong>更好的数据局部性</strong>（在 shared memory 里 tile 复用）。</li>
+</ul>
+<h3 id="6-3-训练-推理里的融合-kernel-实例">6.3 训练/推理里的融合 kernel 实例</h3>
+<ul>
+<li><strong>FlashAttention</strong>：融合 <code>QK^T → mask → softmax → ×V</code>，把 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><msup><mi>s</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s^2)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0641em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span> 中间矩阵不落地 HBM。Megatron/vLLM 默认用。</li>
+<li><strong>FusedMLP</strong>：融合 <code>gate × up → activation → × down</code>（SwiGLU 全融合），Megatron <code>fusions/</code> 下。</li>
+<li><strong>FusedLayerNorm + bias + residual</strong>：Megatron 把 <code>residual = x + dropout(layernorm(x + bias))</code> 融成一步。</li>
+<li><strong>Fused Adam（optimizer）</strong>：把一阶/二阶矩更新 + 权重更新融成一个 kernel，Megatron/VLLM 用。</li>
+<li><strong>Fused softmax / rope / cross_entropy</strong>：Megatron <code>csrc/</code>、vLLM <code>v1/sample/ops</code>。</li>
+</ul>
+<h3 id="6-4-融合的代价与边界">6.4 融合的代价与边界</h3>
+<ul>
+<li><strong>实现复杂</strong>：手写 CUDA/Triton 工作量大、可维护性差。</li>
+<li><strong>通用性差</strong>：融合的特定 op 组合换形状/换激活可能要重写。</li>
+<li><strong>不一定都更快</strong>：compute-bound 的大 kernel（大 GEMM）本身 HBM 访存占比低，融合收益小；访存-bound 的小算子链融合收益大。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“融合 kernel 解决两个问题：访存受限下减少中间结果落地 HBM（性能大头）、launch 受限下减少 launch 次数。FlashAttention/FusedMLP/FusedAdam 都是典型。算 compute-bound 的大 GEMM 融合收益小，访存-bound 的小算子链融合收益大——这就是为什么 decode 阶段（小算子多）特别需要融合和 CUDA Graph。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="七、CUDA-Graph：把一串-launch-录成一次-replay">七、CUDA Graph：把一串 launch 录成一次 replay</h2>
+<h3 id="7-1-问题：launch-开销在-decode-里很重">7.1 问题：launch 开销在 decode 里很重</h3>
+<p>推理 decode 阶段每步只产一两个 token，但每步要 launch 几十个 kernel（mlp/attention/norm/rope/sample…）。每个 launch 几微秒 CPU 开销 × 几十个 × 几百步 = CPU 被 launch 占满、GPU 等待 launch。这就是 <strong>launch-bound</strong>。</p>
+<h3 id="7-2-CUDA-Graph-的解法">7.2 CUDA Graph 的解法</h3>
+<p><strong>CUDA Graph</strong>：在&quot;录制&quot;阶段把一串 kernel launch 记录成一个图结构（依赖关系），&quot;重放&quot;阶段一次 <code>cudaGraphLaunch</code> 把整图丢给 GPU，<strong>CPU 只需一次 launch 调用</strong>，GPU 自己按图依赖调度。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">录制(capture): 跑一遍 op 链 → 记录成 graph(节点=kernel, 边=依赖)</span><br><span class="line">重放(replay):  一次 cudaGraphLaunch → GPU 按图跑完全部 kernel</span><br></pre></td></tr></table></figure>
+<p>收益：</p>
+<ul>
+<li><strong>CPU launch 开销从几十次降到 1 次</strong>——decode 延迟大幅下降。</li>
+<li>GPU 自己管依赖，减少 CPU↔GPU 同步。</li>
+</ul>
+<p>代价：</p>
+<ul>
+<li>图的输入/输出地址固定，shape 要固定（变 shape 要重新抓图或抓多个图）。</li>
+<li>要占额外显存放图。</li>
+<li>动态控制流（if/while 依赖运行时数据）难进图。</li>
+</ul>
+<h3 id="7-3-工程实例">7.3 工程实例</h3>
+<ul>
+<li><strong>vLLM</strong>：<code>v1/cudagraph_dispatcher.py</code> + <code>worker/gpu/cudagraph_utils.py</code>——启动时为若干个固定 <code>num_tokens</code> 组合抓图，运行时 <code>dispatch_cg_and_sync_dp</code> 按实际 token 数选匹配图 replay。decode 受益最大，prefill（shape 多变）收益小。</li>
+<li><strong>静态形状训练 / inference</strong>：很多推理引擎对固定 shape 模型用 CUDA Graph 加速。</li>
+</ul>
+<blockquote>
+<p>和融合 kernel 的区别：<strong>融合是&quot;把多个算子合成一个 kernel&quot;（减 HBM 访存+减 launch），CUDA Graph 是&quot;把多个 kernel launch 合成一次提交&quot;（只减 launch，不改 kernel）</strong>。两者互补——融合解决访存+launch，Graph 解决 launch。decode 慢两者都要用。</p>
+</blockquote>
+<hr>
+<h2 id="八、怎么写-kernel：Triton-与-CUDA-C">八、怎么写 kernel：Triton 与 CUDA C</h2>
+<h3 id="8-1-两条路">8.1 两条路</h3>
+<ul>
+<li><strong>CUDA C/C++</strong>：原生 NVIDIA，性能最高、控制最细，但难写难调。Megatron <code>csrc/</code>、vLLM <code>csrc/</code> 里大量手写 CUDA kernel。</li>
+<li><strong>Triton</strong>：OpenAI 出的 Python DSL（<code>@triton.jit</code>），编译成 GPU 代码，<strong>比 CUDA 易写、性能接近</strong>，FlashAttention 早期版、很多 fused kernel 现在用 Triton 写。生态火。</li>
+</ul>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Triton 写个 vector_add, 比 CUDA 简洁</span></span><br><span class="line"><span class="keyword">import</span> triton</span><br><span class="line"><span class="keyword">import</span> triton.language <span class="keyword">as</span> tl</span><br><span class="line"></span><br><span class="line"><span class="meta">@triton.jit</span></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">add_kernel</span>(<span class="params">x_ptr, y_ptr, z_ptr, N, BLOCK: tl.constexpr</span>):</span><br><span class="line">    pid = tl.program_id(<span class="number">0</span>)                       <span class="comment"># 我是第几个 block</span></span><br><span class="line">    offs = pid * BLOCK + tl.arange(<span class="number">0</span>, BLOCK)     <span class="comment"># 这个 block 管哪些元素</span></span><br><span class="line">    mask = offs &lt; N</span><br><span class="line">    x = tl.load(x_ptr + offs, mask=mask)</span><br><span class="line">    y = tl.load(y_ptr + offs, mask=mask)</span><br><span class="line">    tl.store(z_ptr + offs, x + y, mask=mask)</span><br></pre></td></tr></table></figure>
+<h3 id="8-2-什么时候要自己写">8.2 什么时候要自己写</h3>
+<ul>
+<li>框架没现成融合 kernel、且是性能热点（attention、mlp、optimizer、采样）。</li>
+<li>特殊算子（MLA、MoE dispatch、量化）。</li>
+<li>极致性能优化（cudnn/cutlass 调不动的特殊 shape）。</li>
+</ul>
+<p>但<strong>优先用现成的</strong>（FlashAttention、cudnn、cutlass、Triton 模板），手写 kernel 是最后手段——调到最优极费时。</p>
+<hr>
+<h2 id="九、怎么调-kernel-性能：profiling">九、怎么调 kernel 性能：profiling</h2>
+<p>写完/优化 kernel 要测、要找瓶颈：</p>
+<ul>
+<li><strong><code>torch.cuda.Event</code></strong>：粗粒度测段 GPU 时间（前面讲过）。</li>
+<li><strong><code>torch.profiler</code></strong>：导出 Chrome trace，看每个 kernel 的 wall-clock、占空比、launch 间隔。</li>
+<li><strong><code>nvidia-smi</code></strong>：看 GPU 利用率、显存、温度（粗粒度，util 高不代表没瓶颈）。</li>
+<li><strong><code>nsys</code>（Nsight Systems）</strong>：系统级 timeline，看 CPU launch 和 GPU kernel 的时间线、stream 并行情况、有没有气泡、sync 在哪卡住。<strong>最该会的工具。</strong></li>
+<li><strong><code>ncu</code>（Nsight Compute）</strong>：kernel 级细粒度，看每个 kernel 的算力/访存/占用率/瓶颈（compute bound 还是 memory bound）、给出优化建议。调单个 kernel 用它。</li>
+</ul>
+<p>典型调优流程：</p>
+<ol>
+<li><code>nsys</code> 看哪段有气泡、哪个 kernel 占时最长。</li>
+<li>对最耗时的 kernel 用 <code>ncu</code> 看是 compute bound 还是 memory bound。</li>
+<li>memory bound → 减少 HBM 访存（融合、tile、shared memory、向量化读取）；compute bound → 用 tensor core、减冗余计算。</li>
+<li>launch bound → CUDA Graph 或融合 kernel。</li>
+</ol>
+<blockquote>
+<p>面试金句：<strong>“调 GPU 性能先 nsys 看 timeline 找最长/有气泡的 kernel，再 ncu 看单个 kernel 是 compute bound 还是 memory bound，对症下药——memory bound 减 HBM 访存（融合/tile），compute bound 上 tensor core，launch bound 用 CUDA Graph。<code>nvidia-smi</code> util 高不等于没瓶颈，可能正卡在访存。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="十、串起训练-推理：kernel-视角看性能">十、串起训练/推理：kernel 视角看性能</h2>
+<p>把这套知识用到你熟悉的训练/推理场景：</p>
+<h3 id="训练（Megatron）">训练（Megatron）</h3>
+<ul>
+<li>前向/反向一串 kernel 异步 launch，CPU 不停发，GPU 不停算，两者重叠——这就是高性能的基础。</li>
+<li><code>all-reduce</code>/<code>all-gather</code> 通信也是 kernel（NCCL kernel，在 GPU 上跑），放单独 stream 和计算 kernel 重叠（DP overlap）。</li>
+<li>Timer 要 <code>synchronize()</code> 才能测准各段 kernel 时间，但 sync 拖慢训练所以用 log_level 控制。</li>
+<li>融合 kernel（FusedMLP/FlashAttention/FusedAdam）减访存+减 launch，是访存受限训练的核心优化。</li>
+</ul>
+<h3 id="推理（vLLM）">推理（vLLM）</h3>
+<ul>
+<li>prefill 算力受限：大 GEMM kernel，算得满，launch 开销占比小，CUDA Graph 收益小。</li>
+<li>decode 访存受限+launch 受限：每步几十个小 kernel、batch 小 SM 空闲——continuous batching 攒 token 喂饱 SM + 融合 kernel + CUDA Graph 跳 launch 三件套。</li>
+<li>多 stream：prefill/decode 分流、KV 搬运和计算重叠。</li>
+<li>异步 scheduler：CPU 调度下一步时 GPU 还在算上一步，靠的就是 launch 异步——CPU 在 launch 间隙做调度，不阻塞 GPU。</li>
+</ul>
+<h3 id="三种瓶颈（务必分清）">三种瓶颈（务必分清）</h3>
+<table>
+<thead>
+<tr>
+<th>瓶颈类型</th>
+<th>含义</th>
+<th>优化方向</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>compute bound</strong></td>
+<td>算力打满，访存不是瓶颈</td>
+<td>上 tensor core、减冗余计算、更高精度融合</td>
+</tr>
+<tr>
+<td><strong>memory bound</strong></td>
+<td>访存打满，算力空闲（最常见）</td>
+<td>减 HBM 读写、融合 kernel、tile+shared memory</td>
+</tr>
+<tr>
+<td><strong>launch bound</strong></td>
+<td>launch 开销占主导（小算子多）</td>
+<td>CUDA Graph、融合 kernel</td>
+</tr>
+</tbody>
+</table>
+<p>大模型训练/推理<strong>绝大多数时间是 memory bound</strong>（显存篇讲过访存受限），所以&quot;减访存&quot;是优化主线——融合、tile、量化（少读权重）、KV cache 复用（少重算）全是减访存。</p>
+<hr>
+<h2 id="十一、面试速答清单">十一、面试速答清单</h2>
+<p><strong>Q1：GPU kernel 是什么？和 OS kernel 区别？</strong></p>
+<blockquote>
+<p>GPU kernel 是一段在 GPU 上由成千上万线程并行执行的函数；CPU 调用它（launch）只是把派工单丢进队列，真正执行的是 GPU。OS kernel 是常驻 ring0 管硬件的操作系统核心，跑在 CPU。两者同名但完全不同。</p>
+</blockquote>
+<p><strong>Q2：为什么 PyTorch 测 op 时间必须 <code>cuda.synchronize()</code>？sync 的代价？</strong></p>
+<blockquote>
+<p>CUDA op 异步 launch，<code>time.time()</code> 测的是 CPU 提交 kernel 的时间，GPU 可能还没开始跑，数据不可信。<code>synchronize()</code> 阻塞 CPU 等 GPU 队列排空才反映真实计算时间。代价是打破 CPU/GPU 重叠、串行化拖慢，所以只在测时间、取结果到 CPU（<code>.item()</code>/<code>.cpu()</code>）、做控制流时用，生产尽量少。</p>
+</blockquote>
+<p><strong>Q3：stream 是什么？怎么用它做计算/通信重叠？</strong></p>
+<blockquote>
+<p>stream 是 kernel 执行队列，同 stream 串行、跨 stream 可并行。把独立的两段计算放不同 stream（如算梯度放 stream A、NCCL all-reduce 放 stream B）就能让它们并行——这是 DDP 反向 overlap 的底层。跨 stream 同步用 Event，Event 也能精确测 GPU kernel 时间。</p>
+</blockquote>
+<p><strong>Q4：为什么要融合 kernel？收益和代价？</strong></p>
+<blockquote>
+<p>朴素 op 链每个 kernel 把中间结果写 HBM、下个 kernel 又读 HBM，访存浪费+延迟叠加；launch 多次开销大。融合把多算子合成一个 kernel，中间结果留寄存器/shared memory 不落地 HBM、一次 launch 跑完。收益是减访存（memory bound 下决定性）+减 launch；代价是难写难维护、通用性差。FlashAttention/FusedMLP/FusedAdam 是典型。</p>
+</blockquote>
+<p><strong>Q5：CUDA Graph 解决什么？和融合 kernel 区别？</strong></p>
+<blockquote>
+<p>解决 launch bound——把一串 kernel launch 录成图，运行时一次 <code>cudaGraphLaunch</code> 提交，CPU 只调一次 launch。区别：融合是&quot;多算子合成一个 kernel&quot;（减访存+减 launch），Graph 是&quot;多 kernel launch 合成一次提交&quot;（只减 launch，不改 kernel）。decode 阶段 launch 受限两者互补都要用。vLLM 为固定 num_tokens 抓图、按 token 数 dispatch 选图。</p>
+</blockquote>
+<p><strong>Q6：memory bound / compute bound / launch bound 怎么区分、怎么优化？</strong></p>
+<blockquote>
+<p>memory bound 是访存打满算力空闲（大模型最常见），优化靠减 HBM 读写（融合/tile/shared memory/量化）；compute bound 是算力打满，优化靠 tensor core/减冗余计算；launch bound 是小算子多 launch 开销主导，靠 CUDA Graph/融合。先 nsys 看 timeline 找最长/有气泡的 kernel，再 ncu 看单 kernel 是 compute 还是 memory bound 对症下药。<code>nvidia-smi</code> util 高不代表没瓶颈，可能正卡访存。</p>
+</blockquote>
+<p><strong>Q7：为什么 decode 阶段 GPU 利用率低、特别需要优化？</strong></p>
+<blockquote>
+<p>decode 每步只产一两个 token，kernel 规模小、batch 小，SM 喂不饱（occupancy 低）、算力空闲，同时几十个小算子 launch 开销占比高——既 memory bound 又 launch bound。所以 vLLM 用 continuous batching 攒 token 喂饱 SM、融合 kernel 减访存、CUDA Graph 跳 launch 三件套。prefill 是大 GEMM 算力受限，这些优化收益小。</p>
+</blockquote>
+<p><strong>Q8：FlashAttention 融合了什么、为什么快？</strong></p>
+<blockquote>
+<p>融合 <code>QK^T → mask → softmax → ×V</code>，把 attention 中间 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><msup><mi>s</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s^2)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0641em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span> 矩阵不写回 HBM、用 shared memory/寄存器在线分块算 softmax，把 HBM 访存从 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><msup><mi>s</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s^2)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0641em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span> 降到 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord mathnormal">s</span><span class="mclose">)</span></span></span></span>。memory bound 下减访存是决定性收益，还顺带省了 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><msup><mi>s</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s^2)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0641em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span> 显存。这是融合 kernel 减访存最经典的例子。</p>
+</blockquote>
+<hr>
+<h2 id="十二、一张图收口">十二、一张图收口</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">CPU(派单)  ─launch(kernel)─►  [GPU stream 执行队列]  ─► SM 上成千线程并行跑 kernel</span><br><span class="line">   │                          同 stream 串行, 跨 stream 可并行(Event 同步)</span><br><span class="line">   │</span><br><span class="line">   │ 要结果/测时间: cuda.synchronize() 阻塞 CPU 等队列排空</span><br><span class="line">   ▼</span><br><span class="line">GPU 结果</span><br><span class="line"></span><br><span class="line">kernel 结构:  Grid &gt; Block &gt; Thread   (thread 私有寄存器, block 共享 shared memory, 全局 HBM)</span><br><span class="line">访存层次:     寄存器(~1cyc) &gt; shared mem(~100cyc) &gt; HBM(慢,带宽高延迟大)</span><br><span class="line">              ↑ 高性能 kernel 把热点数据放寄存器/shared, 少读 HBM</span><br><span class="line"></span><br><span class="line">三大瓶颈:</span><br><span class="line">  memory bound(最常见, 访存打满) → 融合/tile/shared mem/量化(减 HBM)</span><br><span class="line">  compute bound(算力打满)       → tensor core/减冗余</span><br><span class="line">  launch bound(launch 主导)     → CUDA Graph/融合</span><br><span class="line"></span><br><span class="line">调优:  nsys(timeline 找最长/气泡) → ncu(单 kernel compute 还是 memory bound) → 对症</span><br></pre></td></tr></table></figure>
+<p>主线一句话：<strong>GPU kernel 是被成千线程并行执行的函数、CPU 异步 launch 派单进 stream 队列、要测准或拿结果才 sync（sync 拖慢所以要少用）；高性能靠&quot;喂饱 SM + 少读 HBM + 少 launch&quot;——融合 kernel 解决访存+launch、CUDA Graph 解决 launch、多 stream 做计算通信重叠；大模型绝大多数时间 memory bound，所以&quot;减访存&quot;是优化主线。</strong> 把 launch 异步、sync、stream、融合、三种瓶颈讲顺，GPU 性能这关就稳了。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>NVIDIA CUDA C++ Programming Guide（grid/block/thread、stream、event、memory hierarchy）</li>
+<li>NVIDIA Nsight Systems / Nsight Compute 文档</li>
+<li><em>FlashAttention: Fast and Memory-Efficient Exact Attention</em> Dao et al., 2022</li>
+<li>Triton: <a target="_blank" rel="noopener" href="https://triton-lang.org">https://triton-lang.org</a></li>
+<li>与本文 Megatron Timer、显存计算法则、vLLM 源码精读、RDMA 篇交叉对照</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/">http://example.com/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/GPU/">GPU</a><a class="post-meta__tags" href="/tags/CUDA/">CUDA</a><a class="post-meta__tags" href="/tags/%E6%80%A7%E8%83%BD/">性能</a><a class="post-meta__tags" href="/tags/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E7%B3%BB%E7%BB%9F/">大模型系统</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/20/2026-07-20-Megatron-Timer-Predictor%E7%B3%BB%E7%BB%9F/" title="Megatron Timer Predictor——训练 Straggler 实时检测与定位系统"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Megatron Timer Predictor——训练 Straggler 实时检测与定位系统</div></div><div class="info-2"><div class="info-item-1">Megatron Timer Predictor——训练 Straggler 实时检测与定位系统  本文记录我设计并落地的 Megatron Timer Predictor：一个针对 Megatron-LM 大规模分布式训练中性能落后节点（Straggler）问题的实时检测与定位系统。核心是用 Megatron Timer 采集的全 rank 时序数据，经&quot;6 种聚类算法 + 投票融合&quot;识别异常 rank，再针对流水线并行场景做通信异常检测 + 交叉验证定位网络拥塞节点，多进程并发把分析压到 30 秒内。生产环境异常检测准确率 &gt;90%。   背景知识：Megatron Timer 怎么采时序、为什么跨 rank all-gather 取 max，见本人《Megatron Timers 源码精读》篇。本篇讲的是拿到这些时序数据之后，怎么自动找出谁是 straggler、为什么慢、慢在哪一段。   一、问题：Straggler 是分布式训练的隐形杀手 大模型训练动辄几百到几千张 GPU，靠 NCCL/Megatron 的集合通信把各卡同步起来。木桶效应：训...</div></div></div></a><a class="pagination-related" href="/2026/07/20/2026-07-20-Megatron-Timers%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron Timers 源码精读——分布式训练性能打点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Megatron Timers 源码精读——分布式训练性能打点</div></div><div class="info-2"><div class="info-item-1">Megatron Timers 源码精读——分布式训练性能打点  本文精读 Megatron-Core 的 megatron/core/timers.py（约 300 行）。目标：让你面试时能讲清&quot;训练里怎么打点测一段算子耗时、为什么必须 torch.cuda.synchronize()、为什么分布式打点要跨 rank 聚合、log_level/DummyTimer 的开销控制怎么做&quot;。这是个&quot;小而完整&quot;的子系统，特别适合讲清&quot;分布式时序测量的陷阱&quot;。   一、为什么需要专门的 Timer 训练几百亿参数、几千卡，一句&quot;前向多快&quot;没法用 time.time() 包一下就答——它有四个坑：  GPU 异步：PyTorch 的 CUDA op 是异步 launch，CPU 侧 time.time() 测的是&quot;把 kernel 丢进队列&quot;的时间，不是 GPU 真跑完的时间。必须 torch.cuda.synchronize() 强制等 GPU 空闲再取时间。 多 rank 不同步：上千张...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/28/2024-09-28-GPU-%E5%AE%B9%E5%99%A8%E5%BA%95%E5%B1%82%E5%AE%9E%E7%8E%B0/" title="GPU 容器底层实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">GPU 容器底层实现</div></div><div class="info-2"><div class="info-item-1">GPU 容器底层实现 容器使⽤ GPU – 问题提出 在容器环境中使⽤ GPU 是⼀件有趣的事情，以 NVIDIA GPU 为例，常⻅的⼀个使⽤ CUDA 的应⽤程序，其结构图如下：  **CUDA Driver API：**GPU 设备的抽象层，通过⼀系列 API 直接操作 GPU 设备，性能好，但编程难度⾼ （需要显式进⾏device初始化以及context管理等） CUDA Runtime API: 对 CUDA Driver API 进⾏⼀定封装，简化编程过程，降低开发难度； CUDA Libraries: 更⾼层的封装，包含⼀些成熟的⾼效函数库。 因此要实现 NVIDIA 容器化，也就是要让应⽤程序可以在容器内调⽤ CUDA API 来操作 GPU，⼀般来讲，就要使容器内应⽤程序内可调⽤ CUDA Runtime API 和 CUDA Libraries，容器内可使⽤ CUDA Driver 相关库。   NVIDIA CONTAINER TOOLKIT 具体结构 曾经 NVIDIA Docker 通过 docker 的 volume ⽅法将 CUDA Driver 挂...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-GPU-%E5%AE%B9%E5%99%A8%E7%9B%B8%E5%85%B3%E6%A6%82%E5%BF%B5/" title="GPU容器相关概念"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">GPU容器相关概念</div></div><div class="info-2"><div class="info-item-1">GPU容器相关概念 CUDA API 体系： 要使编写的 GPU 程序能够正常运行，需要借助 CUDA 直接使用 NVIDIA 的 GPU 来执行通用计算任务，从而使 GPU 能够从图形渲染设备转变为一个通用并行处理器，CUDA API 体系结构图如下：   **CUDA Driver API：**GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）。 CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度。 CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。  因此要实现 CUDA 容器化，就要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内程序可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 CUDA 容器化基本思路 要将 GPU 设备挂载到容器中，NVIDIA Docker 是通过注入一个 pre...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/" title="NVIDIA device plugin for Kubernetes原理分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">NVIDIA device plugin for Kubernetes原理分析</div></div><div class="info-2"><div class="info-item-1">NVIDIA device plugin for Kubernetes原理分析 什么是 Device Plugin K8s 原生并没有支持第三方设备厂商的物理设备资源，因此 Device Plugins 给第三方设备厂商提供了相关接口，可以让他们的物理设备资源以 Extended Resources 提供给底层的容器。 当 device plugin 功能启动后，可以令 kubelet 开放 Register 的 gRPC 服务，device plugin 就可以通过这个服务向 kubelet 进行注册，注册成功后 device plugin 就进入了 Serving 模式，提供前面提到的 gRPC 接口调用服务，kubelet 也就可以通过调用 Listandwatch、Allocate 等方法对设备进行操作，可以用下图来描述单一节点上这一过程：  下面以 NVIDIA k8s-device-plugin 为例简单讲讲这一过程。 注册服务 先看 gRPC 注册部分，下面的函数用于启动一个 gRPC 服务器并在 kubelet 中注册 1234567891011121314151...</div></div></div></a><a class="pagination-related" href="/2025/02/16/2025-02-16-k8s%E4%B8%AD%E9%80%9A%E8%BF%87pod%E8%8E%B7%E5%8F%96gpu%E4%BD%BF%E7%94%A8%E8%BF%9B%E7%A8%8B%E5%88%B0pod%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB%20-%20%E5%89%AF%E6%9C%AC/" title="k8s中通过pod获取gpu使用进程到pod的映射关系"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-02-16</div><div class="info-item-2">k8s中通过pod获取gpu使用进程到pod的映射关系</div></div><div class="info-2"><div class="info-item-1">k8s中通过pod获取gpu使用进程到pod的映射关系 背景 该任务的pod为daemonset在集群的每一个节点上，controller pod（只有一个）通过grpc的方式进行调用该daemonset pod获取到该节点上gpu的使用进程到pod的映射关系，传递的参数为使用gpu的pod的id。 该需求涉及到几个部分内容：  如何通过pod id定位到具体的节点  通过controller 的cache机制（包含有pod和node cache）获取到daemonset pod id对应的node ip，在daemonset的pod部分新建grpc server端，根据ip:port构建grpc client即可   如何获取到节点上的gpu-&gt;process的映射关系  调用go-nvml即可   如何获取到节点上的process-&gt;container的映射关系  调用taskClient   container-&gt;pod的映射关系？  controller cache机制获取到对应的node，然后可以获取到该node上的pod和container，做一层映...</div></div></div></a><a class="pagination-related" href="/2025/07/13/2026-07-13-Spot%E8%B5%84%E6%BA%90%E5%AE%9E%E7%8E%B0%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-%E4%BB%8E%E8%99%9A%E6%8B%9F%E8%AE%BE%E5%A4%87%E5%88%B0%E5%81%B7%E5%8D%A1%E8%B6%85%E5%8D%96%E7%9A%84%E5%AE%8C%E6%95%B4%E9%93%BE%E8%B7%AF/" title="Spot资源实现深度解析：从虚拟设备到偷卡超卖的完整链路"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-07-13</div><div class="info-item-2">Spot资源实现深度解析：从虚拟设备到偷卡超卖的完整链路</div></div><div class="info-2"><div class="info-item-1">Spot 资源实现深度解析：从虚拟设备到偷卡超卖的完整链路 1. 什么是 Spot 资源 Spot 资源（在 GangJob 中对应 spot-queue 队列）是一种服务质量不被保证的低优先级 GPU 资源：  随时可以被高优先级的 reserved 任务驱逐抢占 计费便宜 适用于短时调试任务、可被打断保留进度的任务  传统 spot 的调度范围是集群中所有空闲未分配的资源（未售出的 + 已售出但暂未分配的）。但本文要解析的是更深层的 spot 实现——偷卡超卖：即使资源已被 reserved 任务分配（如用户开发机占着 8 卡），只要用户&quot;离开&quot;（GPU 利用率为 0），就能把这块卡的算力偷给 spot 任务，用户&quot;回归&quot;时再驱逐 spot、还回资源。  2. 三层架构总览 Spot 资源的实现横跨三个组件，各层职责清晰： 12345678910111213141516171819202122232425262728┌─────────────────────────────────────────────────────────┐│ ...</div></div></div></a><a class="pagination-related" href="/2024/10/01/2024-10-01-CUDA%E5%AE%B9%E5%99%A8%E5%8C%96&Container-runtime%E7%9B%B8%E5%85%B3%E6%8A%80%E6%9C%AF%E6%A2%B3%E7%90%86/" title="CUDA容器化&amp;Container runtime相关技术梳理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-10-01</div><div class="info-item-2">CUDA容器化&amp;Container runtime相关技术梳理</div></div><div class="info-2"><div class="info-item-1">CUDA容器化&amp;Container runtime相关技术梳理 整体结构 CUDA API体系  CUDA Driver API：GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）； CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度； CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。 因此要实现 NVIDIA 容器化，也就是要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内应用程序内可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 NVIDIA CONTAINER TOOLKIT 具体结构  GPU 容器底层实现 GPU 容器相关概念 一些背景知识  什么是运行时？什么是高级运行时（high-level runtime）和低级运行时(low-level runtime):  参考：ht...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">218</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">196</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">62</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E6%BE%84%E6%B8%85%EF%BC%9A%E6%AD%A4-kernel-%E9%9D%9E%E5%BD%BC-kernel"><span class="toc-number">1.1.</span> <span class="toc-text">一、先澄清：此 kernel 非彼 kernel</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81CPU-GPU-%E5%8D%8F%E4%BD%9C%E6%A8%A1%E5%9E%8B%EF%BC%9A%E6%B4%BE%E5%8D%95%E4%B8%8E%E6%96%BD%E5%B7%A5"><span class="toc-number">1.2.</span> <span class="toc-text">二、CPU&#x2F;GPU 协作模型：派单与施工</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%BF%85%E9%A1%BB%E5%BC%82%E6%AD%A5%EF%BC%88%E4%B8%8D%E5%BC%82%E6%AD%A5%E5%B0%B1%E6%85%A2%EF%BC%89"><span class="toc-number">1.2.1.</span> <span class="toc-text">为什么必须异步（不异步就慢）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%BC%82%E6%AD%A5-Launch-%E4%B8%8E-synchronize%EF%BC%88Timer-%E7%9A%84%E5%91%BD%E9%97%A8%EF%BC%89"><span class="toc-number">1.3.</span> <span class="toc-text">三、异步 Launch 与 synchronize（Timer 的命门）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E5%BC%82%E6%AD%A5%E5%B8%A6%E6%9D%A5%E7%9A%84-%E6%B5%8B%E4%B8%8D%E5%87%86"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 异步带来的&quot;测不准&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-torch-cuda-synchronize-%E7%9A%84%E4%BD%9C%E7%94%A8"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 torch.cuda.synchronize() 的作用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-sync-%E7%9A%84%E4%BB%A3%E4%BB%B7"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 sync 的代价</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E4%BD%95%E6%97%B6%E8%AF%A5-sync%EF%BC%88%E7%BB%8F%E9%AA%8C%EF%BC%89"><span class="toc-number">1.3.4.</span> <span class="toc-text">3.4 何时该 sync（经验）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81CUDA-Stream-%E4%B8%8E-Event%EF%BC%9A%E8%B0%81%E5%85%88%E8%B0%81%E5%90%8E%E3%80%81%E8%83%BD%E4%B8%8D%E8%83%BD%E5%B9%B6%E8%A1%8C"><span class="toc-number">1.4.</span> <span class="toc-text">四、CUDA Stream 与 Event：谁先谁后、能不能并行</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-Stream%EF%BC%88%E6%B5%81%EF%BC%89%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 Stream（流）是什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E5%85%B8%E5%9E%8B%E7%94%A8%E9%80%94%EF%BC%9A%E8%AE%A1%E7%AE%97-%E9%80%9A%E4%BF%A1%E9%87%8D%E5%8F%A0%E3%80%81H2D-%E8%AE%A1%E7%AE%97%E9%87%8D%E5%8F%A0"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 典型用途：计算&#x2F;通信重叠、H2D&#x2F;计算重叠</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-Event%EF%BC%88%E4%BA%8B%E4%BB%B6%EF%BC%89%EF%BC%9A%E8%B7%A8-stream-%E5%90%8C%E6%AD%A5"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 Event（事件）：跨 stream 同步</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81Grid-Block-Thread%EF%BC%9Akernel-%E7%9A%84%E5%B9%B6%E8%A1%8C%E7%BB%93%E6%9E%84"><span class="toc-number">1.5.</span> <span class="toc-text">五、Grid &#x2F; Block &#x2F; Thread：kernel 的并行结构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%EF%BC%9A%E7%AE%97%E5%8A%9B%E9%9D%A0-%E5%96%82%E9%A5%B1-SM"><span class="toc-number">1.5.1.</span> <span class="toc-text">关键：算力靠&quot;喂饱 SM&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#SM-%E5%86%85%E7%9A%84%E5%AD%98%E5%82%A8%E5%B1%82%E6%AC%A1%EF%BC%88%E5%BD%B1%E5%93%8D-kernel-%E6%80%A7%E8%83%BD%EF%BC%89"><span class="toc-number">1.5.2.</span> <span class="toc-text">SM 内的存储层次（影响 kernel 性能）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E8%9E%8D%E5%90%88-Kernel%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E6%8A%8A%E5%A4%9A%E4%B8%AA%E7%AE%97%E5%AD%90%E5%90%88%E6%88%90%E4%B8%80%E4%B8%AA"><span class="toc-number">1.6.</span> <span class="toc-text">六、融合 Kernel：为什么要把多个算子合成一个</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E6%9C%B4%E7%B4%A0-op-%E9%93%BE%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 朴素 op 链的问题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E8%9E%8D%E5%90%88%E7%9A%84%E8%A7%A3%E6%B3%95"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 融合的解法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E8%AE%AD%E7%BB%83-%E6%8E%A8%E7%90%86%E9%87%8C%E7%9A%84%E8%9E%8D%E5%90%88-kernel-%E5%AE%9E%E4%BE%8B"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 训练&#x2F;推理里的融合 kernel 实例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-%E8%9E%8D%E5%90%88%E7%9A%84%E4%BB%A3%E4%BB%B7%E4%B8%8E%E8%BE%B9%E7%95%8C"><span class="toc-number">1.6.4.</span> <span class="toc-text">6.4 融合的代价与边界</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81CUDA-Graph%EF%BC%9A%E6%8A%8A%E4%B8%80%E4%B8%B2-launch-%E5%BD%95%E6%88%90%E4%B8%80%E6%AC%A1-replay"><span class="toc-number">1.7.</span> <span class="toc-text">七、CUDA Graph：把一串 launch 录成一次 replay</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E9%97%AE%E9%A2%98%EF%BC%9Alaunch-%E5%BC%80%E9%94%80%E5%9C%A8-decode-%E9%87%8C%E5%BE%88%E9%87%8D"><span class="toc-number">1.7.1.</span> <span class="toc-text">7.1 问题：launch 开销在 decode 里很重</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-CUDA-Graph-%E7%9A%84%E8%A7%A3%E6%B3%95"><span class="toc-number">1.7.2.</span> <span class="toc-text">7.2 CUDA Graph 的解法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-%E5%B7%A5%E7%A8%8B%E5%AE%9E%E4%BE%8B"><span class="toc-number">1.7.3.</span> <span class="toc-text">7.3 工程实例</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%80%8E%E4%B9%88%E5%86%99-kernel%EF%BC%9ATriton-%E4%B8%8E-CUDA-C"><span class="toc-number">1.8.</span> <span class="toc-text">八、怎么写 kernel：Triton 与 CUDA C</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E4%B8%A4%E6%9D%A1%E8%B7%AF"><span class="toc-number">1.8.1.</span> <span class="toc-text">8.1 两条路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E8%A6%81%E8%87%AA%E5%B7%B1%E5%86%99"><span class="toc-number">1.8.2.</span> <span class="toc-text">8.2 什么时候要自己写</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E6%80%8E%E4%B9%88%E8%B0%83-kernel-%E6%80%A7%E8%83%BD%EF%BC%9Aprofiling"><span class="toc-number">1.9.</span> <span class="toc-text">九、怎么调 kernel 性能：profiling</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E4%B8%B2%E8%B5%B7%E8%AE%AD%E7%BB%83-%E6%8E%A8%E7%90%86%EF%BC%9Akernel-%E8%A7%86%E8%A7%92%E7%9C%8B%E6%80%A7%E8%83%BD"><span class="toc-number">1.10.</span> <span class="toc-text">十、串起训练&#x2F;推理：kernel 视角看性能</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AE%AD%E7%BB%83%EF%BC%88Megatron%EF%BC%89"><span class="toc-number">1.10.1.</span> <span class="toc-text">训练（Megatron）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8E%A8%E7%90%86%EF%BC%88vLLM%EF%BC%89"><span class="toc-number">1.10.2.</span> <span class="toc-text">推理（vLLM）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E7%A7%8D%E7%93%B6%E9%A2%88%EF%BC%88%E5%8A%A1%E5%BF%85%E5%88%86%E6%B8%85%EF%BC%89"><span class="toc-number">1.10.3.</span> <span class="toc-text">三种瓶颈（务必分清）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E9%9D%A2%E8%AF%95%E9%80%9F%E7%AD%94%E6%B8%85%E5%8D%95"><span class="toc-number">1.11.</span> <span class="toc-text">十一、面试速答清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%BA%8C%E3%80%81%E4%B8%80%E5%BC%A0%E5%9B%BE%E6%94%B6%E5%8F%A3"><span class="toc-number">1.12.</span> <span class="toc-text">十二、一张图收口</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.12.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="vLLM 源码精读——高吞吐 LLM 推理引擎全景">vLLM 源码精读——高吞吐 LLM 推理引擎全景</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-Megatron-Timers%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron Timers 源码精读——分布式训练性能打点">Megatron Timers 源码精读——分布式训练性能打点</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/" title="GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解">GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-Megatron-Timer-Predictor%E7%B3%BB%E7%BB%9F/" title="Megatron Timer Predictor——训练 Straggler 实时检测与定位系统">Megatron Timer Predictor——训练 Straggler 实时检测与定位系统</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/19/2026-07-19-Megatron-LM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron-LM 源码精读——大模型并行训练全景">Megatron-LM 源码精读——大模型并行训练全景</a><time datetime="2026-07-18T16:00:00.000Z" title="发表于 2026-07-19 00:00:00">2026-07-19</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
