@@ -1,0 +1,532 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>vLLM 源码精读——高吞吐 LLM 推理引擎全景 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="vLLM 源码精读——高吞吐 LLM 推理引擎全景  本文基于 vLLM 源码 vllm&#x2F;v1&#x2F;（V1 引擎架构）。目标：让你在面试时能从&quot;为什么传统 serving 显存利用率只有 20%“讲到&quot;PagedAttention 的 block 怎么管”、从&quot;prefill&#x2F;decode 不再分阶段&quot;讲到&quot;continuous batching 的">
+<meta property="og:type" content="article">
+<meta property="og:title" content="vLLM 源码精读——高吞吐 LLM 推理引擎全景">
+<meta property="og:url" content="http://example.com/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="vLLM 源码精读——高吞吐 LLM 推理引擎全景  本文基于 vLLM 源码 vllm&#x2F;v1&#x2F;（V1 引擎架构）。目标：让你在面试时能从&quot;为什么传统 serving 显存利用率只有 20%“讲到&quot;PagedAttention 的 block 怎么管”、从&quot;prefill&#x2F;decode 不再分阶段&quot;讲到&quot;continuous batching 的">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-19T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-19T09:07:43.287Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="推理">
+<meta property="article:tag" content="源码">
+<meta property="article:tag" content="vLLM">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "vLLM 源码精读——高吞吐 LLM 推理引擎全景",
+  "url": "http://example.com/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-19T16:00:00.000Z",
+  "dateModified": "2026-07-19T09:07:43.287Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'vLLM 源码精读——高吞吐 LLM 推理引擎全景',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">215</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">191</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">61</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">vLLM 源码精读——高吞吐 LLM 推理引擎全景</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">vLLM 源码精读——高吞吐 LLM 推理引擎全景</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-19T09:07:43.287Z" title="更新于 2026-07-19 17:07:43">2026-07-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E7%B3%BB%E7%BB%9F/">大模型系统</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" data-flag-title="vLLM 源码精读——高吞吐 LLM 推理引擎全景"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>vLLM 源码精读——高吞吐 LLM 推理引擎全景</h1>
+<blockquote>
+<p>本文基于 vLLM 源码 <code>vllm/v1/</code>（V1 引擎架构）。目标：让你在面试时能从&quot;为什么传统 serving 显存利用率只有 20%“讲到&quot;PagedAttention 的 block 怎么管”、从&quot;prefill/decode 不再分阶段&quot;讲到&quot;continuous batching 的 token-budget 调度&quot;、从&quot;prefix caching + 拷贝写&quot;讲到&quot;V1 的 async scheduler + CUDA Graph + spec decode&quot;。读完这篇，vLLM 这关基本通杀。</p>
+</blockquote>
+<hr>
+<h2 id="一、vLLM-要解决什么问题、为什么面试必问">一、vLLM 要解决什么问题、为什么面试必问</h2>
+<p>传统 LLM serving（朴素 batch）有两个致命问题：</p>
+<ol>
+<li><strong>KV cache 显存碎片化</strong>：为每个请求预分配一段连续 KV 显存，请求长短不一→产生大量内部碎片+外部碎片，实测显存利用率常低于 20%；且无法在请求间复用相同前缀。</li>
+<li><strong>批处理不连续</strong>：朴素做法是&quot;攒满一个 batch 一齐 prefill，全部 decode 完再换下一批&quot;，prefill 和 decode 阶段割裂，新请求要等整批结束才能进→排队延迟高、GPU 空转。</li>
+</ol>
+<p>vLLM 用两件套解决，也正是面试的核心：</p>
+<ul>
+<li><strong>PagedAttention</strong>：把 KV cache 像操作系统虚拟内存一样按固定 block（默认 16 token）分页管理，按需分配、消除碎片、显存利用率从 ~20% 拉到 ~95%。</li>
+<li><strong>Continuous Batching（连续批处理 / iteration-level batching）</strong>：在每次 decode 迭代级别动态增删请求，prefill 和 decode 混在同一 batch，新请求即时加入、完成的即时退出，GPU 不空转。</li>
+</ul>
+<p>源码鸟瞰（<code>vllm/v1/</code>）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">engine/            # 引擎层: AsyncLLM(API 入口) / EngineCore(调度核心) / core_client</span><br><span class="line">core/sched/        # 调度器: scheduler.py(每步分配 token 预算) + request_queue</span><br><span class="line">core/              # KV cache: block_pool / kv_cache_manager / kv_cache_coordinator</span><br><span class="line">worker/gpu/        # 执行器: model_runner(execute_model) / block_table / input_batch / cudagraph_utils</span><br><span class="line">attention/         # 注意力后端: flash_attn / flashinfer / mla / mamba 等</span><br><span class="line">spec_decode/        # 投机解码: eagle / medusa / ngram / draft_model / dflash</span><br><span class="line">core/kv_offload/    # KV cache 卸载到 CPU/分层(PrefixCache 池化、disaggregated prefill)</span><br></pre></td></tr></table></figure>
+<p>主线：<strong><code>AsyncLLM</code> 收请求 → <code>EngineCore</code> 驱动 <code>Scheduler</code> 每步算 token 预算分配给各请求 → <code>KVCacheManager</code> 经 <code>BlockPool</code> 按 block 管 KV → <code>GPUModelRunner.execute_model</code> 把 batch 喂给模型 + 跑 attention + 采样 → 输出回流。</strong></p>
+<hr>
+<h2 id="二、PagedAttention：KV-cache-的虚拟内存（地基）">二、PagedAttention：KV cache 的虚拟内存（地基）</h2>
+<h3 id="2-1-类比-OS-虚拟内存">2.1 类比 OS 虚拟内存</h3>
+<p>vLLM 把 KV cache 当作&quot;显存里的内存系统&quot;来管：</p>
+<table>
+<thead>
+<tr>
+<th>OS 虚拟内存</th>
+<th>vLLM PagedAttention</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>进程的虚拟地址空间</td>
+<td>一个请求的逻辑 KV 序列</td>
+</tr>
+<tr>
+<td>page（4KB）</td>
+<td>block（默认 16 token 的 K/V）</td>
+</tr>
+<tr>
+<td>页表（虚拟→物理）</td>
+<td>block table（逻辑 block → 物理 block id）</td>
+</tr>
+<tr>
+<td>物理 page frame</td>
+<td>显存里的 KV block</td>
+</tr>
+<tr>
+<td>按 page 分配</td>
+<td>按 block 按需分配</td>
+</tr>
+</tbody>
+</table>
+<p>每个请求持有一张 <code>block_table</code>（逻辑 block 序号 → 物理 block id），逻辑上连续的 KV，物理上可以<strong>离散分布</strong>在不同物理 block。所以：</p>
+<ul>
+<li><strong>消除外部碎片</strong>：任何空闲 block 都能用，不必连续。</li>
+<li><strong>消除内部碎片</strong>：只有最后一个 block 可能浪费一点，浪费 ≤ 一个 block（16 token）。</li>
+<li><strong>按需分配</strong>：用多少 token 才分多少 block，不预先占满。</li>
+<li><strong>复用/共享</strong>：相同前缀可指向同一组物理 block（prefix caching）。</li>
+</ul>
+<h3 id="2-2-源码对应">2.2 源码对应</h3>
+<ul>
+<li><code>core/block_pool.py</code> 的 <code>BlockPool</code>：物理 block 池，负责分配/回收/驱逐，<code>get_new_blocks(n)</code>、<code>free_blocks</code>、<code>touch</code>（LRU）、<code>evict_blocks</code>。</li>
+<li><code>core/kv_cache_manager.py</code> 的 <code>KVCacheManager</code>：每个请求的逻辑→物理映射，<code>allocate_slots</code>（为请求新增 token 分 block）、<code>free</code>、<code>get_computed_blocks</code>（prefix 命中查询）、<code>cache_blocks</code>（把 block 哈希存进 prefix 缓存）。</li>
+<li><code>worker/gpu/block_table.py</code>：GPU 上的 block_table 张量，attention kernel 据此查物理 block。</li>
+<li><code>worker/gpu/model_runner.py</code> 的 <code>prepare_attn</code>：把每请求的 <code>slot_mapping</code>（token → 物理 KV slot）算好，attention kernel 用它把新 K/V 写进正确位置。</li>
+</ul>
+<h3 id="2-3-block-的物理布局">2.3 block 的物理布局</h3>
+<p>一个 block 存 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span></span></span></span>（如 16）个 token 的 K 和 V。attention kernel（<code>v1/attention/backends/flash_attn.py</code>）按 block_table 索引到这 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span></span></span></span> 个 token 的 K/V 做 attention。对 query token 要 attention 到序列里所有已计算的 K/V，跨 block 拼起来——这正是 PagedAttention kernel 相对普通 attention 多做的事，但换来了零碎片 + 复用。</p>
+<h3 id="2-4-prefix-caching-copy-on-write">2.4 prefix caching + copy-on-write</h3>
+<p>相同前缀（system prompt、few-shot、共享文档）的 KV 可以被多请求共享。源码 <code>BlockPool.get_cached_block</code> / <code>cache_full_blocks</code> / <code>cache_partial_block</code>：每个 block 按其内容的 hash 作 key 存进 <code>BlockHashToBlockMap</code>。新请求来了 <code>KVCacheManager.get_computed_blocks</code> 先算它能命中哪些已缓存的 block，命中则<strong>直接引用同一组物理 block，不重算 KV</strong>——这就是 vLLM 的 prefix caching（v1 默认开启）。</p>
+<p><strong>Copy-on-write</strong>：当某请求要往一个&quot;共享&quot; block 写新 token（它在前缀后又续了内容），不能直接改共享 block（会污染别的请求），而是复制一份再写——<code>BlockPool</code> 维护引用计数（<code>ref_cnt</code>），共享 block 被写时复制。这就是源码里 <code>cache_partial_block</code>、<code>_maybe_evict_cached_block</code> 处理的逻辑。</p>
+<blockquote>
+<p>面试金句：<strong>“PagedAttention = 把 KV cache 当虚拟内存，逻辑 block 经 block_table 映射到离散物理 block，按需分配消除碎片、显存利用率从 20% 到 95%；相同前缀的 block 按内容 hash 共享，写时复制，这就是 prefix caching。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="三、调度器：没有-prefill-阶段-decode-阶段-之分（V1-核心革新）">三、调度器：没有&quot;prefill 阶段 / decode 阶段&quot;之分（V1 核心革新）</h2>
+<h3 id="3-1-V0-的两阶段-vs-V1-的统一">3.1 V0 的两阶段 vs V1 的统一</h3>
+<ul>
+<li><strong>V0</strong>：有明确的 prefill 阶段和 decode 阶段，一个 iteration 要么全 prefill 要么全 decode，切换有开销。</li>
+<li><strong>V1</strong>：源码 <code>scheduler.py</code> 的 <code>schedule()</code> 开头注释明确写——<strong>“There’s no decoding phase nor prefill phase in the scheduler”</strong>。每个请求只有 <code>num_computed_tokens</code>（已算）和 <code>num_tokens_with_spec</code>（目标），调度器每步就是&quot;把 token 预算分给各请求，让它俩差值变小&quot;。</li>
+</ul>
+<p>这个抽象统一了 chunked prefill、prefix caching、speculative decoding、jump decoding——它们都只是&quot;让 num_computed_tokens 追上 num_tokens_with_spec&quot; 的不同形态。</p>
+<h3 id="3-2-token-budget-调度（每步怎么分）">3.2 token-budget 调度（每步怎么分）</h3>
+<p><code>Scheduler.schedule()</code> 的核心是 <code>max_num_scheduled_tokens</code> 这个<strong>全局 token 预算</strong>，按优先级分配：</p>
+<ol>
+<li><strong>RUNNING 请求优先</strong>：先给正在跑的请求续命——每个 running 请求需要的 <code>num_new_tokens = num_tokens_with_spec - num_computed_tokens</code>，从预算扣。</li>
+<li><strong>chunked prefill</strong>：长 prompt 一次算不完？切 chunk，每步算一段（<code>long_prefill_token_threshold</code>），剩下的下步再算——于是 prefill 和 decode 可在同一 batch 混跑。</li>
+<li><strong>WAITING 请求</strong>：预算还有剩，从 waiting 队列拉新请求做 prefill（FCFS，但允许低优先级抢占以避免饿死——源码注释&quot;by doing continue instead of break, allow lower-priority requests&quot;）。</li>
+<li><strong>预算耗尽或显存不够→preempt</strong>：当 KV 显存不够塞下新请求，<code>_preempt_request</code> 把 running 请求的 KV 换出/重算（preempt）给高优先级腾地方。</li>
+</ol>
+<h3 id="3-3-preemption（抢占）策略">3.3 preemption（抢占）策略</h3>
+<p>KV 显存紧张时调度器会 preempt 请求。两种方式：</p>
+<ul>
+<li><strong>Recompute</strong>：丢弃某请求所有 KV block，把它退回 waiting 队列，下步从 prompt 重新 prefill（损失算力但简单）。</li>
+<li><strong>Swap</strong>：把 KV 临时换到 CPU（V0 有，V1 倾向 recompute + 新的 KV offload/tiering）。</li>
+</ul>
+<p>源码 <code>_preempt_request</code> / <code>_free_blocks</code> / <code>free</code> 处理。抢占是 vLLM 在显存不足时的兜底，保证吞吐不崩。</p>
+<blockquote>
+<p>面试金句：<strong>“V1 调度器取消了 prefill/decode 阶段，每步就是给每个请求分配 token 预算让 num_computed_tokens 追上目标——这就是 continuous batching 的本质：iteration 级动态混跑 prefill 和 decode。显存不够就 preempt（重算或换出）兜底。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="四、EngineCore-与-AsyncLLM：V1-的双进程异步架构">四、EngineCore 与 AsyncLLM：V1 的双进程异步架构</h2>
+<h3 id="4-1-为什么拆异步">4.1 为什么拆异步</h3>
+<p>朴素架构里调度器（CPU）和 worker（GPU）串行：CPU 调度→GPU 算→CPU 收输出→CPU 再调度……CPU 调度时间和 GPU 计算时间互不重叠，互相等。GPU 在 CPU 调度时空闲。</p>
+<p>V1 的解法：<strong>把&quot;调度&quot;和&quot;执行&quot;解耦成两条流水线，用队列 + 双进程（或双线程）异步重叠</strong>。</p>
+<h3 id="4-2-源码结构">4.2 源码结构</h3>
+<ul>
+<li><code>engine/async_llm.py</code> 的 <code>AsyncLLM</code>：用户面向的异步 API（<code>add_request</code>/<code>generate</code>），把请求丢进 input queue，从 output queue 拉结果。<code>output_handler</code> 协程持续回流。</li>
+<li><code>engine/core.py</code> 的 <code>EngineCore</code>：调度核心。<code>step()</code> / <code>step_with_batch_queue()</code> 每步：调 <code>scheduler.schedule()</code> 算出 <code>SchedulerOutput</code>，丢给 worker 执行，收 <code>ModelRunnerOutput</code>，更新请求状态。</li>
+<li><code>v1/worker/gpu/model_runner.py</code> 的 <code>GPUModelRunner.execute_model</code>：真正跑一次 forward。</li>
+</ul>
+<h3 id="4-3-async-scheduler-重叠">4.3 async scheduler 重叠</h3>
+<p>V1 用 <strong>asyncio</strong> 让 scheduler 的一步和 worker 的下一步重叠：worker 在 GPU 上跑第 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi></mrow><annotation encoding="application/x-tex">i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6595em;"></span><span class="mord mathnormal">i</span></span></span></span> 步 forward 时，scheduler 已经在 CPU 上算第 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi><mo>+</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">i+1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7429em;vertical-align:-0.0833em;"></span><span class="mord mathnormal">i</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">1</span></span></span></span> 步的 <code>SchedulerOutput</code>。源码 <code>core/sched/async_scheduler.py</code> 实现这种 overlap 调度。这就是 V1 比 V0 高吞吐的关键之一——<strong>CPU 调度开销藏进 GPU 计算里</strong>。</p>
+<h3 id="4-4-sleep-wake-与-disaggregated-prefill">4.4 sleep/wake 与 disaggregated prefill</h3>
+<p><code>EngineCore.sleep()/wake_up()</code>：让 GPU KV cache 卸载（sleep level 1/2）以腾显存给别的任务，再唤醒恢复——服务于 <strong>disaggregated prefill</strong>（prefill 节点和 decode 节点分离，KV 跨机迁移）。<code>core/kv_offload/</code>、<code>worker/gpu/kv_connector.py</code>、<code>coordinator.py</code> 实现跨节点 KV 传输（Mooncake 风格的 KV 池化）。</p>
+<hr>
+<h2 id="五、GPUModelRunner-execute-model：一次-forward-怎么跑">五、GPUModelRunner.execute_model：一次 forward 怎么跑</h2>
+<p><code>worker/gpu/model_runner.py</code> 的 <code>execute_model</code> 是 worker 侧主入口，源码流程（精简）：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">def</span> <span class="title function_">execute_model</span>(<span class="params">self, scheduler_output, ...</span>):</span><br><span class="line">    <span class="comment"># 1. 更新请求状态: 完成的/新增的/变更的请求, 应用 block_table 写入</span></span><br><span class="line">    <span class="variable language_">self</span>.finish_requests(scheduler_output)</span><br><span class="line">    <span class="variable language_">self</span>.add_requests(scheduler_output)</span><br><span class="line">    <span class="variable language_">self</span>.update_requests(scheduler_output)</span><br><span class="line">    <span class="variable language_">self</span>.block_tables.apply_staged_writes()</span><br><span class="line"></span><br><span class="line">    <span class="comment"># 2. 决定 CUDA Graph 批次描述: 按 num_tokens 选一个预先抓好的图</span></span><br><span class="line">    batch_desc, num_tokens_across_dp = dispatch_cg_and_sync_dp(...)</span><br><span class="line"></span><br><span class="line">    <span class="comment"># 3. 准备输入: token ids/positions/block_table/slot_mapping 等</span></span><br><span class="line">    input_batch = <span class="variable language_">self</span>.prepare_inputs(scheduler_output, batch_desc)</span><br><span class="line">    block_tables, slot_mappings = <span class="variable language_">self</span>.prepare_attn(input_batch)</span><br><span class="line"></span><br><span class="line">    <span class="comment"># 4. 准备 attention metadata(后端无关: flash_attn/flashinfer/mla/...)</span></span><br><span class="line">    attn_metadata = <span class="variable language_">self</span>.model_state.prepare_attn(input_batch, cg_mode, block_tables, ...)</span><br><span class="line"></span><br><span class="line">    <span class="comment"># 5. 真正 forward + 采样</span></span><br><span class="line">    output = <span class="variable language_">self</span>.model(...)              <span class="comment"># 跑模型拿 logits/hidden</span></span><br><span class="line">    sampled = <span class="variable language_">self</span>.sample(output)         <span class="comment"># 采样(temperature/top_p/top_k/束搜索/约束)</span></span><br><span class="line">    <span class="keyword">return</span> ModelRunnerOutput(...)</span><br></pre></td></tr></table></figure>
+<h3 id="5-1-关键设计">5.1 关键设计</h3>
+<ul>
+<li><strong><code>prepare_attn</code> 算 <code>slot_mapping</code></strong>：每个新 token 要写到哪里——把逻辑 token 位置映射到物理 KV block 的具体 slot，attention kernel 据此 scatter 写入新 K/V、gather 旧 K/V 算注意力。这是 PagedAttention 的运行时落地。</li>
+<li><strong>block_table apply_staged_writes</strong>：调度器本步分配的新 block id 先&quot;暂存&quot;（staged），execute_model 时统一 apply 到 GPU 上的 block_table 张量，减少 CPU↔GPU 同步次数。</li>
+<li><strong>多后端 attention</strong>：<code>v1/attention/backends/</code> 下 flash_attn、flashinfer、mla（DeepSeek MLA）、mamba（SSM）、linear_attn 等，<code>registry.py</code> 按 model_config 选后端。vLLM 能跑这么多模型全靠这层抽象。</li>
+</ul>
+<h3 id="5-2-CUDA-Graph-抓图（decode-加速）">5.2 CUDA Graph 抓图（decode 加速）</h3>
+<p>decode 阶段每步只产一个 token、算子小、kernel launch 开销占比高。vLLM 用 <code>cudagraph_utils.py</code>：<strong>对若干个&quot;固定 batch 大小/token 数&quot;组合预先抓 CUDA Graph</strong>，运行时 <code>dispatch_cg_and_sync_dp</code> 按实际 num_tokens 选一个匹配的图直接 replay，跳过 kernel launch。<code>capture_model</code> 在启动时做这些抓图。这就是 decode 阶段 vLLM 低延迟的关键。</p>
+<p>代价：图的种类有限、要为每种 num_tokens 抓一份图（占显存）；EAGLE 等 spec decode 下还要为 draft token 数额外抓图。所以有 <code>dispatch_cg_and_sync_dp</code> 在 DP 各 rank 间同步选同样的图。</p>
+<h3 id="5-3-DP（数据并行）与统一-token-数">5.3 DP（数据并行）与统一 token 数</h3>
+<p>源码里反复出现 <code>get_uniform_token_count</code> / <code>num_tokens_across_dp</code>：多 DP rank 时，为能复用同一 CUDA Graph、做一致 attention，要把各 rank 的 token 数对齐（padding 到 uniform count）。这是 V1 对多卡 serving 的工程细节。</p>
+<hr>
+<h2 id="六、采样、约束输出、投机解码">六、采样、约束输出、投机解码</h2>
+<h3 id="6-1-采样-model-runner-sample">6.1 采样 <code>model_runner.sample</code></h3>
+<ul>
+<li>把模型 logits 过 logits_processor（temperature、top_p、top_k、min_p、penalty）→ 采样 token id。</li>
+<li>支持束搜索（best_of、beam search）、多候选取样（n）。</li>
+<li><code>v1/sample/</code> 下 logits_processor 的各种算子，很多是 fused kernel（<code>v1/sample/ops</code>）。</li>
+<li><strong>约束输出 / 结构化输出</strong>（<code>v1/structured_output/</code>）：JSON schema、regex、grammar——通过 grammar 编译成 FSM bitmask，采样前 mask 掉不合法 token，保证输出符合 schema（xGrammar/AICI 思路）。</li>
+</ul>
+<h3 id="6-2-投机解码（v1-spec-decode-）">6.2 投机解码（<code>v1/spec_decode/</code>）</h3>
+<p>V1 把 spec decode 做成&quot;proposer + target 验证&quot;的统一抽象，多种 proposer：</p>
+<table>
+<thead>
+<tr>
+<th>Proposer</th>
+<th>文件</th>
+<th>原理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>EAGLE/EAGLE-3</strong></td>
+<td><code>eagle.py</code></td>
+<td>自回归草稿头（与大模型共享 embedding/lm_head），一次 forward 出多个 draft token</td>
+</tr>
+<tr>
+<td><strong>Medusa</strong></td>
+<td><code>medusa.py</code></td>
+<td>多头并行猜下一 k 个 token，树形验证</td>
+</tr>
+<tr>
+<td><strong>draft_model</strong></td>
+<td><code>draft_model.py</code></td>
+<td>独立小模型起草稿（经典 spec decode）</td>
+</tr>
+<tr>
+<td><strong>n-gram</strong></td>
+<td><code>ngram_proposer.py</code></td>
+<td>纯启发式，用 prompt 里的 n-gram 猜 draft，零草稿模型开销</td>
+</tr>
+<tr>
+<td><strong>dflash</strong></td>
+<td><code>dflash.py</code></td>
+<td>Flash 风格自回归草稿</td>
+</tr>
+<tr>
+<td><strong>suffix decoding</strong></td>
+<td><code>suffix_decoding.py</code></td>
+<td>后缀树匹配猜 draft</td>
+</tr>
+</tbody>
+</table>
+<p>机制（呼应投机解码那篇）：proposer 出 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi></mrow><annotation encoding="application/x-tex">k</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal" style="margin-right:0.03148em;">k</span></span></span></span> 个 draft token，target 一次 forward 并行验证，按接受率接受前缀、拒绝处从修正分布补采。源码里 <code>Scheduler.update_draft_token_ids</code> 把 draft token 并进 <code>num_tokens_with_spec</code>，统一进调度器——<strong>这就是 V1 &quot;spec decode 只是让 num_computed_tokens 追上一个更大的目标&quot;的具体体现</strong>。<code>take_draft_token_ids</code> 在 worker 取 draft、<code>sample_tokens</code> 收验证。</p>
+<blockquote>
+<p>面试金句：<strong>“V1 把 spec decode 做成 proposer 抽象（EAGLE/Medusa/draft/n-gram…），draft token 并进 num_tokens_with_spec 让调度器统一调度，target 一次 forward 验证、拒绝采样补采——无损且把 decode 的算力喂饱。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="七、KV-cache-offload-分层-disaggregated-prefill">七、KV cache offload / 分层 / disaggregated prefill</h2>
+<p><code>v1/core/kv_offload/</code>（cpu/、tiering/）+ <code>simple_kv_offload/</code>：</p>
+<ul>
+<li><strong>KV offload 到 CPU</strong>：显存紧张时把冷 KV block 换到 host 内存（pin 的），要时再换回。把&quot;GPU 显存&quot;扩展成&quot;GPU + CPU 两级&quot;。</li>
+<li><strong>tiering</strong>：多级 KV 池（GPU hot / CPU warm / SSD cold），按访问热度迁移。</li>
+<li><strong>disaggregated prefill</strong>：把 prefill（算力密集、可并行）和 decode（访存密集、串行）拆到不同节点池。prefill 节点算完 KV，通过 <code>kv_connector</code> 把 KV 迁到 decode 节点继续生成。<code>engine/coordinator.py</code>、<code>worker/gpu/kv_connector.py</code>、<code>_update_from_kv_xfer_finished</code> 实现 KV 跨节点传输。Mooncake/NVIDIA Dynamo 这套都对接 vLLM 这层。</li>
+</ul>
+<p>这层是当前推理系统最热的方向（PD 分离），面试讲到&quot;你怎么看推理架构演进&quot;必谈。</p>
+<hr>
+<h2 id="八、LoRA-多模态-量化-分布式">八、LoRA / 多模态 / 量化 / 分布式</h2>
+<ul>
+<li><strong>LoRA</strong>（<code>vllm/lora/</code> + <code>worker/gpu/lora_utils.py</code>）：多个 LoRA adapter 共享 base 权重，按请求激活。<code>num_active_loras</code> 在 <code>execute_model</code> 里决定走哪条 fused LoRA kernel 路径；CUDA Graph 也要按 active lora 数抓图。</li>
+<li><strong>多模态</strong>（<code>vllm/multimodal/</code> + <code>worker/gpu/mm</code>）：图像/音频输入经 encoder 出 embedding，作为 prefix 注入。<code>encoder_cache_manager</code> 管 encoder 缓存，<code>_try_schedule_encoder_inputs</code> 给 encoder 算预算。</li>
+<li><strong>量化</strong>（<code>vllm/model_executor/layers/quantization/</code> + <code>csrc/quantization/</code>）：W8A8/W4A16/AWQ/GPTQ/FP8 等。把 <code>nn.Linear</code> 换成量化版本，attention/MLP 走量化 kernel。</li>
+<li><strong>分布式</strong>（<code>vllm/distributed/</code> + <code>worker/gpu/dp_utils.py</code>）：TP（切权重，跨 GPU all-reduce）、PP（切层）、DP（多副本）。<code>v1/executor/</code> 编排多 worker。<code>dispatch_cg_and_sync_dp</code> 在 DP 各 rank 同步 token 数以复用 CUDA Graph。</li>
+<li><strong>多种硬件</strong>（<code>vllm/platforms/</code>、<code>csrc/cpu/</code>、<code>csrc/rocm/</code>）：CPU/ROCm/TPU/XPU 后端，attention 后端按平台选。</li>
+</ul>
+<hr>
+<h2 id="九、怎么读源码（给你的路线）">九、怎么读源码（给你的路线）</h2>
+<ol>
+<li><code>vllm/v1/request.py</code> + <code>vllm/v1/engine/async_llm.py</code>：看一个请求从 API 进来怎么流转。</li>
+<li><code>vllm/v1/core/sched/scheduler.py</code> 的 <code>schedule()</code>：看 token 预算怎么分、continuous batching 的本质。<strong>这是 V1 最重要的一个函数。</strong></li>
+<li><code>vllm/v1/core/block_pool.py</code> + <code>kv_cache_manager.py</code>：看 PagedAttention 的 block 分配/回收/命中/驱逐、prefix caching、COW。</li>
+<li><code>vllm/v1/worker/gpu/model_runner.py</code> 的 <code>execute_model</code> + <code>prepare_attn</code>：看一次 forward 怎么把 batch + block_table + slot_mapping 拼好喂给 attention。</li>
+<li><code>vllm/v1/attention/backends/flash_attn.py</code>：看 PagedAttention kernel 怎么按 block_table 算注意力。</li>
+<li><code>vllm/v1/engine/core.py</code> 的 <code>step</code> + <code>core/sched/async_scheduler.py</code>：看 V1 怎么用 asyncio 让调度和执行重叠。</li>
+<li><code>vllm/v1/spec_decode/eagle.py</code>：看 spec decode 怎么并进调度器统一处理。</li>
+<li>跑一个最小例子（<code>examples/basic/</code>）+ <code>VLLM_USE_V1=1</code> 打开调试日志对照。</li>
+</ol>
+<hr>
+<h2 id="十、面试速答清单">十、面试速答清单</h2>
+<p><strong>Q1：vLLM 为什么比朴素 serving 快？两个核心是什么？</strong></p>
+<blockquote>
+<p>两个核心：PagedAttention 把 KV cache 按固定 block（16 token）分页管理，逻辑 block 经 block_table 映射到离散物理 block，按需分配消除碎片、显存利用率从 20% 到 95%；continuous batching 在每次 decode 迭代级别动态增删请求，prefill/decode 混跑、新请求即时加入、GPU 不空转。叠加 prefix caching 复用相同前缀、CUDA Graph 加速 decode、async scheduler 重叠 CPU 调度与 GPU 计算。</p>
+</blockquote>
+<p><strong>Q2：PagedAttention 怎么消除碎片？怎么复用前缀？</strong></p>
+<blockquote>
+<p>KV cache 当虚拟内存：请求持 block_table（逻辑→物理 block id），物理 block 可离散，外部碎片没了，内部碎片最多一个 block。block 按内容 hash 作 key 存 prefix 缓存，新请求 <code>get_computed_blocks</code> 命中已缓存 block 直接引用不重算 KV；要往共享 block 写新 token 时用引用计数 + copy-on-write 复制一份再写，避免污染别的请求。</p>
+</blockquote>
+<p><strong>Q3：continuous batching 和朴素 static batching 区别？V1 调度怎么做的？</strong></p>
+<blockquote>
+<p>static batching 攒满一批一起跑、整批结束才换；continuous batching 在 iteration 级别动态增删。V1 调度器取消 prefill/decode 阶段，每个请求有 num_computed_tokens 和 num_tokens_with_spec，每步把 max_num_scheduled_tokens 这个 token 预算按 running 优先、waiting 次之分配，让前者追上后者——这个抽象统一了 chunked prefill、prefix caching、spec decode。显存不够就 preempt（重算或换出）兜底。</p>
+</blockquote>
+<p><strong>Q4：V1 比 V0 强在哪？</strong></p>
+<blockquote>
+<p>三点：①async scheduler 用 asyncio 把 CPU 调度和 GPU 计算重叠，消除互相等待；②统一 prefill/decode 抽象，chunked prefill 让两者同 batch 混跑；③CUDA Graph 按 token 数抓图 replay，decode 阶段 kernel launch 开销大幅降低；④prefix caching 默认开、spec decode 多 proposer（EAGLE/n-gram/…）、KV offload/PD 分离原生支持。</p>
+</blockquote>
+<p><strong>Q5：CUDA Graph 在 vLLM 怎么用？为什么 decode 受益大？</strong></p>
+<blockquote>
+<p>decode 每步只产一两个 token、算子小，kernel launch 开销占比高。vLLM 在启动时 <code>capture_model</code> 为若干个固定 num_tokens/batch 组合抓 CUDA Graph，运行时 <code>dispatch_cg_and_sync_dp</code> 按实际 token 数选匹配图直接 replay，跳过 launch。代价是图要占显存、且种类有限，DP 各 rank 要同步选同一图以复用。prefill 算子大 launch 占比低、且 shape 多变，所以 Graph 对 prefill 收益小。</p>
+</blockquote>
+<p><strong>Q6：prefill 和 decode 为什么要拆开调度、disaggregated prefill 是什么？</strong></p>
+<blockquote>
+<p>prefill 算力密集可并行、长 prompt 一次算很多 token；decode 访存密集、串行、每步少 token。混跑时两者对算力/带宽需求不同会互相拖累。disaggregated prefill 把 prefill 和 decode 拆到不同节点池：prefill 节点算完 KV 通过 kv_connector 把 KV 迁到 decode 节点继续生成。vLLM V1 的 sleep/wake、kv_offload、coordinator 实现这层。Mooncake/Dynamo 都对接这层。</p>
+</blockquote>
+<p><strong>Q7：vLLM 的 spec decode 怎么和调度器结合？</strong></p>
+<blockquote>
+<p>V1 把 spec decode 做成 proposer 抽象（EAGLE/Medusa/draft_model/n-gram/suffix）。proposer 出 k 个 draft token 后，<code>update_draft_token_ids</code> 把 draft 并进请求的 num_tokens_with_spec，于是调度器把它当成&quot;要算更多 token&quot;统一处理，target 一次 forward 验证这 k+1 个位置、按接受率接受前缀、拒绝处修正分布补采——无损。CUDA Graph 还要为 draft token 数额外抓图。</p>
+</blockquote>
+<p><strong>Q8：preemption 怎么工作？什么时候触发？</strong></p>
+<blockquote>
+<p>当某步要调度但 KV 显存不够塞下新请求/继续 running 请求时，调度器从 running 尾部 preempt——<code>_preempt_request</code> 把请求的 KV block 释放、退回 waiting 队列，下步从头 recompute（或 swap 到 CPU）。这是显存不足的兜底，保证吞吐不崩但牺牲被抢占请求的算力。源码用 recompute 为主（简单、prefix caching 能缓解重算成本）。</p>
+</blockquote>
+<hr>
+<h2 id="十一、一张图收口">十一、一张图收口</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">请求流:  AsyncLLM.add_request ─► input queue</span><br><span class="line">            │</span><br><span class="line">            ▼ (asyncio 双进程, CPU 调度 与 GPU 执行 重叠)</span><br><span class="line">EngineCore.step:</span><br><span class="line">   Scheduler.schedule()  ── token 预算分给 running(优先) + waiting + chunked prefill</span><br><span class="line">       │                     (取消 prefill/decode 阶段, 统一 num_computed_tokens→num_tokens_with_spec)</span><br><span class="line">       ▼</span><br><span class="line">   KVCacheManager.allocate_slots ── BlockPool: 按需分物理 block / prefix 命中共享 / COW / preempt</span><br><span class="line">       │</span><br><span class="line">       ▼</span><br><span class="line">GPUModelRunner.execute_model:</span><br><span class="line">   prepare_inputs + prepare_attn(算 slot_mapping) + block_tables.apply_staged_writes</span><br><span class="line">   dispatch_cg_and_sync_dp 选 CUDA Graph ── replay</span><br><span class="line">   model.forward + attention(flash_attn/mla/mamba...) ── PagedAttention 按 block_table 算注意力</span><br><span class="line">   sample(logits_processor / 约束输出 / spec decode 验证)</span><br><span class="line">       │</span><br><span class="line">       ▼</span><br><span class="line">ModelRunnerOutput ─► output queue ─► AsyncLLM.generate 流式回流</span><br></pre></td></tr></table></figure>
+<p>主线一句话：<strong>vLLM = PagedAttention（KV 分页 + prefix 共享 + COW）把显存利用率拉满 + continuous batching（token 预算统一调度、prefill/decode 混跑）把 GPU 喂饱 + V1 三件套（async scheduler 重叠 CPU/GPU、CUDA Graph 跳 launch、spec decode 喂 decode 算力）把延迟和吞吐再推一格。</strong> 把这条主线、PagedAttention 的 block 机制、V1 调度器的 token 预算抽象讲顺，vLLM 这关就稳了。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>Kwon et al., <em>Efficient Memory Management for Large Language Model Serving with PagedAttention (vLLM)</em>, SOSP 2023</li>
+<li>vLLM V1 设计文档：<code>docs/design/</code>、<code>vllm/v1/</code> 源码</li>
+<li>EAGLE: <em>EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty</em>, ICML 2024</li>
+<li>与本文显存计算法则、投机解码、RDMA（disaggregated prefill 跨机 KV）、CUDA Graph/x86 体系结构篇交叉对照</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/">http://example.com/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86/">推理</a><a class="post-meta__tags" href="/tags/%E6%BA%90%E7%A0%81/">源码</a><a class="post-meta__tags" href="/tags/vLLM/">vLLM</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/07/19/2026-07-19-Megatron-LM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron-LM 源码精读——大模型并行训练全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Megatron-LM 源码精读——大模型并行训练全景</div></div><div class="info-2"><div class="info-item-1">Megatron-LM 源码精读——大模型并行训练全景 https://blog.csdn.net/Antai_ZHU/article/details/144409187  本文基于 NVIDIA Megatron-LM 源码（megatron/core/，即 Megatron-Core）。目标：让你在面试时能从&quot;5D 并行 + rank 排布&quot;讲到&quot;ColumnParallelLinear 的 autograd 通信插入&quot;、从&quot;1F1B vs Interleaved&quot;讲到&quot;DDP 的 param/grad buffer 与 distributed optimizer&quot;、从源码结构讲到工程取舍。读完这篇，Megatron 这关基本通杀。   一、Megatron 是什么、为什么面试要问 Megatron-LM 是 NVIDIA 开源的大模型分布式训练框架，论文从 2019（张量并行）一路到 2022（PP+SP）、2023（CP、MoE）。它的核心价值是把&quot;怎么把一个 Transformer...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/09/12/2025-09-12-Nano-vllm-%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="Nano-vllm 项目学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/nanovllm.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-12</div><div class="info-item-2">Nano-vllm 项目学习</div></div><div class="info-2"><div class="info-item-1">Nano-vllm 项目学习 项目地址：https://github.com/GeeeekExplorer/nano-vllm vllm介绍：https://zhuanlan.zhihu.com/p/693279132 paged attention:https://zhuanlan.zhihu.com/p/691038809 nano vllm: https://zhuanlan.zhihu.com/p/1923689524778766954   请求（request）可理解为操作系统中的一个进程   逻辑内存（logical KV blocks）可理解为操作系统中的虚拟内存，每个block类比于虚拟内存中的一个page。每个block的大小是固定的，在vLLM中默认大小为16，即可装16个token的K/V值   块表（block table）可理解为操作系统中的虚拟内存到物理内存的映射表   物理内存（physical KV blocks）可理解为操作系统中的物理内存，物理块在gpu显存上，每个block类比于虚拟内存中的一个page  vLLM节省KV cache显存的核...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2026-07-17-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%98%BE%E5%AD%98%E8%AE%A1%E7%AE%97%E6%B3%95%E5%88%99/" title="大模型显存计算法则——训练与推理全景图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">大模型显存计算法则——训练与推理全景图</div></div><div class="info-2"><div class="info-item-1">大模型显存计算法则——训练与推理全景图  本文目标：面试官问&quot;一个 70B 模型 fp16 训练要多少显存？为什么混合精度训练 Adam 优化器要 16 bytes/参数？ZeRO-3 之后能降到多少？推理 KV cache 占多大？&quot;——你能张口就算、并且讲清每个数的来源。 全文以**“算清训练显存 → 算清推理显存 → 进阶优化对显存的影响 → 面试速算题”**为主线。   一、前置：精度与字节换算（所有计算的基石）    精度 1 个参数占多少字节 常见用途     FP64 / double 8 B 几乎不用   FP32 4 B 优化器状态、master weight、科学计算   TF32 4 B（存储同 fp32，计算用 19 bit 尾数） A100 训练加速，存储仍 4B   BF16 / FP16 2 B 训练前向/反向权重、推理权重   FP8 (E4M3/E5M2) 1 B H100+ 训练/推理加速   INT8 1 B 推理量化、部分训练激活量化   INT4 0.5 B 推理量化（W4A16、GPTQ/AWQ）   INT3 / ...</div></div></div></a><a class="pagination-related" href="/2026/07/19/2026-07-19-Megatron-LM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron-LM 源码精读——大模型并行训练全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-19</div><div class="info-item-2">Megatron-LM 源码精读——大模型并行训练全景</div></div><div class="info-2"><div class="info-item-1">Megatron-LM 源码精读——大模型并行训练全景 https://blog.csdn.net/Antai_ZHU/article/details/144409187  本文基于 NVIDIA Megatron-LM 源码（megatron/core/，即 Megatron-Core）。目标：让你在面试时能从&quot;5D 并行 + rank 排布&quot;讲到&quot;ColumnParallelLinear 的 autograd 通信插入&quot;、从&quot;1F1B vs Interleaved&quot;讲到&quot;DDP 的 param/grad buffer 与 distributed optimizer&quot;、从源码结构讲到工程取舍。读完这篇，Megatron 这关基本通杀。   一、Megatron 是什么、为什么面试要问 Megatron-LM 是 NVIDIA 开源的大模型分布式训练框架，论文从 2019（张量并行）一路到 2022（PP+SP）、2023（CP、MoE）。它的核心价值是把&quot;怎么把一个 Transformer...</div></div></div></a><a class="pagination-related" href="/2024/08/06/2024-08-06-WiNGPT2%E7%9A%84%E9%83%A8%E7%BD%B2%E5%92%8C%E6%80%A7%E8%83%BD%E5%AF%B9%E6%AF%94/" title="医疗垂直领域大模型WiNGPT2的部署和性能对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-06</div><div class="info-item-2">医疗垂直领域大模型WiNGPT2的部署和性能对比</div></div><div class="info-2"><div class="info-item-1">医疗垂直领域大模型WiNGPT2的部署和性能对比 WiNGPT2部署和运行 123456git clone https://github.com/winninghealth/WiNGPT2.gitcd WiNGPT2mkdir winninghealthcd winninghealthgit clone https://hf-mirror.com/winninghealth/WiNGPT2-7B-Chatcd .. 若没有以下这三个库，则安装gradio、tiktoken、pip install einops flash_attn 123pip install gradiopip install tiktokenpip install einops flash_attn 选一个目录作为cache（前提是这个目录已经存在且有权限读写） 12# 遇到报错 [Errno 13] Permission denied: &#x27;/data/.cache/huggingface/modules/transformers_modules/WiNGPT2-7B-Chat&#x27;expor...</div></div></div></a><a class="pagination-related" href="/2024/08/07/2024-08-07-%E6%B3%95%E5%BE%8B%E5%9E%82%E7%B1%BB%E5%A4%A7%E6%A8%A1%E5%9E%8BDISC-LawGPT%E7%9A%84%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C%E5%92%8C%E5%AF%B9%E6%AF%94/" title="法律垂类大模型DISC-LawGPT的部署运行和对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-07</div><div class="info-item-2">法律垂类大模型DISC-LawGPT的部署运行和对比</div></div><div class="info-2"><div class="info-item-1">法律垂类大模型DISC-LawGPT的部署运行和对比 部署和运行 123456789101112131415# 部署git clone https://github.com/FudanDISC/DISC-LawLLM.gitcd DISC-LawLLMpip install -r requirements.txtmkdir ShengbinYuecd ShengbinYuegit clone https://hf-mirror.com/ShengbinYue/DISC-LawLLMcd ..mkdir cache# 遇到报错 [Errno 13] Permission denied: &#x27;/data/.cache/huggingface/modules/transformers_modules/DISC-LawLLM&#x27;export HF_HOME=&quot;~/verticalLLM/lzjr/DISC-LawLLM/cache&quot; # 如果遇到CUDA error: out of memory 用 watch -n 0.5 nvidia-smi查看显...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-15-Camel%E6%A1%86%E6%9E%B6/" title="Camel框架"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/camel.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">Camel框架</div></div><div class="info-2"><div class="info-item-1">NeurIPS 2023｜AI Agents先行者CAMEL:第一个基于大模型的多智能体框架 转自：https://zhuanlan.zhihu.com/p/671093582 AI Agents是当下大模型领域备受关注的话题，用户可以引入多个扮演不同角色的LLM Agents参与到实际的任务中，Agents之间会进行竞争和协作等多种形式的动态交互，进而产生惊人的群体智能效果。本文介绍了来自KAUST研究团队的大模型心智交互CAMEL框架（“骆驼”），CAMEL框架是最早基于ChatGPT的autonomous agents知名项目，目前已被顶级人工智能会议NeurIPS 2023录用。  1777dbe9073c4bcd8ab59365481bcafc.png  论文题目： CAMEL: Communicative Agents for “Mind” Exploration of Large Scale Language Model Society 论文链接： https://ghli.org/camel.pdf 代码链接： https://github.com/camel-a...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">215</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">191</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">61</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">vLLM 源码精读——高吞吐 LLM 推理引擎全景</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81vLLM-%E8%A6%81%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%E9%97%AE%E9%A2%98%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9D%A2%E8%AF%95%E5%BF%85%E9%97%AE"><span class="toc-number">1.1.</span> <span class="toc-text">一、vLLM 要解决什么问题、为什么面试必问</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81PagedAttention%EF%BC%9AKV-cache-%E7%9A%84%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%EF%BC%88%E5%9C%B0%E5%9F%BA%EF%BC%89"><span class="toc-number">1.2.</span> <span class="toc-text">二、PagedAttention：KV cache 的虚拟内存（地基）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E7%B1%BB%E6%AF%94-OS-%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 类比 OS 虚拟内存</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E6%BA%90%E7%A0%81%E5%AF%B9%E5%BA%94"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 源码对应</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-block-%E7%9A%84%E7%89%A9%E7%90%86%E5%B8%83%E5%B1%80"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 block 的物理布局</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-prefix-caching-copy-on-write"><span class="toc-number">1.2.4.</span> <span class="toc-text">2.4 prefix caching + copy-on-write</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E8%B0%83%E5%BA%A6%E5%99%A8%EF%BC%9A%E6%B2%A1%E6%9C%89-prefill-%E9%98%B6%E6%AE%B5-decode-%E9%98%B6%E6%AE%B5-%E4%B9%8B%E5%88%86%EF%BC%88V1-%E6%A0%B8%E5%BF%83%E9%9D%A9%E6%96%B0%EF%BC%89"><span class="toc-number">1.3.</span> <span class="toc-text">三、调度器：没有&quot;prefill 阶段 &#x2F; decode 阶段&quot;之分（V1 核心革新）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-V0-%E7%9A%84%E4%B8%A4%E9%98%B6%E6%AE%B5-vs-V1-%E7%9A%84%E7%BB%9F%E4%B8%80"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 V0 的两阶段 vs V1 的统一</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-token-budget-%E8%B0%83%E5%BA%A6%EF%BC%88%E6%AF%8F%E6%AD%A5%E6%80%8E%E4%B9%88%E5%88%86%EF%BC%89"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 token-budget 调度（每步怎么分）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-preemption%EF%BC%88%E6%8A%A2%E5%8D%A0%EF%BC%89%E7%AD%96%E7%95%A5"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 preemption（抢占）策略</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81EngineCore-%E4%B8%8E-AsyncLLM%EF%BC%9AV1-%E7%9A%84%E5%8F%8C%E8%BF%9B%E7%A8%8B%E5%BC%82%E6%AD%A5%E6%9E%B6%E6%9E%84"><span class="toc-number">1.4.</span> <span class="toc-text">四、EngineCore 与 AsyncLLM：V1 的双进程异步架构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%8B%86%E5%BC%82%E6%AD%A5"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 为什么拆异步</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E6%BA%90%E7%A0%81%E7%BB%93%E6%9E%84"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 源码结构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-async-scheduler-%E9%87%8D%E5%8F%A0"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 async scheduler 重叠</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-sleep-wake-%E4%B8%8E-disaggregated-prefill"><span class="toc-number">1.4.4.</span> <span class="toc-text">4.4 sleep&#x2F;wake 与 disaggregated prefill</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81GPUModelRunner-execute-model%EF%BC%9A%E4%B8%80%E6%AC%A1-forward-%E6%80%8E%E4%B9%88%E8%B7%91"><span class="toc-number">1.5.</span> <span class="toc-text">五、GPUModelRunner.execute_model：一次 forward 怎么跑</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E5%85%B3%E9%94%AE%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 关键设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-CUDA-Graph-%E6%8A%93%E5%9B%BE%EF%BC%88decode-%E5%8A%A0%E9%80%9F%EF%BC%89"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 CUDA Graph 抓图（decode 加速）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-DP%EF%BC%88%E6%95%B0%E6%8D%AE%E5%B9%B6%E8%A1%8C%EF%BC%89%E4%B8%8E%E7%BB%9F%E4%B8%80-token-%E6%95%B0"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 DP（数据并行）与统一 token 数</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E9%87%87%E6%A0%B7%E3%80%81%E7%BA%A6%E6%9D%9F%E8%BE%93%E5%87%BA%E3%80%81%E6%8A%95%E6%9C%BA%E8%A7%A3%E7%A0%81"><span class="toc-number">1.6.</span> <span class="toc-text">六、采样、约束输出、投机解码</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E9%87%87%E6%A0%B7-model-runner-sample"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 采样 model_runner.sample</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E6%8A%95%E6%9C%BA%E8%A7%A3%E7%A0%81%EF%BC%88v1-spec-decode-%EF%BC%89"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 投机解码（v1&#x2F;spec_decode&#x2F;）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81KV-cache-offload-%E5%88%86%E5%B1%82-disaggregated-prefill"><span class="toc-number">1.7.</span> <span class="toc-text">七、KV cache offload &#x2F; 分层 &#x2F; disaggregated prefill</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81LoRA-%E5%A4%9A%E6%A8%A1%E6%80%81-%E9%87%8F%E5%8C%96-%E5%88%86%E5%B8%83%E5%BC%8F"><span class="toc-number">1.8.</span> <span class="toc-text">八、LoRA &#x2F; 多模态 &#x2F; 量化 &#x2F; 分布式</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E6%80%8E%E4%B9%88%E8%AF%BB%E6%BA%90%E7%A0%81%EF%BC%88%E7%BB%99%E4%BD%A0%E7%9A%84%E8%B7%AF%E7%BA%BF%EF%BC%89"><span class="toc-number">1.9.</span> <span class="toc-text">九、怎么读源码（给你的路线）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E9%9D%A2%E8%AF%95%E9%80%9F%E7%AD%94%E6%B8%85%E5%8D%95"><span class="toc-number">1.10.</span> <span class="toc-text">十、面试速答清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E4%B8%80%E5%BC%A0%E5%9B%BE%E6%94%B6%E5%8F%A3"><span class="toc-number">1.11.</span> <span class="toc-text">十一、一张图收口</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.11.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="vLLM 源码精读——高吞吐 LLM 推理引擎全景">vLLM 源码精读——高吞吐 LLM 推理引擎全景</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/19/2026-07-19-Megatron-LM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron-LM 源码精读——大模型并行训练全景">Megatron-LM 源码精读——大模型并行训练全景</a><time datetime="2026-07-18T16:00:00.000Z" title="发表于 2026-07-19 00:00:00">2026-07-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/" title="x86 体系结构基础——特权级、中断异常、内存与总线">x86 体系结构基础——特权级、中断异常、内存与总线</a><time datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/18/2026-07-18-%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E6%8E%A5%E5%8F%A3fork-exec-mmap-ioctl-epoll/" title="操作系统接口——fork/exec/wait、mmap、ioctl、epoll 与共享内存">操作系统接口——fork/exec/wait、mmap、ioctl、epoll 与共享内存</a><time datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/" title="CPU 虚拟化——从 trap-and-emulate 到 VT-x">CPU 虚拟化——从 trap-and-emulate 到 VT-x</a><time datetime="2026-07-17T16:00:00.000Z" title="发表于 2026-07-18 00:00:00">2026-07-18</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
