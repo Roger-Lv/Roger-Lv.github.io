@@ -1,0 +1,532 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>PaaS 平台 GPU 资源复用与超卖探索 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="在 K8s 原生框架内，基于自定义 Container Runtime、Device Plugin 与节点资源管理组件，实现通用的容器间&#x2F;Pod 间 GPU 设备共享，并进一步探索闲时资源的时分复用超卖。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="PaaS 平台 GPU 资源复用与超卖探索">
+<meta property="og:url" content="http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="在 K8s 原生框架内，基于自定义 Container Runtime、Device Plugin 与节点资源管理组件，实现通用的容器间&#x2F;Pod 间 GPU 设备共享，并进一步探索闲时资源的时分复用超卖。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-20T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-21T03:57:57.382Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="GPU">
+<meta property="article:tag" content="资源共享">
+<meta property="article:tag" content="K8s">
+<meta property="article:tag" content="PaaS">
+<meta property="article:tag" content="内核模块">
+<meta property="article:tag" content="超卖">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "PaaS 平台 GPU 资源复用与超卖探索",
+  "url": "http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-20T16:00:00.000Z",
+  "dateModified": "2026-07-21T03:57:57.382Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'PaaS 平台 GPU 资源复用与超卖探索',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">221</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">204</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">63</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">PaaS 平台 GPU 资源复用与超卖探索</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">PaaS 平台 GPU 资源复用与超卖探索</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-21T03:57:57.382Z" title="更新于 2026-07-21 11:57:57">2026-07-21</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E7%B3%BB%E7%BB%9F/">大模型系统</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" data-flag-title="PaaS 平台 GPU 资源复用与超卖探索"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>PaaS 平台 GPU 资源复用与超卖探索</h1>
+<h2 id="背景-动机">背景&amp;动机</h2>
+<h3 id="PaaS平台用户使用上的需求：">PaaS平台用户使用上的需求：</h3>
+<ul>
+<li>部分推理服务的实例占用的资源较少，即使只占用1卡也存在浪费，因此希望将多个推理服务的实例部署到同一个GPU上，从而节约成本。</li>
+<li>由于租户内资源有限，往往只有一两个节点，但有十几个用户的开发机。因此希望支持多个用户的开发机共用一个节点的GPU。</li>
+</ul>
+<h3 id="PaaS平台侧从提高集群利用率、增加收入和毛利率的角度出发，也存在下面的需求：">PaaS平台侧从提高集群利用率、增加收入和毛利率的角度出发，也存在下面的需求：</h3>
+<ul>
+<li>通过对未分配/已分配空闲GPU超卖进一步增加收入</li>
+<li>在节点GPU资源全部调度分配后，以CPU任务的方式继续超卖节点的CPU和内存资源</li>
+</ul>
+<blockquote>
+<p>为了满足用户需求，需要支持GPU复用功能，吸引用户使用平台，同时为了提升集群资源利用率和毛利率，需要进一步探索闲时复用方案，对于已经售卖但处于空闲状态的资源进行超卖。</p>
+</blockquote>
+<p>本文将介绍PaaS侧在解决上面的问题过程中，在GPU资源的复用与超卖方面的一些探索。所谓复用或者超卖，都建立在把同一个GPU同时分配给多个实例的基础上，属于一种<strong>GPU共享技术</strong>。</p>
+<ul>
+<li><strong>GPU共享</strong>一般是指在多个用户或应用程序之间共享GPU资源的技术。这种技术通过虚拟化、资源管理和调度算法，使多个任务能够在同一GPU上运行，从而提高GPU的利用率。</li>
+<li>GPU共享在大模型训练中的用处不大，因为大模型训练往往都是整节点分配资源，所以它的应用场景主要是在<strong>推理、开发机</strong>。</li>
+</ul>
+<hr>
+<h2 id="市场现有方案对比">市场现有方案对比</h2>
+<table>
+<thead>
+<tr>
+<th>方案类型</th>
+<th>代表方案</th>
+<th>局限性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>厂商官方解决方案</td>
+<td>Nvidia MIG、Nvidia MPS、Nvidia vGPU</td>
+<td>授权成本高；使用场景局限性大；不好灵活配置；不利于整合不同GPU厂商功能；不利于扩展超卖等业务功能</td>
+</tr>
+<tr>
+<td>基于API劫持的隔离共享方案</td>
+<td>用户态vCUDA、OrionX，内核态cGPU</td>
+<td>有侵入业务层；开发维护难度大；存在性能损失；整套复杂系统ROI不符合预期</td>
+</tr>
+<tr>
+<td>轻量开源调度共享方案</td>
+<td>Aliyun gpushare-device-plugin、gpushare-scheduler-extender</td>
+<td>依赖调度逻辑变更；与已有体系存在冲突；不利于进一步扩展</td>
+</tr>
+</tbody>
+</table>
+<h3 id="我们的选择：自研轻量化共享方案">我们的选择：自研轻量化共享方案</h3>
+<p>在K8s原生的框架和现有的调度体系内，基于自定义的 <strong>Container Runtime</strong>、<strong>Device Plugin</strong>、<strong>节点资源管理组件</strong> 等，实现一种通用的容器间的GPU设备共享。</p>
+<p><strong>核心优势</strong>：</p>
+<ul>
+<li>对调度逻辑的影响更小</li>
+<li>设备类型无关，更加通用且便于扩展</li>
+<li><strong>核心功能</strong>：支持将一块卡同时挂载到多个容器里</li>
+</ul>
+<hr>
+<h2 id="从容器间共享开始">从容器间共享开始</h2>
+<h3 id="Dind的问题">Dind的问题</h3>
+<p>目前线上开发机的Dind（docker in docker）功能，是通过在开发机pod中设置了一个运行docker服务的Dind容器实现的。</p>
+<p><strong>问题</strong>：用户常常会有需要在 Dind 中使用 GPU 的需求，但是由于 K8s 中资源是以容器为单位进行调度的，不同容器之间的资源互不相干，一个 GPU 设备要么分配给主容器，要么分配给 Dind 容器。当前，如果开发机开启了Dind功能，在创建 pod 的时候是将所有GPU都挂载给Dind容器的，这就会导致用户在主容器中看不到显卡，也没法使用显卡。</p>
+<h3 id="解决思路">解决思路</h3>
+<p>虽然 K8s 不能给不同容器分配同一个 GPU，但是从容器的角度来讲，同一个 GPU 是可以被不同容器挂载的，因此如果从更底层去实现，是完全可行的。</p>
+<p><strong>问题转化</strong>：</p>
+<ol>
+<li>怎样从底层把一个容器中的设备同步挂载到另一个容器中？</li>
+<li>在哪一步/哪一个组件中去完成上面的同步挂载的操作？</li>
+</ol>
+<h3 id="容器创建-Hacking">容器创建 Hacking</h3>
+<p>K8s容器创建基本流程：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">kubelet → containerd → spec文件(OCI标准) → runc → 容器</span><br></pre></td></tr></table></figure>
+<ul>
+<li><code>containerd</code> 在创建容器时会根据kubelet请求中的信息（如 Pod 的配置、容器的镜像、环境变量、挂载卷等）生成容器的规范文件（spec 文件）</li>
+<li>这个 spec 文件符合 OCI标准，描述了容器的配置和运行时环境</li>
+<li><code>runc</code> 实际创建容器时就是参考这个spec文件进行创建的</li>
+</ul>
+<p><strong>关键发现</strong>：只要将容器A的spec中的设备挂载信息拷贝到容器B的spec中，就可以实现将同一块GPU同时挂载给容器A和容器B。</p>
+<h3 id="自定义Runtime方案">自定义Runtime方案</h3>
+<p>查看 <code>nvidia-container-runtime</code> 的源码，会发现它定义了很多 <code>spec-modifier</code>，用于修改容器的 spec 文件，在修改完成后，最终再调用 <code>runc</code> 去创建容器。</p>
+<p><strong>我们的方案</strong>：仿照 <code>nvidia-container-runtime</code> “包一层&quot;的方式，自定义runtime&quot;再包一层”，在真正创建容器之前修改它的spec文件，将另一个容器的设备、挂载、环境变量等信息同步到当前容器里。</p>
+<h3 id="用annotation传递共享关系">用annotation传递共享关系</h3>
+<p>利用容器的 <code>annotation</code> 作为接口：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">&quot;annotations&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">  ...</span><br><span class="line">  <span class="attr">&quot;gpushare.k8s.io/container-devices-from.dind&quot;</span><span class="punctuation">:</span> <span class="string">&quot;_/_/main&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;gpushare.k8s.io/partition&quot;</span><span class="punctuation">:</span> <span class="string">&quot;po-xxxxxxxxxxxx&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;gpushare.k8s.io/user_id&quot;</span><span class="punctuation">:</span> <span class="string">&quot;ac-xxxxxxxxxxxx&quot;</span></span><br><span class="line">  ...</span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p><strong>annotation格式说明</strong>：</p>
+<ul>
+<li><code>&quot;gpushare.k8s.io/container-devices-from.dind&quot;</code>：代表需要进行设备同步，接收设备的容器名称为 <code>dind</code></li>
+<li><code>&quot;_/_/main&quot;</code>：代表来源容器的信息，2个下划线分别代表来源容器属于当前namespace和当前pod，<code>main</code> 代表容器名称</li>
+<li>这样的设计为以后租户间、pod间的显卡复用提前留好接口</li>
+</ul>
+<p><strong>Runtime执行逻辑</strong>：</p>
+<ol>
+<li>首先对annotation进行检查</li>
+<li>如果没有检查到上述的annotation，就什么都不做</li>
+<li>否则就将来源容器的设备挂载信息拷贝到目标容器的spec中，再调用下一层的runtime创建容器</li>
+</ol>
+<h3 id="小结">小结</h3>
+<ul>
+<li>上层组件在创建pod的时候，只需要向pod中写入上述格式的annotation，就可以完成main容器与dind容器之间的设备共享</li>
+<li>这种容器间的设备共享不局限于特定的GPU设备类型，对所有类型的GPU设备都可以生效，是一种比较通用的实现方式</li>
+</ul>
+<hr>
+<h2 id="向Pod间显卡复用拓展">向Pod间显卡复用拓展</h2>
+<h3 id="新的共享需求">新的共享需求</h3>
+<p>基于在容器间共享GPU的能力，支持推理服务和开发机GPU共享的需求。</p>
+<p><strong>以推理服务为例</strong>：</p>
+<ul>
+<li>最初需求：支持1卡规格的推理服务实例两两共享GPU</li>
+<li>用户在创建推理服务时，不需要指定共享的对象，只增加一个&quot;显卡复用开关&quot;</li>
+</ul>
+<p><strong>带来的问题</strong>：如何区分和处理第一个开启共享的pod？因为基于runtime的设备同步的共享机制永远需要一个&quot;来源容器&quot;。</p>
+<h3 id="ShadowPod和虚拟设备">ShadowPod和虚拟设备</h3>
+<p>由于在k8s的框架里无法将同一张卡同时分配给两个pod，为了实现上述需求，并且最小化对已有调度逻辑的侵入，设计了一种基于 <strong>ShadowPod</strong> 和 <strong>虚拟设备</strong> 的共享方案。</p>
+<h4 id="核心概念">核心概念</h4>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ShadowPod</strong></td>
+<td>隐藏的pod，在系统中仅在后台可见，作用是创建出用来占住GPU资源，作为设备同步中的&quot;来源容器&quot;</td>
+</tr>
+<tr>
+<td><strong>SharePod</strong></td>
+<td>开启了&quot;显卡复用&quot;开关的推理服务pod，作为&quot;目标容器&quot;接收设备同步</td>
+</tr>
+<tr>
+<td><strong>虚拟资源</strong></td>
+<td><code>gpushare/share-gpu</code>，在k8s的调度框架内实现对应关系</td>
+</tr>
+</tbody>
+</table>
+<h4 id="工作流程">工作流程</h4>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">1. 根据SharePod的需求，动态创建ShadowPod</span><br><span class="line">2. 根据ShadowPod生成对应的虚拟设备</span><br><span class="line">3. 虚拟设备产生后，供SharePod调度使用</span><br><span class="line">4. SharePod创建时，底层runtime把ShadowPod中的显卡设备同步到SharePod之中</span><br><span class="line">5. 实现SharePod之间的GPU共享</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="探索进一步超卖">探索进一步超卖</h2>
+<h3 id="扩大spot任务的活动范围">扩大spot任务的活动范围</h3>
+<p><strong>当前spot任务机制</strong>：</p>
+<ul>
+<li>一种服务质量不被保证的低优先级任务</li>
+<li>在运行过程中随时可以被高优先级的reserved任务驱逐抢占</li>
+<li>可调度范围：集群中所有空闲未分配的资源（未售出的 + 已售出但暂未分配的）</li>
+</ul>
+<p><strong>问题场景</strong>：</p>
+<blockquote>
+<p>某个用户以包年包月的方式购买了一个8卡节点，同时起了一个8卡的开发机在上面，但是这个开发机只有白天工作时间会运行一些GPU任务，大部分休息时间则保持空闲，GPU利用率为0。我们能否将这部分空闲的GPU时也作为可以调度的资源超卖呢？</p>
+</blockquote>
+<h3 id="偷卡-机制设计">&quot;偷卡&quot;机制设计</h3>
+<p><strong>核心思路</strong>：</p>
+<ul>
+<li>利用已有的&quot;同一块GPU挂载给多个pod&quot;的能力</li>
+<li>准确判断用户的&quot;离开&quot;状态 → 把开发机中的GPU重复挂载给其他spot类型的pod</li>
+<li>检测到用户的&quot;回归&quot; → 立刻驱逐偷卡的spot任务，释放显卡资源</li>
+</ul>
+<p><strong>用户体验目标</strong>：让用户感觉离开的这段时间好像什么事情都没发生一样。</p>
+<h3 id="如何判断用户离开与回归">如何判断用户离开与回归</h3>
+<h4 id="技术原理">技术原理</h4>
+<p>&quot;回归&quot;意味着对 GPU有所操作，无论是用户执行一个torch脚本，还是执行一个 nvidia-smi命令，最终在系统层面上都会转化成对GPU设备的<strong>系统调用</strong>。</p>
+<h4 id="实现方案">实现方案</h4>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">参考audit、falco等监控方案 → 在内核中劫持对GPU设备的ioctl系统调用</span><br><span class="line"></span><br><span class="line">↓</span><br><span class="line"></span><br><span class="line">解析ioctl系统调用的参数：</span><br><span class="line">- 通过参数中的设备魔数判断当前访问的设备是否是GPU设备</span><br><span class="line">- 通过pid和pidnsid信息判断容器身份</span><br><span class="line"></span><br><span class="line">↓</span><br><span class="line"></span><br><span class="line">实现对容器中GPU访问的监控和统计</span><br></pre></td></tr></table></figure>
+<h4 id="判断逻辑">判断逻辑</h4>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>判断条件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>离开</strong></td>
+<td>容器中超过一段时间没有对GPU设备的访问，并且设备利用率在过去这段时间一直是0</td>
+</tr>
+<tr>
+<td><strong>回归</strong></td>
+<td>处于&quot;离开&quot;状态的容器中出现了对GPU设备的访问</td>
+</tr>
+</tbody>
+</table>
+<h4 id="技术演进：eBPF-→-内核模块">技术演进：eBPF → 内核模块</h4>
+<p><strong>问题</strong>：当检测到&quot;回归&quot;事件并立刻驱逐偷卡的负载，还是来不及。因为负载的驱逐需要时间，显卡资源的释放也需要时间。</p>
+<p><strong>解决方案</strong>：</p>
+<ul>
+<li>在内核中检测到用户回归的同时，将其系统调用<strong>阻塞一小段时间</strong>，直到显卡资源彻底释放为止</li>
+<li>由于eBPF技术的限制无法进行阻塞操作，最终将内核逻辑重新实现为一个<strong>内核模块</strong></li>
+</ul>
+<h3 id="新的spot调度视图">新的spot调度视图</h3>
+<p>引入&quot;偷卡&quot;机制后，为spot任务引入新的虚拟资源类型：<code>gpushare/spot-gpu</code></p>
+<h4 id="资源映射关系">资源映射关系</h4>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">真实GPU ←→ gpushare/spot-gpu (一一对应)</span><br></pre></td></tr></table></figure>
+<h4 id="状态流转">状态流转</h4>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>真实GPU状态</th>
+<th>gpushare/spot-gpu状态</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>reserved任务分配</td>
+<td>已分配</td>
+<td>Unhealthy</td>
+<td>不可用，如有spot负载则驱逐</td>
+</tr>
+<tr>
+<td>开发机&quot;离开&quot;状态</td>
+<td>已分配但空闲</td>
+<td>Healthy</td>
+<td>可分配给新的spot负载</td>
+</tr>
+<tr>
+<td>用户&quot;回归&quot;</td>
+<td>需要使用</td>
+<td>触发驱逐</td>
+<td>内核模块信号→驱逐spot负载</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="CPU和内存超卖">CPU和内存超卖</h2>
+<h3 id="数据处理任务超卖">数据处理任务超卖</h3>
+<p><strong>背景</strong>：当前节点上CPU、内存和显卡资源是捆绑成固定的规格统一分配的，在节点上所有资源按照规格分配完毕后，理论上就不能再调度其他CPU规格的任务到节点上了。</p>
+<p><strong>方案</strong>：通过引入虚拟资源 <code>vCPU</code> 和 <code>vMem</code>，实现将数据处理任务调度到已经全部分配的节点上，以此实现CPU和内存的超卖。</p>
+<hr>
+<h2 id="技术架构">技术架构</h2>
+<h3 id="通用性和可扩展性分析">通用性和可扩展性分析</h3>
+<p>当前容器间设备共享是基于底层runtime实现的，具有很好的通用性和可扩展性。</p>
+<h4 id="业务需求扩展示例">业务需求扩展示例</h4>
+<p><strong>场景</strong>：节点上只剩1卡空闲，另外还有一个1卡的处于&quot;离开&quot;状态的开发机，此时启动一个2卡spot负载。</p>
+<p><strong>方案</strong>：意味着它需要同时接收来自另外2个容器的GPU设备，只需要扩展上文runtime的annotation接口即可。</p>
+<h4 id="国产芯片适配">国产芯片适配</h4>
+<p><strong>优势</strong>：底层runtime进行容器间设备同步的机制是<strong>设备无关</strong>的，适用于所有类型的设备。</p>
+<p><strong>已适配芯片</strong>：</p>
+<ul>
+<li>国际：NVIDIA、AMD</li>
+<li>国产：燧原、摩尔线程、天数、沐曦、壁仞等</li>
+</ul>
+<p><strong>扩展方式</strong>：对于后续可能新增的芯片类型，可以通过增加配置项，而不用修改代码来实现。</p>
+<hr>
+<h2 id="🎉-总结">🎉 总结</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">技术演进路线：</span><br><span class="line">容器间共享GPU </span><br><span class="line">    ↓</span><br><span class="line">Pod间的GPU共享 </span><br><span class="line">    ↓</span><br><span class="line">空闲资源的时分复用超卖</span><br></pre></td></tr></table></figure>
+<p><strong>当前成果</strong>：</p>
+<ul>
+<li>随着需求的导向，基于容器间设备同步这一技术对PaaS中GPU资源的复用与超卖进行了一系列探索</li>
+<li>当前方案在产品、研发和测试同学的共同努力下，已经能够稳定地在线上环境运行</li>
+</ul>
+<p><strong>后续规划</strong>：</p>
+<ul>
+<li>完善可观测性等产品功能和技术实现</li>
+<li>不断探索其他更多的调度优化方式，以实现集群利用率和平台效益的最大化</li>
+</ul>
+<hr>
+<blockquote>
+<p>📋 <strong>文档信息</strong>：PaaS中GPU资源的复用与超卖探索</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/">http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/GPU/">GPU</a><a class="post-meta__tags" href="/tags/%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB/">资源共享</a><a class="post-meta__tags" href="/tags/K8s/">K8s</a><a class="post-meta__tags" href="/tags/PaaS/">PaaS</a><a class="post-meta__tags" href="/tags/%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97/">内核模块</a><a class="post-meta__tags" href="/tags/%E8%B6%85%E5%8D%96/">超卖</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="PaaS 平台 GPU 资源复用与超卖技术深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">PaaS 平台 GPU 资源复用与超卖技术深度解析</div></div><div class="info-2"><div class="info-item-1">PaaS 平台 GPU 资源复用与超卖技术深度解析 目录  背景与动机 技术架构概览 核心技术实现  自定义Container Runtime实现容器间GPU共享 ShadowPod与虚拟设备实现Pod级GPU复用 Steal GPU动态超卖机制 多GPU类型适配   关键数据结构 核心代码解析 模拟面试问答   背景与动机 业务需求 在PaaS平台的实际运营中，我们遇到了两类核心问题： 用户侧需求：  推理服务实例资源利用率低：部分推理服务只占用1卡资源，但存在浪费 开发机资源紧张：租户内资源有限，多用户开发机需要共享GPU  平台侧需求：  提升集群资源利用率 对已分配但空闲的GPU进行超卖 增加平台收入和毛利率  技术选型 经过对市场现有方案的调研：    方案类型 代表方案 局限性     厂商官方解决方案 Nvidia MIG、MPS、vGPU 授权成本高；场景局限；不便于整合不同厂商   API劫持隔离方案 vCUDA、OrionX、cGPU 侵入业务层；开发维护难度大；存在性能损失   轻量调度共享方案 gpushare-device-plugin 依赖调度逻辑变更...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="PaaS 平台 GPU 资源复用与超卖技术深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">PaaS 平台 GPU 资源复用与超卖技术深度解析</div></div><div class="info-2"><div class="info-item-1">PaaS 平台 GPU 资源复用与超卖技术深度解析 目录  背景与动机 技术架构概览 核心技术实现  自定义Container Runtime实现容器间GPU共享 ShadowPod与虚拟设备实现Pod级GPU复用 Steal GPU动态超卖机制 多GPU类型适配   关键数据结构 核心代码解析 模拟面试问答   背景与动机 业务需求 在PaaS平台的实际运营中，我们遇到了两类核心问题： 用户侧需求：  推理服务实例资源利用率低：部分推理服务只占用1卡资源，但存在浪费 开发机资源紧张：租户内资源有限，多用户开发机需要共享GPU  平台侧需求：  提升集群资源利用率 对已分配但空闲的GPU进行超卖 增加平台收入和毛利率  技术选型 经过对市场现有方案的调研：    方案类型 代表方案 局限性     厂商官方解决方案 Nvidia MIG、MPS、vGPU 授权成本高；场景局限；不便于整合不同厂商   API劫持隔离方案 vCUDA、OrionX、cGPU 侵入业务层；开发维护难度大；存在性能损失   轻量调度共享方案 gpushare-device-plugin 依赖调度逻辑变更...</div></div></div></a><a class="pagination-related" href="/2025/07/13/2026-07-13-Spot%E8%B5%84%E6%BA%90%E5%AE%9E%E7%8E%B0%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-%E4%BB%8E%E8%99%9A%E6%8B%9F%E8%AE%BE%E5%A4%87%E5%88%B0%E5%81%B7%E5%8D%A1%E8%B6%85%E5%8D%96%E7%9A%84%E5%AE%8C%E6%95%B4%E9%93%BE%E8%B7%AF/" title="Spot资源实现深度解析：从虚拟设备到偷卡超卖的完整链路"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-07-13</div><div class="info-item-2">Spot资源实现深度解析：从虚拟设备到偷卡超卖的完整链路</div></div><div class="info-2"><div class="info-item-1">Spot 资源实现深度解析：从虚拟设备到偷卡超卖的完整链路 1. 什么是 Spot 资源 Spot 资源（在 GangJob 中对应 spot-queue 队列）是一种服务质量不被保证的低优先级 GPU 资源：  随时可以被高优先级的 reserved 任务驱逐抢占 计费便宜 适用于短时调试任务、可被打断保留进度的任务  传统 spot 的调度范围是集群中所有空闲未分配的资源（未售出的 + 已售出但暂未分配的）。但本文要解析的是更深层的 spot 实现——偷卡超卖：即使资源已被 reserved 任务分配（如用户开发机占着 8 卡），只要用户&quot;离开&quot;（GPU 利用率为 0），就能把这块卡的算力偷给 spot 任务，用户&quot;回归&quot;时再驱逐 spot、还回资源。  2. 三层架构总览 Spot 资源的实现横跨三个组件，各层职责清晰： 12345678910111213141516171819202122232425262728┌─────────────────────────────────────────────────────────┐│ ...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-GPU-%E5%AE%B9%E5%99%A8%E5%BA%95%E5%B1%82%E5%AE%9E%E7%8E%B0/" title="GPU 容器底层实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">GPU 容器底层实现</div></div><div class="info-2"><div class="info-item-1">GPU 容器底层实现 容器使⽤ GPU – 问题提出 在容器环境中使⽤ GPU 是⼀件有趣的事情，以 NVIDIA GPU 为例，常⻅的⼀个使⽤ CUDA 的应⽤程序，其结构图如下：  **CUDA Driver API：**GPU 设备的抽象层，通过⼀系列 API 直接操作 GPU 设备，性能好，但编程难度⾼ （需要显式进⾏device初始化以及context管理等） CUDA Runtime API: 对 CUDA Driver API 进⾏⼀定封装，简化编程过程，降低开发难度； CUDA Libraries: 更⾼层的封装，包含⼀些成熟的⾼效函数库。 因此要实现 NVIDIA 容器化，也就是要让应⽤程序可以在容器内调⽤ CUDA API 来操作 GPU，⼀般来讲，就要使容器内应⽤程序内可调⽤ CUDA Runtime API 和 CUDA Libraries，容器内可使⽤ CUDA Driver 相关库。   NVIDIA CONTAINER TOOLKIT 具体结构 曾经 NVIDIA Docker 通过 docker 的 volume ⽅法将 CUDA Driver 挂...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-GPU-%E5%AE%B9%E5%99%A8%E7%9B%B8%E5%85%B3%E6%A6%82%E5%BF%B5/" title="GPU容器相关概念"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">GPU容器相关概念</div></div><div class="info-2"><div class="info-item-1">GPU容器相关概念 CUDA API 体系： 要使编写的 GPU 程序能够正常运行，需要借助 CUDA 直接使用 NVIDIA 的 GPU 来执行通用计算任务，从而使 GPU 能够从图形渲染设备转变为一个通用并行处理器，CUDA API 体系结构图如下：   **CUDA Driver API：**GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）。 CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度。 CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。  因此要实现 CUDA 容器化，就要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内程序可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 CUDA 容器化基本思路 要将 GPU 设备挂载到容器中，NVIDIA Docker 是通过注入一个 pre...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/" title="NVIDIA device plugin for Kubernetes原理分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">NVIDIA device plugin for Kubernetes原理分析</div></div><div class="info-2"><div class="info-item-1">NVIDIA device plugin for Kubernetes原理分析 什么是 Device Plugin K8s 原生并没有支持第三方设备厂商的物理设备资源，因此 Device Plugins 给第三方设备厂商提供了相关接口，可以让他们的物理设备资源以 Extended Resources 提供给底层的容器。 当 device plugin 功能启动后，可以令 kubelet 开放 Register 的 gRPC 服务，device plugin 就可以通过这个服务向 kubelet 进行注册，注册成功后 device plugin 就进入了 Serving 模式，提供前面提到的 gRPC 接口调用服务，kubelet 也就可以通过调用 Listandwatch、Allocate 等方法对设备进行操作，可以用下图来描述单一节点上这一过程：  下面以 NVIDIA k8s-device-plugin 为例简单讲讲这一过程。 注册服务 先看 gRPC 注册部分，下面的函数用于启动一个 gRPC 服务器并在 kubelet 中注册 1234567891011121314151...</div></div></div></a><a class="pagination-related" href="/2025/02/16/2025-02-16-k8s%E4%B8%AD%E9%80%9A%E8%BF%87pod%E8%8E%B7%E5%8F%96gpu%E4%BD%BF%E7%94%A8%E8%BF%9B%E7%A8%8B%E5%88%B0pod%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB%20-%20%E5%89%AF%E6%9C%AC/" title="k8s中通过pod获取gpu使用进程到pod的映射关系"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-02-16</div><div class="info-item-2">k8s中通过pod获取gpu使用进程到pod的映射关系</div></div><div class="info-2"><div class="info-item-1">k8s中通过pod获取gpu使用进程到pod的映射关系 背景 该任务的pod为daemonset在集群的每一个节点上，controller pod（只有一个）通过grpc的方式进行调用该daemonset pod获取到该节点上gpu的使用进程到pod的映射关系，传递的参数为使用gpu的pod的id。 该需求涉及到几个部分内容：  如何通过pod id定位到具体的节点  通过controller 的cache机制（包含有pod和node cache）获取到daemonset pod id对应的node ip，在daemonset的pod部分新建grpc server端，根据ip:port构建grpc client即可   如何获取到节点上的gpu-&gt;process的映射关系  调用go-nvml即可   如何获取到节点上的process-&gt;container的映射关系  调用taskClient   container-&gt;pod的映射关系？  controller cache机制获取到对应的node，然后可以获取到该node上的pod和container，做一层映...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">221</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">204</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">63</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">PaaS 平台 GPU 资源复用与超卖探索</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%83%8C%E6%99%AF-%E5%8A%A8%E6%9C%BA"><span class="toc-number">1.1.</span> <span class="toc-text">背景&amp;动机</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#PaaS%E5%B9%B3%E5%8F%B0%E7%94%A8%E6%88%B7%E4%BD%BF%E7%94%A8%E4%B8%8A%E7%9A%84%E9%9C%80%E6%B1%82%EF%BC%9A"><span class="toc-number">1.1.1.</span> <span class="toc-text">PaaS平台用户使用上的需求：</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#PaaS%E5%B9%B3%E5%8F%B0%E4%BE%A7%E4%BB%8E%E6%8F%90%E9%AB%98%E9%9B%86%E7%BE%A4%E5%88%A9%E7%94%A8%E7%8E%87%E3%80%81%E5%A2%9E%E5%8A%A0%E6%94%B6%E5%85%A5%E5%92%8C%E6%AF%9B%E5%88%A9%E7%8E%87%E7%9A%84%E8%A7%92%E5%BA%A6%E5%87%BA%E5%8F%91%EF%BC%8C%E4%B9%9F%E5%AD%98%E5%9C%A8%E4%B8%8B%E9%9D%A2%E7%9A%84%E9%9C%80%E6%B1%82%EF%BC%9A"><span class="toc-number">1.1.2.</span> <span class="toc-text">PaaS平台侧从提高集群利用率、增加收入和毛利率的角度出发，也存在下面的需求：</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B8%82%E5%9C%BA%E7%8E%B0%E6%9C%89%E6%96%B9%E6%A1%88%E5%AF%B9%E6%AF%94"><span class="toc-number">1.2.</span> <span class="toc-text">市场现有方案对比</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%88%91%E4%BB%AC%E7%9A%84%E9%80%89%E6%8B%A9%EF%BC%9A%E8%87%AA%E7%A0%94%E8%BD%BB%E9%87%8F%E5%8C%96%E5%85%B1%E4%BA%AB%E6%96%B9%E6%A1%88"><span class="toc-number">1.2.1.</span> <span class="toc-text">我们的选择：自研轻量化共享方案</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8E%E5%AE%B9%E5%99%A8%E9%97%B4%E5%85%B1%E4%BA%AB%E5%BC%80%E5%A7%8B"><span class="toc-number">1.3.</span> <span class="toc-text">从容器间共享开始</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Dind%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">1.3.1.</span> <span class="toc-text">Dind的问题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%A7%A3%E5%86%B3%E6%80%9D%E8%B7%AF"><span class="toc-number">1.3.2.</span> <span class="toc-text">解决思路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%B9%E5%99%A8%E5%88%9B%E5%BB%BA-Hacking"><span class="toc-number">1.3.3.</span> <span class="toc-text">容器创建 Hacking</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%87%AA%E5%AE%9A%E4%B9%89Runtime%E6%96%B9%E6%A1%88"><span class="toc-number">1.3.4.</span> <span class="toc-text">自定义Runtime方案</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%94%A8annotation%E4%BC%A0%E9%80%92%E5%85%B1%E4%BA%AB%E5%85%B3%E7%B3%BB"><span class="toc-number">1.3.5.</span> <span class="toc-text">用annotation传递共享关系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B0%8F%E7%BB%93"><span class="toc-number">1.3.6.</span> <span class="toc-text">小结</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%90%91Pod%E9%97%B4%E6%98%BE%E5%8D%A1%E5%A4%8D%E7%94%A8%E6%8B%93%E5%B1%95"><span class="toc-number">1.4.</span> <span class="toc-text">向Pod间显卡复用拓展</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%96%B0%E7%9A%84%E5%85%B1%E4%BA%AB%E9%9C%80%E6%B1%82"><span class="toc-number">1.4.1.</span> <span class="toc-text">新的共享需求</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#ShadowPod%E5%92%8C%E8%99%9A%E6%8B%9F%E8%AE%BE%E5%A4%87"><span class="toc-number">1.4.2.</span> <span class="toc-text">ShadowPod和虚拟设备</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E6%A6%82%E5%BF%B5"><span class="toc-number">1.4.2.1.</span> <span class="toc-text">核心概念</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B7%A5%E4%BD%9C%E6%B5%81%E7%A8%8B"><span class="toc-number">1.4.2.2.</span> <span class="toc-text">工作流程</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8E%A2%E7%B4%A2%E8%BF%9B%E4%B8%80%E6%AD%A5%E8%B6%85%E5%8D%96"><span class="toc-number">1.5.</span> <span class="toc-text">探索进一步超卖</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%89%A9%E5%A4%A7spot%E4%BB%BB%E5%8A%A1%E7%9A%84%E6%B4%BB%E5%8A%A8%E8%8C%83%E5%9B%B4"><span class="toc-number">1.5.1.</span> <span class="toc-text">扩大spot任务的活动范围</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%81%B7%E5%8D%A1-%E6%9C%BA%E5%88%B6%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.5.2.</span> <span class="toc-text">&quot;偷卡&quot;机制设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A6%82%E4%BD%95%E5%88%A4%E6%96%AD%E7%94%A8%E6%88%B7%E7%A6%BB%E5%BC%80%E4%B8%8E%E5%9B%9E%E5%BD%92"><span class="toc-number">1.5.3.</span> <span class="toc-text">如何判断用户离开与回归</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86"><span class="toc-number">1.5.3.1.</span> <span class="toc-text">技术原理</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E6%96%B9%E6%A1%88"><span class="toc-number">1.5.3.2.</span> <span class="toc-text">实现方案</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%88%A4%E6%96%AD%E9%80%BB%E8%BE%91"><span class="toc-number">1.5.3.3.</span> <span class="toc-text">判断逻辑</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E6%BC%94%E8%BF%9B%EF%BC%9AeBPF-%E2%86%92-%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97"><span class="toc-number">1.5.3.4.</span> <span class="toc-text">技术演进：eBPF → 内核模块</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%96%B0%E7%9A%84spot%E8%B0%83%E5%BA%A6%E8%A7%86%E5%9B%BE"><span class="toc-number">1.5.4.</span> <span class="toc-text">新的spot调度视图</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%B5%84%E6%BA%90%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.5.4.1.</span> <span class="toc-text">资源映射关系</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%8A%B6%E6%80%81%E6%B5%81%E8%BD%AC"><span class="toc-number">1.5.4.2.</span> <span class="toc-text">状态流转</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#CPU%E5%92%8C%E5%86%85%E5%AD%98%E8%B6%85%E5%8D%96"><span class="toc-number">1.6.</span> <span class="toc-text">CPU和内存超卖</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%95%B0%E6%8D%AE%E5%A4%84%E7%90%86%E4%BB%BB%E5%8A%A1%E8%B6%85%E5%8D%96"><span class="toc-number">1.6.1.</span> <span class="toc-text">数据处理任务超卖</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E6%9E%B6%E6%9E%84"><span class="toc-number">1.7.</span> <span class="toc-text">技术架构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%80%9A%E7%94%A8%E6%80%A7%E5%92%8C%E5%8F%AF%E6%89%A9%E5%B1%95%E6%80%A7%E5%88%86%E6%9E%90"><span class="toc-number">1.7.1.</span> <span class="toc-text">通用性和可扩展性分析</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%9A%E5%8A%A1%E9%9C%80%E6%B1%82%E6%89%A9%E5%B1%95%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.7.1.1.</span> <span class="toc-text">业务需求扩展示例</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9B%BD%E4%BA%A7%E8%8A%AF%E7%89%87%E9%80%82%E9%85%8D"><span class="toc-number">1.7.1.2.</span> <span class="toc-text">国产芯片适配</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%F0%9F%8E%89-%E6%80%BB%E7%BB%93"><span class="toc-number">1.8.</span> <span class="toc-text">🎉 总结</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="PaaS 平台 GPU 资源复用与超卖技术深度解析">PaaS 平台 GPU 资源复用与超卖技术深度解析</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" title="PaaS 平台 GPU 资源复用与超卖探索">PaaS 平台 GPU 资源复用与超卖探索</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="vLLM 源码精读——高吞吐 LLM 推理引擎全景">vLLM 源码精读——高吞吐 LLM 推理引擎全景</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-Megatron-Timers%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron Timers 源码精读——分布式训练性能打点">Megatron Timers 源码精读——分布式训练性能打点</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/" title="GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解">GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

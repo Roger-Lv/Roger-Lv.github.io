@@ -1,0 +1,1018 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>PaaS 平台 GPU 资源复用与超卖技术深度解析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从源码层面深度解析 PaaS 平台 GPU 复用与超卖方案：自定义 Container Runtime 实现容器间设备共享、ShadowPod 与虚拟设备实现 Pod 级复用、基于内核模块劫持 ioctl 的&quot;偷卡&quot;超卖与快速驱逐机制，以及多 GPU 厂商适配。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="PaaS 平台 GPU 资源复用与超卖技术深度解析">
+<meta property="og:url" content="http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从源码层面深度解析 PaaS 平台 GPU 复用与超卖方案：自定义 Container Runtime 实现容器间设备共享、ShadowPod 与虚拟设备实现 Pod 级复用、基于内核模块劫持 ioctl 的&quot;偷卡&quot;超卖与快速驱逐机制，以及多 GPU 厂商适配。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-20T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-21T03:59:41.950Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="GPU">
+<meta property="article:tag" content="K8s">
+<meta property="article:tag" content="源码">
+<meta property="article:tag" content="PaaS">
+<meta property="article:tag" content="内核模块">
+<meta property="article:tag" content="netlink">
+<meta property="article:tag" content="ioctl">
+<meta property="article:tag" content="超卖">
+<meta property="article:tag" content="Container Runtime">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "PaaS 平台 GPU 资源复用与超卖技术深度解析",
+  "url": "http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-20T16:00:00.000Z",
+  "dateModified": "2026-07-21T03:59:41.950Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'PaaS 平台 GPU 资源复用与超卖技术深度解析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">221</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">204</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">63</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">PaaS 平台 GPU 资源复用与超卖技术深度解析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">PaaS 平台 GPU 资源复用与超卖技术深度解析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-21T03:59:41.950Z" title="更新于 2026-07-21 11:59:41">2026-07-21</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E7%B3%BB%E7%BB%9F/">大模型系统</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" data-flag-title="PaaS 平台 GPU 资源复用与超卖技术深度解析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>PaaS 平台 GPU 资源复用与超卖技术深度解析</h1>
+<h2 id="目录">目录</h2>
+<ol>
+<li><a href="#%E8%83%8C%E6%99%AF%E4%B8%8E%E5%8A%A8%E6%9C%BA">背景与动机</a></li>
+<li><a href="#%E6%8A%80%E6%9C%AF%E6%9E%B6%E6%9E%84%E6%A6%82%E8%A7%88">技术架构概览</a></li>
+<li><a href="#%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E5%AE%9E%E7%8E%B0">核心技术实现</a>
+<ul>
+<li><a href="#%E4%B8%80%E8%87%AA%E5%AE%9A%E4%B9%89container-runtime%E5%AE%9E%E7%8E%B0%E5%AE%B9%E5%99%A8%E9%97%B4gpu%E5%85%B1%E4%BA%AB">自定义Container Runtime实现容器间GPU共享</a></li>
+<li><a href="#%E4%BA%8Cshadowpod%E4%B8%8E%E8%99%9A%E6%8B%9F%E8%AE%BE%E5%A4%87%E5%AE%9E%E7%8E%B0pod%E7%BA%A7gpu%E5%A4%8D%E7%94%A8">ShadowPod与虚拟设备实现Pod级GPU复用</a></li>
+<li><a href="#%E4%B8%89steal-gpu%E5%8A%A8%E6%80%81%E8%B6%85%E5%8D%96%E6%9C%BA%E5%88%B6">Steal GPU动态超卖机制</a></li>
+<li><a href="#%E5%9B%9B%E5%A4%9Agpu%E7%B1%BB%E5%9E%8B%E9%80%82%E9%85%8D">多GPU类型适配</a></li>
+</ul>
+</li>
+<li><a href="#%E5%85%B3%E9%94%AE%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84">关键数据结构</a></li>
+<li><a href="#%E6%A0%B8%E5%BF%83%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90">核心代码解析</a></li>
+<li><a href="#%E6%A8%A1%E6%8B%9F%E9%9D%A2%E8%AF%95%E9%97%AE%E7%AD%94">模拟面试问答</a></li>
+</ol>
+<hr>
+<h2 id="背景与动机">背景与动机</h2>
+<h3 id="业务需求">业务需求</h3>
+<p>在PaaS平台的实际运营中，我们遇到了两类核心问题：</p>
+<p><strong>用户侧需求：</strong></p>
+<ul>
+<li>推理服务实例资源利用率低：部分推理服务只占用1卡资源，但存在浪费</li>
+<li>开发机资源紧张：租户内资源有限，多用户开发机需要共享GPU</li>
+</ul>
+<p><strong>平台侧需求：</strong></p>
+<ul>
+<li>提升集群资源利用率</li>
+<li>对已分配但空闲的GPU进行超卖</li>
+<li>增加平台收入和毛利率</li>
+</ul>
+<h3 id="技术选型">技术选型</h3>
+<p>经过对市场现有方案的调研：</p>
+<table>
+<thead>
+<tr>
+<th>方案类型</th>
+<th>代表方案</th>
+<th>局限性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>厂商官方解决方案</td>
+<td>Nvidia MIG、MPS、vGPU</td>
+<td>授权成本高；场景局限；不便于整合不同厂商</td>
+</tr>
+<tr>
+<td>API劫持隔离方案</td>
+<td>vCUDA、OrionX、cGPU</td>
+<td>侵入业务层；开发维护难度大；存在性能损失</td>
+</tr>
+<tr>
+<td>轻量调度共享方案</td>
+<td>gpushare-device-plugin</td>
+<td>依赖调度逻辑变更；与已有体系存在冲突</td>
+</tr>
+</tbody>
+</table>
+<p><strong>最终选择：自研轻量化共享方案</strong></p>
+<p>基于自定义Container Runtime、Device Plugin、节点资源管理组件，实现通用的容器间GPU设备共享，具有以下优势：</p>
+<ul>
+<li>对调度逻辑影响更小</li>
+<li>设备类型无关，通用性强</li>
+<li>核心功能：支持将一块卡同时挂载到多个容器</li>
+</ul>
+<hr>
+<h2 id="技术架构概览">技术架构概览</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                         整体架构图                                    │</span><br><span class="line">├─────────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                     │</span><br><span class="line">│   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐       │</span><br><span class="line">│   │  SharePod    │     │  ShadowPod   │     │  SpotPod     │       │</span><br><span class="line">│   │  (推理服务)   │     │  (隐藏Pod)   │     │  (低优先级)   │       │</span><br><span class="line">│   └──────┬───────┘     └──────┬───────┘     └──────┬───────┘       │</span><br><span class="line">│          │                    │                    │                │</span><br><span class="line">│          ▼                    ▼                    ▼                │</span><br><span class="line">│   ┌──────────────────────────────────────────────────────────┐     │</span><br><span class="line">│   │                    Device Plugin Layer                    │     │</span><br><span class="line">│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │     │</span><br><span class="line">│   │  │ ShareGPU DP │  │ SpotGPU DP  │  │ Real GPU DP     │   │     │</span><br><span class="line">│   │  │(虚拟设备)    │  │(虚拟设备)   │  │(NVIDIA/AMD/...) │   │     │</span><br><span class="line">│   │  └─────────────┘  └─────────────┘  └─────────────────┘   │     │</span><br><span class="line">│   └──────────────────────────────────────────────────────────┘     │</span><br><span class="line">│                              │                                      │</span><br><span class="line">│                              ▼                                      │</span><br><span class="line">│   ┌──────────────────────────────────────────────────────────┐     │</span><br><span class="line">│   │                    node-agent (核心组件)                  │     │</span><br><span class="line">│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │     │</span><br><span class="line">│   │  │  Detector   │  │   Solver    │  │  MappingCache   │   │     │</span><br><span class="line">│   │  │  (状态检测)  │  │  (事件处理)  │  │  (设备映射缓存)  │   │     │</span><br><span class="line">│   │  └─────────────┘  └─────────────┘  └─────────────────┘   │     │</span><br><span class="line">│   └──────────────────────────────────────────────────────────┘     │</span><br><span class="line">│                              │                                      │</span><br><span class="line">│                              ▼                                      │</span><br><span class="line">│   ┌──────────────────────────────────────────────────────────┐     │</span><br><span class="line">│   │              Custom Container Runtime                     │     │</span><br><span class="line">│   │         (设备同步、Spec文件修改、Annotation处理)           │     │</span><br><span class="line">│   └──────────────────────────────────────────────────────────┘     │</span><br><span class="line">│                              │                                      │</span><br><span class="line">│                              ▼                                      │</span><br><span class="line">│   ┌──────────────────────────────────────────────────────────┐     │</span><br><span class="line">│   │                    Physical GPU                           │     │</span><br><span class="line">│   │              (NVIDIA / AMD / 国产芯片)                    │     │</span><br><span class="line">│   └──────────────────────────────────────────────────────────┘     │</span><br><span class="line">│                                                                     │</span><br><span class="line">└─────────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="核心技术实现">核心技术实现</h2>
+<h3 id="一、自定义Container-Runtime实现容器间GPU共享">一、自定义Container Runtime实现容器间GPU共享</h3>
+<h4 id="1-1-问题背景：Dind场景下的GPU独占">1.1 问题背景：Dind场景下的GPU独占</h4>
+<p>在PaaS平台的开发机场景中，用户使用Dind（Docker in Docker）功能时遇到问题：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────┐</span><br><span class="line">│              开发机Pod                   │</span><br><span class="line">│  ┌─────────────┐    ┌─────────────┐    │</span><br><span class="line">│  │ Main容器    │    │ Dind容器    │    │</span><br><span class="line">│  │ (用户环境)  │    │ (Docker服务) │    │</span><br><span class="line">│  │     ?       │    │   GPU ✓     │    │</span><br><span class="line">│  └─────────────┘    └─────────────┘    │</span><br><span class="line">│                                         │</span><br><span class="line">│  问题：GPU只能挂载给一个容器            │</span><br><span class="line">└─────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>核心矛盾</strong>：K8s以容器为单位调度资源，不同容器间资源互不相干，一个GPU设备要么分配给主容器，要么分配给Dind容器。</p>
+<h4 id="1-2-解决思路：Hacking容器创建流程">1.2 解决思路：Hacking容器创建流程</h4>
+<p>K8s容器创建基本流程：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">kubelet → containerd → spec文件(OCI标准) → runc → 容器</span><br></pre></td></tr></table></figure>
+<p><strong>关键发现</strong>：<code>containerd</code>在创建容器时会生成符合OCI标准的spec文件，<code>runc</code>根据这个spec文件创建容器。只要将容器A的spec中的设备挂载信息拷贝到容器B的spec中，就可以实现同一GPU同时挂载给多个容器。</p>
+<h4 id="1-3-自定义Runtime实现">1.3 自定义Runtime实现</h4>
+<p>参考<code>nvidia-container-runtime</code>的&quot;包一层&quot;方式，自定义runtime修改spec文件：</p>
+<p><strong>核心逻辑</strong>：</p>
+<ol>
+<li>检查Pod的annotation</li>
+<li>如果存在设备同步标记，将来源容器的设备信息同步到目标容器spec</li>
+<li>调用下层runtime创建容器</li>
+</ol>
+<h4 id="1-4-Annotation接口设计">1.4 Annotation接口设计</h4>
+<p>使用annotation作为容器间设备同步的接口：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;annotations&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">    <span class="attr">&quot;gpushare.k8s.io/container-devices-from.dind&quot;</span><span class="punctuation">:</span> <span class="string">&quot;_/_/main&quot;</span></span><br><span class="line">  <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p><strong>格式说明</strong>：</p>
+<ul>
+<li><code>container-devices-from.dind</code>：目标容器为dind，需要从其他容器同步设备</li>
+<li><code>_/_/main</code>：来源容器信息，两个下划线分别代表当前namespace和当前pod，<code>main</code>为来源容器名称</li>
+</ul>
+<p><strong>代码实现</strong>（<code>pkg/deviceplugin/share/stub.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Allocate will give annotation to the container according to the device id</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(stub *dpStub)</span></span> Allocate(ctx context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, <span class="type">error</span>) &#123;</span><br><span class="line">    <span class="comment">// ... 省略前置检查 ...</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">for</span> _, req := <span class="keyword">range</span> req.ContainerRequests &#123;</span><br><span class="line">        <span class="comment">// 解析设备ID获取ShadowPod信息</span></span><br><span class="line">        ns, shadowPodName := utils.ParseShadowPodFromDevice(req.DevicesIDs[<span class="number">0</span>])</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 构建设备同步annotation</span></span><br><span class="line">        <span class="comment">// e.g. &quot;gpushare.k8s.io/container-devices-from.infer&quot;: &quot;_/shadowPodName/main&quot;</span></span><br><span class="line">        annoData := <span class="keyword">map</span>[<span class="type">string</span>]<span class="keyword">map</span>[<span class="type">string</span>][]<span class="type">string</span>&#123;</span><br><span class="line">            <span class="string">&quot;_/&quot;</span> + shadowPodName + <span class="string">&quot;/main&quot;</span>: &#123;</span><br><span class="line">                <span class="string">&quot;*&quot;</span>: req.DevicesIDs,</span><br><span class="line">            &#125;,</span><br><span class="line">        &#125;</span><br><span class="line">        bytes, err := json.Marshal(annoData)</span><br><span class="line">        <span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">nil</span>, fmt.Errorf(<span class="string">&quot;failed marshaling annotation value data: %v&quot;</span>, err)</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        containerResponses = <span class="built_in">append</span>(containerResponses, &amp;pluginapi.ContainerAllocateResponse&#123;</span><br><span class="line">            Annotations: <span class="keyword">map</span>[<span class="type">string</span>]<span class="type">string</span>&#123;</span><br><span class="line">                consts.ContainerRelationAnnotation + <span class="string">&quot;.main&quot;</span>: <span class="type">string</span>(bytes)</span><br><span class="line">            &#125;,</span><br><span class="line">        &#125;)</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> &amp;pluginapi.AllocateResponse&#123;</span><br><span class="line">        ContainerResponses: containerResponses,</span><br><span class="line">    &#125;, <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<hr>
+<h3 id="二、ShadowPod与虚拟设备实现Pod级GPU复用">二、ShadowPod与虚拟设备实现Pod级GPU复用</h3>
+<h4 id="2-1-核心概念">2.1 核心概念</h4>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ShadowPod</strong></td>
+<td>隐藏的Pod，仅在后台可见，作用是占住GPU资源，作为设备同步中的&quot;来源容器&quot;</td>
+</tr>
+<tr>
+<td><strong>SharePod</strong></td>
+<td>开启了&quot;显卡复用&quot;开关的推理服务Pod，作为&quot;目标容器&quot;接收设备同步</td>
+</tr>
+<tr>
+<td><strong>虚拟资源</strong></td>
+<td><code>gpushare/share-gpu</code>，在K8s调度框架内实现对应关系</td>
+</tr>
+</tbody>
+</table>
+<h4 id="2-2-工作流程">2.2 工作流程</h4>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    ShareGPU工作流程                              │</span><br><span class="line">├─────────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                                 │</span><br><span class="line">│  1. 用户创建推理服务，开启&quot;显卡复用&quot;开关                          │</span><br><span class="line">│     │                                                           │</span><br><span class="line">│     ▼                                                           │</span><br><span class="line">│  2. Shadow Controller根据需求创建ShadowPod                       │</span><br><span class="line">│     │                                                           │</span><br><span class="line">│     ▼                                                           │</span><br><span class="line">│  3. ShadowPod绑定真实GPU，生成虚拟设备ID                          │</span><br><span class="line">│     │  虚拟设备ID格式: &#123;namespace&#125;/&#123;shadowpod-name&#125;-&#123;index&#125;       │</span><br><span class="line">│     │                                                           │</span><br><span class="line">│     ▼                                                           │</span><br><span class="line">│  4. ShareGPU Device Plugin向kubelet注册虚拟设备                   │</span><br><span class="line">│     │                                                           │</span><br><span class="line">│     ▼                                                           │</span><br><span class="line">│  5. SharePod调度时请求gpushare/share-gpu资源                        │</span><br><span class="line">│     │                                                           │</span><br><span class="line">│     ▼                                                           │</span><br><span class="line">│  6. Device Plugin Allocate返回设备同步annotation                 │</span><br><span class="line">│     │                                                           │</span><br><span class="line">│     ▼                                                           │</span><br><span class="line">│  7. Custom Runtime同步ShadowPod的GPU设备到SharePod               │</span><br><span class="line">│     │                                                           │</span><br><span class="line">│     ▼                                                           │</span><br><span class="line">│  8. 多个SharePod共享同一块物理GPU                                 │</span><br><span class="line">│                                                                 │</span><br><span class="line">└─────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h4 id="2-3-核心代码实现">2.3 核心代码实现</h4>
+<p><strong>Shadow Controller</strong>（<code>pkg/controllers/shadow/controller.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(c *Controller)</span></span> doOneReconcile(ctx context.Context) &#123;</span><br><span class="line">    snapshot := c.cache.Snapshot()</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 计算每个quota的ShadowPod需求</span></span><br><span class="line">    <span class="keyword">for</span> _, quotaKey := <span class="keyword">range</span> snapshot.ShareDevices.Keys() &#123;</span><br><span class="line">        quotaDevices := snapshot.ShareDevices.Get(quotaKey)</span><br><span class="line">        delta := quotaDevices.Pipelining + quotaDevices.Ready</span><br><span class="line">        <span class="keyword">if</span> delta &lt; <span class="number">0</span> &#123;</span><br><span class="line">            <span class="comment">// 需要创建ShadowPod</span></span><br><span class="line">            needShadow := (quotaKey.ShareSpec - <span class="number">1</span> - delta) / quotaKey.ShareSpec</span><br><span class="line">            <span class="keyword">for</span> i := <span class="number">0</span>; i &lt; needShadow; i++ &#123;</span><br><span class="line">                err := c.createShadow(ctx, quotaKey)</span><br><span class="line">                <span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">                    logrus.Errorf(<span class="string">&quot;failed creating shadow: %v&quot;</span>, err)</span><br><span class="line">                &#125;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 清理空闲超时的ShadowPod</span></span><br><span class="line">    <span class="keyword">for</span> _, podInfo := <span class="keyword">range</span> snapshot.Pods &#123;</span><br><span class="line">        <span class="keyword">switch</span> podInfo.DeviceType &#123;</span><br><span class="line">        <span class="keyword">case</span> apis.PodDeviceShadow:</span><br><span class="line">            c.doShadowPodClear(ctx, podInfo, snapshot.ShareDevices)</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>ShareGPU Device Plugin</strong>（<code>pkg/deviceplugin/share/deviceplugin.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(dp *ShareGPUDevicePlugin)</span></span> initDevices() <span class="type">error</span> &#123;</span><br><span class="line">    <span class="comment">// 获取所有ShadowPod并生成虚拟设备</span></span><br><span class="line">    pods, err := dp.kubeClient.CoreV1().Pods(v1.NamespaceAll).List(context.Background(), metav1.ListOptions&#123;</span><br><span class="line">        LabelSelector: fmt.Sprintf(<span class="string">&quot;%s=%s&quot;</span>, shareapis.PodDescriptionLabelKey, shareapis.PodDescriptionLabelShadowPod),</span><br><span class="line">    &#125;)</span><br><span class="line">    <span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> err</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">for</span> _, pod := <span class="keyword">range</span> pods.Items &#123;</span><br><span class="line">        <span class="keyword">if</span> pod.Spec.NodeName != dp.nodeName &#123;</span><br><span class="line">            <span class="keyword">continue</span></span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> pod.Status.Phase != v1.PodRunning &#123;</span><br><span class="line">            <span class="keyword">continue</span></span><br><span class="line">        &#125;</span><br><span class="line">        spec, err := utils.GetPodShareSpec(&amp;pod)</span><br><span class="line">        <span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">            <span class="keyword">continue</span></span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 每个ShadowPod生成spec个虚拟设备</span></span><br><span class="line">        <span class="keyword">for</span> i := <span class="number">0</span>; i &lt; spec; i++ &#123;</span><br><span class="line">            dp.devs = <span class="built_in">append</span>(dp.devs, &amp;pluginapi.Device&#123;</span><br><span class="line">                ID:     fmt.Sprintf(<span class="string">&quot;%s/%s-%d&quot;</span>, pod.Namespace, pod.Name, i),</span><br><span class="line">                Health: pluginapi.Healthy,</span><br><span class="line">            &#125;)</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>ShareGPU Solver</strong>（<code>pkg/solvers/sharegpu/sharegpu.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *shareGPUSolver)</span></span> Solve(e detectors.Event) &#123;</span><br><span class="line">    s.Lock()</span><br><span class="line">    <span class="keyword">defer</span> s.Unlock()</span><br><span class="line"></span><br><span class="line">    <span class="keyword">switch</span> e.Type &#123;</span><br><span class="line">    <span class="keyword">case</span> consts.EventTypeShadow:</span><br><span class="line">        s.solveShadowPodEvent(e)</span><br><span class="line">    <span class="keyword">case</span> consts.EventTypeShare:</span><br><span class="line">        s.solveSharePodEvent(e)</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *shareGPUSolver)</span></span> solveSharePodEvent(e detectors.Event) &#123;</span><br><span class="line">    <span class="keyword">if</span> e.Clear &#123;</span><br><span class="line">        s.unuse(e)  <span class="comment">// SharePod终止，释放虚拟设备</span></span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        s.use(e)    <span class="comment">// SharePod运行，占用虚拟设备</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *shareGPUSolver)</span></span> use(e detectors.Event) &#123;</span><br><span class="line">    <span class="keyword">for</span> _, d := <span class="keyword">range</span> e.Devices &#123;</span><br><span class="line">        ns, shadowpodName := utils.ParseShadowPodFromDevice(d.ID)</span><br><span class="line">        shadowpod := ns + <span class="string">&quot;/&quot;</span> + shadowpodName</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 检查ShadowPod存活状态</span></span><br><span class="line">        pod, err := s.kubeClient.CoreV1().Pods(ns).Get(context.TODO(), shadowpodName, metav1.GetOptions&#123;&#125;)</span><br><span class="line">        <span class="keyword">if</span> err != <span class="literal">nil</span> || pod.DeletionTimestamp != <span class="literal">nil</span> &#123;</span><br><span class="line">            <span class="comment">// ShadowPod已不存在，驱逐SharePod</span></span><br><span class="line">            s.kubeClient.CoreV1().Pods(ns).Delete(context.Background(), sharePodName, metav1.DeleteOptions&#123;&#125;)</span><br><span class="line">            <span class="keyword">return</span></span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 更新缓存，建立设备使用关系</span></span><br><span class="line">        s.cache.Use(shadowpod, e.Target, d.ID)</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 更新ShadowPod的Condition，标记设备被使用</span></span><br><span class="line">        s.kubeClient.AddUsingCondition(shadowpod, d.ID, e.Target)</span><br><span class="line"></span><br><span class="line">        <span class="comment">// 在SharePod上添加owner annotation</span></span><br><span class="line">        s.kubeClient.AddAnnotation(e.Target, shareapis.AnnoDeviceOwnerKey, shadowpod)</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<hr>
+<h3 id="三、Steal-GPU动态超卖机制">三、Steal GPU动态超卖机制</h3>
+<h4 id="3-1-问题场景">3.1 问题场景</h4>
+<blockquote>
+<p>某用户以包年包月方式购买了一个8卡节点，同时运行一个8卡开发机。但开发机只有白天工作时间运行GPU任务，大部分时间GPU利用率为0。能否将这部分空闲GPU时超卖？</p>
+</blockquote>
+<h4 id="3-2-偷卡-机制设计">3.2 &quot;偷卡&quot;机制设计</h4>
+<p><strong>核心思路</strong>：</p>
+<ul>
+<li>利用已有的&quot;同一GPU挂载给多个Pod&quot;能力</li>
+<li>准确判断用户&quot;离开&quot;状态 → 将开发机GPU重复挂载给Spot任务</li>
+<li>检测到用户&quot;回归&quot; → 立刻驱逐偷卡的Spot任务</li>
+</ul>
+<p><strong>状态定义</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>判断条件</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>离开</strong></td>
+<td>容器中超过一段时间没有对GPU设备的访问，且利用率为0</td>
+<td>GPU可超卖</td>
+</tr>
+<tr>
+<td><strong>回归</strong></td>
+<td>处于&quot;离开&quot;状态的容器中出现对GPU设备的访问</td>
+<td>驱逐Spot任务</td>
+</tr>
+</tbody>
+</table>
+<h4 id="3-3-虚拟资源映射">3.3 虚拟资源映射</h4>
+<p>引入新的虚拟资源类型：<code>gpushare/spot-gpu</code></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">真实GPU ←→ gpushare/spot-gpu (一一对应)</span><br></pre></td></tr></table></figure>
+<p><strong>状态流转</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>真实GPU状态</th>
+<th>gpushare/spot-gpu状态</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reserved任务分配</td>
+<td>已分配</td>
+<td>Unhealthy</td>
+<td>不可用，如有Spot负载则驱逐</td>
+</tr>
+<tr>
+<td>开发机&quot;离开&quot;状态</td>
+<td>已分配但空闲</td>
+<td>Healthy</td>
+<td>可分配给新的Spot负载</td>
+</tr>
+<tr>
+<td>用户&quot;回归&quot;</td>
+<td>需要使用</td>
+<td>触发驱逐</td>
+<td>内核模块信号→驱逐Spot负载</td>
+</tr>
+</tbody>
+</table>
+<h4 id="3-4-核心代码实现">3.4 核心代码实现</h4>
+<p><strong>SpotGPU Device Plugin</strong>（<code>pkg/deviceplugin/spot/deviceplugin.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(dp *SpotGPUDevicePlugin)</span></span> initDevices() <span class="type">error</span> &#123;</span><br><span class="line">    <span class="comment">// 从真实GPU Device Plugin获取设备ID</span></span><br><span class="line">    <span class="keyword">var</span> resp *pluginapi.ListAndWatchResponse</span><br><span class="line">    <span class="keyword">for</span> name, c := <span class="keyword">range</span> dp.realDPClients &#123;</span><br><span class="line">        lwClient, err := c.ListAndWatch(context.Background(), &amp;pluginapi.Empty&#123;&#125;)</span><br><span class="line">        <span class="keyword">if</span> err != <span class="literal">nil</span> &#123;</span><br><span class="line">            <span class="keyword">continue</span></span><br><span class="line">        &#125;</span><br><span class="line">        resp, err = lwClient.Recv()</span><br><span class="line">        <span class="keyword">if</span> err == <span class="literal">nil</span> &#123;</span><br><span class="line">            dp.realResourceName = name</span><br><span class="line">            <span class="keyword">break</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 将真实GPU ID转换为Spot GPU ID</span></span><br><span class="line">    devs := []*pluginapi.Device&#123;&#125;</span><br><span class="line">    <span class="keyword">for</span> _, d := <span class="keyword">range</span> resp.Devices &#123;</span><br><span class="line">        devs = <span class="built_in">append</span>(devs, &amp;pluginapi.Device&#123;</span><br><span class="line">            ID:     utils.OriginalID_To_SpotID(d.ID),  <span class="comment">// 添加spot-前缀</span></span><br><span class="line">            Health: pluginapi.Healthy,</span><br><span class="line">        &#125;)</span><br><span class="line">    &#125;</span><br><span class="line">    dp.devs = devs</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>SpotGPU Solver</strong>（<code>pkg/solvers/spotgpu/spotgpu.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> Solve(e detectors.Event) &#123;</span><br><span class="line">    s.Lock()</span><br><span class="line">    <span class="keyword">defer</span> s.Unlock()</span><br><span class="line"></span><br><span class="line">    <span class="keyword">switch</span> e.Type &#123;</span><br><span class="line">    <span class="keyword">case</span> consts.EventTypeLowPower:</span><br><span class="line">        s.solveLowPower(e)  <span class="comment">// 处理低功耗(离开)事件</span></span><br><span class="line">    <span class="keyword">case</span> consts.EventTypeGeneric:</span><br><span class="line">        s.solveGeneric(e)   <span class="comment">// 处理Reserved任务</span></span><br><span class="line">    <span class="keyword">case</span> consts.EventTypeSpot:</span><br><span class="line">        s.solveSpot(e)      <span class="comment">// 处理Spot任务</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>低功耗检测与处理</strong>（<code>pkg/solvers/spotgpu/lowpower.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> solveLowPower(e detectors.Event) <span class="type">error</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> e.Clear &#123;</span><br><span class="line">        s.solveGenericTerminating(e)</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> e.Devices[<span class="number">0</span>].Using &#123;</span><br><span class="line">        <span class="comment">// 用户&quot;回归&quot;，GPU开始使用</span></span><br><span class="line">        s.solveBusy(e)</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        <span class="comment">// 用户&quot;离开&quot;，GPU空闲</span></span><br><span class="line">        s.solveIdle(e)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> solveBusy(e detectors.Event) <span class="type">error</span> &#123;</span><br><span class="line">    <span class="comment">// 用户回归，需要驱逐偷卡的Spot任务</span></span><br><span class="line">    evictedUsers := s.cache.GetOwnerUsers(e.Target)</span><br><span class="line">    s.updateEvictCounter(evictedUsers, consts.EvictReasonOwnerBack)</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 执行驱逐</span></span><br><span class="line">    s.evictProcessFor(e)</span><br><span class="line">    s.evictFor(e.Target)</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 更新缓存，删除设备映射</span></span><br><span class="line">    s.cache.Delete(e.Target)</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 设置Spot GPU为Unhealthy，防止新调度</span></span><br><span class="line">    s.updateDP(e, pluginapi.Unhealthy)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> solveIdle(e detectors.Event) <span class="type">error</span> &#123;</span><br><span class="line">    <span class="comment">// 用户离开，GPU可以超卖</span></span><br><span class="line">    nvIDs := []<span class="type">string</span>&#123;&#125;</span><br><span class="line">    <span class="keyword">for</span> _, d := <span class="keyword">range</span> e.Devices &#123;</span><br><span class="line">        nvIDs = <span class="built_in">append</span>(nvIDs, d.ID)</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 在缓存中创建设备映射</span></span><br><span class="line">    s.cache.Create(e.Target, utils.OriginalIDs_To_SpotIDs(nvIDs))</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 设置Spot GPU为Healthy，允许调度</span></span><br><span class="line">    s.updateDP(e, pluginapi.Healthy)</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>驱逐机制</strong>（<code>pkg/solvers/spotgpu/evict.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *spotGPUSolver)</span></span> evictByDevice(e detectors.Event) <span class="type">error</span> &#123;</span><br><span class="line">    needEvict := <span class="keyword">map</span>[<span class="type">string</span>]<span class="keyword">struct</span>&#123;&#125;&#123;&#125;</span><br><span class="line">    <span class="keyword">for</span> _, d := <span class="keyword">range</span> e.Devices &#123;</span><br><span class="line">        spotID := utils.OriginalID_To_SpotID(d.ID)</span><br><span class="line">        needEvict[spotID] = <span class="keyword">struct</span>&#123;&#125;&#123;&#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 从IdleSpace中查找使用这些设备的Spot任务</span></span><br><span class="line">    snapshot := s.cache.Snapshot()</span><br><span class="line">    idleStatus := snapshot[consts.IdleSpace]</span><br><span class="line">    users := <span class="keyword">map</span>[<span class="type">string</span>]<span class="keyword">struct</span>&#123;&#125;&#123;&#125;</span><br><span class="line">    <span class="keyword">for</span> _, ds := <span class="keyword">range</span> *idleStatus &#123;</span><br><span class="line">        <span class="keyword">if</span> _, need := needEvict[ds.ID]; need &amp;&amp; ds.SharingPod != <span class="string">&quot;&quot;</span> &#123;</span><br><span class="line">            users[ds.SharingPod] = <span class="keyword">struct</span>&#123;&#125;&#123;&#125;</span><br><span class="line">            <span class="comment">// 从缓存中移除映射关系</span></span><br><span class="line">            s.cache.UnUse(consts.IdleSpace, ds.SharingPod, ds.ID)</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 驱逐Spot Pod</span></span><br><span class="line">    <span class="keyword">for</span> user := <span class="keyword">range</span> users &#123;</span><br><span class="line">        ns, name, _ := cache.SplitMetaNamespaceKey(user)</span><br><span class="line">        <span class="comment">// 先Kill容器进程</span></span><br><span class="line">        <span class="keyword">for</span> _, container := <span class="keyword">range</span> pod.Status.ContainerStatuses &#123;</span><br><span class="line">            id := strings.TrimPrefix(container.ContainerID, <span class="string">&quot;containerd://&quot;</span>)</span><br><span class="line">            s.taskClient.Kill(context.Background(), id)</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="comment">// 再删除Pod</span></span><br><span class="line">        s.kubeClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions&#123;&#125;)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<hr>
+<h3 id="四、多GPU类型适配">四、多GPU类型适配</h3>
+<h4 id="4-1-设计理念">4.1 设计理念</h4>
+<p>底层Runtime进行容器间设备同步的机制是<strong>设备无关</strong>的，适用于所有类型的GPU设备。</p>
+<h4 id="4-2-已适配芯片">4.2 已适配芯片</h4>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>厂商</th>
+<th>资源名称</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>国际</td>
+<td>NVIDIA</td>
+<td><a target="_blank" rel="noopener" href="http://nvidia.com/gpu">nvidia.com/gpu</a></td>
+</tr>
+<tr>
+<td>国际</td>
+<td>AMD</td>
+<td><a target="_blank" rel="noopener" href="http://amd.com/gpu">amd.com/gpu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>燧原</td>
+<td><a target="_blank" rel="noopener" href="http://enflame.com/gpu">enflame.com/gpu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>摩尔线程</td>
+<td><a target="_blank" rel="noopener" href="http://metax.com/gpu">metax.com/gpu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>天数智芯</td>
+<td><a target="_blank" rel="noopener" href="http://iluvatar.com/gpu">iluvatar.com/gpu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>沐曦</td>
+<td><a target="_blank" rel="noopener" href="http://metax.com/gpu">metax.com/gpu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>壁仞</td>
+<td><a target="_blank" rel="noopener" href="http://bilibili.com/gpu">bilibili.com/gpu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>海光</td>
+<td><a target="_blank" rel="noopener" href="http://hygon.com/dcu">hygon.com/dcu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>华为</td>
+<td><a target="_blank" rel="noopener" href="http://huawei.com/npu">huawei.com/npu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>昆仑芯</td>
+<td><a target="_blank" rel="noopener" href="http://kunlunxin.com/xpu">kunlunxin.com/xpu</a></td>
+</tr>
+<tr>
+<td>国产</td>
+<td>清微</td>
+<td><a target="_blank" rel="noopener" href="http://qingwei.com/gpu">qingwei.com/gpu</a></td>
+</tr>
+</tbody>
+</table>
+<h4 id="4-3-GPU-Collector适配器实现">4.3 GPU Collector适配器实现</h4>
+<p><strong>适配器接口定义</strong>（<code>pkg/metrics/collector/gpu.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> GpuAdapter <span class="keyword">interface</span> &#123;</span><br><span class="line">    ConvertLabels(*model.Metric, *GpuMetric) <span class="type">bool</span></span><br><span class="line">    Convert(context.Context, PlainMetricModel) (ConvertedGpuMetricModel, <span class="type">error</span>)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">init</span><span class="params">()</span></span> &#123;</span><br><span class="line">    adapters = <span class="keyword">map</span>[<span class="type">string</span>]GpuAdapter&#123;</span><br><span class="line">        ADAPTER_NVIDIA:    &amp;NvidiaAdapter&#123;&#125;,</span><br><span class="line">        ADAPTER_METAX:     &amp;MetaxAdapter&#123;&#125;,</span><br><span class="line">        ADAPTER_HUAWEI:    &amp;HuaweiAdapter&#123;&#125;,</span><br><span class="line">        ADAPTER_ENFLAME:   &amp;EnflameAdapter&#123;&#125;,</span><br><span class="line">        ADAPTER_KUNLUNXIN: &amp;KunlunxinAdapter&#123;&#125;,</span><br><span class="line">        ADAPTER_QINGWEI:   &amp;QingweiAdapter&#123;&#125;,</span><br><span class="line">        ADAPTER_HYGON:     &amp;HygonAdapter&#123;&#125;,</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>海光DCU适配器示例</strong>（<code>pkg/metrics/collector/gpu_hygon.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">const</span> (</span><br><span class="line">    ADAPTER_HYGON = <span class="string">&quot;dcu&quot;</span></span><br><span class="line">    HYGON_GPU_USAGE       = <span class="string">&quot;dcu_utilizationrate&quot;</span></span><br><span class="line">    HYGON_GPU_MEM_USED    = <span class="string">&quot;dcu_usedmemory_bytes&quot;</span></span><br><span class="line">    HYGON_GPU_MEM_TOTAL   = <span class="string">&quot;dcu_memorycap_bytes&quot;</span></span><br><span class="line">    HYGON_GPU_POWER_USAGE = <span class="string">&quot;dcu_power_usage&quot;</span></span><br><span class="line">)</span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> HygonAdapter <span class="keyword">struct</span>&#123;&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(na *HygonAdapter)</span></span> ConvertLabels(mt *model.Metric, data *GpuMetric) <span class="type">bool</span> &#123;</span><br><span class="line">    <span class="keyword">for</span> _, lbl := <span class="keyword">range</span> mt.Label &#123;</span><br><span class="line">        <span class="keyword">switch</span> lbl.GetName() &#123;</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;dcu_pod_namespace&quot;</span>:</span><br><span class="line">            data.Namespace = lbl.Value</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;dcu_pod_name&quot;</span>:</span><br><span class="line">            data.PodName = lbl.Value</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;container&quot;</span>:</span><br><span class="line">            data.Container = lbl.Value</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;minor_number&quot;</span>:</span><br><span class="line">            data.DeviceName = lbl.Value</span><br><span class="line">        <span class="keyword">case</span> <span class="string">&quot;pcieBus_number&quot;</span>:  <span class="comment">// 海光芯片使用PCIE ID作为设备ID</span></span><br><span class="line">            data.DeviceId = lbl.Value</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> <span class="literal">true</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(na *HygonAdapter)</span></span> Convert(ctx context.Context, pm PlainMetricModel) (ConvertedGpuMetricModel, <span class="type">error</span>) &#123;</span><br><span class="line">    model := NewConvertedGpuMetricModel()</span><br><span class="line">    <span class="keyword">for</span> name, mf := <span class="keyword">range</span> pm &#123;</span><br><span class="line">        <span class="keyword">switch</span> name &#123;</span><br><span class="line">        <span class="keyword">case</span> HYGON_GPU_USAGE:</span><br><span class="line">            walkMetricFamily(na, mf, <span class="function"><span class="keyword">func</span><span class="params">(data *GpuMetric)</span></span> &#123;</span><br><span class="line">                model.AddMetric(MetricGpuUsage, data)</span><br><span class="line">            &#125;)</span><br><span class="line">        <span class="keyword">case</span> HYGON_GPU_MEM_USED:</span><br><span class="line">            walkMetricFamily(na, mf, <span class="function"><span class="keyword">func</span><span class="params">(data *GpuMetric)</span></span> &#123;</span><br><span class="line">                model.AddMetric(MetricGpuMemUsedBytes, data)</span><br><span class="line">            &#125;)</span><br><span class="line">        <span class="comment">// ... 其他指标处理</span></span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> model, <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="关键数据结构">关键数据结构</h2>
+<h3 id="MappingCache-设备映射缓存">MappingCache - 设备映射缓存</h3>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// pkg/apis/mapping_cache.go</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> MappingCache <span class="keyword">struct</span> &#123;</span><br><span class="line">    cache <span class="keyword">map</span>[<span class="type">string</span>]*PodStatus  <span class="comment">// owner pod key =&gt; PodStatus</span></span><br><span class="line">    sync.Mutex</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> PodStatus <span class="keyword">map</span>[<span class="type">string</span>]*DeviceStatus  <span class="comment">// device id =&gt; DeviceStatus</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> DeviceStatus <span class="keyword">struct</span> &#123;</span><br><span class="line">    ID         <span class="type">string</span>  <span class="comment">// 设备ID</span></span><br><span class="line">    SharingPod <span class="type">string</span>  <span class="comment">// 当前使用该设备的Pod</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 核心方法</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(mc *MappingCache)</span></span> Create(owner <span class="type">string</span>, devices []<span class="type">string</span>)    <span class="comment">// 创建owner与设备的映射</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(mc *MappingCache)</span></span> Use(owner, user, deviceID <span class="type">string</span>)         <span class="comment">// 标记设备被user使用</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(mc *MappingCache)</span></span> UnUse(owner, user, deviceID <span class="type">string</span>) <span class="type">error</span> <span class="comment">// 解除设备使用关系</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(mc *MappingCache)</span></span> GetOwnerUsers(owner <span class="type">string</span>) []<span class="type">string</span>      <span class="comment">// 获取owner的所有使用者</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(mc *MappingCache)</span></span> GetDeviceOwner(deviceID <span class="type">string</span>) <span class="type">string</span>    <span class="comment">// 获取设备的owner</span></span><br></pre></td></tr></table></figure>
+<h3 id="ShareDeviceCount-共享设备计数">ShareDeviceCount - 共享设备计数</h3>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// pkg/apis/share_device.go</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> ShareDeviceCount <span class="keyword">struct</span> &#123;</span><br><span class="line">    Pipelining <span class="type">int</span>  <span class="comment">// 管道中(已请求但未调度)</span></span><br><span class="line">    Ready      <span class="type">int</span>  <span class="comment">// 就绪(已调度并运行)</span></span><br><span class="line">    Releasing  <span class="type">int</span>  <span class="comment">// 释放中</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<h3 id="Event-检测事件">Event - 检测事件</h3>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// pkg/detectors/types.go</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> Event <span class="keyword">struct</span> &#123;</span><br><span class="line">    Type      <span class="type">string</span>           <span class="comment">// 事件类型</span></span><br><span class="line">    Target    <span class="type">string</span>           <span class="comment">// 目标Pod key</span></span><br><span class="line">    Devices   []DeviceStatus   <span class="comment">// 设备状态列表</span></span><br><span class="line">    SpecCode  <span class="type">string</span>           <span class="comment">// 规格编码</span></span><br><span class="line">    ShareInfo ShareInfo        <span class="comment">// 共享信息</span></span><br><span class="line">    Clear     <span class="type">bool</span>             <span class="comment">// 是否为清除事件</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="核心代码解析">核心代码解析</h2>
+<h3 id="设备ID转换工具函数">设备ID转换工具函数</h3>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 设备ID格式转换，用于区分真实GPU和虚拟GPU</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// OriginalID_To_SpotID: 将真实GPU ID转换为Spot GPU ID</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">OriginalID_To_SpotID</span><span class="params">(id <span class="type">string</span>)</span></span> <span class="type">string</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> <span class="string">&quot;spot-&quot;</span> + id</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// SpotID_To_OriginalID: 将Spot GPU ID还原为真实GPU ID</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">SpotID_To_OriginalID</span><span class="params">(spotID <span class="type">string</span>)</span></span> <span class="type">string</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> strings.TrimPrefix(spotID, <span class="string">&quot;spot-&quot;</span>)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ParseShadowPodFromDevice: 从虚拟设备ID解析ShadowPod信息</span></span><br><span class="line"><span class="comment">// 输入: &quot;namespace/shadowpod-xxx-0&quot;</span></span><br><span class="line"><span class="comment">// 输出: namespace=&quot;namespace&quot;, shadowPodName=&quot;shadowpod-xxx&quot;</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">ParseShadowPodFromDevice</span><span class="params">(gpuName <span class="type">string</span>)</span></span> (namespace, shadowPodName <span class="type">string</span>) &#123;</span><br><span class="line">    idx := strings.LastIndex(gpuName, <span class="string">&quot;-&quot;</span>)</span><br><span class="line">    <span class="keyword">if</span> idx == <span class="number">-1</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="string">&quot;&quot;</span>, <span class="string">&quot;&quot;</span></span><br><span class="line">    &#125;</span><br><span class="line">    parts := strings.SplitN(gpuName, <span class="string">&quot;/&quot;</span>, <span class="number">2</span>)</span><br><span class="line">    <span class="keyword">if</span> <span class="built_in">len</span>(parts) != <span class="number">2</span> &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="string">&quot;&quot;</span>, <span class="string">&quot;&quot;</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> parts[<span class="number">0</span>], gpuName[:idx]</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="模拟面试问答">模拟面试问答</h2>
+<h3 id="Q1-请介绍一下你在这个项目中的角色和主要贡献？">Q1: 请介绍一下你在这个项目中的角色和主要贡献？</h3>
+<p><strong>回答</strong>：</p>
+<p>我在这个项目中负责GPU资源复用与超卖功能的核心设计与实现。具体包括：</p>
+<ol>
+<li>
+<p><strong>技术方案设计</strong>：主导设计了基于自定义Container Runtime的容器间GPU共享方案，解决了Dind场景下的GPU独占问题。</p>
+</li>
+<li>
+<p><strong>核心代码开发</strong>：</p>
+<ul>
+<li>实现了ShadowPod控制器，负责动态创建和管理隐藏Pod</li>
+<li>开发了ShareGPU和SpotGPU两个Device Plugin，实现虚拟设备的注册和分配</li>
+<li>实现了完整的设备映射缓存(MappingCache)和状态同步机制</li>
+</ul>
+</li>
+<li>
+<p><strong>多GPU适配</strong>：设计并实现了GPU适配器接口，完成了对NVIDIA、AMD以及海光、燧原、摩尔线程等国产芯片的适配。</p>
+</li>
+<li>
+<p><strong>线上落地</strong>：该方案已在生产环境稳定运行，显著提升了集群GPU利用率。</p>
+</li>
+</ol>
+<hr>
+<h3 id="Q2-为什么选择自定义Container-Runtime的方式，而不是使用Nvidia官方的MIG或MPS？">Q2: 为什么选择自定义Container Runtime的方式，而不是使用Nvidia官方的MIG或MPS？</h3>
+<p><strong>回答</strong>：</p>
+<p>选择自定义Container Runtime主要基于以下几点考虑：</p>
+<ol>
+<li>
+<p><strong>通用性</strong>：我们的方案是设备无关的，一套代码可以支持NVIDIA、AMD以及各种国产芯片。而MIG和MPS是NVIDIA专有技术，无法覆盖其他厂商。</p>
+</li>
+<li>
+<p><strong>成本考虑</strong>：MIG需要A100/H100等高端卡支持，MPS也需要额外的授权费用。我们的方案不需要任何额外硬件或授权成本。</p>
+</li>
+<li>
+<p><strong>灵活性</strong>：MIG的划分粒度有限(如A100 80GB只能划分7个实例)，而我们的方案可以灵活配置共享比例，比如一块卡可以分给4个甚至更多实例。</p>
+</li>
+<li>
+<p><strong>侵入性低</strong>：MPS需要业务侧配合设置环境变量，我们的方案对业务完全透明，用户无需修改任何代码。</p>
+</li>
+<li>
+<p><strong>便于扩展</strong>：基于这套机制，我们后续又实现了Spot GPU超卖功能，这是官方方案无法支持的。</p>
+</li>
+</ol>
+<hr>
+<h3 id="Q3-ShadowPod的作用是什么？为什么不直接让多个SharePod绑定同一块GPU？">Q3: ShadowPod的作用是什么？为什么不直接让多个SharePod绑定同一块GPU？</h3>
+<p><strong>回答</strong>：</p>
+<p>ShadowPod是一个关键的设计巧思，它解决了几个核心问题：</p>
+<ol>
+<li>
+<p><strong>K8s调度限制</strong>：K8s的资源调度是以Pod为单位的，同一块GPU不能同时分配给两个不同的Pod。ShadowPod作为一个&quot;占位符&quot;，先通过正常调度流程获得GPU资源。</p>
+</li>
+<li>
+<p><strong>设备同步来源</strong>：我们的设备同步机制需要一个&quot;来源容器&quot;，ShadowPod就是提供GPU设备的来源。SharePod通过annotation指定从哪个ShadowPod同步设备。</p>
+</li>
+<li>
+<p><strong>生命周期管理</strong>：ShadowPod与GPU资源绑定，当ShadowPod被删除时，可以级联驱逐所有依赖它的SharePod。</p>
+</li>
+<li>
+<p><strong>状态追踪</strong>：通过ShadowPod的Condition，我们可以追踪哪些SharePod正在使用这块GPU。</p>
+</li>
+</ol>
+<p>如果直接让多个SharePod绑定同一块GPU，在K8s的调度框架内是无法实现的，因为kubelet在分配设备时会检查资源是否已被占用。</p>
+<hr>
+<h3 id="Q4-如何判断用户-离开-和-回归-？如何保证Spot任务被及时驱逐？">Q4: 如何判断用户&quot;离开&quot;和&quot;回归&quot;？如何保证Spot任务被及时驱逐？</h3>
+<p><strong>回答</strong>：</p>
+<p>用户状态的判断主要通过两个维度：</p>
+<ol>
+<li>
+<p><strong>GPU访问检测</strong>：在内核层面劫持对GPU设备的ioctl系统调用。通过解析ioctl参数中的设备魔数判断是否为GPU访问，通过pid和pidnsid判断容器身份。</p>
+</li>
+<li>
+<p><strong>GPU利用率监控</strong>：通过DCGM或各厂商的监控接口获取GPU利用率。</p>
+</li>
+</ol>
+<p><strong>状态判断</strong>：</p>
+<ul>
+<li>离开：超过阈值时间(如10分钟)没有GPU访问，且利用率为0</li>
+<li>回归：出现GPU访问行为</li>
+</ul>
+<p><strong>快速驱逐机制</strong>：</p>
+<ol>
+<li>当检测到用户回归时，内核模块会<strong>阻塞用户的系统调用</strong>一小段时间</li>
+<li>同时触发驱逐流程，并行Kill所有Spot容器进程</li>
+<li>阻塞确保在Spot任务完全释放资源前，用户无法继续操作GPU</li>
+</ol>
+<p>这里为什么使用内核模块而不是eBPF？因为eBPF不支持阻塞操作，而我们需要在检测到回归的瞬间阻塞用户操作，争取驱逐时间。</p>
+<h4 id="实现细节：gpukmod-内核模块如何感知-ioctl">实现细节：gpukmod 内核模块如何感知 ioctl</h4>
+<p>上述&quot;劫持 ioctl + 阻塞 + 上报&quot;由独立的内核模块 <code>gpukmod</code> 完成，用户态侧（node-agent 的 <code>pkg/gpukmod</code>）通过 netlink 与之协作。整条链路如下：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">node-agent (Go)  ──netlink &quot;detect(pidnsid)&quot;──▶  gpukmod 内核模块</span><br><span class="line">                                                     │ container_map[pidnsid].need_notice = true</span><br><span class="line">                                                     │</span><br><span class="line">[容器内进程调 ioctl(fd, …)]                          │</span><br><span class="line">        │ __x64_sys_ioctl 被 khook 劫持              │</span><br><span class="line">        ▼                                            │</span><br><span class="line">  khook___x64_sys_ioctl:                             │</span><br><span class="line">    type==0x46(GPU) &amp;&amp; in pid-ns &amp;&amp; need_notice ─────┤</span><br><span class="line">        │                                            │</span><br><span class="line">        ├─ send_netlink_message(pidns_id) ───────────┘</span><br><span class="line">        │      └─▶ Go: Recvfrom → noticeChans[id] ← 触发驱逐 spot</span><br><span class="line">        └─ msleep(3000)   ← 阻塞用户，给驱逐争取时间</span><br><span class="line">        最后 KHOOK_ORIGIN 调真正的 ioctl</span><br></pre></td></tr></table></figure>
+<p><strong>1. 劫持方式：khook 内联 hook（非 eBPF、非 kprobe）</strong></p>
+<p><code>gpukmod</code> 用的是经典的内核函数内联打补丁，实现在 <code>khook/</code> 目录：</p>
+<ul>
+<li><code>KHOOK_EXT(long, __x64_sys_ioctl, const struct pt_regs *)</code> 声明要 hook 的目标符号，宏把自定义处理函数 <code>khook___x64_sys_ioctl</code>、目标名、stub 放进 <code>.data.khook</code> section。</li>
+<li><code>khook_resolve</code> 通过 <code>kallsyms_lookup_name</code> 找到 <code>__x64_sys_ioctl</code> 地址（符号未导出时用 kprobe 临时注册再读 <code>probe.addr</code> 兜底）。</li>
+<li><code>khook_arch_sm_init_one</code> 用内核内置长度反汇编器（<code>insn_init</code>/<code>insn_get_length</code>）算出目标函数首部若干字节的完整指令长度（≥5 字节），然后：
+<ul>
+<li><code>khook_arch_create_orig</code>：把原始首指令拷贝到 <code>orig</code> 缓冲，后接 <code>jmp</code> 回原函数继续处，这就是 <code>KHOOK_ORIGIN(...)</code> 调用的&quot;原始函数&quot;。</li>
+<li><code>khook_arch_create_stub</code>：构造 stub，末尾跳到我们的 <code>khook___x64_sys_ioctl</code>。</li>
+<li><code>x86_put_jmp</code>：在目标函数起始处写一条 <code>E9 jmp</code> 到 stub。</li>
+</ul>
+</li>
+<li>写内核代码段需关写保护：<code>khook_arch_write_kernel</code> 里 <code>cli</code>→关 <code>CR0.WP</code>（必要时关 <code>CR4.CET</code>）→写→恢复，全程在 <code>stop_machine</code> 上下文执行，避免其它核踩到半改的指令。</li>
+</ul>
+<p>效果：任何进程调 <code>ioctl</code>，进内核走到 <code>__x64_sys_ioctl</code> 即被 <code>jmp</code> 转入我们的处理函数。</p>
+<p><strong>2. 感知逻辑本体：<code>khook___x64_sys_ioctl</code></strong></p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">long</span> <span class="title function_">khook___x64_sys_ioctl</span><span class="params">(<span class="type">const</span> <span class="keyword">struct</span> pt_regs *regs)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">int</span> fd = regs-&gt;di;                  <span class="comment">// ioctl(int fd, ...)</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">long</span> request = regs-&gt;si;   <span class="comment">// 命令码</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">long</span> arg = regs-&gt;dx;</span><br><span class="line"></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">int</span> cmd  = _IOC_NR(request);</span><br><span class="line">    <span class="type">unsigned</span> <span class="type">int</span> type = _IOC_TYPE(request);   <span class="comment">// ← 设备魔数</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">int</span> size = _IOC_SIZE(request);</span><br><span class="line">    <span class="type">unsigned</span> <span class="type">int</span> dir  = _IOC_DIR(request);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 只关心容器里的进程：pid namespace 不是 init_pid_ns 的才算</span></span><br><span class="line">    <span class="keyword">if</span> (!is_task_under_pid_ns(current))</span><br><span class="line">        <span class="keyword">return</span> KHOOK_ORIGIN(__x64_sys_ioctl, regs);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 通过 ioctl 命令码里的设备魔数判断是不是 GPU 设备</span></span><br><span class="line">    <span class="keyword">if</span> (type != <span class="number">0x46</span>)                    <span class="comment">// 0x46 = &#x27;F&#x27;，GPU 魔数</span></span><br><span class="line">        <span class="keyword">return</span> KHOOK_ORIGIN(__x64_sys_ioctl, regs);</span><br><span class="line"></span><br><span class="line">    <span class="comment">// 拿到当前进程所在 pid namespace 的 id（容器身份）</span></span><br><span class="line">    u64 pidns_id = get_pid_ns_id(current);   <span class="comment">// task_active_pid_ns(current)-&gt;ns.inum</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">// 查 container_map：这个容器当前是否需要上报</span></span><br><span class="line">    hash_for_each_possible(container_map, entry, node, pidns_id) &#123;</span><br><span class="line">        <span class="keyword">if</span> (entry-&gt;pidns_id == pidns_id &amp;&amp; entry-&gt;need_notice == <span class="literal">true</span>) &#123;</span><br><span class="line">            <span class="comment">// 命中 → 上报用户态 + 阻塞一会儿</span></span><br><span class="line">            send_netlink_message(pidns_id);</span><br><span class="line">            msleep(<span class="number">3000</span>);                 <span class="comment">// ← &quot;阻塞一小段时间&quot;</span></span><br><span class="line">            <span class="keyword">return</span> KHOOK_ORIGIN(__x64_sys_ioctl, regs);</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> KHOOK_ORIGIN(__x64_sys_ioctl, regs);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>文档里那段描述与代码的对应关系：</p>
+<table>
+<thead>
+<tr>
+<th>文档说法</th>
+<th>代码实现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>劫持对 GPU 设备的 ioctl 系统调用</td>
+<td>khook 改写 <code>__x64_sys_ioctl</code> 首指令</td>
+</tr>
+<tr>
+<td>解析 ioctl 参数中的设备魔数判断是否 GPU 访问</td>
+<td><code>_IOC_TYPE(request)</code> != <code>0x46</code> 即放行</td>
+</tr>
+<tr>
+<td>通过 pid 和 pidnsid 判断容器身份</td>
+<td><code>is_task_under_pid_ns</code> + <code>get_pid_ns_id</code>（<code>ns.inum</code>）</td>
+</tr>
+<tr>
+<td>检测到回归后阻塞一小段时间争取驱逐</td>
+<td><code>send_netlink_message(pidns_id); msleep(3000)</code></td>
+</tr>
+</tbody>
+</table>
+<p>注意：内核模块<strong>不</strong>负责统计每个容器的访问次数或判断&quot;离开&quot;（那部分由 节点组件 侧用利用率 + 时间窗完成）。它只做一件具体的事——<strong>当某个被标记为&quot;需要上报&quot;的容器重新发起 GPU ioctl 时，立刻把它卡住 3 秒并通知用户态去驱逐 spot</strong>，也就是&quot;回归 → 阻塞 + 触发驱逐&quot;这一环。</p>
+<p><strong>3. <code>container_map</code> / <code>need_notice</code> 由谁设置</strong></p>
+<p>内核维护哈希表 <code>container_map</code>（key=pidns_id），每个 entry 有 <code>need_notice</code> bool。增删改由 netlink 命令驱动（<code>nl_recv_msg</code>）：</p>
+<ul>
+<li><code>add(N):id1 id2 …</code> → 把容器登记进表（<code>need_notice=false</code>）</li>
+<li><code>delete(N):…</code> → 移除</li>
+<li><code>detect(N):…</code> → <code>need_notice=true</code>，开始盯着这个容器，一旦有 GPU ioctl 就上报（对应&quot;开发机离开、把卡借给 spot&quot;后等待用户回归）</li>
+<li><code>undetect(N):…</code> → <code>need_notice=false</code></li>
+</ul>
+<p>只有 <code>need_notice==true</code> 的容器，其 GPU ioctl 才会被上报+阻塞。这正是&quot;处于离开状态的容器出现 GPU 访问 = 回归&quot;的精确实现。</p>
+<p><strong>4. 用户态对端：<code>pkg/gpukmod/user.go</code></strong></p>
+<ul>
+<li>启动时建 netlink socket（协议号 <code>NETLINK_USER = 31</code>），向内核发 <code>&quot;Register&quot;</code>。内核收到后记下 <code>user_pid</code>，之后 <code>send_netlink_message</code> 用 <code>nlmsg_unicast(nl_sk, skb, user_pid)</code> 把消息打回这个进程。</li>
+<li><code>Add/Delete/Detect/Undetect</code> 把容器 pidns_id 列表拼成 <code>add(2):123 456</code> 之类字符串发往内核，内核据此维护 <code>container_map</code>。</li>
+<li>一个 goroutine <code>Recvfrom</code> 专门收内核上报：解出一个 <code>uint64</code>（即命中的 <code>pidns_id</code>），按 pidns_id 找到 <code>noticeChans[pidnsid]</code> 通道塞进去。</li>
+</ul>
+<p>下游（<code>detectors/lowpower</code>、<code>pkg/detectors/spot</code> 等）拿到该通道事件即知&quot;某容器的用户回来了&quot;，进而触发 spot pod 驱逐；而 <code>detect</code>/<code>undetect</code> 的调用时机则由&quot;离开/回归&quot;状态机（利用率 + 时间窗，节点组件 侧）决定。</p>
+<p><strong>5. netlink 是什么</strong></p>
+<p>netlink 是 Linux 内核提供的<strong>内核 ↔ 用户态进程间的异步双向通信机制</strong>，本质是一组基于 socket 的 IPC。它最初为网络子系统设计（替换老的 <code>ioctl</code> 网络配置），后来泛化成内核与用户态交换任意数据的通用通道——audit、route、netfilter、SELinux 事件、kobject 事件等都走它。</p>
+<p>为什么这里用它：gpukmod 是内核模块，而触发驱逐的逻辑在用户态 Go 程序里。内核 hook 到 ioctl 后，需要把&quot;某容器（pidns_id）回来了&quot;这个事件<strong>异步推</strong>给用户态去驱逐 spot pod——这正是 netlink 最擅长的场景。对比：</p>
+<ul>
+<li><code>ioctl</code>/sysfs/procfs：用户态主动问内核，内核难以主动推。</li>
+<li>信号 <code>signal</code>：能主动推，但只能带一个 int，语义粗糙。</li>
+<li><strong>netlink</strong>：内核可主动 <code>nlmsg_unicast</code>/多播，能带任意 payload，支持多对多、多播组、非阻塞。</li>
+</ul>
+<p>在本方案里协议号自定义 <code>NETLINK_USER = 31</code>（21~31 是给自定义/实验性协议保留的段）。两端各持一个 socket：</p>
+<ul>
+<li>内核侧（<code>lkm/main.c</code>）：<code>netlink_kernel_create(&amp;init_net, NETLINK_USER, &amp;cfg)</code> 创建 socket，<code>.input = nl_recv_msg</code> 收用户态命令；发消息用 <code>nlmsg_new</code> 建 skb → <code>nlmsg_put</code> 填头 → <code>memcpy</code> 把 <code>pidns_id</code> 当 payload → <code>nlmsg_unicast(nl_sk, skb, user_pid)</code> 单播给注册过的用户进程。</li>
+<li>用户态侧（<code>pkg/gpukmod/user.go</code>）：<code>syscall.Socket(AF_NETLINK, SOCK_RAW, 31)</code>，bind 后发 <code>&quot;Register&quot;</code>，内核据此记下 <code>user_pid</code>；之后一边发命令（<code>detect</code>/<code>undetect</code>…），一边 <code>Recvfrom</code> 收内核上报的 <code>pidns_id</code>。</li>
+</ul>
+<p>报文是<strong>头（<code>nlmsghdr</code>）+ payload</strong> 结构。这里非常简化：命令方向是字符串（<code>&quot;Register&quot;</code>、<code>&quot;add(2):123 456&quot;</code>），上报方向就是一个 <code>uint64</code> 的 <code>pidns_id</code>。</p>
+<p>netlink 在本方案承担的两个方向：</p>
+<table>
+<thead>
+<tr>
+<th>方向</th>
+<th>用途</th>
+<th>谁发起</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>用户态 → 内核</td>
+<td><code>Register</code>（登记接收方 pid）、<code>add/delete</code>（维护 <code>container_map</code>）、<code>detect/undetect</code>（开关 <code>need_notice</code>）</td>
+<td>node-agent 主动</td>
+</tr>
+<tr>
+<td>内核 → 用户态</td>
+<td>命中 GPU ioctl 的容器的 <code>pidns_id</code> 上报（触发 spot 驱逐）</td>
+<td>gpukmod 主动 <code>nlmsg_unicast</code></td>
+</tr>
+</tbody>
+</table>
+<p>一句话：netlink 是内核模块 gpukmod 和用户态 node-agent 之间的那根&quot;电话线&quot;——用户态用它下达&quot;盯哪些容器&quot;的指令，内核用它上报&quot;这个容器回来了，赶紧驱逐&quot;的事件。</p>
+<p><strong>6. gpukmod 内核模块如何部署到集群节点</strong></p>
+<p>gpukmod 不是手动在每台节点上 <code>insmod</code> 的，而是打进一个镜像，通过 Helm chart 以 DaemonSet 的 <strong>initContainer</strong> 在每个节点上自动编译+加载。关键在于：内核模块和内核版本强绑定，所以必须在每个节点上<strong>针对该节点当前运行的内核就地编译</strong>，而不是预编译一份 <code>.ko</code> 全集群分发。</p>
+<p><strong>镜像侧</strong>（<code>dist/gpukmod.dockerfile</code>）：基于 <code>ubuntu:22.04</code>，装 <code>build-essential kmod libelf-dev sudo</code>，把 gpukmod 源码放到 <code>/gpukmod</code>、<code>install_gpukmod.sh</code> 放到 <code>/gpukmod/lkm/</code>。这个镜像本身不带编译产物，只带源码和工具链——编译在节点上发生。</p>
+<p><strong>Helm chart 侧</strong>（<code>chart/templates/daemonset.yaml</code>）：node-agent 以 DaemonSet 部署（一节点一个）。加载内核模块放在一个 initContainer 里，受 <code>enableAutoUpdateLKM</code> 开关控制：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">initContainers:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">kernel-module-installer</span></span><br><span class="line">    <span class="attr">image:</span> <span class="string">&quot;<span class="template-variable">&#123;&#123; .Values.image.repositoryInit &#125;&#125;</span>&quot;</span>   <span class="comment"># gpukmod 镜像</span></span><br><span class="line">    <span class="attr">securityContext:</span></span><br><span class="line">      <span class="attr">privileged:</span> <span class="literal">true</span></span><br><span class="line">      <span class="attr">capabilities:</span></span><br><span class="line">        <span class="attr">add:</span> [<span class="string">&quot;SYS_MODULE&quot;</span>]</span><br><span class="line">    <span class="attr">command:</span> [<span class="string">&quot;/gpukmod/lkm/install_gpukmod.sh&quot;</span>]</span><br><span class="line">    <span class="attr">volumeMounts:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">kernel-headers</span></span><br><span class="line">        <span class="attr">mountPath:</span> <span class="string">/lib/modules</span>        <span class="comment"># 宿主机内核模块目录</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">kernel-src</span></span><br><span class="line">        <span class="attr">mountPath:</span> <span class="string">/usr/src</span>            <span class="comment"># 宿主机内核源码/headers</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">sysfs</span></span><br><span class="line">        <span class="attr">mountPath:</span> <span class="string">/sys</span></span><br></pre></td></tr></table></figure>
+<ul>
+<li><code>privileged: true</code> + <code>SYS_MODULE</code> capability：容器需要 root 权限执行 <code>insmod</code>/<code>rmmod</code>。</li>
+<li>挂宿主机 <code>/lib/modules</code> 和 <code>/usr/src</code>：让容器内编译 <code>.ko</code> 时能 link 到<strong>该节点当前内核</strong>的 headers/symbols——这是&quot;就地编译&quot;的关键，保证 <code>.ko</code> 与节点内核版本严格匹配。</li>
+<li>主容器 <code>node-agent</code> 同样 <code>privileged: true</code>、<code>hostPID: true</code>（开启 lowpower 时还 <code>hostNetwork: true</code>），并挂 <code>/run</code>、<code>/var/lib/kubelet</code>、<code>/sys</code>、<code>/var/lib/node-agent</code> 等，用于感知容器状态、设备、持久化计数。</li>
+</ul>
+<p><strong>安装脚本</strong>（<code>hack/install_gpukmod.sh</code>）做了版本化的幂等加载，所以每次 Pod 重启或镜像更新都会自愈：</p>
+<ol>
+<li>从 <code>main.c</code> 的 <code>MODULE_VERSION(&quot;...&quot;)</code> 提取新版本号。</li>
+<li><code>lsmod | grep gpukmod</code> 看是否已加载；若已加载，读 <code>/sys/module/gpukmod/version</code> 比对版本。</li>
+<li>版本相同 → 跳过（幂等，避免重启就重新编译/卸载）。</li>
+<li>否则 <code>rmmod</code> 旧模块 → <code>make clean &amp;&amp; make</code>（针对节点内核编译）→ <code>sudo insmod gpukmod.ko</code>。</li>
+<li><code>lsmod | grep gpukmod</code> 校验加载成功。</li>
+</ol>
+<p><strong>整条部署链路</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">helm install → DaemonSet 调度到每个 GPU 节点</span><br><span class="line">   │</span><br><span class="line">   └─ initContainer(kernel-module-installer, privileged + SYS_MODULE)</span><br><span class="line">         │ 挂宿主机 /lib/modules、/usr/src</span><br><span class="line">         │ install_gpukmod.sh: 版本比对 → make → insmod gpukmod.ko</span><br><span class="line">         ▼</span><br><span class="line">      主容器 node-agent(privileged, hostPID)</span><br><span class="line">         │ netlink(31) 连上内核里的 gpukmod</span><br><span class="line">         │ 下发 detect/undetect、收回归上报、触发 spot 驱逐</span><br></pre></td></tr></table></figure>
+<p>这样做的好处：节点重启、内核升级、镜像更新后，只要 DaemonSet Pod 重新调度，initContainer 就会按当前内核重新编译并加载对应版本的 gpukmod，无需人工介入；而版本号比对又避免了无谓的重复卸载加载。</p>
+<p>综上，“感知 ioctl”= <strong>khook 在内核文本段插 jmp 劫持 <code>__x64_sys_ioctl</code>，再用 <code>_IOC_TYPE</code> 魔数（0x46）+ pid namespace inum 过滤出&quot;被监听容器的 GPU 访问&quot;，命中即阻塞 3 秒并通过 netlink(31) 上报 pidns_id 给用户态</strong>。eBPF 被弃用的根因也在此：eBPF 不能在 handler 里 <code>msleep</code> 阻塞，而这里恰恰要靠阻塞给驱逐争取时间。</p>
+<hr>
+<h3 id="Q5-如何保证多容器共享GPU时的隔离性和安全性？">Q5: 如何保证多容器共享GPU时的隔离性和安全性？</h3>
+<p><strong>回答</strong>：</p>
+<p>这是一个很好的问题。我们的方案目前主要解决的是<strong>设备共享</strong>问题，而非<strong>硬隔离</strong>问题。具体来说：</p>
+<p><strong>当前方案特点</strong>：</p>
+<ol>
+<li><strong>设备可见性共享</strong>：多个容器可以看到同一块GPU设备，共享设备文件和环境变量</li>
+<li><strong>资源竞争共存</strong>：多个容器进程在GPU上竞争执行，由GPU硬件和驱动层处理调度</li>
+</ol>
+<p><strong>隔离性保障</strong>：</p>
+<ol>
+<li><strong>显存隔离</strong>：可以通过CUDA_MPS_ACTIVE_THREAD_PERCENTAGE等机制限制每个进程的显存使用</li>
+<li><strong>算力隔离</strong>：可以通过cgroup或容器级别的资源限制来间接控制</li>
+<li><strong>错误隔离</strong>：一个进程崩溃不会影响其他进程（由GPU驱动保障）</li>
+</ol>
+<p><strong>适用场景</strong>：</p>
+<ul>
+<li>推理服务：多个小模型实例共享一块卡，各自显存需求明确</li>
+<li>开发机：用户自己管理资源，不存在恶意竞争</li>
+</ul>
+<p><strong>不适用场景</strong>：</p>
+<ul>
+<li>训练任务：需要独占GPU资源</li>
+<li>需要严格QoS保证的场景</li>
+</ul>
+<p>如果需要更严格的隔离，可以结合MIG或cGPU等技术，但会增加复杂度和成本。</p>
+<hr>
+<h3 id="Q6-这个方案在性能上有什么影响？设备同步会带来额外开销吗？">Q6: 这个方案在性能上有什么影响？设备同步会带来额外开销吗？</h3>
+<p><strong>回答</strong>：</p>
+<p><strong>性能影响分析</strong>：</p>
+<ol>
+<li>
+<p><strong>设备同步开销</strong>：</p>
+<ul>
+<li>同步发生在容器创建阶段，属于一次性操作</li>
+<li>只是在spec文件中添加设备挂载信息，开销可忽略</li>
+<li>容器运行时没有额外开销，GPU访问路径与正常容器完全相同</li>
+</ul>
+</li>
+<li>
+<p><strong>运行时性能</strong>：</p>
+<ul>
+<li>GPU计算性能：无影响，各容器进程直接与GPU驱动交互</li>
+<li>显存带宽：存在竞争，取决于实际工作负载</li>
+<li>这与任何多进程共享GPU的场景一致</li>
+</ul>
+</li>
+<li>
+<p><strong>调度延迟</strong>：</p>
+<ul>
+<li>ShadowPod需要先调度，SharePod才能创建</li>
+<li>典型增加约5-10秒的启动延迟</li>
+<li>对于推理服务这种长运行任务，影响很小</li>
+</ul>
+</li>
+</ol>
+<p><strong>监控开销</strong>：</p>
+<ul>
+<li>Detector每分钟检查一次Pod状态</li>
+<li>GPU指标采集复用现有的监控链路</li>
+<li>整体CPU和内存占用在100MB以内</li>
+</ul>
+<hr>
+<h3 id="Q7-如何处理节点故障或Pod被驱逐的情况？">Q7: 如何处理节点故障或Pod被驱逐的情况？</h3>
+<p><strong>回答</strong>：</p>
+<p>我们设计了完善的故障处理机制：</p>
+<p><strong>ShadowPod故障</strong>：</p>
+<ol>
+<li>ShadowPod被删除或进入Terminating状态</li>
+<li>Detector检测到后发送Clear事件</li>
+<li>Solver收到事件后，驱逐所有依赖该ShadowPod的SharePod</li>
+<li>代码逻辑（<code>sharegpu.go</code>）：</li>
+</ol>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *shareGPUSolver)</span></span> solveShadowPodEvent(e detectors.Event) &#123;</span><br><span class="line">    <span class="keyword">if</span> e.Clear &#123;</span><br><span class="line">        s.evictFor(e.Target)  <span class="comment">// 驱逐所有SharePod</span></span><br><span class="line">        s.cache.Delete(e.Target)</span><br><span class="line">        s.updateDevicePlugin()</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>SharePod故障</strong>：</p>
+<ol>
+<li>SharePod终止时发送Clear事件</li>
+<li>从MappingCache中移除设备使用关系</li>
+<li>更新ShadowPod的Condition，标记设备空闲</li>
+<li>虚拟设备变为可用，可分配给新的SharePod</li>
+</ol>
+<p><strong>节点故障</strong>：</p>
+<ol>
+<li>节点NotReady后，kubelet会驱逐所有Pod</li>
+<li>上层控制器会重新调度Pod到其他节点</li>
+<li>我们的组件是节点级的，会随节点恢复而重建状态</li>
+</ol>
+<p><strong>Spot任务驱逐失败</strong>：</p>
+<ol>
+<li>默认会重试驱逐</li>
+<li>如果持续失败，可以通过运维手段介入</li>
+<li>关键是保证用户的Reserved任务优先</li>
+</ol>
+<hr>
+<h3 id="Q8-你们是如何实现多GPU厂商适配的？新增一个芯片需要做什么？">Q8: 你们是如何实现多GPU厂商适配的？新增一个芯片需要做什么？</h3>
+<p><strong>回答</strong>：</p>
+<p>我们设计了<strong>适配器模式</strong>来实现多厂商支持：</p>
+<p><strong>核心抽象</strong>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> GpuAdapter <span class="keyword">interface</span> &#123;</span><br><span class="line">    ConvertLabels(*model.Metric, *GpuMetric) <span class="type">bool</span>  <span class="comment">// 标签转换</span></span><br><span class="line">    Convert(context.Context, PlainMetricModel) (ConvertedGpuMetricModel, <span class="type">error</span>)  <span class="comment">// 指标转换</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>适配步骤</strong>：</p>
+<ol>
+<li>
+<p><strong>指标映射</strong>：定义厂商特定指标名称到通用指标的映射</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">const</span> (</span><br><span class="line">    HYGON_GPU_USAGE    = <span class="string">&quot;dcu_utilizationrate&quot;</span>  <span class="comment">// 海光</span></span><br><span class="line">    NVIDIA_GPU_USAGE   = <span class="string">&quot;DCGM_FI_DEV_GPU_UTIL&quot;</span> <span class="comment">// NVIDIA</span></span><br><span class="line">    METAX_GPU_USAGE    = <span class="string">&quot;metax_gpu_util&quot;</span>       <span class="comment">// 摩尔线程</span></span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+</li>
+<li>
+<p><strong>标签转换</strong>：处理厂商特定的标签名称</p>
+<ul>
+<li>如海光使用<code>dcu_pod_name</code>而非<code>pod_name</code></li>
+<li>海光使用PCIE ID作为设备ID</li>
+</ul>
+</li>
+<li>
+<p><strong>注册适配器</strong>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">init</span><span class="params">()</span></span> &#123;</span><br><span class="line">    adapters[ADAPTER_HYGON] = &amp;HygonAdapter&#123;&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+</li>
+</ol>
+<p><strong>新增芯片只需</strong>：</p>
+<ol>
+<li>实现GpuAdapter接口</li>
+<li>在init()中注册适配器</li>
+<li>节点上部署对应厂商的device-plugin和exporter</li>
+</ol>
+<p><strong>设备同步层面</strong>完全不需要修改，因为我们的Runtime是设备无关的，只处理设备文件路径和环境变量。</p>
+<hr>
+<h3 id="Q9-这个方案有哪些局限性？未来有什么优化方向？">Q9: 这个方案有哪些局限性？未来有什么优化方向？</h3>
+<p><strong>回答</strong>：</p>
+<p><strong>当前局限性</strong>：</p>
+<ol>
+<li>
+<p><strong>软隔离问题</strong>：共享GPU的容器之间没有硬隔离，存在资源竞争</p>
+<ul>
+<li>显存隔离依赖用户自觉或业务侧限制</li>
+<li>算力隔离目前没有实现</li>
+</ul>
+</li>
+<li>
+<p><strong>调度耦合</strong>：SharePod依赖ShadowPod先调度，增加启动延迟</p>
+</li>
+<li>
+<p><strong>单节点限制</strong>：目前只支持同节点内的GPU共享，不支持跨节点</p>
+</li>
+<li>
+<p><strong>故障传播</strong>：ShadowPod故障会级联影响所有SharePod</p>
+</li>
+</ol>
+<p><strong>未来优化方向</strong>：</p>
+<ol>
+<li>
+<p><strong>增强隔离</strong>：</p>
+<ul>
+<li>结合cGPU实现显存硬隔离</li>
+<li>支持配置每个容器的GPU使用配额</li>
+</ul>
+</li>
+<li>
+<p><strong>调度优化</strong>：</p>
+<ul>
+<li>预创建ShadowPod池，减少启动延迟</li>
+<li>支持SharePod的亲和性调度，提高资源匹配效率</li>
+</ul>
+</li>
+<li>
+<p><strong>可观测性增强</strong>：</p>
+<ul>
+<li>提供更细粒度的GPU使用监控</li>
+<li>支持按容器维度的显存/算力使用统计</li>
+</ul>
+</li>
+<li>
+<p><strong>跨节点共享</strong>：</p>
+<ul>
+<li>探索基于GPU虚拟化的跨节点共享方案</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h3 id="Q10-如果让你重新设计这个系统，你会做哪些改进？">Q10: 如果让你重新设计这个系统，你会做哪些改进？</h3>
+<p><strong>回答</strong>：</p>
+<p>如果重新设计，我会考虑以下改进：</p>
+<ol>
+<li>
+<p><strong>架构简化</strong>：</p>
+<ul>
+<li>当前ShadowPod + SharePod的双层设计增加了复杂度</li>
+<li>可以考虑直接在Device Plugin层面实现资源池化，对上层完全透明</li>
+</ul>
+</li>
+<li>
+<p><strong>状态管理优化</strong>：</p>
+<ul>
+<li>当前MappingCache是内存状态，组件重启需要重建</li>
+<li>可以引入持久化存储，加速状态恢复</li>
+</ul>
+</li>
+<li>
+<p><strong>更强的隔离支持</strong>：</p>
+<ul>
+<li>内核模块层面支持显存隔离</li>
+<li>提供更灵活的资源配额配置</li>
+</ul>
+</li>
+<li>
+<p><strong>更好的调度集成</strong>：</p>
+<ul>
+<li>与K8s调度框架深度集成，避免二次调度</li>
+<li>支持更复杂的调度策略（如负载感知调度）</li>
+</ul>
+</li>
+<li>
+<p><strong>可观测性优先</strong>：</p>
+<ul>
+<li>设计阶段就考虑完善的监控和告警</li>
+<li>提供用户友好的资源使用视图</li>
+</ul>
+</li>
+</ol>
+<p>不过任何设计都需要在<strong>功能完整性</strong>、<strong>系统复杂度</strong>和<strong>开发效率</strong>之间做权衡。当前方案的优势在于：快速落地、稳定运行、易于维护，这在商业项目中同样重要。</p>
+<hr>
+<h2 id="总结">总结</h2>
+<p>本项目通过自定义Container Runtime、Device Plugin、节点资源管理组件的协同工作，实现了PaaS平台GPU资源的复用与超卖功能：</p>
+<ol>
+<li><strong>容器间GPU共享</strong>：解决了Dind场景下的GPU独占问题</li>
+<li><strong>Pod级GPU复用</strong>：支持推理服务多实例共享同一GPU</li>
+<li><strong>动态超卖</strong>：利用空闲GPU资源提升集群利用率</li>
+<li><strong>多芯片适配</strong>：支持NVIDIA、AMD及多款国产芯片</li>
+</ol>
+<p>方案已在生产环境稳定运行，为平台带来了显著的资源利用效率提升。</p>
+<hr>
+<blockquote>
+<p><strong>作者</strong>: [项目核心开发成员]<br>
+<strong>文档版本</strong>: v1.0<br>
+<strong>更新日期</strong>: 2024年</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/">http://example.com/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/GPU/">GPU</a><a class="post-meta__tags" href="/tags/K8s/">K8s</a><a class="post-meta__tags" href="/tags/%E6%BA%90%E7%A0%81/">源码</a><a class="post-meta__tags" href="/tags/PaaS/">PaaS</a><a class="post-meta__tags" href="/tags/%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97/">内核模块</a><a class="post-meta__tags" href="/tags/netlink/">netlink</a><a class="post-meta__tags" href="/tags/ioctl/">ioctl</a><a class="post-meta__tags" href="/tags/%E8%B6%85%E5%8D%96/">超卖</a><a class="post-meta__tags" href="/tags/Container-Runtime/">Container Runtime</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" title="PaaS 平台 GPU 资源复用与超卖探索"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">PaaS 平台 GPU 资源复用与超卖探索</div></div><div class="info-2"><div class="info-item-1">PaaS 平台 GPU 资源复用与超卖探索 背景&amp;动机 PaaS平台用户使用上的需求：  部分推理服务的实例占用的资源较少，即使只占用1卡也存在浪费，因此希望将多个推理服务的实例部署到同一个GPU上，从而节约成本。 由于租户内资源有限，往往只有一两个节点，但有十几个用户的开发机。因此希望支持多个用户的开发机共用一个节点的GPU。  PaaS平台侧从提高集群利用率、增加收入和毛利率的角度出发，也存在下面的需求：  通过对未分配/已分配空闲GPU超卖进一步增加收入 在节点GPU资源全部调度分配后，以CPU任务的方式继续超卖节点的CPU和内存资源   为了满足用户需求，需要支持GPU复用功能，吸引用户使用平台，同时为了提升集群资源利用率和毛利率，需要进一步探索闲时复用方案，对于已经售卖但处于空闲状态的资源进行超卖。  本文将介绍PaaS侧在解决上面的问题过程中，在GPU资源的复用与超卖方面的一些探索。所谓复用或者超卖，都建立在把同一个GPU同时分配给多个实例的基础上，属于一种GPU共享技术。  GPU共享一般是指在多个用户或应用程序之间共享GPU资源的技术。这种技术通过虚拟化、...</div></div></div></a><a class="pagination-related" href="/2026/07/20/2025-07-20-Claude-Code-Harness%E8%AE%BE%E8%AE%A1%E7%B2%BE%E8%AF%BB/" title="Claude Code Harness 设计精读——从源码看 Agent 运行时"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Claude Code Harness 设计精读——从源码看 Agent 运行时</div></div><div class="info-2"><div class="info-item-1">Claude Code Harness 设计精读——从源码看 Agent 运行时  本文基于 Claude Code 的 TypeScript 源码（src/）精读，讲清一个核心问题：“harness” 到底是什么、它由哪些子系统构成、它们怎么协作把&quot;一次用户输入&quot;变成&quot;一串工具调用 + 最终回答&quot;。 注：参考的某篇中文专栏文章无法访问，本文以源码为唯一事实来源，结构上覆盖 harness 的全部关键面。   一、什么是 harness——Agent 的&quot;操作系统层&quot; 在 Agent / LLM 工程语境里，harness 指包在模型之外的运行时——模型本身只会&quot;输入文本→输出文本&quot;，但一个能干活的 Agent 需要：  维护对话历史和上下文窗口（长了要压缩） 把模型输出的 tool_use 解析出来、调度执行、把结果喂回模型 控制工具的并发/串行、权限、安全 在出错、超 token、被打断时正确恢复 管子代理、计划模式、hooks、内存、技能、任务  这些&quot;模型不管的工程事&quot;加起...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" title="PaaS 平台 GPU 资源复用与超卖探索"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">PaaS 平台 GPU 资源复用与超卖探索</div></div><div class="info-2"><div class="info-item-1">PaaS 平台 GPU 资源复用与超卖探索 背景&amp;动机 PaaS平台用户使用上的需求：  部分推理服务的实例占用的资源较少，即使只占用1卡也存在浪费，因此希望将多个推理服务的实例部署到同一个GPU上，从而节约成本。 由于租户内资源有限，往往只有一两个节点，但有十几个用户的开发机。因此希望支持多个用户的开发机共用一个节点的GPU。  PaaS平台侧从提高集群利用率、增加收入和毛利率的角度出发，也存在下面的需求：  通过对未分配/已分配空闲GPU超卖进一步增加收入 在节点GPU资源全部调度分配后，以CPU任务的方式继续超卖节点的CPU和内存资源   为了满足用户需求，需要支持GPU复用功能，吸引用户使用平台，同时为了提升集群资源利用率和毛利率，需要进一步探索闲时复用方案，对于已经售卖但处于空闲状态的资源进行超卖。  本文将介绍PaaS侧在解决上面的问题过程中，在GPU资源的复用与超卖方面的一些探索。所谓复用或者超卖，都建立在把同一个GPU同时分配给多个实例的基础上，属于一种GPU共享技术。  GPU共享一般是指在多个用户或应用程序之间共享GPU资源的技术。这种技术通过虚拟化、...</div></div></div></a><a class="pagination-related" href="/2025/07/13/2026-07-13-Spot%E8%B5%84%E6%BA%90%E5%AE%9E%E7%8E%B0%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-%E4%BB%8E%E8%99%9A%E6%8B%9F%E8%AE%BE%E5%A4%87%E5%88%B0%E5%81%B7%E5%8D%A1%E8%B6%85%E5%8D%96%E7%9A%84%E5%AE%8C%E6%95%B4%E9%93%BE%E8%B7%AF/" title="Spot资源实现深度解析：从虚拟设备到偷卡超卖的完整链路"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-07-13</div><div class="info-item-2">Spot资源实现深度解析：从虚拟设备到偷卡超卖的完整链路</div></div><div class="info-2"><div class="info-item-1">Spot 资源实现深度解析：从虚拟设备到偷卡超卖的完整链路 1. 什么是 Spot 资源 Spot 资源（在 GangJob 中对应 spot-queue 队列）是一种服务质量不被保证的低优先级 GPU 资源：  随时可以被高优先级的 reserved 任务驱逐抢占 计费便宜 适用于短时调试任务、可被打断保留进度的任务  传统 spot 的调度范围是集群中所有空闲未分配的资源（未售出的 + 已售出但暂未分配的）。但本文要解析的是更深层的 spot 实现——偷卡超卖：即使资源已被 reserved 任务分配（如用户开发机占着 8 卡），只要用户&quot;离开&quot;（GPU 利用率为 0），就能把这块卡的算力偷给 spot 任务，用户&quot;回归&quot;时再驱逐 spot、还回资源。  2. 三层架构总览 Spot 资源的实现横跨三个组件，各层职责清晰： 12345678910111213141516171819202122232425262728┌─────────────────────────────────────────────────────────┐│ ...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-GPU-%E5%AE%B9%E5%99%A8%E5%BA%95%E5%B1%82%E5%AE%9E%E7%8E%B0/" title="GPU 容器底层实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">GPU 容器底层实现</div></div><div class="info-2"><div class="info-item-1">GPU 容器底层实现 容器使⽤ GPU – 问题提出 在容器环境中使⽤ GPU 是⼀件有趣的事情，以 NVIDIA GPU 为例，常⻅的⼀个使⽤ CUDA 的应⽤程序，其结构图如下：  **CUDA Driver API：**GPU 设备的抽象层，通过⼀系列 API 直接操作 GPU 设备，性能好，但编程难度⾼ （需要显式进⾏device初始化以及context管理等） CUDA Runtime API: 对 CUDA Driver API 进⾏⼀定封装，简化编程过程，降低开发难度； CUDA Libraries: 更⾼层的封装，包含⼀些成熟的⾼效函数库。 因此要实现 NVIDIA 容器化，也就是要让应⽤程序可以在容器内调⽤ CUDA API 来操作 GPU，⼀般来讲，就要使容器内应⽤程序内可调⽤ CUDA Runtime API 和 CUDA Libraries，容器内可使⽤ CUDA Driver 相关库。   NVIDIA CONTAINER TOOLKIT 具体结构 曾经 NVIDIA Docker 通过 docker 的 volume ⽅法将 CUDA Driver 挂...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-GPU-%E5%AE%B9%E5%99%A8%E7%9B%B8%E5%85%B3%E6%A6%82%E5%BF%B5/" title="GPU容器相关概念"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">GPU容器相关概念</div></div><div class="info-2"><div class="info-item-1">GPU容器相关概念 CUDA API 体系： 要使编写的 GPU 程序能够正常运行，需要借助 CUDA 直接使用 NVIDIA 的 GPU 来执行通用计算任务，从而使 GPU 能够从图形渲染设备转变为一个通用并行处理器，CUDA API 体系结构图如下：   **CUDA Driver API：**GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）。 CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度。 CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。  因此要实现 CUDA 容器化，就要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内程序可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 CUDA 容器化基本思路 要将 GPU 设备挂载到容器中，NVIDIA Docker 是通过注入一个 pre...</div></div></div></a><a class="pagination-related" href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/" title="NVIDIA device plugin for Kubernetes原理分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">NVIDIA device plugin for Kubernetes原理分析</div></div><div class="info-2"><div class="info-item-1">NVIDIA device plugin for Kubernetes原理分析 什么是 Device Plugin K8s 原生并没有支持第三方设备厂商的物理设备资源，因此 Device Plugins 给第三方设备厂商提供了相关接口，可以让他们的物理设备资源以 Extended Resources 提供给底层的容器。 当 device plugin 功能启动后，可以令 kubelet 开放 Register 的 gRPC 服务，device plugin 就可以通过这个服务向 kubelet 进行注册，注册成功后 device plugin 就进入了 Serving 模式，提供前面提到的 gRPC 接口调用服务，kubelet 也就可以通过调用 Listandwatch、Allocate 等方法对设备进行操作，可以用下图来描述单一节点上这一过程：  下面以 NVIDIA k8s-device-plugin 为例简单讲讲这一过程。 注册服务 先看 gRPC 注册部分，下面的函数用于启动一个 gRPC 服务器并在 kubelet 中注册 1234567891011121314151...</div></div></div></a><a class="pagination-related" href="/2025/02/16/2025-02-16-k8s%E4%B8%AD%E9%80%9A%E8%BF%87pod%E8%8E%B7%E5%8F%96gpu%E4%BD%BF%E7%94%A8%E8%BF%9B%E7%A8%8B%E5%88%B0pod%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB%20-%20%E5%89%AF%E6%9C%AC/" title="k8s中通过pod获取gpu使用进程到pod的映射关系"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-02-16</div><div class="info-item-2">k8s中通过pod获取gpu使用进程到pod的映射关系</div></div><div class="info-2"><div class="info-item-1">k8s中通过pod获取gpu使用进程到pod的映射关系 背景 该任务的pod为daemonset在集群的每一个节点上，controller pod（只有一个）通过grpc的方式进行调用该daemonset pod获取到该节点上gpu的使用进程到pod的映射关系，传递的参数为使用gpu的pod的id。 该需求涉及到几个部分内容：  如何通过pod id定位到具体的节点  通过controller 的cache机制（包含有pod和node cache）获取到daemonset pod id对应的node ip，在daemonset的pod部分新建grpc server端，根据ip:port构建grpc client即可   如何获取到节点上的gpu-&gt;process的映射关系  调用go-nvml即可   如何获取到节点上的process-&gt;container的映射关系  调用taskClient   container-&gt;pod的映射关系？  controller cache机制获取到对应的node，然后可以获取到该node上的pod和container，做一层映...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">221</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">204</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">63</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">PaaS 平台 GPU 资源复用与超卖技术深度解析</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%9B%AE%E5%BD%95"><span class="toc-number">1.1.</span> <span class="toc-text">目录</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E8%83%8C%E6%99%AF%E4%B8%8E%E5%8A%A8%E6%9C%BA"><span class="toc-number">1.2.</span> <span class="toc-text">背景与动机</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%9A%E5%8A%A1%E9%9C%80%E6%B1%82"><span class="toc-number">1.2.1.</span> <span class="toc-text">业务需求</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E9%80%89%E5%9E%8B"><span class="toc-number">1.2.2.</span> <span class="toc-text">技术选型</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E6%9E%B6%E6%9E%84%E6%A6%82%E8%A7%88"><span class="toc-number">1.3.</span> <span class="toc-text">技术架构概览</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.4.</span> <span class="toc-text">核心技术实现</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%87%AA%E5%AE%9A%E4%B9%89Container-Runtime%E5%AE%9E%E7%8E%B0%E5%AE%B9%E5%99%A8%E9%97%B4GPU%E5%85%B1%E4%BA%AB"><span class="toc-number">1.4.1.</span> <span class="toc-text">一、自定义Container Runtime实现容器间GPU共享</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#1-1-%E9%97%AE%E9%A2%98%E8%83%8C%E6%99%AF%EF%BC%9ADind%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84GPU%E7%8B%AC%E5%8D%A0"><span class="toc-number">1.4.1.1.</span> <span class="toc-text">1.1 问题背景：Dind场景下的GPU独占</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#1-2-%E8%A7%A3%E5%86%B3%E6%80%9D%E8%B7%AF%EF%BC%9AHacking%E5%AE%B9%E5%99%A8%E5%88%9B%E5%BB%BA%E6%B5%81%E7%A8%8B"><span class="toc-number">1.4.1.2.</span> <span class="toc-text">1.2 解决思路：Hacking容器创建流程</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#1-3-%E8%87%AA%E5%AE%9A%E4%B9%89Runtime%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.4.1.3.</span> <span class="toc-text">1.3 自定义Runtime实现</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#1-4-Annotation%E6%8E%A5%E5%8F%A3%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.4.1.4.</span> <span class="toc-text">1.4 Annotation接口设计</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BA%8C%E3%80%81ShadowPod%E4%B8%8E%E8%99%9A%E6%8B%9F%E8%AE%BE%E5%A4%87%E5%AE%9E%E7%8E%B0Pod%E7%BA%A7GPU%E5%A4%8D%E7%94%A8"><span class="toc-number">1.4.2.</span> <span class="toc-text">二、ShadowPod与虚拟设备实现Pod级GPU复用</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#2-1-%E6%A0%B8%E5%BF%83%E6%A6%82%E5%BF%B5"><span class="toc-number">1.4.2.1.</span> <span class="toc-text">2.1 核心概念</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#2-2-%E5%B7%A5%E4%BD%9C%E6%B5%81%E7%A8%8B"><span class="toc-number">1.4.2.2.</span> <span class="toc-text">2.2 工作流程</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#2-3-%E6%A0%B8%E5%BF%83%E4%BB%A3%E7%A0%81%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.4.2.3.</span> <span class="toc-text">2.3 核心代码实现</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E3%80%81Steal-GPU%E5%8A%A8%E6%80%81%E8%B6%85%E5%8D%96%E6%9C%BA%E5%88%B6"><span class="toc-number">1.4.3.</span> <span class="toc-text">三、Steal GPU动态超卖机制</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#3-1-%E9%97%AE%E9%A2%98%E5%9C%BA%E6%99%AF"><span class="toc-number">1.4.3.1.</span> <span class="toc-text">3.1 问题场景</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#3-2-%E5%81%B7%E5%8D%A1-%E6%9C%BA%E5%88%B6%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.4.3.2.</span> <span class="toc-text">3.2 &quot;偷卡&quot;机制设计</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#3-3-%E8%99%9A%E6%8B%9F%E8%B5%84%E6%BA%90%E6%98%A0%E5%B0%84"><span class="toc-number">1.4.3.3.</span> <span class="toc-text">3.3 虚拟资源映射</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#3-4-%E6%A0%B8%E5%BF%83%E4%BB%A3%E7%A0%81%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.4.3.4.</span> <span class="toc-text">3.4 核心代码实现</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%A4%9AGPU%E7%B1%BB%E5%9E%8B%E9%80%82%E9%85%8D"><span class="toc-number">1.4.4.</span> <span class="toc-text">四、多GPU类型适配</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#4-1-%E8%AE%BE%E8%AE%A1%E7%90%86%E5%BF%B5"><span class="toc-number">1.4.4.1.</span> <span class="toc-text">4.1 设计理念</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#4-2-%E5%B7%B2%E9%80%82%E9%85%8D%E8%8A%AF%E7%89%87"><span class="toc-number">1.4.4.2.</span> <span class="toc-text">4.2 已适配芯片</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#4-3-GPU-Collector%E9%80%82%E9%85%8D%E5%99%A8%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.4.4.3.</span> <span class="toc-text">4.3 GPU Collector适配器实现</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84"><span class="toc-number">1.5.</span> <span class="toc-text">关键数据结构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#MappingCache-%E8%AE%BE%E5%A4%87%E6%98%A0%E5%B0%84%E7%BC%93%E5%AD%98"><span class="toc-number">1.5.1.</span> <span class="toc-text">MappingCache - 设备映射缓存</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#ShareDeviceCount-%E5%85%B1%E4%BA%AB%E8%AE%BE%E5%A4%87%E8%AE%A1%E6%95%B0"><span class="toc-number">1.5.2.</span> <span class="toc-text">ShareDeviceCount - 共享设备计数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Event-%E6%A3%80%E6%B5%8B%E4%BA%8B%E4%BB%B6"><span class="toc-number">1.5.3.</span> <span class="toc-text">Event - 检测事件</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E4%BB%A3%E7%A0%81%E8%A7%A3%E6%9E%90"><span class="toc-number">1.6.</span> <span class="toc-text">核心代码解析</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AE%BE%E5%A4%87ID%E8%BD%AC%E6%8D%A2%E5%B7%A5%E5%85%B7%E5%87%BD%E6%95%B0"><span class="toc-number">1.6.1.</span> <span class="toc-text">设备ID转换工具函数</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A8%A1%E6%8B%9F%E9%9D%A2%E8%AF%95%E9%97%AE%E7%AD%94"><span class="toc-number">1.7.</span> <span class="toc-text">模拟面试问答</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Q1-%E8%AF%B7%E4%BB%8B%E7%BB%8D%E4%B8%80%E4%B8%8B%E4%BD%A0%E5%9C%A8%E8%BF%99%E4%B8%AA%E9%A1%B9%E7%9B%AE%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E5%92%8C%E4%B8%BB%E8%A6%81%E8%B4%A1%E7%8C%AE%EF%BC%9F"><span class="toc-number">1.7.1.</span> <span class="toc-text">Q1: 请介绍一下你在这个项目中的角色和主要贡献？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q2-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%80%89%E6%8B%A9%E8%87%AA%E5%AE%9A%E4%B9%89Container-Runtime%E7%9A%84%E6%96%B9%E5%BC%8F%EF%BC%8C%E8%80%8C%E4%B8%8D%E6%98%AF%E4%BD%BF%E7%94%A8Nvidia%E5%AE%98%E6%96%B9%E7%9A%84MIG%E6%88%96MPS%EF%BC%9F"><span class="toc-number">1.7.2.</span> <span class="toc-text">Q2: 为什么选择自定义Container Runtime的方式，而不是使用Nvidia官方的MIG或MPS？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q3-ShadowPod%E7%9A%84%E4%BD%9C%E7%94%A8%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%9B%B4%E6%8E%A5%E8%AE%A9%E5%A4%9A%E4%B8%AASharePod%E7%BB%91%E5%AE%9A%E5%90%8C%E4%B8%80%E5%9D%97GPU%EF%BC%9F"><span class="toc-number">1.7.3.</span> <span class="toc-text">Q3: ShadowPod的作用是什么？为什么不直接让多个SharePod绑定同一块GPU？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q4-%E5%A6%82%E4%BD%95%E5%88%A4%E6%96%AD%E7%94%A8%E6%88%B7-%E7%A6%BB%E5%BC%80-%E5%92%8C-%E5%9B%9E%E5%BD%92-%EF%BC%9F%E5%A6%82%E4%BD%95%E4%BF%9D%E8%AF%81Spot%E4%BB%BB%E5%8A%A1%E8%A2%AB%E5%8F%8A%E6%97%B6%E9%A9%B1%E9%80%90%EF%BC%9F"><span class="toc-number">1.7.4.</span> <span class="toc-text">Q4: 如何判断用户&quot;离开&quot;和&quot;回归&quot;？如何保证Spot任务被及时驱逐？</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%AE%9E%E7%8E%B0%E7%BB%86%E8%8A%82%EF%BC%9Agpukmod-%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E5%A6%82%E4%BD%95%E6%84%9F%E7%9F%A5-ioctl"><span class="toc-number">1.7.4.1.</span> <span class="toc-text">实现细节：gpukmod 内核模块如何感知 ioctl</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q5-%E5%A6%82%E4%BD%95%E4%BF%9D%E8%AF%81%E5%A4%9A%E5%AE%B9%E5%99%A8%E5%85%B1%E4%BA%ABGPU%E6%97%B6%E7%9A%84%E9%9A%94%E7%A6%BB%E6%80%A7%E5%92%8C%E5%AE%89%E5%85%A8%E6%80%A7%EF%BC%9F"><span class="toc-number">1.7.5.</span> <span class="toc-text">Q5: 如何保证多容器共享GPU时的隔离性和安全性？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q6-%E8%BF%99%E4%B8%AA%E6%96%B9%E6%A1%88%E5%9C%A8%E6%80%A7%E8%83%BD%E4%B8%8A%E6%9C%89%E4%BB%80%E4%B9%88%E5%BD%B1%E5%93%8D%EF%BC%9F%E8%AE%BE%E5%A4%87%E5%90%8C%E6%AD%A5%E4%BC%9A%E5%B8%A6%E6%9D%A5%E9%A2%9D%E5%A4%96%E5%BC%80%E9%94%80%E5%90%97%EF%BC%9F"><span class="toc-number">1.7.6.</span> <span class="toc-text">Q6: 这个方案在性能上有什么影响？设备同步会带来额外开销吗？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q7-%E5%A6%82%E4%BD%95%E5%A4%84%E7%90%86%E8%8A%82%E7%82%B9%E6%95%85%E9%9A%9C%E6%88%96Pod%E8%A2%AB%E9%A9%B1%E9%80%90%E7%9A%84%E6%83%85%E5%86%B5%EF%BC%9F"><span class="toc-number">1.7.7.</span> <span class="toc-text">Q7: 如何处理节点故障或Pod被驱逐的情况？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q8-%E4%BD%A0%E4%BB%AC%E6%98%AF%E5%A6%82%E4%BD%95%E5%AE%9E%E7%8E%B0%E5%A4%9AGPU%E5%8E%82%E5%95%86%E9%80%82%E9%85%8D%E7%9A%84%EF%BC%9F%E6%96%B0%E5%A2%9E%E4%B8%80%E4%B8%AA%E8%8A%AF%E7%89%87%E9%9C%80%E8%A6%81%E5%81%9A%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">1.7.8.</span> <span class="toc-text">Q8: 你们是如何实现多GPU厂商适配的？新增一个芯片需要做什么？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q9-%E8%BF%99%E4%B8%AA%E6%96%B9%E6%A1%88%E6%9C%89%E5%93%AA%E4%BA%9B%E5%B1%80%E9%99%90%E6%80%A7%EF%BC%9F%E6%9C%AA%E6%9D%A5%E6%9C%89%E4%BB%80%E4%B9%88%E4%BC%98%E5%8C%96%E6%96%B9%E5%90%91%EF%BC%9F"><span class="toc-number">1.7.9.</span> <span class="toc-text">Q9: 这个方案有哪些局限性？未来有什么优化方向？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Q10-%E5%A6%82%E6%9E%9C%E8%AE%A9%E4%BD%A0%E9%87%8D%E6%96%B0%E8%AE%BE%E8%AE%A1%E8%BF%99%E4%B8%AA%E7%B3%BB%E7%BB%9F%EF%BC%8C%E4%BD%A0%E4%BC%9A%E5%81%9A%E5%93%AA%E4%BA%9B%E6%94%B9%E8%BF%9B%EF%BC%9F"><span class="toc-number">1.7.10.</span> <span class="toc-text">Q10: 如果让你重新设计这个系统，你会做哪些改进？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">1.8.</span> <span class="toc-text">总结</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="PaaS 平台 GPU 资源复用与超卖技术深度解析">PaaS 平台 GPU 资源复用与超卖技术深度解析</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" title="PaaS 平台 GPU 资源复用与超卖探索">PaaS 平台 GPU 资源复用与超卖探索</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="vLLM 源码精读——高吞吐 LLM 推理引擎全景">vLLM 源码精读——高吞吐 LLM 推理引擎全景</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-Megatron-Timers%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron Timers 源码精读——分布式训练性能打点">Megatron Timers 源码精读——分布式训练性能打点</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/20/2026-07-20-GPU-Kernel-Stream-%E8%9E%8D%E5%90%88/" title="GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解">GPU Kernel、异步 Launch、Stream 与融合 Kernel 全解</a><time datetime="2026-07-19T16:00:00.000Z" title="发表于 2026-07-20 00:00:00">2026-07-20</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
