@@ -1,0 +1,535 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>LLM 推理的 AF 分离与 PD 分离—— disaggregation 全解 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="LLM 推理的 AF 分离与 PD 分离——disaggregation 全解  本文讲清现代 LLM 推理 serving 里的两类&quot;分离（disaggregation）“技术：PD 分离（Prefill-Decode 分离） 和 AF 分离（Attention-FFN 分离）。两者都是把原本&quot;混在一起跑&quot;的工作流按资源&#x2F;瓶颈差异拆开，独立调度、独立优化、必要时独立">
+<meta property="og:type" content="article">
+<meta property="og:title" content="LLM 推理的 AF 分离与 PD 分离—— disaggregation 全解">
+<meta property="og:url" content="http://example.com/2026/07/21/2026-07-21-AF%E5%88%86%E7%A6%BB%E4%B8%8EPD%E5%88%86%E7%A6%BB/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="LLM 推理的 AF 分离与 PD 分离——disaggregation 全解  本文讲清现代 LLM 推理 serving 里的两类&quot;分离（disaggregation）“技术：PD 分离（Prefill-Decode 分离） 和 AF 分离（Attention-FFN 分离）。两者都是把原本&quot;混在一起跑&quot;的工作流按资源&#x2F;瓶颈差异拆开，独立调度、独立优化、必要时独立">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-20T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-25T13:09:26.041Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="LLM">
+<meta property="article:tag" content="推理">
+<meta property="article:tag" content="disaggregation">
+<meta property="article:tag" content="serving">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "LLM 推理的 AF 分离与 PD 分离—— disaggregation 全解",
+  "url": "http://example.com/2026/07/21/2026-07-21-AF%E5%88%86%E7%A6%BB%E4%B8%8EPD%E5%88%86%E7%A6%BB/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-20T16:00:00.000Z",
+  "dateModified": "2026-07-25T13:09:26.041Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/21/2026-07-21-AF%E5%88%86%E7%A6%BB%E4%B8%8EPD%E5%88%86%E7%A6%BB/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'LLM 推理的 AF 分离与 PD 分离—— disaggregation 全解',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">228</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">220</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">65</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">LLM 推理的 AF 分离与 PD 分离—— disaggregation 全解</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">LLM 推理的 AF 分离与 PD 分离—— disaggregation 全解</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-25T13:09:26.041Z" title="更新于 2026-07-25 21:09:26">2026-07-25</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E7%B3%BB%E7%BB%9F/">大模型系统</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/21/2026-07-21-AF%E5%88%86%E7%A6%BB%E4%B8%8EPD%E5%88%86%E7%A6%BB/" data-flag-title="LLM 推理的 AF 分离与 PD 分离—— disaggregation 全解"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>LLM 推理的 AF 分离与 PD 分离——disaggregation 全解</h1>
+<blockquote>
+<p>本文讲清现代 LLM 推理 serving 里的两类&quot;分离（disaggregation）“技术：<strong>PD 分离（Prefill-Decode 分离）</strong> 和 <strong>AF 分离（Attention-FFN 分离）</strong>。两者都是把原本&quot;混在一起跑&quot;的工作流按资源/瓶颈差异拆开，独立调度、独立优化、必要时独立部署。读完你能回答面试官&quot;为什么要把 prefill 和 decode 拆开”“KV cache 怎么跨节点搬”“attention 和 FFN 为什么能分离”“两者能不能叠加用”。</p>
+<p>术语说明：PD 分离是业界共识术语（Splitwise/Mooncake/DistServe）。AF 分离术语相对不那么标准化，本文取<strong>Attention-FFN 分离/解耦</strong>的含义——把 Transformer 内的 attention 计算与 FFN(MLP) 计算解耦，做算子级或微批级重叠调度（DeepSeek Dual-Batch Overlap 思路）。若你语境里的 AF 另有含义（如 Async-Fetch），可与本文思路类比。</p>
+</blockquote>
+<hr>
+<h2 id="一、为什么要-分离-——两个根本矛盾">一、为什么要&quot;分离&quot;——两个根本矛盾</h2>
+<p>LLM 推理有两个与生俱来的&quot;不对称&quot;，是所有 disaggregation 的出发点：</p>
+<h3 id="矛盾-1：prefill-与-decode-的资源画像完全相反">矛盾 1：prefill 与 decode 的资源画像完全相反</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Prefill（首 token 阶段）</th>
+<th>Decode（逐 token 阶段）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>算一次的 token 数</td>
+<td>整个 prompt（几百~几万）</td>
+<td>1 个（+ spec decode 时几个）</td>
+</tr>
+<tr>
+<td>算力/访存比</td>
+<td>高（compute-bound）</td>
+<td>低（memory-bound）</td>
+</tr>
+<tr>
+<td>并行度</td>
+<td>高（prompt 内 token 并行）</td>
+<td>低（自回归串行，batch 内可并行但每步 token 少）</td>
+</tr>
+<tr>
+<td>GPU 利用</td>
+<td>高（大 GEMM 喂饱 SM）</td>
+<td>低（小算子、SM 空闲、等访存）</td>
+</tr>
+<tr>
+<td>KV cache</td>
+<td>一次性算出全部</td>
+<td>逐个追加，占大头</td>
+</tr>
+</tbody>
+</table>
+<p>把两者放同一 batch 混跑（vLLM V0/V1 的 continuous batching 是迭代级混跑）会有<strong>资源互相干扰</strong>：</p>
+<ul>
+<li>prefill 的大 GEMM 抢算力，把 decode 的 token 挤延迟；</li>
+<li>decode 的小算子拉低 batch 的整体算力利用率；</li>
+<li>prefill 突发（长 prompt 进来）打断 decode 的稳定节奏。</li>
+</ul>
+<h3 id="矛盾-2：Transformer-内-attention-与-FFN-的瓶颈不同">矛盾 2：Transformer 内 attention 与 FFN 的瓶颈不同</h3>
+<p>一层 Transformer = attention + FFN（MoE 下 FFN 是稀疏 expert）。两者的算力/访存画像也不同：</p>
+<ul>
+<li><strong>Attention</strong>：算的是 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>Q</mi><msup><mi>K</mi><mi>T</mi></msup><mo>→</mo><mtext>softmax</mtext><mo>→</mo><mo>×</mo><mi>V</mi></mrow><annotation encoding="application/x-tex">QK^T \to \text{softmax} \to \times V</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0358em;vertical-align:-0.1944em;"></span><span class="mord mathnormal">Q</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">K</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8413em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.13889em;">T</span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">→</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord text"><span class="mord">softmax</span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">→</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.7667em;vertical-align:-0.0833em;"></span><span class="mord">×</span><span class="mord mathnormal" style="margin-right:0.22222em;">V</span></span></span></span>，长上下文时 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>O</mi><mo stretchy="false">(</mo><msup><mi>s</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">O(s^2)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0641em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span>，<strong>访存/带宽敏感</strong>（尤其 decode 时 KV cache 读取是瓶颈）。</li>
+<li><strong>FFN/MLP</strong>：算的是几个大 GEMM（<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>d</mi><mo>→</mo><mn>4</mn><mi>d</mi><mo>→</mo><mi>d</mi></mrow><annotation encoding="application/x-tex">d \to 4d \to d</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">d</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">→</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord">4</span><span class="mord mathnormal">d</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">→</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal">d</span></span></span></span> 或 SwiGLU 三矩阵），<strong>算力密集</strong>，大矩阵能喂饱 tensor core。</li>
+</ul>
+<p>把两层混着顺序执行（标准做法），会出现&quot;算 attention 时 FFN 的算力单元闲着、算 FFN 时 attention 的访存通道闲着&quot;的利用率凹陷。</p>
+<p><strong>分离的核心思想</strong>：<strong>把资源画像不同、瓶颈不同的部分拆开，让各部分独立调度/独立部署/互相重叠，消除干扰、把硬件利用率拉满。</strong> PD 分离针对矛盾 1（阶段级），AF 分离针对矛盾 2（算子级）。</p>
+<hr>
+<h2 id="二、PD-分离（Prefill-Decode-Disaggregation）">二、PD 分离（Prefill-Decode Disaggregation）</h2>
+<h3 id="2-1-思想">2.1 思想</h3>
+<p>把 prefill 和 decode <strong>从同一批 worker 拆到两个独立的 worker 池</strong>：</p>
+<ul>
+<li><strong>Prefill pool</strong>：专门跑 prefill（算 prompt 的 KV，产第一个 token）。compute-bound，配高算力卡、大 batch、CUDA Graph/大 GEMM 优化。</li>
+<li><strong>Decode pool</strong>：专门跑 decode（逐 token 生成）。memory-bound，配大显存/带宽、长 batch、KV cache 优化。</li>
+<li>prefill 算完一个请求的 KV 后，<strong>把 KV cache 迁移到 decode pool</strong>，由 decode 节点接力生成。</li>
+</ul>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">请求 ─► Prefill pool(算 KV + 首 token) ──KV 迁移──► Decode pool(逐 token 生成) ─► 返回</span><br></pre></td></tr></table></figure>
+<h3 id="2-2-为什么能赢">2.2 为什么能赢</h3>
+<ol>
+<li><strong>消除干扰</strong>：prefill 不再打断 decode 节奏，decode 节点可连续跑高 batch、稳定低尾延迟。</li>
+<li><strong>各自调优</strong>：prefill 池配大算力开大 GEMM、decode 池配大显存/高带宽堆 batch，硬件按画像配置而非折中。</li>
+<li><strong>batch 更纯</strong>：prefill 池里全是 prefill（可长 prompt 拼批）、decode 池里全是 decode（可大 batch 拼），每个池内同质、调度简单、利用率高。</li>
+<li><strong>弹性</strong>：prefill 和 decode 负载特征不同（TTFT 敏感 vs 吞吐/TPOT 敏感），可独立扩容——prefill 突发多配 prefill 卡、decode 长输出多配 decode 卡。</li>
+</ol>
+<h3 id="2-3-核心挑战：KV-cache-迁移">2.3 核心挑战：KV cache 迁移</h3>
+<p>这是 PD 分离最难的工程点。prefill 算出的 KV 要搬到 decode 节点，KV 量 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>=</mo><mn>4</mn><mi>L</mi><mi>d</mi><mi>s</mi><mi>b</mi></mrow><annotation encoding="application/x-tex">= 4Ldsb</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.3669em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord">4</span><span class="mord mathnormal">L</span><span class="mord mathnormal">d</span><span class="mord mathnormal">s</span><span class="mord mathnormal">b</span></span></span></span>（见显存篇），长上下文时几个 GB 起步。</p>
+<ul>
+<li><strong>怎么搬</strong>：靠高带宽网络——RDMA/GPUDirect-RDMA 把 prefill 节点 GPU 显存的 KV 直接写到 decode 节点 GPU 显存（不经 host 内存中转），或走 CPU/NVMe 分层（热 KV 在 GPU、温在 CPU、冷在 NVMe）。</li>
+<li><strong>开销</strong>：KV 迁移有延迟和带宽成本，若迁移时间 &gt; 它省下的干扰时间就亏。所以 PD 分离要配<strong>高带宽互联（IB/RoCE/NVLink-domain）</strong>，且只在迁移代价可控时划算。</li>
+<li><strong>Mooncake 的做法</strong>：KV-cache 中心化——prefill 节点把 KV 写进一个 KV 池（CPU+GPU+SSD 多层），decode 节点从池里取，KV 在多请求间可复用（共享 prefix）。vLLM V1 的 <code>sleep()/wake_up()</code>、<code>kv_connector</code>、<code>coordinator</code> 也实现这层。</li>
+</ul>
+<h3 id="2-4-其它挑战">2.4 其它挑战</h3>
+<ul>
+<li><strong>Prefix cache 连续性</strong>：连续批处理里同 prefix 共享 KV，分离后跨池复用要专门设计（Mooncake 的 KV 池化、vLLM 的 prefix cache 跨节点）。</li>
+<li><strong>负载均衡</strong>：prefill 和 decode 负载比随请求分布变（长短不一），两池配比要动态，不然某池积压。</li>
+<li><strong>调度</strong>：何时把 prefill 完的请求&quot;交接&quot;给 decode 池，要避免 decode 池空等或 prefill 池拥塞——双池队列调度是个非平凡问题。</li>
+<li><strong>显存碎片</strong>：decode 池大 batch + 长 KV，靠 PagedAttention 分页管（vLLM）。</li>
+</ul>
+<h3 id="2-5-代表系统">2.5 代表系统</h3>
+<ul>
+<li><strong>Splitwise</strong>（微软）：PD 分离 + KV 迁移，量化分析最优配比。</li>
+<li><strong>Mooncake</strong>（月之暗面/Kimi）：KV-cache-centric disaggregated，KV 池化、prefill/decode 解耦、高吞吐长上下文。</li>
+<li><strong>DistServe</strong>：把 prefill 和 decode 分到不同 GPU set，证明 disaggregation 在 TTFT/TPOT 两端都更好。</li>
+<li><strong>vLLM V1</strong>：原生支持 PD 分离（sleep/wake、kv_connector、coordinator、KV offload/tiering），对接 Mooncake/Dynamo 等。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“PD 分离把 compute-bound 的 prefill 和 memory-bound 的 decode 拆到两个独立池，消除干扰、各自调优、独立扩容。命门是 KV cache 跨节点迁移——靠 RDMA/GPUDirect-RDMA 把 KV 从 prefill 节点搬到 decode 节点，或走 Mooncake 式的 KV 池化。只有迁移代价 &lt; 省下的干扰代价时才划算，所以离不开高带宽互联。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="三、AF-分离（Attention-FFN-分离-解耦）">三、AF 分离（Attention-FFN 分离/解耦）</h2>
+<h3 id="3-1-思想">3.1 思想</h3>
+<p>把一层 Transformer 里的 <strong>attention 计算和 FFN(MLP) 计算解耦</strong>，让它们可以：</p>
+<ul>
+<li>在不同时间点跑（重叠调度，把 A 的空闲塞进 B 的算力）；</li>
+<li>或放在不同硬件/SM/流上并行；</li>
+<li>或独立 batch（attention batch 和 FFN batch 分开组批）。</li>
+</ul>
+<p>核心是<strong>利用 attention 和 FFN 的算力/访存画像差异做重叠</strong>，把一层的&quot;串行 attention→FFN&quot;变成&quot;流水/重叠&quot;。</p>
+<h3 id="3-2-为什么能赢">3.2 为什么能赢</h3>
+<p>标准做法一层内是串行：<code>norm → attention → norm → FFN</code>，一个算完才下一个。问题：</p>
+<ul>
+<li><strong>attention 跑时 FFN 的 tensor core 闲</strong>（attention 访存敏感、tensor core 吃不饱）；</li>
+<li><strong>FFN 跑时 attention 的访存通道闲</strong>（FFN 算力密集、访存通道空闲）。</li>
+</ul>
+<p>如果把<strong>两个微批</strong>交错：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">batch A: attention ──────────► FFN ──────►</span><br><span class="line">batch B:            attention ───────► FFN ──►</span><br><span class="line">          ▲ A的attention时 B的FFN在跑(或反过来), 算力和访存重叠</span><br></pre></td></tr></table></figure>
+<p>A 的 attention（访存 bound）和 B 的 FFN（compute bound）在同一 GPU 上<strong>可重叠</strong>——一个吃访存一个吃算力，互补而非争抢。于是单卡利用率从&quot;两段都半闲&quot;拉到&quot;两段都满&quot;，吞吐提升。</p>
+<h3 id="3-3-DeepSeek-Dual-Batch-Overlap（典型实现）">3.3 DeepSeek Dual-Batch Overlap（典型实现）</h3>
+<p>DeepSeek-V3 的双批重叠（Dual-Batch Overlap）就是 AF 分离的工程化：</p>
+<ul>
+<li>把一个 batch 切成两半（dual batch）。</li>
+<li>前一半的 attention 和后一半的 FFN 在同一 GPU 上<strong>用不同 CUDA stream 重叠执行</strong>——attention 走访存、FFN 走算力，互补填满 GPU。</li>
+<li>配合 stream/event 做依赖同步（A 的 attention 结果是 A 的 FFN 输入，要等）。</li>
+</ul>
+<p>这本质是<strong>算子级流水</strong>：把&quot;attention + FFN&quot;的串行变成两批之间的流水重叠，类似把&quot;流水线气泡&quot;用另一批的工作填上——和 PP 的 interleaved 思想同源，但粒度细到层内 attention/FFN。</p>
+<h3 id="3-4-MoE-场景下的-AF-分离更香">3.4 MoE 场景下的 AF 分离更香</h3>
+<p>MoE 模型（DeepSeek-V3、Mixtral）里 FFN 是稀疏的 MoE 层：</p>
+<ul>
+<li><strong>attention 是 dense</strong>（所有 token 都走同一个 attention）；</li>
+<li><strong>FFN 是 sparse</strong>（每 token 只路由到 K 个 expert）。<br>
+两者算力/访存/调度特征差异更大，解耦后可各自 batch：attention batch 按 token 组织、MoE 按 expert 负载组织（all-to-all dispatch），独立调优。MoE 的 dispatch all-to-all 和 attention 还能进一步重叠。</li>
+</ul>
+<h3 id="3-5-实现层次">3.5 实现层次</h3>
+<p>AF 分离可在多个粒度做：</p>
+<ul>
+<li><strong>算子级重叠</strong>（dual-batch / dual-stream，单卡内 attention/FFN 重叠）——成本最低、收益直接。</li>
+<li><strong>微批流水</strong>（多个 micro-batch 在 attention/FFN 两段间流水）——类似 PP 的 1F1B，但段是 attention/FFN。</li>
+<li><strong>跨硬件/SM 分配</strong>（极端：attention 和 FFN 放不同硬件或固定 SM 分区，heterogeneous placement）——研究/特殊部署，工程复杂。</li>
+</ul>
+<h3 id="3-6-挑战">3.6 挑战</h3>
+<ul>
+<li><strong>依赖同步</strong>：A 的 FFN 依赖 A 的 attention 输出，必须 stream/event 同步，重叠窗口受最长段约束。</li>
+<li><strong>显存</strong>：要同时持有两个微批的中间激活，显存增加。</li>
+<li><strong>调度复杂</strong>：双批切分要平衡、stream 编排要正确，bug 难调。</li>
+<li><strong>收益前提</strong>：attention 和 FFN 真的要&quot;一个访存 bound 一个 compute bound&quot;才能互补；若都 compute bound 重叠收益小（所以长上下文/MoE 场景收益大，短 prompt 普通 FFN 收益小）。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“AF 分离把一层内 attention（访存 bound）和 FFN（compute bound）解耦，用 dual-batch/dual-stream 让 A 的 attention 和 B 的 FFN 重叠——一个吃访存一个吃算力，把单卡利用率从’两段都半闲’拉满。DeepSeek-V3 的 Dual-Batch Overlap 是典型实现。MoE 下 attention dense/FFN sparse 差异更大，解耦收益更香。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="四、PD-与-AF-的对比">四、PD 与 AF 的对比</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>PD 分离</th>
+<th>AF 分离</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>拆什么</td>
+<td>阶段（prefill / decode）</td>
+<td>算子（attention / FFN）</td>
+</tr>
+<tr>
+<td>粒度</td>
+<td>节点/池级</td>
+<td>算子/微批/stream 级</td>
+</tr>
+<tr>
+<td>针对矛盾</td>
+<td>prefill compute-bound vs decode memory-bound</td>
+<td>attention 访存-bound vs FFN compute-bound</td>
+</tr>
+<tr>
+<td>典型手段</td>
+<td>独立 worker 池 + KV 跨节点迁移</td>
+<td>dual-batch / dual-stream 重叠</td>
+</tr>
+<tr>
+<td>通信负担</td>
+<td>重（KV cache GB 级跨机搬）</td>
+<td>轻（同卡内 stream 同步，激活不大）</td>
+</tr>
+<tr>
+<td>部署复杂</td>
+<td>高（双池、KV 池、调度、负载均衡）</td>
+<td>中（双批切分、stream 编排）</td>
+</tr>
+<tr>
+<td>对硬件要求</td>
+<td>高带宽互联（IB/RoCE/GPUDirect-RDMA）</td>
+<td>单卡多 stream 算力/访存互补</td>
+</tr>
+<tr>
+<td>代表</td>
+<td>Splitwise / Mooncake / DistServe / vLLM V1</td>
+<td>DeepSeek-V3 Dual-Batch Overlap</td>
+</tr>
+</tbody>
+</table>
+<h3 id="两者互补、可叠加">两者互补、可叠加</h3>
+<ul>
+<li>PD 分离解决<strong>阶段间</strong>资源冲突（prefill/decode 不互相挤）。</li>
+<li>AF 分离解决<strong>算子间</strong>资源浪费（attention/FFN 不互相等）。</li>
+<li>一个在外（节点池分离），一个在内（单卡算子重叠），<strong>正交可叠加</strong>：prefill 池内部用 AF 重叠提 prefill 利用率、decode 池内部也可用 AF（decode 的 attention 是 KV 访存大头、FFN 是小 GEMM，重叠仍有空间）。Mooncake/DeepSeek 类系统往往两者都用——PD 分离做架构、AF 重叠做算子级优化。</li>
+</ul>
+<hr>
+<h2 id="五、什么时候用、什么时候别用">五、什么时候用、什么时候别用</h2>
+<p><strong>PD 分离适合</strong>：</p>
+<ul>
+<li>长上下文/长输出占比高（prefill 与 decode 画像差异大、干扰重）。</li>
+<li>集群大、有高带宽互联（KV 迁移代价可承担）。</li>
+<li>TTFT 和 TPOT 有独立 SLA 要分别优化。</li>
+<li><strong>别用</strong>：单卡小集群、KV 迁移代价 &gt; 收益、请求短且均匀（prefill/decode 差异小，混跑 continuous batching 就够）。</li>
+</ul>
+<p><strong>AF 分离适合</strong>：</p>
+<ul>
+<li>长上下文（attention 访存 bound 明显）或 MoE（attention dense / FFN sparse 差异大）。</li>
+<li>单卡利用率凹陷明显（profile 出 attention/FFN 没喂饱）。</li>
+<li><strong>别用</strong>：短 prompt + 普通 dense FFN（两段都偏 compute bound，重叠互补收益小，徒增复杂度和显存）。</li>
+</ul>
+<p><strong>先做简单的</strong>：continuous batching + PagedAttention + prefix cache + CUDA Graph + 融合 kernel 这些&quot;非分离&quot;优化先吃干净，再上 PD/AF。分离是&quot;榨干最后利用率&quot;的高级手段，复杂度代价大，别为用而用。</p>
+<hr>
+<h2 id="六、面试速答清单">六、面试速答清单</h2>
+<p><strong>Q1：PD 分离是什么，为什么能提速？</strong></p>
+<blockquote>
+<p>把 prefill（compute-bound）和 decode（memory-bound）从同一 worker 拆到两个独立池。好处：消除两阶段资源干扰、各自按画像调优（prefill 大 GEMM 高算力、decode 大显存高带宽堆 batch）、独立扩容（TTFT/TPOT 分别 SLA）。命门是 KV cache 跨节点迁移——靠 RDMA/GPUDirect-RDMA 或 Mooncake 式 KV 池化，迁移代价要小于省下的干扰代价，所以离不开高带宽互联。</p>
+</blockquote>
+<p><strong>Q2：PD 分离的 KV cache 迁移怎么解决？</strong></p>
+<blockquote>
+<p>prefill 算完 KV 后要搬到 decode 节点。靠 GPUDirect-RDMA 跨节点直接写显存（不经 host 中转）最快；Mooncake 把 KV 池化在 GPU+CPU+SSD 多层，prefill 写池、decode 取池，还能跨请求复用同 prefix 的 KV。vLLM V1 用 sleep/wake、kv_connector、coordinator 实现这层。迁移是 GB 级跨机数据，是 PD 分离性能/工程的核心矛盾。</p>
+</blockquote>
+<p><strong>Q3：AF 分离是什么，attention 和 FFN 为什么能分离？</strong></p>
+<blockquote>
+<p>把一层内 attention（访存 bound、KV 读取是瓶颈）和 FFN（compute bound、大 GEMM）解耦，用 dual-batch/dual-stream 让 A 的 attention 和 B 的 FFN 重叠执行——一个吃访存一个吃算力，互补填满 GPU，把&quot;两段都半闲&quot;拉到&quot;两段都满&quot;。DeepSeek-V3 Dual-Batch Overlap 是典型。MoE 下 attention dense / FFN sparse 差异更大收益更香。</p>
+</blockquote>
+<p><strong>Q4：PD 和 AF 是不是冲突？能不能一起用？</strong></p>
+<blockquote>
+<p>不冲突，正交可叠加。PD 在节点池级解决阶段间资源冲突，AF 在单卡算子级解决 attention/FFN 资源浪费——一外一内。prefill 池内部可用 AF 提 prefill 利用率，decode 池内部也可用 AF（decode attention 是 KV 访存大头、FFN 小 GEMM，重叠仍有空间）。Mooncake/DeepSeek 类系统往往两者都用。</p>
+</blockquote>
+<p><strong>Q5：什么场景不适合上分离？</strong></p>
+<blockquote>
+<p>PD 别用：单卡小集群、KV 迁移代价超收益、请求短且均匀（混跑 continuous batching 就够）。AF 别用：短 prompt + dense FFN（两段都偏 compute bound，互补收益小徒增复杂度和显存）。原则：continuous batching + PagedAttention + prefix cache + CUDA Graph + 融合 kernel 这些非分离优化先吃干净，再上 PD/AF——分离是榨干最后利用率的高级手段，别为用而用。</p>
+</blockquote>
+<p><strong>Q6：和 vLLM V1 continuous batching 比呢？</strong></p>
+<blockquote>
+<p>vLLM V1 的 continuous batching 是迭代级混跑——prefill 和 decode 在同一 worker、同一 batch 用 token 预算调度混跑，不分池、不搬 KV。它简单、对小集群/通用场景够用，但解决不了&quot;prefill 突发打断 decode&quot;“两阶段画像差异大需独立调优”。PD 分离是它的进阶——把混跑拆成分离，代价是 KV 迁移和双池调度。vLLM V1 同时支持两者（continuous batching 内核 + PD 分离的 sleep/wake/kv_connector）。</p>
+</blockquote>
+<hr>
+<h2 id="七、一张图收口">七、一张图收口</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">PD 分离(阶段级, 节点池):                  AF 分离(算子级, 单卡):</span><br><span class="line">  请求                                      层内: norm→attention→norm→FFN</span><br><span class="line">   │                                              串行: attention跑时FFN闲, FFN跑时attn访存闲</span><br><span class="line">   ▼                                              ▼ 解耦 + 双批重叠</span><br><span class="line">  Prefill 池 (compute-bound, 大GEMM)           batchA: attn ──────► FFN ──►</span><br><span class="line">   │  算 KV + 首 token, 写入 KV 池              batchB:        attn ─────► FFN</span><br><span class="line">   │  ──RDMA 搬 KV──►                              (A的attn访存 bound 与 B的FFN compute bound 互补重叠)</span><br><span class="line">   ▼</span><br><span class="line">  Decode 池 (memory-bound, 大显存高带宽)</span><br><span class="line">   │  逐 token 生成, PagedAttention 管 KV</span><br><span class="line">   ▼</span><br><span class="line">  返回</span><br><span class="line"></span><br><span class="line">正交可叠加: Prefill 池内部用 AF 提利用率, Decode 池内部也可用 AF</span><br></pre></td></tr></table></figure>
+<p>主线一句话：<strong>PD 分离在节点池级把 prefill(compute-bound) 和 decode(memory-bound) 拆开靠 KV 跨节点迁移接力；AF 分离在单卡算子级把 attention(访存-bound) 和 FFN(compute-bound) 用双批重叠填满利用率。一外一内、正交可叠加——但都是&quot;榨干最后利用率&quot;的高级手段，先把 continuous batching/PagedAttention/prefix cache/CUDA Graph/融合 kernel 吃干净再上。</strong> 把这两类分离的动机、手段、命门（KV 迁移 / 依赖同步）、适用边界讲顺，disaggregation 这关就稳了。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>Splitwise (Agrawal et al., ISCA 2024): <em>Splitwise: Efficient Generative LLM Inference Using Phase Splitting</em></li>
+<li>DistServe (Zhong et al., OSDI 2024): <em>DistServe: Disaggregating Prefill and Decoding for Goodput-optimized LLM Serving</em></li>
+<li>Mooncake (Qin et al., 2024): <em>Mooncake: A KVCache-centric Disaggregated Architecture</em></li>
+<li>DeepSeek-V3 技术报告：Dual-Batch Overlap / MoE serving</li>
+<li>vLLM V1 <code>core/kv_offload/</code>、<code>engine/coordinator.py</code>、<code>worker/gpu/kv_connector.py</code></li>
+<li>与本文 vLLM 源码精读、RDMA、显存计算法则、GPU Kernel/Stream 篇交叉对照</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/21/2026-07-21-AF%E5%88%86%E7%A6%BB%E4%B8%8EPD%E5%88%86%E7%A6%BB/">http://example.com/2026/07/21/2026-07-21-AF%E5%88%86%E7%A6%BB%E4%B8%8EPD%E5%88%86%E7%A6%BB/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/LLM/">LLM</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86/">推理</a><a class="post-meta__tags" href="/tags/disaggregation/">disaggregation</a><a class="post-meta__tags" href="/tags/serving/">serving</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/21/2026-07-21-Meta-Self-Evolving-Agent%E6%9E%84%E6%83%B3/" title="Meta-Evolution Genesis Agent (MEGA)——A Spec-Driven Framework for Bootstrapping Cross-Domain Self-Evolving Agents"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Meta-Evolution Genesis Agent (MEGA)——A Spec-Driven Framework for Bootstrapping Cross-Domain Self-Evolving Agents</div></div><div class="info-2"><div class="info-item-1">Meta-Evolution Genesis Agent (MEGA)  Meta-Evolution Genesis Agent (MEGA) · 昵称 元神 A Spec-Driven Framework for Bootstrapping Cross-Domain Self-Evolving Agents   研究构想文档（research idea / position paper draft）。作者：lvzhongrenjie　日期：2026-07-21 关联：自进化智能体研究综述（~/Documents/实习/）、alcor-chaos 排障自进化 agent（已有，作为已验证的一个领域实例） 系统名 MEGA = Meta-Evolution Genesis Agent；Meta-Evolution 命名二阶贡献（进化进化器），Genesis 命名 bootstrap，Agent = M 本身。   0. 一句话  MEGA（元神）是一个 spec-driven 的跨域 meta 进化层：本身是一个 meta-evolver（跑在 Claude Code/Codex...</div></div></div></a><a class="pagination-related" href="/2026/07/21/2025-07-21-MCP%E5%AE%89%E5%85%A8%E4%B8%8EPromptInjection%E6%94%BB%E9%98%B2%E5%AE%9E%E6%88%98/" title="MCP 安全与 Prompt Injection 攻防实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">MCP 安全与 Prompt Injection 攻防实战</div></div><div class="info-2"><div class="info-item-1">MCP 安全与 Prompt Injection 攻防实战  本文是《LLM Agent 安全》篇的补充实战篇，聚焦两个最该会落地的子题：MCP（Model Context Protocol）生态的 tool poisoning 风险与防护、以及 Prompt Injection 的真实 payload 案例 + 防御代码级落地（Spotlighting / Instruction Hierarchy / 参数校验 / human-in-the-loop）。读完你能回答&quot;MCP 工具描述怎么藏毒&quot;“Rug pulling 是什么”“spotlighting 代码怎么写”“为什么 base64 编码也能防一阵”。   前置：攻击面分类、indirect PI、无银弹根因见《LLM Agent 安全》篇。本文不重复理论，只讲实战形态与落地。   一、MCP 为什么是新的高危攻击面 MCP（Model Context Protocol）让 agent 能像装浏览器扩展一样接外部工具/数据源——stdio、HTTP、SSE 本地或远程 server 暴露 tools/...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/09/12/2025-09-12-Nano-vllm-%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="Nano-vllm 项目学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/nanovllm.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-12</div><div class="info-item-2">Nano-vllm 项目学习</div></div><div class="info-2"><div class="info-item-1">Nano-vllm 项目学习 项目地址：https://github.com/GeeeekExplorer/nano-vllm vllm介绍：https://zhuanlan.zhihu.com/p/693279132 paged attention:https://zhuanlan.zhihu.com/p/691038809 nano vllm: https://zhuanlan.zhihu.com/p/1923689524778766954   请求（request）可理解为操作系统中的一个进程   逻辑内存（logical KV blocks）可理解为操作系统中的虚拟内存，每个block类比于虚拟内存中的一个page。每个block的大小是固定的，在vLLM中默认大小为16，即可装16个token的K/V值   块表（block table）可理解为操作系统中的虚拟内存到物理内存的映射表   物理内存（physical KV blocks）可理解为操作系统中的物理内存，物理块在gpu显存上，每个block类比于虚拟内存中的一个page  vLLM节省KV cache显存的核...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2026-07-17-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%98%BE%E5%AD%98%E8%AE%A1%E7%AE%97%E6%B3%95%E5%88%99/" title="大模型显存计算法则——训练与推理全景图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">大模型显存计算法则——训练与推理全景图</div></div><div class="info-2"><div class="info-item-1">大模型显存计算法则——训练与推理全景图  本文目标：面试官问&quot;一个 70B 模型 fp16 训练要多少显存？为什么混合精度训练 Adam 优化器要 16 bytes/参数？ZeRO-3 之后能降到多少？推理 KV cache 占多大？&quot;——你能张口就算、并且讲清每个数的来源。 全文以**“算清训练显存 → 算清推理显存 → 进阶优化对显存的影响 → 面试速算题”**为主线。   一、前置：精度与字节换算（所有计算的基石）    精度 1 个参数占多少字节 常见用途     FP64 / double 8 B 几乎不用   FP32 4 B 优化器状态、master weight、科学计算   TF32 4 B（存储同 fp32，计算用 19 bit 尾数） A100 训练加速，存储仍 4B   BF16 / FP16 2 B 训练前向/反向权重、推理权重   FP8 (E4M3/E5M2) 1 B H100+ 训练/推理加速   INT8 1 B 推理量化、部分训练激活量化   INT4 0.5 B 推理量化（W4A16、GPTQ/AWQ）   INT3 / ...</div></div></div></a><a class="pagination-related" href="/2026/07/20/2026-07-20-vLLM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="vLLM 源码精读——高吞吐 LLM 推理引擎全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-20</div><div class="info-item-2">vLLM 源码精读——高吞吐 LLM 推理引擎全景</div></div><div class="info-2"><div class="info-item-1">vLLM 源码精读——高吞吐 LLM 推理引擎全景  本文基于 vLLM 源码 vllm/v1/（V1 引擎架构）。目标：让你在面试时能从&quot;为什么传统 serving 显存利用率只有 20%“讲到&quot;PagedAttention 的 block 怎么管”、从&quot;prefill/decode 不再分阶段&quot;讲到&quot;continuous batching 的 token-budget 调度&quot;、从&quot;prefix caching + 拷贝写&quot;讲到&quot;V1 的 async scheduler + CUDA Graph + spec decode&quot;。读完这篇，vLLM 这关基本通杀。   一、vLLM 要解决什么问题、为什么面试必问 传统 LLM serving（朴素 batch）有两个致命问题：  KV cache 显存碎片化：为每个请求预分配一段连续 KV 显存，请求长短不一→产生大量内部碎片+外部碎片，实测显存利用率常低于 20%；且无法在请求间复用相同前缀。 批处理不连续：朴素做法是&quot;...</div></div></div></a><a class="pagination-related" href="/2024/08/06/2024-08-06-WiNGPT2%E7%9A%84%E9%83%A8%E7%BD%B2%E5%92%8C%E6%80%A7%E8%83%BD%E5%AF%B9%E6%AF%94/" title="医疗垂直领域大模型WiNGPT2的部署和性能对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-06</div><div class="info-item-2">医疗垂直领域大模型WiNGPT2的部署和性能对比</div></div><div class="info-2"><div class="info-item-1">医疗垂直领域大模型WiNGPT2的部署和性能对比 WiNGPT2部署和运行 123456git clone https://github.com/winninghealth/WiNGPT2.gitcd WiNGPT2mkdir winninghealthcd winninghealthgit clone https://hf-mirror.com/winninghealth/WiNGPT2-7B-Chatcd .. 若没有以下这三个库，则安装gradio、tiktoken、pip install einops flash_attn 123pip install gradiopip install tiktokenpip install einops flash_attn 选一个目录作为cache（前提是这个目录已经存在且有权限读写） 12# 遇到报错 [Errno 13] Permission denied: &#x27;/data/.cache/huggingface/modules/transformers_modules/WiNGPT2-7B-Chat&#x27;expor...</div></div></div></a><a class="pagination-related" href="/2024/08/07/2024-08-07-%E6%B3%95%E5%BE%8B%E5%9E%82%E7%B1%BB%E5%A4%A7%E6%A8%A1%E5%9E%8BDISC-LawGPT%E7%9A%84%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C%E5%92%8C%E5%AF%B9%E6%AF%94/" title="法律垂类大模型DISC-LawGPT的部署运行和对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-08-07</div><div class="info-item-2">法律垂类大模型DISC-LawGPT的部署运行和对比</div></div><div class="info-2"><div class="info-item-1">法律垂类大模型DISC-LawGPT的部署运行和对比 部署和运行 123456789101112131415# 部署git clone https://github.com/FudanDISC/DISC-LawLLM.gitcd DISC-LawLLMpip install -r requirements.txtmkdir ShengbinYuecd ShengbinYuegit clone https://hf-mirror.com/ShengbinYue/DISC-LawLLMcd ..mkdir cache# 遇到报错 [Errno 13] Permission denied: &#x27;/data/.cache/huggingface/modules/transformers_modules/DISC-LawLLM&#x27;export HF_HOME=&quot;~/verticalLLM/lzjr/DISC-LawLLM/cache&quot; # 如果遇到CUDA error: out of memory 用 watch -n 0.5 nvidia-smi查看显...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-15-Camel%E6%A1%86%E6%9E%B6/" title="Camel框架"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/camel.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">Camel框架</div></div><div class="info-2"><div class="info-item-1">NeurIPS 2023｜AI Agents先行者CAMEL:第一个基于大模型的多智能体框架 转自：https://zhuanlan.zhihu.com/p/671093582 AI Agents是当下大模型领域备受关注的话题，用户可以引入多个扮演不同角色的LLM Agents参与到实际的任务中，Agents之间会进行竞争和协作等多种形式的动态交互，进而产生惊人的群体智能效果。本文介绍了来自KAUST研究团队的大模型心智交互CAMEL框架（“骆驼”），CAMEL框架是最早基于ChatGPT的autonomous agents知名项目，目前已被顶级人工智能会议NeurIPS 2023录用。  1777dbe9073c4bcd8ab59365481bcafc.png  论文题目： CAMEL: Communicative Agents for “Mind” Exploration of Large Scale Language Model Society 论文链接： https://ghli.org/camel.pdf 代码链接： https://github.com/camel-a...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">228</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">220</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">65</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">LLM 推理的 AF 分离与 PD 分离——disaggregation 全解</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81-%E5%88%86%E7%A6%BB-%E2%80%94%E2%80%94%E4%B8%A4%E4%B8%AA%E6%A0%B9%E6%9C%AC%E7%9F%9B%E7%9B%BE"><span class="toc-number">1.1.</span> <span class="toc-text">一、为什么要&quot;分离&quot;——两个根本矛盾</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9F%9B%E7%9B%BE-1%EF%BC%9Aprefill-%E4%B8%8E-decode-%E7%9A%84%E8%B5%84%E6%BA%90%E7%94%BB%E5%83%8F%E5%AE%8C%E5%85%A8%E7%9B%B8%E5%8F%8D"><span class="toc-number">1.1.1.</span> <span class="toc-text">矛盾 1：prefill 与 decode 的资源画像完全相反</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9F%9B%E7%9B%BE-2%EF%BC%9ATransformer-%E5%86%85-attention-%E4%B8%8E-FFN-%E7%9A%84%E7%93%B6%E9%A2%88%E4%B8%8D%E5%90%8C"><span class="toc-number">1.1.2.</span> <span class="toc-text">矛盾 2：Transformer 内 attention 与 FFN 的瓶颈不同</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81PD-%E5%88%86%E7%A6%BB%EF%BC%88Prefill-Decode-Disaggregation%EF%BC%89"><span class="toc-number">1.2.</span> <span class="toc-text">二、PD 分离（Prefill-Decode Disaggregation）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E6%80%9D%E6%83%B3"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 思想</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%83%BD%E8%B5%A2"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 为什么能赢</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E6%A0%B8%E5%BF%83%E6%8C%91%E6%88%98%EF%BC%9AKV-cache-%E8%BF%81%E7%A7%BB"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 核心挑战：KV cache 迁移</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E5%85%B6%E5%AE%83%E6%8C%91%E6%88%98"><span class="toc-number">1.2.4.</span> <span class="toc-text">2.4 其它挑战</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E4%BB%A3%E8%A1%A8%E7%B3%BB%E7%BB%9F"><span class="toc-number">1.2.5.</span> <span class="toc-text">2.5 代表系统</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81AF-%E5%88%86%E7%A6%BB%EF%BC%88Attention-FFN-%E5%88%86%E7%A6%BB-%E8%A7%A3%E8%80%A6%EF%BC%89"><span class="toc-number">1.3.</span> <span class="toc-text">三、AF 分离（Attention-FFN 分离&#x2F;解耦）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E6%80%9D%E6%83%B3"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 思想</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%83%BD%E8%B5%A2"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 为什么能赢</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-DeepSeek-Dual-Batch-Overlap%EF%BC%88%E5%85%B8%E5%9E%8B%E5%AE%9E%E7%8E%B0%EF%BC%89"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 DeepSeek Dual-Batch Overlap（典型实现）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-MoE-%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84-AF-%E5%88%86%E7%A6%BB%E6%9B%B4%E9%A6%99"><span class="toc-number">1.3.4.</span> <span class="toc-text">3.4 MoE 场景下的 AF 分离更香</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E5%AE%9E%E7%8E%B0%E5%B1%82%E6%AC%A1"><span class="toc-number">1.3.5.</span> <span class="toc-text">3.5 实现层次</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-6-%E6%8C%91%E6%88%98"><span class="toc-number">1.3.6.</span> <span class="toc-text">3.6 挑战</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81PD-%E4%B8%8E-AF-%E7%9A%84%E5%AF%B9%E6%AF%94"><span class="toc-number">1.4.</span> <span class="toc-text">四、PD 与 AF 的对比</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%A4%E8%80%85%E4%BA%92%E8%A1%A5%E3%80%81%E5%8F%AF%E5%8F%A0%E5%8A%A0"><span class="toc-number">1.4.1.</span> <span class="toc-text">两者互补、可叠加</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E7%94%A8%E3%80%81%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E5%88%AB%E7%94%A8"><span class="toc-number">1.5.</span> <span class="toc-text">五、什么时候用、什么时候别用</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E9%9D%A2%E8%AF%95%E9%80%9F%E7%AD%94%E6%B8%85%E5%8D%95"><span class="toc-number">1.6.</span> <span class="toc-text">六、面试速答清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E4%B8%80%E5%BC%A0%E5%9B%BE%E6%94%B6%E5%8F%A3"><span class="toc-number">1.7.</span> <span class="toc-text">七、一张图收口</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.7.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/" title="apis 仓库的 proto→Go gRPC 代码生成流程">apis 仓库的 proto→Go gRPC 代码生成流程</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-%E5%AE%B9%E5%99%A8PID1%E4%B8%8E%E5%83%B5%E5%B0%B8%E8%BF%9B%E7%A8%8B-dumb-init-tini-pause/" title="容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解">容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/" title="insmod 实操指南——从写一个内核模块到加载运行">insmod 实操指南——从写一个内核模块到加载运行</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="PaaS 平台 GPU 资源复用与超卖技术深度解析">PaaS 平台 GPU 资源复用与超卖技术深度解析</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" title="PaaS 平台 GPU 资源复用与超卖探索">PaaS 平台 GPU 资源复用与超卖探索</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,485 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>insmod 实操指南——从写一个内核模块到加载运行 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="insmod 加载内核模块的原理、与 modprobe 的区别、模块签名坑，附一个可实操的 hello world 模块从编写到加载到卸载全流程">
+<meta property="og:type" content="article">
+<meta property="og:title" content="insmod 实操指南——从写一个内核模块到加载运行">
+<meta property="og:url" content="http://example.com/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="insmod 加载内核模块的原理、与 modprobe 的区别、模块签名坑，附一个可实操的 hello world 模块从编写到加载到卸载全流程">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-21T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-22T05:32:29.587Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Linux">
+<meta property="article:tag" content="内核模块">
+<meta property="article:tag" content="内核">
+<meta property="article:tag" content="insmod">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "insmod 实操指南——从写一个内核模块到加载运行",
+  "url": "http://example.com/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-21T16:00:00.000Z",
+  "dateModified": "2026-07-22T05:32:29.587Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'insmod 实操指南——从写一个内核模块到加载运行',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">228</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">220</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">65</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">insmod 实操指南——从写一个内核模块到加载运行</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">insmod 实操指南——从写一个内核模块到加载运行</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-22T05:32:29.587Z" title="更新于 2026-07-22 13:32:29">2026-07-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F/">操作系统</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/" data-flag-title="insmod 实操指南——从写一个内核模块到加载运行"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>insmod 实操指南——从写一个内核模块到加载运行</h1>
+<blockquote>
+<p>本文讲清 <code>insmod</code>：它干什么、内核模块（.ko）是什么、<code>insmod</code> 与 <code>modprobe</code> 的区别、模块签名这个最常见的坑，并给一个<strong>可直接照抄跑通</strong>的 hello world 模块从编写→编译→加载→验证→卸载全流程。</p>
+<p>前置：ring0/ring3、内核态概念见本人《x86 体系结构基础》篇。内核模块就是跑在 ring0、和内核同地址空间的代码。</p>
+</blockquote>
+<hr>
+<h2 id="一、insmod-是什么、内核模块又是什么">一、insmod 是什么、内核模块又是什么</h2>
+<p>**内核模块（Loadable Kernel Module, LKM）**是一段可动态加载到内核地址空间、跑在 ring0 的代码，扩展内核功能而不需重启、不需重编内核。文件后缀 <code>.ko</code>（kernel object）。典型用途：设备驱动、文件系统、网络协议、安全 hook（如 alcor-chaos 的 libnvml-hijack/libixml-hijack 就是劫持库的内核态配合件）。</p>
+<p><strong><code>insmod</code></strong>（insert module）是用户态命令，把一个 <code>.ko</code> 文件加载进内核。它本质是调一次 <code>init_module(2)</code> / <code>fini_module(2)</code> 系统调用（或 <code>finit_module</code> 带 fd 的变体），让内核：</p>
+<ol>
+<li>把模块二进制拷进内核地址空间。</li>
+<li>重定位、解析符号依赖（模块用到的内核导出符号 <code>EXPORT_SYMBOL</code>）。</li>
+<li>调用模块的 <code>init</code> 函数——init 返回 0 成功，返回非 0 则加载失败回滚。</li>
+<li>注册到 <code>/proc/modules</code>、<code>/sys/module/</code>。</li>
+</ol>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">用户态 insmod foo.ko ──init_module() syscall──► 内核</span><br><span class="line">   内核: 拷贝.ko → 重定位/解析符号 → 调 module_init() → 成功则常驻 ring0</span><br><span class="line">   卸载: rmmod foo ──► 调 module_exit() → 释放</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>面试金句：<strong>“insmod 把 .ko 动态加载进内核 ring0 地址空间、跑模块 init、常驻内核；它就是 init_module 系统调用的用户态壳。内核模块 = 编译进内核功能的’热插拔版’，不重启扩展内核。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="二、insmod-vs-modprobe">二、insmod vs modprobe</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>insmod</th>
+<th>modprobe</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>输入</td>
+<td>单个 <code>.ko</code> 文件路径</td>
+<td>模块名（不带 .ko、不带路径）</td>
+</tr>
+<tr>
+<td>依赖解析</td>
+<td><strong>不解析</strong>，缺依赖直接报错</td>
+<td>自动从 <code>/lib/modules/$(uname -r)</code> 解析依赖、按序加载</td>
+</tr>
+<tr>
+<td>来源</td>
+<td>当前目录任意 .ko</td>
+<td><code>modules.dep</code> 索引的标准模块目录</td>
+</tr>
+<tr>
+<td>用途</td>
+<td>加载自己编的、没装到标准目录的 .ko</td>
+<td>加载发行版自带驱动（如 <code>modprobe nfsd</code>）</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>你<strong>自己编译的 .ko</strong>（在当前目录）用 <code>insmod ./hello.ko</code>。</li>
+<li>发行版<strong>已安装的模块</strong>用 <code>modprobe &lt;name&gt;</code>，它会读 <code>modules.dep</code> 把依赖一并装上。</li>
+<li><code>insmod</code> 不会自动装依赖——若你的模块 <code>depends on</code> 别的模块，要先 insmod 依赖。<code>modprobe</code> 解决这个。</li>
+</ul>
+<p>辅助命令：</p>
+<ul>
+<li><code>lsmod</code>：列出已加载模块（读 <code>/proc/modules</code>）。</li>
+<li><code>modinfo hello.ko</code>：看模块元信息（license、version、依赖、parm 参数）。</li>
+<li><code>rmmod hello</code>：卸载模块（调 exit）。</li>
+<li><code>dmesg | tail</code>：看模块 <code>printk</code> 输出。</li>
+</ul>
+<hr>
+<h2 id="三、模块签名坑（最常见的-加载失败-原因）">三、模块签名坑（最常见的&quot;加载失败&quot;原因）</h2>
+<p>启用了 Secure Boot 的系统（多数云主机/笔记本）内核要求模块<strong>有签名</strong>才能加载。报错形如：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">insmod: ERROR: could not insert module hello.ko: Required key not available</span><br><span class="line"># 或 dmesg:</span><br><span class="line">PKCS7 signature not in .ko</span><br></pre></td></tr></table></figure>
+<p>因为 Secure Boot 链下，内核只信被 MOK（Machine Owner Key）签过的模块。解决：</p>
+<ol>
+<li><strong>生成自签名 MOK</strong>：<code>mokutil</code> 导入你的公钥到内核信任链（一次性，需重启确认）。</li>
+<li>给 <code>.ko</code> 签名：<code>scripts/sign-file sha256 privkey.pem cert.der hello.ko</code>。</li>
+<li>或在<strong>测试机</strong>上<strong>关闭 Secure Boot</strong>（BIOS 里关）最省事。</li>
+</ol>
+<p>另一类坑是 <strong>ABI/版本不匹配</strong>：<code>.ko</code> 是为某个内核版本编译的（用 <code>vermagic</code> 字符串标记），换内核版本加载会被拒（<code>invalid module format</code> / <code>vermagic mismatch</code>）。所以模块必须在<strong>当前运行的内核</strong>的 headers 下编译。容器/不同发行版交叉编译要特别注意 <code>uname -r</code> 对齐。</p>
+<blockquote>
+<p>面试金句：<strong>“insmod 失败两大常见因：Secure Boot 要求模块签名（Required key not available，要 MOK 签名或关 Secure Boot）；vermagic 不匹配（模块为别的内核版本编的，要当前内核 headers 重编）。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="四、实操：一个可跑通的-hello-world-模块">四、实操：一个可跑通的 hello world 模块</h2>
+<blockquote>
+<p>在一台<strong>你能 sudo、且最好关了 Secure Boot</strong>的 Linux 测试机（VM 最方便）。生产机别玩。</p>
+</blockquote>
+<h3 id="4-1-装内核-headers（前提）">4.1 装内核 headers（前提）</h3>
+<p>模块要用当前运行内核的 headers 编译：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> apt-get update</span><br><span class="line"><span class="built_in">sudo</span> apt-get install -y build-essential linux-headers-$(<span class="built_in">uname</span> -r) kmod</span><br><span class="line"></span><br><span class="line"><span class="comment"># 确认 headers 装好（应有这个目录）</span></span><br><span class="line"><span class="built_in">ls</span> /lib/modules/$(<span class="built_in">uname</span> -r)/build</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>容器里编译内核模块坑多（容器不共享内核源码树、且容器内一般没内核 headers），建议在宿主机/VM 上做。</p>
+</blockquote>
+<h3 id="4-2-写模块-hello-c">4.2 写模块 <code>hello.c</code></h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// hello.c — 最小可加载内核模块</span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;linux/module.h&gt;</span>   <span class="comment">// 所有模块都要</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;linux/kernel.h&gt;</span>   <span class="comment">// pr_info / KERN_INFO</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;linux/init.h&gt;</span>     <span class="comment">// __init / __exit 宏</span></span></span><br><span class="line"></span><br><span class="line">MODULE_LICENSE(<span class="string">&quot;GPL&quot;</span>);                  <span class="comment">// 必填:声明 license,否则内核报 tainted 警告</span></span><br><span class="line">MODULE_AUTHOR(<span class="string">&quot;you&quot;</span>);</span><br><span class="line">MODULE_DESCRIPTION(<span class="string">&quot;a hello world LKM demo&quot;</span>);</span><br><span class="line">MODULE_VERSION(<span class="string">&quot;0.1&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 可传参: insmod hello.ko whom=World  (见 4.6)</span></span><br><span class="line"><span class="type">static</span> <span class="type">char</span> *whom = <span class="string">&quot;World&quot;</span>;</span><br><span class="line">module_param(whom, charp, <span class="number">0644</span>);        <span class="comment">// charp=字符指针, 0644=sysfs 可读</span></span><br><span class="line">MODULE_PARM_DESC(whom, <span class="string">&quot;who to greet&quot;</span>);</span><br><span class="line"></span><br><span class="line"><span class="comment">// 加载时调用, 返回 0 成功</span></span><br><span class="line"><span class="type">static</span> <span class="type">int</span> __init <span class="title function_">hello_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">    pr_info(<span class="string">&quot;Hello, %s! (insmod loaded me)\n&quot;</span>, whom);</span><br><span class="line">    pr_info(<span class="string">&quot;  running in kernel ring0, jiffies=%lu\n&quot;</span>, jiffies);</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;   <span class="comment">// 非 0 则加载失败、自动回滚</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 卸载时调用</span></span><br><span class="line"><span class="type">static</span> <span class="type">void</span> __exit <span class="title function_">hello_exit</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">    pr_info(<span class="string">&quot;Goodbye, %s. (rmmod unloaded me)\n&quot;</span>, whom);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">module_init(hello_init);</span><br><span class="line">module_exit(hello_exit);</span><br></pre></td></tr></table></figure>
+<p>要点：</p>
+<ul>
+<li><code>MODULE_LICENSE(&quot;GPL&quot;)</code> 必填，否则用 GPL-only 导出符号会失败、内核被标记 tainted。</li>
+<li><code>__init</code>/<code>__exit</code> 提示编译器把这段放专用 section，加载后 init 段可释放省内存。</li>
+<li><code>module_param</code> 让模块接受参数，<code>insmod hello.ko whom=World</code> 传值，可在 <code>/sys/module/hello/parameters/whom</code> 读。</li>
+<li><code>pr_info</code> = <code>printk(KERN_INFO ...)</code>，输出到内核环形缓冲区，用 <code>dmesg</code> 看。</li>
+</ul>
+<h3 id="4-3-写-Makefile">4.3 写 <code>Makefile</code></h3>
+<figure class="highlight makefile"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Makefile — 用内核 kbuild 体系编译模块</span></span><br><span class="line">obj-m += hello.o</span><br><span class="line"></span><br><span class="line"><span class="comment"># 当前内核源码/headers 树</span></span><br><span class="line">KDIR ?= /lib/modules/<span class="variable">$(<span class="built_in">shell</span> uname -r)</span>/build</span><br><span class="line">PWD  := <span class="variable">$(<span class="built_in">shell</span> pwd)</span></span><br><span class="line"></span><br><span class="line"><span class="section">all:</span></span><br><span class="line">	<span class="variable">$(MAKE)</span> -C <span class="variable">$(KDIR)</span> M=<span class="variable">$(PWD)</span> modules</span><br><span class="line"></span><br><span class="line"><span class="section">clean:</span></span><br><span class="line">	<span class="variable">$(MAKE)</span> -C <span class="variable">$(KDIR)</span> M=<span class="variable">$(PWD)</span> clean</span><br></pre></td></tr></table></figure>
+<ul>
+<li><code>obj-m += hello.o</code> 告诉 kbuild 把 <code>hello.c</code> 编成模块 <code>hello.ko</code>（文件名取自源文件名）。</li>
+<li><code>make -C $(KDIR) M=$(PWD) modules</code>：进内核树跑 kbuild 的 modules 目标，在当前目录产出 <code>.ko</code>。</li>
+<li>多文件模块用 <code>hello-objs := a.o b.o</code>。</li>
+</ul>
+<h3 id="4-4-编译">4.4 编译</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">make</span><br><span class="line"><span class="comment"># 产出: hello.ko (还有 .mod.c/.o/.cmd 等中间件)</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 看元信息</span></span><br><span class="line">modinfo hello.ko</span><br><span class="line"><span class="comment">#   filename:       hello.ko</span></span><br><span class="line"><span class="comment">#   license:        GPL</span></span><br><span class="line"><span class="comment">#   version:        0.1</span></span><br><span class="line"><span class="comment">#   depends:</span></span><br><span class="line"><span class="comment">#   vermagic:       6.x.0 ...   ← 必须和 uname -r 一致</span></span><br><span class="line"><span class="comment">#   parm:           whom: who to greet</span></span><br></pre></td></tr></table></figure>
+<h3 id="4-5-加载-验证-卸载">4.5 加载 + 验证 + 卸载</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1) 加载(默认 whom=World)</span></span><br><span class="line"><span class="built_in">sudo</span> insmod ./hello.ko</span><br><span class="line"><span class="comment"># 或带参:</span></span><br><span class="line"><span class="built_in">sudo</span> insmod ./hello.ko whom=Kernel</span><br><span class="line"></span><br><span class="line"><span class="comment"># 2) 确认已加载</span></span><br><span class="line">lsmod | grep hello            <span class="comment"># 出现一行 hello ...</span></span><br><span class="line"><span class="built_in">cat</span> /proc/modules | grep hello</span><br><span class="line"></span><br><span class="line"><span class="comment"># 3) 看输出</span></span><br><span class="line"><span class="built_in">sudo</span> dmesg | <span class="built_in">tail</span></span><br><span class="line"><span class="comment">#   Hello, Kernel! (insmod loaded me)</span></span><br><span class="line"><span class="comment">#     running in kernel ring0, jiffies=...</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 4) 看模块参数(sysfs)</span></span><br><span class="line"><span class="built_in">cat</span> /sys/module/hello/parameters/whom   <span class="comment"># Kernel</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 5) 卸载(名字不带 .ko)</span></span><br><span class="line"><span class="built_in">sudo</span> rmmod hello</span><br><span class="line"><span class="built_in">sudo</span> dmesg | <span class="built_in">tail</span></span><br><span class="line"><span class="comment">#   Goodbye, Kernel. (rmmod unloaded me)</span></span><br></pre></td></tr></table></figure>
+<p>到这一步，一个完整的&quot;写模块→编译→insmod→rmmod&quot;闭环就跑通了。</p>
+<h3 id="4-6-常见报错与排查">4.6 常见报错与排查</h3>
+<table>
+<thead>
+<tr>
+<th>报错</th>
+<th>原因</th>
+<th>解决</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Required key not available</code> / <code>PKCS7 signature not in .ko</code></td>
+<td>Secure Boot 要求签名</td>
+<td>关 Secure Boot，或 MOK 签名 <code>.ko</code>（§三）</td>
+</tr>
+<tr>
+<td><code>Invalid module format</code> / <code>vermagic mismatch</code></td>
+<td><code>.ko</code> 为别的内核版本编</td>
+<td>装当前 <code>uname -r</code> 的 headers 重编 <code>make</code></td>
+</tr>
+<tr>
+<td><code>Unknown symbol in module</code> / dmesg <code>disagrees about version of symbol</code></td>
+<td>用了未导出/版本不符的内核符号</td>
+<td><code>modinfo</code>、<code>nm</code> 看依赖；只 <code>EXPORT_SYMBOL</code> 导出的符号才可用</td>
+</tr>
+<tr>
+<td><code>Operation not permitted</code></td>
+<td>非 root / 容器无 <code>CAP_SYS_MODULE</code></td>
+<td>sudo；容器要给 <code>--privileged</code> 或 <code>CAP_SYS_MODULE</code>（生产别给）</td>
+</tr>
+<tr>
+<td>init 返回非 0</td>
+<td>模块 init 失败</td>
+<td>看 dmesg 自打日志，修逻辑</td>
+</tr>
+<tr>
+<td><code>Module already in use</code>（rmmod）</td>
+<td>模块被引用计数不为 0</td>
+<td>先停掉使用它的进程/驱动，<code>lsmod</code> 看 Used by 列</td>
+</tr>
+</tbody>
+</table>
+<p>排查命令：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">modinfo hello.ko                    <span class="comment"># vermagic / depends / parm</span></span><br><span class="line">lsmod | grep hello                  <span class="comment"># 是否加载、被谁引用</span></span><br><span class="line"><span class="built_in">sudo</span> dmesg | <span class="built_in">tail</span> -30               <span class="comment"># 模块 printk + 内核加载日志</span></span><br><span class="line"><span class="built_in">cat</span> /sys/module/hello/parameters/*  <span class="comment"># 运行时参数</span></span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="五、进阶：模块能做什么、安全提醒">五、进阶：模块能做什么、安全提醒</h2>
+<p>模块能干的事（ring0 权限）：</p>
+<ul>
+<li>注册字符/块设备（<code>alloc_chrdev_region</code> + <code>cdev_add</code>）—— 自定义设备驱动。</li>
+<li>注册文件系统（<code>register_filesystem</code>）、网络协议、netfilter hook。</li>
+<li>实现 <code>/proc</code>/<code>/sys</code> 接口（<code>proc_create</code>/<code>kobject_create</code>）和用户态交互。</li>
+<li>hook 系统调用表 / kprobe（需 <code>EXPORT_SYMBOL</code>，部分被限制）。</li>
+<li>alcor-chaos 风格的内核态劫持/故障注入配合件。</li>
+</ul>
+<p>安全提醒：</p>
+<ul>
+<li><strong>模块 = 完全信任的内核态代码</strong>，写错会 kernel panic、死机、数据损坏。生产加载要签名 + 审计。</li>
+<li>容器给 <code>CAP_SYS_MODULE</code> 等于给宿主内核权，<strong>生产容器绝不给</strong>。</li>
+<li>别在生产机 <code>insmod</code> 未审计 <code>.ko</code>，等于执行任意 ring0 代码。</li>
+<li>模块卸载前提是引用计数为 0；强行 <code>rmmod --force</code> 可能崩。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“内核模块有 ring0 全权，能注册设备/文件系统/netfilter、hook 系统调用，写错就 panic；所以生产模块必须签名+审计，容器绝不给 CAP_SYS_MODULE。insmod 本质是给内核执行任意 ring0 代码的入口，故权限管控是命门。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="六、面试速答清单">六、面试速答清单</h2>
+<p><strong>Q1：insmod 干什么、原理？</strong></p>
+<blockquote>
+<p>把 <code>.ko</code> 内核模块动态加载进内核 ring0 地址空间。它调 <code>init_module</code>/<code>finit_module</code> 系统调用，内核拷贝二进制、重定位、解析 <code>EXPORT_SYMBOL</code> 依赖、调模块 init，成功则常驻。模块 = 编译进内核功能的&quot;热插拔版&quot;，不重启扩展内核。</p>
+</blockquote>
+<p><strong>Q2：insmod 和 modprobe 区别？</strong></p>
+<blockquote>
+<p>insmod 加载单个 <code>.ko</code>、不解析依赖（缺依赖就报错），用于自己编的没装到标准目录的模块。modprobe 输入模块名、自动从 <code>/lib/modules/$(uname -r)</code> 的 <code>modules.dep</code> 解析依赖按序加载，用于发行版自带模块。卸载都可用 <code>rmmod</code>，但 modprobe 有 <code>-r</code> 递归卸依赖。</p>
+</blockquote>
+<p><strong>Q3：insmod 报 <code>Required key not available</code> 怎么办？</strong></p>
+<blockquote>
+<p>Secure Boot 开启时内核只信 MOK 签过的模块。要么关 Secure Boot（测试机），要么生成 MOK 用 <code>mokutil</code> 导入公钥、用内核 <code>scripts/sign-file</code> 给 <code>.ko</code> 签名。另一类 <code>invalid module format</code> 是 vermagic 不匹配——用当前 <code>uname -r</code> 的 headers 重编。</p>
+</blockquote>
+<p><strong>Q4：写一个最小内核模块要哪些要素？</strong></p>
+<blockquote>
+<p><code>#include &lt;linux/module.h&gt;</code>、<code>MODULE_LICENSE(&quot;GPL&quot;)</code>（必填否则 tainted/符号失效）、<code>module_init(fn)</code> + <code>module_exit(fn)</code>、init 返回 0 成功否则回滚。可选 <code>module_param</code> 收参、<code>__init</code>/<code>__exit</code> 段优化。Makefile 用 kbuild：<code>obj-m += hello.o</code> + <code>make -C /lib/modules/$(uname -r)/build M=$(PWD) modules</code>。</p>
+</blockquote>
+<p><strong>Q5：怎么验证模块加载成功？</strong></p>
+<blockquote>
+<p><code>lsmod | grep hello</code>、<code>cat /proc/modules</code> 看是否列出；<code>dmesg | tail</code> 看 init 的 <code>pr_info</code> 输出；<code>/sys/module/hello/parameters/</code> 看运行时参数。卸载 <code>rmmod hello</code> 后 exit 的 printk 也会进 dmesg。</p>
+</blockquote>
+<p><strong>Q6：内核模块有哪些安全风险？</strong></p>
+<blockquote>
+<p>模块跑在 ring0 拥有内核全权，能注册设备/文件系统/netfilter、hook syscall，写错 kernel panic、死机、数据损坏。所以生产模块必须签名+审计；容器给 <code>CAP_SYS_MODULE</code> 等于给宿主内核任意执行权，生产容器绝不给。insmod 本质是&quot;给内核注入任意 ring0 代码&quot;的入口，权限管控是命门。</p>
+</blockquote>
+<p><strong>Q7：模块卸载失败 <code>Module already in use</code>？</strong></p>
+<blockquote>
+<p>模块引用计数不为 0（有进程/驱动在用）。<code>lsmod</code> 的 “Used by” 列看谁引用，先停掉使用者再 <code>rmmod</code>。别用 <code>rmmod --force</code>，可能崩。模块 init 里建的资源（proc/sysfs、设备号）要在 exit 里对应释放，否则卸载也失败。</p>
+</blockquote>
+<hr>
+<h2 id="七、一张图收口">七、一张图收口</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">编写:  hello.c (MODULE_LICENSE + module_init/exit + pr_info) + Makefile (obj-m + kbuild)</span><br><span class="line">       │</span><br><span class="line">       ▼ make -C /lib/modules/$(uname -r)/build M=$(PWD) modules</span><br><span class="line">编译:  hello.ko  (vermagic 必须匹配 uname -r)</span><br><span class="line">       │</span><br><span class="line">       ▼ sudo insmod ./hello.ko  (或 insmod hello.ko whom=Kernel)</span><br><span class="line">加载:  内核 init_module() → 拷贝/重定位/解析 EXPORT_SYMBOL → 调 hello_init → 常驻 ring0</span><br><span class="line">       │</span><br><span class="line">验证:  lsmod | grep hello ; dmesg | tail ; /sys/module/hello/parameters/whom</span><br><span class="line">       │</span><br><span class="line">       ▼ sudo rmmod hello</span><br><span class="line">卸载:  调 hello_exit → pr_info &quot;Goodbye&quot; → 释放  (引用计数为0才行)</span><br><span class="line">坑:    Secure Boot 要 MOK 签名 / vermagic 不匹配要重编 / 用未导出符号 Unknown symbol</span><br><span class="line">权限:  需 root + CAP_SYS_MODULE; 模块=ring0 全权, 生产签名+审计, 容器不给</span><br></pre></td></tr></table></figure>
+<p>主线一句话：<strong>insmod 把 <code>.ko</code> 经 init_module 系统调用加载进内核 ring0、跑模块 init、常驻内核，是&quot;不重启扩展内核&quot;的热插拔入口；自己编的用 insmod（不解析依赖）、发行版用 modprobe（自动解析依赖）；最大坑是 Secure Boot 要 MOK 签名、vermagic 要匹配当前内核 headers；模块有 ring0 全权，生产必须签名审计、容器绝不给 CAP_SYS_MODULE。</strong> 把加载原理、insmod/modprobe 区别、签名坑、实操全流程讲顺，insmod 这关就稳了。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>Linux Kernel Module Programming Guide（<code>Documentation/admin-guide/modules.rst</code>）</li>
+<li>man: <code>insmod(8)</code>, <code>modprobe(8)</code>, <code>rmmod(8)</code>, <code>lsmod(8)</code>, <code>modinfo(8)</code>, <code>init_module(2)</code>, <code>finit_module(2)</code></li>
+<li><code>Documentation/admin-guide/module-signing.rst</code>（模块签名）</li>
+<li>与本人《x86 体系结构基础》《操作系统接口》篇交叉对照</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/">http://example.com/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Linux/">Linux</a><a class="post-meta__tags" href="/tags/%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97/">内核模块</a><a class="post-meta__tags" href="/tags/%E5%86%85%E6%A0%B8/">内核</a><a class="post-meta__tags" href="/tags/insmod/">insmod</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/07/22/2026-07-22-%E5%AE%B9%E5%99%A8PID1%E4%B8%8E%E5%83%B5%E5%B0%B8%E8%BF%9B%E7%A8%8B-dumb-init-tini-pause/" title="容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解</div></div><div class="info-2"><div class="info-item-1">容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解  本文把&quot;容器里 PID 1 为什么是个问题、僵尸进程怎么来的、dumb-init/tini 怎么兜、k8s pause 和 shareProcessNamespace 怎么协作&quot;一次讲清。读完你能回答面试官&quot;为什么容器里 Python/Java 当 PID 1 会漏僵尸&quot;“dumb-init 和 tini 干了什么”&quot;k8s pause 容器是不是 PID 1&quot;“shareProcessNamespace 开不开有啥区别”。 前置：fork/exec/wait、僵尸 vs 孤儿的基础见本人《操作系统接口》篇。本文只讲容器场景。   一、僵尸进程快速回顾（容器视角） 子进程 exit 后内核不能立刻释放 task_struct——父进程可能要查退出码，于是子进程留一个&quot;僵尸&quot;状态（Z）：代码/数据/堆栈都释放了，只剩 task_struct 和退出码等父进程 wait 收尸。父进程 wait/waitp...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/07/19/2024-07-19-Linux%E7%B3%BB%E7%BB%9F%E4%B8%AD%E5%8D%B8%E8%BD%BDanaconda/" title="Linux系统中卸载anaconda"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Linux.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-19</div><div class="info-item-2">Linux系统中卸载anaconda</div></div><div class="info-2"><div class="info-item-1">Linux系统中卸载anaconda 要在Linux系统中卸载Anaconda，你需要执行一系列的命令。这里是一个通用的步骤指南：   找到Anaconda安装脚本： 在安装Anaconda时，它会在你的主目录中创建一个名为anaconda3的文件夹（默认情况下，如果你在安装时选择了不同的名称或位置，请确保使用正确的路径）。   运行Anaconda卸载程序： Anaconda提供了一个卸载程序anaconda-clean，可以帮助你删除Anaconda的配置文件。在终端中运行以下命令： 12conda install anaconda-cleananaconda-clean --yes 这个命令将删除Anaconda的配置文件，并且可以选择创建一个备份。使用–yes选项可以避免在删除每个项目时都要求确认。   删除Anaconda安装目录： 接下来，你需要手动删除Anaconda的安装目录。如果你的安装目录是默认的~/anaconda3，你可以使用以下命令： 1rm -rf ~/anaconda3 如果你的安装目录不是默认的，请确保使用正确的路径。   编辑.bashrc或其他...</div></div></div></a><a class="pagination-related" href="/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/" title="Linux 云服务器根分区扩容流程(ext4 示例)"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/df.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-01</div><div class="info-item-2">Linux 云服务器根分区扩容流程(ext4 示例)</div></div><div class="info-2"><div class="info-item-1">Linux 云服务器根分区扩容流程（ext4 示例） 1. 云厂商控制台扩容磁盘  登录云服务商（AWS、阿里云、腾讯云等） 找到对应实例的 系统盘 / 数据盘 修改磁盘大小，例如从 40G → 80G 这一步完成后，虚拟磁盘 /dev/vda 就会变大，但分区和文件系统不会自动变大   2. 确认磁盘和分区情况 12lsblkdf -h  lsblk 会显示磁盘和分区大小 df -h 会显示文件系统挂载的空间大小  例子： 12vda    80G└─vda1 40G   / 👉 说明磁盘是 80G，但分区还只有 40G  3. 安装扩容工具 （Ubuntu/Debian） 12sudo apt updatesudo apt install -y cloud-guest-utils （CentOS/RHEL） 1sudo yum install -y cloud-utils-growpart  4. 扩展分区 1sudo growpart /dev/vda 1  /dev/vda → 磁盘名 1 → 分区号（即 /dev/vda1）  执行后再看： 1lsblk 应该变成： ...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">如何通过Pod进入到宿主机?</div></div><div class="info-2"><div class="info-item-1">如何通过Pod进入到宿主机? nsenter -a -t 1 bash 命令的作用是让你在一个新的 shell 会话中，进入 PID 为 1 的进程所在的全部命名空间（Namespace）。 通过这种方式，可以从pod中进入到宿主机（全部的namespace都跟宿主机一样） breakdown 如下：  nsenter: 这是一个 Linux 命令行工具，用于将当前进程“进入”到指定进程的一个或多个命名空间中。 -t 1: 这个选项指定了目标进程的 PID (Process ID)。在这里，1 是 Linux 系统中第一个启动的进程（通常是 init 或 systemd）的 PID。所有其他进程都是由它或它的子进程派生出来的。 -a: 这个选项是 “all namespaces” 的缩写。它告诉 nsenter 将当前进程加入到目标进程（PID 1）所属于的所有类型的命名空间中，包括但不限于：  Mount (mnt) UTS (主机名和域名) IPC (进程间通信) Network PID (进程 ID) User ID Cgroup   bash: 这是要在新加入的命名空间环...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">k8s informer通俗易懂详解</div></div><div class="info-2"><div class="info-item-1">Kubernetes Informer 机制详解 核心概念 Informer 是 Kubernetes 中用于监听和缓存资源对象的核心机制，它通过 ListAndWatch 机制实现高效的资源监控。 核心组件及作用 1. Reflector（反射器）  作用：负责从 Kubernetes API Server 获取资源对象 功能：  List：获取资源的全量数据 Watch：监听资源的增量变化 将数据放入 Delta FIFO 队列    2. Delta FIFO Queue（增量队列）  作用：存储资源对象的变化（增删改） 特点：  保持操作顺序 存储对象的增量变化（Delta） 线程安全    3. Informer（通知器）  作用：从 Delta FIFO 队列中取出对象并处理 功能：  调用 Indexer 更新本地缓存 触发注册的事件处理器    4. Indexer（索引器）  作用：本地缓存，提供快速查询 功能：  存储资源对象的本地副本 提供基于索引的快速查找 线程安全的读写操作    5. Resource Event Handlers（资源事件处理器）  ...</div></div></div></a><a class="pagination-related" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-16</div><div class="info-item-2">sandbox和container对比</div></div><div class="info-2"><div class="info-item-1">sandbox和container对比 Sandbox 和 Container 的区别 基本概念 Sandbox（沙箱）  定义：一种隔离环境，用于安全地运行程序，限制其对系统资源的访问 目的：提供安全隔离，防止恶意代码影响主机系统 范围：通常针对单个应用程序或进程  Container（容器）  定义：一种轻量级虚拟化技术，将应用程序及其依赖打包在一起 目的：提供一致的运行环境，确保应用在不同环境中行为一致 范围：包含完整的应用程序运行时环境  主要区别对比    特性 Sandbox Container     主要目标 安全隔离 环境一致性   隔离级别 高（安全优先） 中等（资源隔离）   资源开销 极低 低到中等   启动速度 极快 快   包含内容 单个应用/进程 完整运行时环境    技术实现差异 Sandbox 实现方式 1234567// 浏览器沙箱示例（概念性）// 运行在受限环境中const sandboxedCode = `  // 无法访问DOM、网络、文件系统  // 只能执行安全的JavaScript代码  return 42;`; 典型技术：  浏...</div></div></div></a><a class="pagination-related" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-16</div><div class="info-item-2">容器运行时扩展方案技术解析</div></div><div class="info-2"><div class="info-item-1">容器运行时扩展方案技术解析 基于对某容器运行时扩展项目的代码分析，现从架构层面提炼其核心技术实现，聚焦三大核心能力：运行时接入机制、容器根文件系统云端持久化、Docker-in-Docker 安全实现方案。  1. 如何接入 Containerd 运行时生态 项目通过 Containerd Proxy Plugin 机制 实现与容器运行时的无缝集成，架构清晰、扩展性强。 ▶ 配置层接入  在 containerd 配置中注册名为 custom-snapshotter 的代理插件，通过 Unix Domain Socket 与本地 Agent 通信； 同时注册自定义 Runtime，指向特定二进制执行程序，实现容器生命周期的定制化控制。  ▶ 运行时层实现  Agent 侧：实现标准 gRPC 服务，响应来自 Containerd 的 Snapshotter 接口调用（如 Prepare、Mount、Remove）； 存储层封装：采用 Wrapper 模式封装原生 OverlayFS Snapshotter，在不破坏原有逻辑的前提下注入自定义行为（如镜像预处理、元数据记录等）； 通...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">228</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">220</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">65</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">insmod 实操指南——从写一个内核模块到加载运行</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81insmod-%E6%98%AF%E4%BB%80%E4%B9%88%E3%80%81%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E5%8F%88%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.1.</span> <span class="toc-text">一、insmod 是什么、内核模块又是什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81insmod-vs-modprobe"><span class="toc-number">1.2.</span> <span class="toc-text">二、insmod vs modprobe</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%A8%A1%E5%9D%97%E7%AD%BE%E5%90%8D%E5%9D%91%EF%BC%88%E6%9C%80%E5%B8%B8%E8%A7%81%E7%9A%84-%E5%8A%A0%E8%BD%BD%E5%A4%B1%E8%B4%A5-%E5%8E%9F%E5%9B%A0%EF%BC%89"><span class="toc-number">1.3.</span> <span class="toc-text">三、模块签名坑（最常见的&quot;加载失败&quot;原因）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%AE%9E%E6%93%8D%EF%BC%9A%E4%B8%80%E4%B8%AA%E5%8F%AF%E8%B7%91%E9%80%9A%E7%9A%84-hello-world-%E6%A8%A1%E5%9D%97"><span class="toc-number">1.4.</span> <span class="toc-text">四、实操：一个可跑通的 hello world 模块</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E8%A3%85%E5%86%85%E6%A0%B8-headers%EF%BC%88%E5%89%8D%E6%8F%90%EF%BC%89"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 装内核 headers（前提）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E5%86%99%E6%A8%A1%E5%9D%97-hello-c"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 写模块 hello.c</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E5%86%99-Makefile"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 写 Makefile</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E7%BC%96%E8%AF%91"><span class="toc-number">1.4.4.</span> <span class="toc-text">4.4 编译</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E5%8A%A0%E8%BD%BD-%E9%AA%8C%E8%AF%81-%E5%8D%B8%E8%BD%BD"><span class="toc-number">1.4.5.</span> <span class="toc-text">4.5 加载 + 验证 + 卸载</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-6-%E5%B8%B8%E8%A7%81%E6%8A%A5%E9%94%99%E4%B8%8E%E6%8E%92%E6%9F%A5"><span class="toc-number">1.4.6.</span> <span class="toc-text">4.6 常见报错与排查</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E8%BF%9B%E9%98%B6%EF%BC%9A%E6%A8%A1%E5%9D%97%E8%83%BD%E5%81%9A%E4%BB%80%E4%B9%88%E3%80%81%E5%AE%89%E5%85%A8%E6%8F%90%E9%86%92"><span class="toc-number">1.5.</span> <span class="toc-text">五、进阶：模块能做什么、安全提醒</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E9%9D%A2%E8%AF%95%E9%80%9F%E7%AD%94%E6%B8%85%E5%8D%95"><span class="toc-number">1.6.</span> <span class="toc-text">六、面试速答清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E4%B8%80%E5%BC%A0%E5%9B%BE%E6%94%B6%E5%8F%A3"><span class="toc-number">1.7.</span> <span class="toc-text">七、一张图收口</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.7.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/" title="apis 仓库的 proto→Go gRPC 代码生成流程">apis 仓库的 proto→Go gRPC 代码生成流程</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-%E5%AE%B9%E5%99%A8PID1%E4%B8%8E%E5%83%B5%E5%B0%B8%E8%BF%9B%E7%A8%8B-dumb-init-tini-pause/" title="容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解">容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/" title="insmod 实操指南——从写一个内核模块到加载运行">insmod 实操指南——从写一个内核模块到加载运行</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="PaaS 平台 GPU 资源复用与超卖技术深度解析">PaaS 平台 GPU 资源复用与超卖技术深度解析</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" title="PaaS 平台 GPU 资源复用与超卖探索">PaaS 平台 GPU 资源复用与超卖探索</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,529 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>apis 仓库的 proto→Go gRPC 代码生成流程 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="以 apis 仓库为例讲清 protoc 工具链与插件机制，从 .proto 一路到 Go gRPC stub &#x2F; gateway &#x2F; validate &#x2F; deepcopy &#x2F; mock 的完整生成流程">
+<meta property="og:type" content="article">
+<meta property="og:title" content="apis 仓库的 proto→Go gRPC 代码生成流程">
+<meta property="og:url" content="http://example.com/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="以 apis 仓库为例讲清 protoc 工具链与插件机制，从 .proto 一路到 Go gRPC stub &#x2F; gateway &#x2F; validate &#x2F; deepcopy &#x2F; mock 的完整生成流程">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-21T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-22T09:43:42.878Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="gRPC">
+<meta property="article:tag" content="protobuf">
+<meta property="article:tag" content="Go">
+<meta property="article:tag" content="代码生成">
+<meta property="article:tag" content="apis">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "apis 仓库的 proto→Go gRPC 代码生成流程",
+  "url": "http://example.com/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-21T16:00:00.000Z",
+  "dateModified": "2026-07-22T09:43:42.878Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'apis 仓库的 proto→Go gRPC 代码生成流程',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">228</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">220</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">65</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">apis 仓库的 proto→Go gRPC 代码生成流程</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">apis 仓库的 proto→Go gRPC 代码生成流程</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-22T09:43:42.878Z" title="更新于 2026-07-22 17:43:42">2026-07-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%90%8E%E7%AB%AF/">后端</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/" data-flag-title="apis 仓库的 proto→Go gRPC 代码生成流程"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>apis 仓库的 proto→Go gRPC 代码生成流程</h1>
+<blockquote>
+<p>本文以 <code>apis</code> 仓库（<code>gitlab.infini-ai.com/mizar/apis</code>）真实代码为例，讲清从一份 <code>.proto</code> 一路生成到 Go gRPC 代码的完整流程：protoc 工具链、各 <code>protoc-gen-*</code> 插件、<code>go_package</code>/<code>module=</code> 如何决定落地路径、grpc-gateway 怎么把 HTTP 反代到 gRPC、CI 怎么守门保证生成物与 proto 同步。</p>
+<p>读完你能回答&quot;protoc 和 protoc-gen-go 是什么关系&quot;“一份 proto 怎么同时产出消息结构/gRPC stub/HTTP 网关/校验/深拷贝/mock”“为什么 CI 跑 <code>make generate &amp;&amp; git diff</code> 能卡住没同步的提交”。</p>
+</blockquote>
+<hr>
+<h2 id="一、apis-仓库的定位：proto-作为-single-source-of-truth">一、apis 仓库的定位：proto 作为 single source of truth</h2>
+<p>apis 是一个<strong>多服务 API 定义仓库</strong>——所有对外的 RPC/HTTP 接口、消息结构、字段校验，都以 <code>pb/&lt;group&gt;/&lt;version&gt;/&lt;name&gt;.proto</code> 为唯一事实来源（source of truth），<strong>手写代码几乎不碰接口定义</strong>，全由生成器产出。目录约定：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">apis/</span><br><span class="line">├── pb/                      # proto 源(.proto 在此)</span><br><span class="line">│   ├── cluster/v1alpha1/cluster.proto</span><br><span class="line">│   ├── job/v1alpha1/job.proto</span><br><span class="line">│   └── third_party/         # 依赖的外部 proto(google/api、google/protobuf 等)</span><br><span class="line">├── pkg/grpcapis/            # 生成的 Go gRPC 代码落地处</span><br><span class="line">│   └── cluster/v1alpha1/cluster.pb.go / cluster_grpc.pb.go / .pb.gw.go / ...</span><br><span class="line">├── ts/src/pb/               # 生成的 TypeScript 绑定(给前端)</span><br><span class="line">├── hack/                    # 生成脚本: genpb.sh / genpb_ts.sh / install_protoc.sh</span><br><span class="line">├── Makefile                 # make generate 总入口</span><br><span class="line">└── .gitlab-ci.yml           # CI 守门</span><br></pre></td></tr></table></figure>
+<p>一个服务 = 一个 <code>.proto</code>，proto 里 <code>service</code> 定义 RPC、<code>message</code> 定义数据、<code>google.api.http</code> 注解绑定 HTTP 路由。改接口 = 改 proto，再 <code>make generate</code>，所有语言/层（Go gRPC、Go HTTP 网关、TS、openapi、mock、k8s CRD）的代码一次性重生。</p>
+<blockquote>
+<p>面试金句：<strong>“apis 仓库把 proto 当唯一事实来源，所有 Go gRPC stub/HTTP 网关/校验/深拷贝/mock/TS/openapi 都由 protoc+插件从 proto 生成，改接口只改 proto 再 make generate——这是 API 仓库的标准范式。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="二、protoc-工具链：本体-插件">二、protoc 工具链：本体 + 插件</h2>
+<p>理解生成流程的关键是分清 <strong>protoc 本体</strong>和<strong>插件</strong>两层：</p>
+<ul>
+<li><strong>protoc</strong>（Protocol Buffers 编译器本体）：解析 <code>.proto</code>（语法、message/service/enum、import、option），构建内部<strong>描述符（descriptor）</strong>，然后<strong>把描述符喂给各插件</strong>让它各自生成目标语言代码。protoc 自己只懂 proto、不生成 Go/TS——那是插件的事。</li>
+<li><strong>插件</strong>（<code>protoc-gen-*</code>）：独立可执行程序，接收 protoc 传来的 <code>CodeGeneratorRequest</code>（含描述符），吐出 <code>CodeGeneratorResponse</code>（含生成的文件）。<strong>一种插件产一种产物</strong>。protoc 用 <code>--&lt;name&gt;_out=</code> 调用名为 <code>protoc-gen-&lt;name&gt;</code> 的插件。</li>
+</ul>
+<p>apis 用的插件（见 <code>hack/genpb.sh</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>protoc 选项</th>
+<th>插件</th>
+<th>产物</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--go_out</code></td>
+<td>protoc-gen-go</td>
+<td><code>cluster.pb.go</code></td>
+<td>message/enum 的 Go 结构体 + 序列化</td>
+</tr>
+<tr>
+<td><code>--go-grpc_out</code></td>
+<td>protoc-gen-go-grpc</td>
+<td><code>cluster_grpc.pb.go</code></td>
+<td>gRPC client 接口 + server 桩（<code>*_grpc.pb.go</code>）</td>
+</tr>
+<tr>
+<td><code>--grpc-gateway_out</code></td>
+<td>protoc-gen-grpc-gateway</td>
+<td><code>cluster.pb.gw.go</code></td>
+<td>HTTP→gRPC 反向代理（读 <code>google.api.http</code> 注解）</td>
+</tr>
+<tr>
+<td><code>--validate_out</code></td>
+<td>protoc-gen-validate</td>
+<td><code>cluster.pb.validate.go</code></td>
+<td>字段校验（<code>validate</code> 注解 → 校验函数）</td>
+</tr>
+<tr>
+<td><code>--deepcopy_out</code></td>
+<td>protoc-gen-deepcopy</td>
+<td><code>cluster_deepcopy.pb.go</code></td>
+<td>深拷贝方法（k8s 场景需要）</td>
+</tr>
+<tr>
+<td><code>--openapi_out</code></td>
+<td>protoc-gen-openapi</td>
+<td><code>cluster.openapi.yaml</code></td>
+<td>OpenAPI/Swagger 文档</td>
+</tr>
+<tr>
+<td><code>--ts_out</code>（genpb_ts.sh）</td>
+<td>protoc-gen-es</td>
+<td><code>ts/src/pb/*.ts</code></td>
+<td>前端 TypeScript 绑定</td>
+</tr>
+</tbody>
+</table>
+<p>外加 <code>mockgen</code>（不是 protoc 插件，是独立工具，扫生成的 <code>*_grpc.pb.go</code> 里的 <code>interface</code> 给 gRPC client/server 产 mock）。</p>
+<blockquote>
+<p>面试金句：<strong>“protoc 只解析 proto 产描述符，真正生成 Go 的是插件：protoc-gen-go 产消息结构、protoc-gen-go-grpc 产 gRPC stub、protoc-gen-grpc-gateway 产 HTTP 反代、protoc-gen-validate 产校验。一个 <code>--xxx_out=</code> 一个插件，一行 proto 同时喂多个插件产多种产物。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="三、genpb-sh-逐行拆解（生成流程的真正入口）">三、<a target="_blank" rel="noopener" href="http://genpb.sh">genpb.sh</a> 逐行拆解（生成流程的真正入口）</h2>
+<p><code>Makefile</code> 的 <code>generate-pb</code> 目标对每个 <code>pb/*</code> 子目录调一次 <code>hack/genpb.sh</code>（和 <code>genpb_ts.sh</code>）。核心是这条 <code>protoc</code> 命令（去掉循环外壳后的实质）：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">protoc -I ./pb \</span><br><span class="line">       -I ./pb/third_party \</span><br><span class="line">       --go_out=.            --go_opt=module=<span class="variable">$PRJ_SRC_PATH</span> \</span><br><span class="line">       --go-grpc_out=.       --go-grpc_opt=module=<span class="variable">$PRJ_SRC_PATH</span> \</span><br><span class="line">       --grpc-gateway_out=.  --grpc-gateway_opt=module=<span class="variable">$PRJ_SRC_PATH</span> \</span><br><span class="line">       --validate_out .      --validate_opt=module=<span class="variable">$PRJ_SRC_PATH</span> --validate_opt=lang=go \</span><br><span class="line">       --deepcopy_out .      --deepcopy_opt=module=<span class="variable">$PRJ_SRC_PATH</span> \</span><br><span class="line">       ./pb/cluster/v1alpha1/cluster.proto</span><br></pre></td></tr></table></figure>
+<p>逐段拆：</p>
+<h3 id="3-1-I：proto-import-搜索路径">3.1 <code>-I</code>：proto import 搜索路径</h3>
+<ul>
+<li><code>-I ./pb</code>：当前仓库 proto 根。</li>
+<li><code>-I ./pb/third_party</code>：<code>google/api/annotations.proto</code>、<code>google/protobuf/empty.proto</code> 这些外部依赖放在 <code>pb/third_party/</code>，让 <code>import &quot;google/api/annotations.proto&quot;</code> 能找到。<code>install_protoc.sh</code> 还会把 <code>google/protobuf</code> 装到 <code>/usr/local/include</code>，是 protoc 自带的 well-known types。</li>
+</ul>
+<h3 id="3-2-plugin-out-dir-plugin-opt-module-：输出路径控制">3.2 <code>--&lt;plugin&gt;_out=&lt;dir&gt;</code> + <code>&lt;plugin&gt;_opt=module=...</code>：输出路径控制</h3>
+<ul>
+<li><code>--go_out=.</code>：Go 代码输出根目录是当前目录 <code>.</code>。</li>
+<li><code>--go_opt=module=gitlab.infini-ai.com/mizar/apis</code>：<strong>关键</strong>——告诉 protoc-gen-go “目标 module 路径是 <code>gitlab.../apis</code>”，于是生成器<strong>把 <code>go_package</code> 里的这段 module 前缀剥掉</strong>，剩下相对路径拼到 <code>--go_out=.</code> 上。</li>
+<li>proto 里 <code>option go_package = &quot;gitlab.infini-ai.com/mizar/apis/pkg/grpcapis/cluster/v1alpha1;v1alpha1&quot;;</code> → 剥掉 <code>gitlab.../apis</code> 后剩 <code>pkg/grpcapis/cluster/v1alpha1</code> → 最终落在 <code>./pkg/grpcapis/cluster/v1alpha1/cluster.pb.go</code>。</li>
+<li><strong>没有 <code>module=</code> 的话，protoc 会按完整 <code>go_package</code> 路径建一堆目录，落地位置乱套</strong>。<code>module=</code> 是让生成物落到期望包路径的标准手段。</li>
+</ul>
+<h3 id="3-3-一个-proto-喂-6-个插件">3.3 一个 proto 喂 6 个插件</h3>
+<ul>
+<li>一行 <code>protoc</code> 同时 <code>--go_out / --go-grpc_out / --grpc-gateway_out / --validate_out / --deepcopy_out / --openapi_out</code>——<strong>proto 解析只做一次</strong>，描述符分发给所有插件，并行产 6 种产物。这是 proto 工具链&quot;一份定义多产物&quot;的精髓。</li>
+<li>各插件独立工作：protoc-gen-go 不关心 gRPC，protoc-gen-go-grpc 只读 <code>service</code> 块产 stub，grpc-gateway 只读 <code>google.api.http</code> 注解产网关。互不依赖。</li>
+</ul>
+<h3 id="3-4-mockgen：扫生成的-interface-再产-mock">3.4 mockgen：扫生成的 interface 再产 mock</h3>
+<p>脚本最后一段（非 protoc）：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">dir</span>=<span class="variable">$&#123;1/&quot;pb&quot;/&quot;pkg/grpcapis&quot;&#125;</span>/<span class="variable">$version</span></span><br><span class="line">interface_names=$(<span class="built_in">cat</span> <span class="variable">$dir</span>/* | grep <span class="string">&#x27;^type&#x27;</span> | grep <span class="string">&#x27;interface &#123;$&#x27;</span> | awk <span class="string">&#x27;&#123;print $2&#125;&#x27;</span> | grep -v <span class="string">&#x27;^Unsafe&#x27;</span> | grep <span class="string">&#x27;^[A-Z]&#x27;</span>)</span><br><span class="line"><span class="keyword">for</span> service <span class="keyword">in</span> <span class="variable">$interface_names</span>; <span class="keyword">do</span></span><br><span class="line">    dest=<span class="string">&quot;<span class="variable">$&#123;dir&#125;</span>/mock/mock_<span class="subst">$(...小写化)</span>.go&quot;</span></span><br><span class="line">    mockgen -package mock -destination=<span class="variable">$dest</span> &lt;import-path&gt; <span class="variable">$&#123;service&#125;</span></span><br><span class="line"><span class="keyword">done</span></span><br></pre></td></tr></table></figure>
+<ul>
+<li>把 <code>pb/</code> 换成 <code>pkg/grpcapis/</code> 定位到生成的 Go 目录。</li>
+<li>扫所有生成的 <code>*_grpc.pb.go</code>，grep 出 <code>type Xxx interface &#123;</code> 拿到 client/server 接口名。</li>
+<li>对每个接口跑 <code>mockgen</code> 产 <code>mock/mock_xxx_client.go</code>、<code>mock/mock_xxx_server.go</code>，供单测 mock。</li>
+<li>用 <code>run</code> 函数开 3 个 worker 并发跑 mockgen（生成任务多、I/O 独立，并行加速）。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“<a target="_blank" rel="noopener" href="http://genpb.sh">genpb.sh</a> 的灵魂是 <code>--&lt;plugin&gt;_out=. --&lt;plugin&gt;_opt=module=&lt;repo&gt;</code>：module 前缀剥掉 go_package 剩余路径拼到输出根，让生成物精准落到 <code>pkg/grpcapis/...</code>；一条 protoc 喂 6 个插件一次性产消息/stub/网关/校验/深拷贝/openapi；最后 mockgen 扫生成的 interface 再产 mock。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="四、一个-proto-长什么样、生成物对应什么">四、一个 proto 长什么样、生成物对应什么</h2>
+<p>以 <code>pb/cluster/v1alpha1/cluster.proto</code> 为例（精简）：</p>
+<figure class="highlight proto"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">syntax = <span class="string">&quot;proto3&quot;</span>;</span><br><span class="line"><span class="keyword">package</span> infinigence.mizar.cluster.v1alpha1;</span><br><span class="line"><span class="keyword">option</span> go_package = <span class="string">&quot;gitlab.infini-ai.com/mizar/apis/pkg/grpcapis/cluster/v1alpha1;v1alpha1&quot;</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">import</span> <span class="string">&quot;google/api/annotations.proto&quot;</span>;</span><br><span class="line"><span class="keyword">import</span> <span class="string">&quot;google/protobuf/empty.proto&quot;</span>;</span><br><span class="line"></span><br><span class="line"><span class="keyword">service </span><span class="title class_">ClusterV1alpha1</span> &#123;</span><br><span class="line">    <span class="function"><span class="keyword">rpc</span> CreateCluster(ClusterRequestWithBody) <span class="keyword">returns</span> (Cluster) </span>&#123;</span><br><span class="line">        <span class="keyword">option</span> (google.api.http) = &#123; post: <span class="string">&quot;/mizar/v1alpha1/clusters/&#123;id&#125;&quot;</span> body: <span class="string">&quot;cluster&quot;</span> &#125;;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="function"><span class="keyword">rpc</span> GetCluster(ClusterRequest) <span class="keyword">returns</span> (Cluster) </span>&#123;</span><br><span class="line">        <span class="keyword">option</span> (google.api.http) = &#123; get: <span class="string">&quot;/mizar/v1alpha1/clusters/&#123;id&#125;&quot;</span> &#125;;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">// Update/Delete/List...</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">message </span><span class="title class_">Cluster</span> &#123; <span class="type">string</span> api_version = <span class="number">1</span>; ClusterSpec spec = <span class="number">2</span>; ... &#125;</span><br></pre></td></tr></table></figure>
+<p>生成物落 <code>pkg/grpcapis/cluster/v1alpha1/</code>：</p>
+<table>
+<thead>
+<tr>
+<th>生成文件</th>
+<th>由哪个插件产</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cluster.pb.go</code></td>
+<td>protoc-gen-go</td>
+<td><code>type Cluster struct&#123;...&#125;</code>、序列化方法、<code>Reset/String/ProtoMessage</code></td>
+</tr>
+<tr>
+<td><code>cluster_grpc.pb.go</code></td>
+<td>protoc-gen-go-grpc</td>
+<td><code>ClusterV1alpha1Client</code> 接口 + <code>clusterV1alpha1Client</code> 实现（<code>NewClusterV1alpha1Client</code>）、<code>ClusterV1alpha1Server</code> 接口 + <code>UnimplementedClusterV1alpha1Server</code>、<code>RegisterClusterV1alpha1Server</code>、<code>*_FullMethodName</code> 常量</td>
+</tr>
+<tr>
+<td><code>cluster.pb.gw.go</code></td>
+<td>protoc-gen-grpc-gateway</td>
+<td><code>RegisterClusterV1alpha1HandlerServer/FromEndpoint</code>——把 HTTP <code>POST /mizar/v1alpha1/clusters/&#123;id&#125;</code> 解析后转成 gRPC <code>CreateCluster</code> 调用</td>
+</tr>
+<tr>
+<td><code>cluster.pb.validate.go</code></td>
+<td>protoc-gen-validate</td>
+<td>每个字段的 <code>Validate() error</code>（按 <code>[(validate.rules)...]</code> 注解）</td>
+</tr>
+<tr>
+<td><code>cluster_deepcopy.pb.go</code></td>
+<td>protoc-gen-deepcopy</td>
+<td><code>DeepCopy()</code>/<code>DeepCopyInto()</code>（k8s controller 场景要）</td>
+</tr>
+<tr>
+<td><code>cluster.openapi.yaml</code></td>
+<td>protoc-gen-openapi</td>
+<td>HTTP 接口的 OpenAPI 文档</td>
+</tr>
+<tr>
+<td><code>mock/mock_cluster_v1_alpha1_client.go</code></td>
+<td>mockgen</td>
+<td>gRPC client 的 mock（单测用）</td>
+</tr>
+<tr>
+<td><code>mock/mock_cluster_v1_alpha1_server.go</code></td>
+<td>mockgen</td>
+<td>gRPC server 的 mock</td>
+</tr>
+<tr>
+<td><code>ts/src/pb/...cluster.ts</code>（genpb_ts.sh）</td>
+<td>protoc-gen-es</td>
+<td>前端 TS 类型 + gRPC-web/REST 调用</td>
+</tr>
+</tbody>
+</table>
+<h3 id="gRPC-stub-的关键（cluster-grpc-pb-go-片段）">gRPC stub 的关键（<code>cluster_grpc.pb.go</code> 片段）</h3>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Code generated by protoc-gen-go-grpc. DO NOT EDIT.</span></span><br><span class="line"><span class="keyword">const</span> (</span><br><span class="line">  ClusterV1Alpha1_CreateCluster_FullMethodName = <span class="string">&quot;/infinigence.mizar.cluster.v1alpha1.ClusterV1alpha1/CreateCluster&quot;</span></span><br><span class="line">  <span class="comment">// ...</span></span><br><span class="line">)</span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> ClusterV1Alpha1Client <span class="keyword">interface</span> &#123;</span><br><span class="line">    CreateCluster(ctx context.Context, in *ClusterRequestWithBody, opts ...grpc.CallOption) (*Cluster, <span class="type">error</span>)</span><br><span class="line">    GetCluster(ctx context.Context, in *ClusterRequest, opts ...grpc.CallOption) (*Cluster, <span class="type">error</span>)</span><br><span class="line">    <span class="comment">// ...</span></span><br><span class="line">&#125;</span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">NewClusterV1Alpha1Client</span><span class="params">(cc grpc.ClientConnInterface)</span></span> ClusterV1Alpha1Client &#123;...&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> ClusterV1Alpha1Server <span class="keyword">interface</span> &#123;</span><br><span class="line">    CreateCluster(context.Context, *ClusterRequestWithBody) (*Cluster, <span class="type">error</span>)</span><br><span class="line">    <span class="comment">// ...</span></span><br><span class="line">&#125;</span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">RegisterClusterV1alpha1Server</span><span class="params">(s grpc.ServiceRegistrar, srv ClusterV1alpha1Server)</span></span> &#123;...&#125;</span><br></pre></td></tr></table></figure>
+<ul>
+<li><code>service ClusterV1alpha1</code> → 客户端接口 + 服务端接口 + <code>Register</code> + 全方法名常量。</li>
+<li>服务端实现方 <code>embed UnimplementedClusterV1alpha1Server</code> 即可只实现关心的方法。</li>
+<li>全方法名 <code>/package.Service/Method</code> 是 gRPC 在线协议里的 method 标识，HTTP/gateway/metadata 都靠它路由。</li>
+</ul>
+<h3 id="grpc-gateway-怎么把-HTTP-反代到-gRPC">grpc-gateway 怎么把 HTTP 反代到 gRPC</h3>
+<p>proto 里 <code>option (google.api.http) = &#123; post: &quot;/mizar/v1alpha1/clusters/&#123;id&#125;&quot; body: &quot;cluster&quot; &#125;</code> 被 grpc-gateway 插件读到，生成 <code>cluster.pb.gw.go</code> 里的 HTTP handler：收到 <code>POST /mizar/v1alpha1/clusters/&#123;id&#125;</code>，把 <code>&#123;id&#125;</code> 填进 request、<code>body</code> 映射到 <code>cluster</code> 字段、构造 <code>ClusterRequestWithBody</code>，再调 gRPC <code>CreateCluster</code>。于是<strong>一份 service 同时给 gRPC 客户端和 HTTP/REST 客户端用</strong>——gRPC 性能、HTTP 易用兼得。</p>
+<hr>
+<h2 id="五、CI-守门：make-generate-git-diff">五、CI 守门：make generate + git diff</h2>
+<p><code>.gitlab-ci.yml</code> 的 <code>lint-generation</code> 阶段是这套范式的命门：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">lint-generation:</span></span><br><span class="line">  <span class="attr">script:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="string">make</span> <span class="string">download</span>       <span class="comment"># 装 protoc + 各 protoc-gen-* 插件</span></span><br><span class="line">    <span class="bullet">-</span> <span class="string">make</span> <span class="string">generate</span>       <span class="comment"># proto→全产物重新生成</span></span><br><span class="line">    <span class="bullet">-</span> <span class="string">git</span> <span class="string">diff</span>            <span class="comment"># 看工作区有没有改动</span></span><br><span class="line">    <span class="bullet">-</span> <span class="string">if</span> [ <span class="string">&quot;`git diff`&quot;</span> <span class="type">!=</span> <span class="string">&quot;&quot;</span> ]<span class="string">;</span> <span class="string">then</span> <span class="string">exit</span> <span class="number">1</span><span class="string">;</span> <span class="string">fi</span>   <span class="comment"># 有改动 → CI 失败</span></span><br></pre></td></tr></table></figure>
+<p>逻辑：<strong>生成物是提交进 git 的</strong>（<code>pkg/grpcapis/</code>、<code>ts/</code> 都入库），CI 在干净 clone 上重新 <code>make generate</code>，若结果和仓库里已提交的不一致 → 说明有人改了 proto 却没重新生成/没提交生成物 → <code>git diff</code> 非空 → CI 失败。</p>
+<p>这强制了&quot;改接口必走 <code>make generate</code>、必提交生成物&quot;，保证<strong>proto 与所有生成代码永远一致</strong>：</p>
+<ul>
+<li>不会出现&quot;proto 改了但 stub 没同步&quot;的隐蔽 bug。</li>
+<li>评审只看 proto 就够，生成物是机械产物。</li>
+<li>版本对齐：<code>cluster_grpc.pb.go</code> 头部写明 <code>protoc-gen-go-grpc v1.3.0 / protoc v6.30.2</code>，CI 跑的插件版本固定（<code>make download</code> 装指定版本），避免不同人本地插件版本不同导致生成物漂移。</li>
+</ul>
+<blockquote>
+<p>面试金句：<strong>“CI 在干净 clone 上重跑 make generate 再 git diff，非空即失败——这强制’改 proto 必重新生成并提交生成物’，保证 proto 与 stub/网关/校验/TS 永远一致，评审只需看 proto。生成物头部标注插件版本、CI 固定插件版本，防版本漂移。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="六、完整流程图">六、完整流程图</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">开发: 改 pb/cluster/v1alpha1/cluster.proto (service/message/google.api.http 注解)</span><br><span class="line">   │</span><br><span class="line">   ▼ make generate (= generate-pb + generate-apis + generate-kubeclients + generate-crd)</span><br><span class="line">   │</span><br><span class="line">hack/genpb.sh 对每个 pb/* 子目录跑:</span><br><span class="line">   protoc -I ./pb -I ./pb/third_party \</span><br><span class="line">          --go_out=.            --go_opt=module=&lt;repo&gt;     ─► pkg/grpcapis/.../cluster.pb.go        (消息结构)</span><br><span class="line">          --go-grpc_out=.       --go-grpc_opt=module=&lt;repo&gt; ─► pkg/grpcapis/.../cluster_grpc.pb.go (gRPC stub)</span><br><span class="line">          --grpc-gateway_out=. --grpc-gateway_opt=module=&lt;repo&gt; ─► .../cluster.pb.gw.go          (HTTP→gRPC)</span><br><span class="line">          --validate_out .      --validate_opt=module=&lt;repo&gt; --validate_opt=lang=go ─► .../cluster.pb.validate.go</span><br><span class="line">          --deepcopy_out .     --deepcopy_opt=module=&lt;repo&gt; ─► .../cluster_deepcopy.pb.go</span><br><span class="line">          --openapi_out=.../   ─► cluster.openapi.yaml</span><br><span class="line">   go_package 剥 module 前缀 → 落 pkg/grpcapis/&lt;group&gt;/&lt;version&gt;/</span><br><span class="line">   │</span><br><span class="line">hack/genpb_ts.sh: protoc --ts_out ./ts/src/pb  ─►  ts/src/pb/*.ts   (前端绑定)</span><br><span class="line">mockgen 扫 *_grpc.pb.go 的 interface  ─►  pkg/grpcapis/.../mock/mock_*.go</span><br><span class="line">(并行: generate-apis/controller-gen 产 k8s API 类型; gencrd.sh 产 CRD; kube_codegen.sh 产 clientset/lister/informer)</span><br><span class="line">   │</span><br><span class="line">   ▼ git add 生成物 + 提交</span><br><span class="line">CI: 干净 clone 重跑 make generate → git diff 非空即失败 (守门, 保证 proto 与生成物永远同步)</span><br><span class="line">   │</span><br><span class="line">服务端: embed UnimplementedXxxServer 实现业务 ─► RegisterXxxServer 注册到 grpc.Server</span><br><span class="line">客户端: NewXxxClient(conn) 调 RPC; 或 HTTP 经 grpc-gateway 反代到 gRPC</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="七、实践要点与坑">七、实践要点与坑</h2>
+<ol>
+<li><strong>改接口只改 proto，再 <code>make generate</code></strong>——别手改生成物（文件头都写着 <code>DO NOT EDIT</code>，手改会被下次生成覆盖）。</li>
+<li><strong>生成物必须入库</strong>——CI 靠 <code>git diff</code> 守门，生成物不入库则 CI 永远失败；团队约定生成物随 proto 一起提交。</li>
+<li><strong>插件版本固定</strong>——<code>make download</code> 装指定版本 protoc/插件（如 protoc v24.4/v6.30.2、protoc-gen-go-grpc v1.3.0），不同版本生成产物格式会变导致 <code>git diff</code> 误报。</li>
+<li><strong><code>go_package</code> + <code>module=</code> 必须对齐</strong>——<code>go_package</code> 的 module 段要和 <code>--go_opt=module=</code> 一致，否则路径剥不对、生成物乱落。</li>
+<li><strong>import 路径要 <code>-I</code> 全</strong>——<code>google/api/annotations.proto</code> 这类要放 <code>pb/third_party/</code> 并 <code>-I</code>，否则 protoc 找不到。</li>
+<li><strong>grpc-gateway 要 service 每个方法都加 <code>google.api.http</code></strong>——没注解的方法 gateway 不产 HTTP handler（仍可走 gRPC）。</li>
+<li><strong>mockgen 路径要对</strong>——它要扫已生成的 <code>*_grpc.pb.go</code>，所以必须在 protoc 之后跑（脚本里就是这个顺序）。</li>
+<li><strong>新加服务</strong>：在 <code>pb/&lt;group&gt;/&lt;version&gt;/</code> 加 <code>.proto</code>，<code>Makefile</code> 不用改（<code>generate-pb: pb/*</code> 自动枚举）；proto 里 <code>service</code> 名按 <code>&lt;Resource&gt;V1alpha1</code> 命名规范。</li>
+</ol>
+<blockquote>
+<p>面试金句：<strong>“这套范式的好处：单一事实来源（proto）、多语言多层一次生成、CI 强制同步；坑主要在插件版本漂移、go_package/module 对齐、third_party import 路径、gateway 注解缺失。”</strong></p>
+</blockquote>
+<hr>
+<h2 id="八、面试速答清单">八、面试速答清单</h2>
+<p><strong>Q1：protoc 和 protoc-gen-go 是什么关系？</strong></p>
+<blockquote>
+<p>protoc 是 protobuf 编译器本体，只解析 .proto 构建描述符，自己不生成 Go。真正生成 Go 的是插件 protoc-gen-go：protoc 用 <code>--go_out=</code> 调用它，把描述符以 CodeGeneratorRequest 传给插件，插件吐出 CodeGeneratorResponse（生成的 .pb.go）。一种 <code>--xxx_out=</code> 一个 <code>protoc-gen-xxx</code> 插件，一行 protoc 喂多个插件产多种产物。</p>
+</blockquote>
+<p><strong>Q2：apis 仓库一份 proto 怎么同时产这么多东西？</strong></p>
+<blockquote>
+<p>一份 .proto 经 protoc 解析一次，描述符分发给 6 个插件：protoc-gen-go 产消息结构（.pb.go）、protoc-gen-go-grpc 产 gRPC stub（_grpc.pb.go）、protoc-gen-grpc-gateway 产 HTTP 反代（.pb.gw.go）、protoc-gen-validate 产校验、protoc-gen-deepcopy 产深拷贝、protoc-gen-openapi 产文档；外加 genpb_ts.sh 的 protoc-gen-es 产 TS、mockgen 扫 stub 的 interface 产 mock。</p>
+</blockquote>
+<p><strong>Q3：生成的 .pb.go 怎么落到 pkg/grpcapis/cluster/v1alpha1/ 这个路径？</strong></p>
+<blockquote>
+<p>proto 里 <code>option go_package = &quot;.../apis/pkg/grpcapis/cluster/v1alpha1;v1alpha1&quot;</code> 给出完整 import 路径，<code>--go_out=.</code> 给输出根，<code>--go_opt=module=gitlab.../apis</code> 让 protoc-gen-go 把 go_package 里的 module 前缀剥掉，剩 <code>pkg/grpcapis/cluster/v1alpha1</code> 拼到输出根，就是落地路径。module= 不对齐会乱落。</p>
+</blockquote>
+<p><strong>Q4：grpc-gateway 干了什么？</strong></p>
+<blockquote>
+<p>读 proto 里 <code>google.api.http</code> 注解（如 <code>post: &quot;/mizar/v1alpha1/clusters/&#123;id&#125;&quot; body: &quot;cluster&quot;</code>），生成 HTTP handler：收到该 HTTP 请求时把 path 参数/body 映射成 gRPC request message、调对应 RPC，把 gRPC 响应转回 HTTP。让一份 service 同时给 gRPC 和 REST 用。没注解的方法 gateway 不产 HTTP handler。</p>
+</blockquote>
+<p><strong>Q5：为什么 CI 跑 make generate 再 git diff 能卡住没同步的提交？</strong></p>
+<blockquote>
+<p>生成物是入库的。CI 在干净 clone 上重跑 make generate，若结果和已提交的不一致（有人改了 proto 没重新生成、或没提交生成物），git diff 非空 → CI 失败。强制&quot;改接口必走 make generate 并提交生成物&quot;，保证 proto 与所有产物永远一致，评审只看 proto 即可。</p>
+</blockquote>
+<p><strong>Q6：服务端怎么用生成的 stub？</strong></p>
+<blockquote>
+<p>生成的 *_grpc.pb.go 里有 <code>XxxServer</code> 接口和 <code>UnimplementedXxxServer</code>。业务 struct embed <code>UnimplementedXxxServer</code>、实现关心的方法，再 <code>RegisterXxxServer(grpcServer, &amp;impl&#123;&#125;)</code> 注册。客户端 <code>NewXxxClient(conn)</code> 拿接口调 RPC；HTTP 客户端走 gateway 生成的 handler。</p>
+</blockquote>
+<p><strong>Q7：新加一个 gRPC 服务要改什么？</strong></p>
+<blockquote>
+<p>在 pb/<group>/<version>/ 加 <name>.proto（含 service/message/google.api.http 注解、option go_package 对齐），跑 make generate（Makefile 的 generate-pb: pb/* 自动枚举新 proto，不用改 Makefile），生成物入库提交。CI 守门保证同步。注意插件版本固定、import 路径 -I 全、service 命名按 ResourceV1alpha1 规范。</p>
+</blockquote>
+<hr>
+<h2 id="九、一句话总结">九、一句话总结</h2>
+<blockquote>
+<p><strong>apis 仓库以 proto 为单一事实来源：<code>hack/genpb.sh</code> 用一条 <code>protoc</code> 把 .proto 解析一次、描述符喂给 go/go-grpc/grpc-gateway/validate/deepcopy/openapi 六个插件（+ ts 和 mockgen），用 <code>go_package</code>+<code>--go_opt=module=</code> 精准控制落地到 <code>pkg/grpcapis/...</code>，生成物入库、CI 用 <code>make generate &amp;&amp; git diff</code> 守门保证 proto 与产物永远同步。</strong> 把 protoc/插件分层、module= 路径控制、gateway 注解、CI 守门这套讲顺，proto→Go gRPC 生成流程这关就稳了。</p>
+</blockquote>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>apis 仓库源码：<code>Makefile</code>、<code>hack/genpb.sh</code>、<code>hack/genpb_ts.sh</code>、<code>hack/install_protoc.sh</code>、<code>pb/cluster/v1alpha1/cluster.proto</code>、<code>pkg/grpcapis/cluster/v1alpha1/*</code></li>
+<li>protoc 插件协议：<code>plugin.proto</code>（CodeGeneratorRequest/Response）</li>
+<li>protoc-gen-go / protoc-gen-go-grpc：<a target="_blank" rel="noopener" href="https://pkg.go.dev/google.golang.org/protobuf">https://pkg.go.dev/google.golang.org/protobuf</a></li>
+<li>grpc-gateway：<a target="_blank" rel="noopener" href="https://github.com/grpc-ecosystem/grpc-gateway">https://github.com/grpc-ecosystem/grpc-gateway</a></li>
+<li>protoc-gen-validate：<a target="_blank" rel="noopener" href="https://github.com/envoyproxy/protoc-gen-validate">https://github.com/envoyproxy/protoc-gen-validate</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/">http://example.com/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/gRPC/">gRPC</a><a class="post-meta__tags" href="/tags/protobuf/">protobuf</a><a class="post-meta__tags" href="/tags/Go/">Go</a><a class="post-meta__tags" href="/tags/%E4%BB%A3%E7%A0%81%E7%94%9F%E6%88%90/">代码生成</a><a class="post-meta__tags" href="/tags/apis/">apis</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/22/2026-07-22-%E5%AE%B9%E5%99%A8PID1%E4%B8%8E%E5%83%B5%E5%B0%B8%E8%BF%9B%E7%A8%8B-dumb-init-tini-pause/" title="容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解</div></div><div class="info-2"><div class="info-item-1">容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解  本文把&quot;容器里 PID 1 为什么是个问题、僵尸进程怎么来的、dumb-init/tini 怎么兜、k8s pause 和 shareProcessNamespace 怎么协作&quot;一次讲清。读完你能回答面试官&quot;为什么容器里 Python/Java 当 PID 1 会漏僵尸&quot;“dumb-init 和 tini 干了什么”&quot;k8s pause 容器是不是 PID 1&quot;“shareProcessNamespace 开不开有啥区别”。 前置：fork/exec/wait、僵尸 vs 孤儿的基础见本人《操作系统接口》篇。本文只讲容器场景。   一、僵尸进程快速回顾（容器视角） 子进程 exit 后内核不能立刻释放 task_struct——父进程可能要查退出码，于是子进程留一个&quot;僵尸&quot;状态（Z）：代码/数据/堆栈都释放了，只剩 task_struct 和退出码等父进程 wait 收尸。父进程 wait/waitp...</div></div></div></a><a class="pagination-related" href="/2026/07/21/2026-07-21-Meta-Self-Evolving-Agent%E6%9E%84%E6%83%B3/" title="Meta-Evolution Genesis Agent (MEGA)——A Spec-Driven Framework for Bootstrapping Cross-Domain Self-Evolving Agents"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Meta-Evolution Genesis Agent (MEGA)——A Spec-Driven Framework for Bootstrapping Cross-Domain Self-Evolving Agents</div></div><div class="info-2"><div class="info-item-1">Meta-Evolution Genesis Agent (MEGA)  Meta-Evolution Genesis Agent (MEGA) · 昵称 元神 A Spec-Driven Framework for Bootstrapping Cross-Domain Self-Evolving Agents   研究构想文档（research idea / position paper draft）。作者：lvzhongrenjie　日期：2026-07-21 关联：自进化智能体研究综述（~/Documents/实习/）、alcor-chaos 排障自进化 agent（已有，作为已验证的一个领域实例） 系统名 MEGA = Meta-Evolution Genesis Agent；Meta-Evolution 命名二阶贡献（进化进化器），Genesis 命名 bootstrap，Agent = M 本身。   0. 一句话  MEGA（元神）是一个 spec-driven 的跨域 meta 进化层：本身是一个 meta-evolver（跑在 Claude Code/Codex...</div></div></div></a></nav><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">228</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">220</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">65</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">apis 仓库的 proto→Go gRPC 代码生成流程</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81apis-%E4%BB%93%E5%BA%93%E7%9A%84%E5%AE%9A%E4%BD%8D%EF%BC%9Aproto-%E4%BD%9C%E4%B8%BA-single-source-of-truth"><span class="toc-number">1.1.</span> <span class="toc-text">一、apis 仓库的定位：proto 作为 single source of truth</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81protoc-%E5%B7%A5%E5%85%B7%E9%93%BE%EF%BC%9A%E6%9C%AC%E4%BD%93-%E6%8F%92%E4%BB%B6"><span class="toc-number">1.2.</span> <span class="toc-text">二、protoc 工具链：本体 + 插件</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81genpb-sh-%E9%80%90%E8%A1%8C%E6%8B%86%E8%A7%A3%EF%BC%88%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B%E7%9A%84%E7%9C%9F%E6%AD%A3%E5%85%A5%E5%8F%A3%EF%BC%89"><span class="toc-number">1.3.</span> <span class="toc-text">三、genpb.sh 逐行拆解（生成流程的真正入口）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-I%EF%BC%9Aproto-import-%E6%90%9C%E7%B4%A2%E8%B7%AF%E5%BE%84"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 -I：proto import 搜索路径</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-plugin-out-dir-plugin-opt-module-%EF%BC%9A%E8%BE%93%E5%87%BA%E8%B7%AF%E5%BE%84%E6%8E%A7%E5%88%B6"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 --&lt;plugin&gt;_out&#x3D;&lt;dir&gt; + &lt;plugin&gt;_opt&#x3D;module&#x3D;...：输出路径控制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E4%B8%80%E4%B8%AA-proto-%E5%96%82-6-%E4%B8%AA%E6%8F%92%E4%BB%B6"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 一个 proto 喂 6 个插件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-mockgen%EF%BC%9A%E6%89%AB%E7%94%9F%E6%88%90%E7%9A%84-interface-%E5%86%8D%E4%BA%A7-mock"><span class="toc-number">1.3.4.</span> <span class="toc-text">3.4 mockgen：扫生成的 interface 再产 mock</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%80%E4%B8%AA-proto-%E9%95%BF%E4%BB%80%E4%B9%88%E6%A0%B7%E3%80%81%E7%94%9F%E6%88%90%E7%89%A9%E5%AF%B9%E5%BA%94%E4%BB%80%E4%B9%88"><span class="toc-number">1.4.</span> <span class="toc-text">四、一个 proto 长什么样、生成物对应什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#gRPC-stub-%E7%9A%84%E5%85%B3%E9%94%AE%EF%BC%88cluster-grpc-pb-go-%E7%89%87%E6%AE%B5%EF%BC%89"><span class="toc-number">1.4.1.</span> <span class="toc-text">gRPC stub 的关键（cluster_grpc.pb.go 片段）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#grpc-gateway-%E6%80%8E%E4%B9%88%E6%8A%8A-HTTP-%E5%8F%8D%E4%BB%A3%E5%88%B0-gRPC"><span class="toc-number">1.4.2.</span> <span class="toc-text">grpc-gateway 怎么把 HTTP 反代到 gRPC</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81CI-%E5%AE%88%E9%97%A8%EF%BC%9Amake-generate-git-diff"><span class="toc-number">1.5.</span> <span class="toc-text">五、CI 守门：make generate + git diff</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%AE%8C%E6%95%B4%E6%B5%81%E7%A8%8B%E5%9B%BE"><span class="toc-number">1.6.</span> <span class="toc-text">六、完整流程图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%AE%9E%E8%B7%B5%E8%A6%81%E7%82%B9%E4%B8%8E%E5%9D%91"><span class="toc-number">1.7.</span> <span class="toc-text">七、实践要点与坑</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E9%9D%A2%E8%AF%95%E9%80%9F%E7%AD%94%E6%B8%85%E5%8D%95"><span class="toc-number">1.8.</span> <span class="toc-text">八、面试速答清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E4%B8%80%E5%8F%A5%E8%AF%9D%E6%80%BB%E7%BB%93"><span class="toc-number">1.9.</span> <span class="toc-text">九、一句话总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.9.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-apis%E4%BB%93%E5%BA%93proto%E5%88%B0Go-gRPC%E7%94%9F%E6%88%90%E6%B5%81%E7%A8%8B/" title="apis 仓库的 proto→Go gRPC 代码生成流程">apis 仓库的 proto→Go gRPC 代码生成流程</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-%E5%AE%B9%E5%99%A8PID1%E4%B8%8E%E5%83%B5%E5%B0%B8%E8%BF%9B%E7%A8%8B-dumb-init-tini-pause/" title="容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解">容器里的 PID 1 与僵尸进程——dumb-init / tini / k8s pause 全解</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/" title="insmod 实操指南——从写一个内核模块到加载运行">insmod 实操指南——从写一个内核模块到加载运行</a><time datetime="2026-07-21T16:00:00.000Z" title="发表于 2026-07-22 00:00:00">2026-07-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8A%80%E6%9C%AF%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="PaaS 平台 GPU 资源复用与超卖技术深度解析">PaaS 平台 GPU 资源复用与超卖技术深度解析</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/21/2026-07-21-PaaS%E5%B9%B3%E5%8F%B0GPU%E8%B5%84%E6%BA%90%E5%A4%8D%E7%94%A8%E4%B8%8E%E8%B6%85%E5%8D%96%E6%8E%A2%E7%B4%A2/" title="PaaS 平台 GPU 资源复用与超卖探索">PaaS 平台 GPU 资源复用与超卖探索</a><time datetime="2026-07-20T16:00:00.000Z" title="发表于 2026-07-21 00:00:00">2026-07-21</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
