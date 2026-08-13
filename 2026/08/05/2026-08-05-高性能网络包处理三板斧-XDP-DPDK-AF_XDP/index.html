@@ -1,0 +1,695 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从内核协议栈的瓶颈出发，系统对比 XDP、DPDK、AF_XDP 三种高性能包处理路径的原理、数据流、取舍与适用场景。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP">
+<meta property="og:url" content="http://example.com/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从内核协议栈的瓶颈出发，系统对比 XDP、DPDK、AF_XDP 三种高性能包处理路径的原理、数据流、取舍与适用场景。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-05T03:50:29.701Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="高性能网络">
+<meta property="article:tag" content="网络">
+<meta property="article:tag" content="XDP">
+<meta property="article:tag" content="DPDK">
+<meta property="article:tag" content="eBPF">
+<meta property="article:tag" content="Kernel Bypass">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP",
+  "url": "http://example.com/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-04T16:00:00.000Z",
+  "dateModified": "2026-08-05T03:50:29.701Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-05T03:50:29.701Z" title="更新于 2026-08-05 11:50:29">2026-08-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E7%BD%91%E7%BB%9C%E4%B8%8E%E7%B3%BB%E7%BB%9F/">网络与系统</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" data-flag-title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>做大模型 Infra 的人迟早会撞到「网络」这堵墙：千卡训练的 NCCL all-reduce、KV-cache 的 RDMA 直读、推理网关的百万 QPS……一旦标准内核协议栈不够用，就要在 <strong>XDP / DPDK / AF_XDP</strong> 这三条「绕过内核」的路径里做选择。本文把三者的原理、数据流、取舍一次性讲透。</p>
+</blockquote>
+<h2 id="一、为什么内核协议栈不够快">一、为什么内核协议栈不够快</h2>
+<p>先建立基准：<strong>为什么需要绕过内核？</strong> 标准 Linux 网络栈（<code>sk_buff</code> + TCP/IP 协议栈 + socket）每收一个包要走的路：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">网卡 RX → DMA 到内存 → 硬中断 → 软中断 NET_RX_SOFTIRQ → netif_receive_skb</span><br><span class="line">→ sk_buff 分配/拷贝 → IP/TCP 协议栈处理 → socket 接收队列 → 用户态 read()</span><br></pre></td></tr></table></figure>
+<p>这套路径有四个「慢点」：</p>
+<ol>
+<li><strong>上下文切换</strong>：硬中断 → 软中断 → 内核态 → 用户态，每个包多次跨越特权级。</li>
+<li><strong><code>sk_buff</code> 分配/释放</strong>：每个包都 <code>alloc_skb</code>/<code>kfree</code>，这是热点里的内存分配抖动。</li>
+<li><strong>数据拷贝</strong>：内核缓冲区 → 用户态 buffer，至少一次 copy。</li>
+<li><strong>中断风暴</strong>：pps（packet per second）一高，中断处理本身成为瓶颈，CPU 全在处理中断没空算业务。</li>
+</ol>
+<p>对几十万 pps 的普通服务无所谓；但 L4 负载均衡、DDoS 清洗、NFV 网元、高频量化行情这些<strong>千万级 pps</strong> 场景，内核栈就是天花板。于是有了三种「kernel bypass」思路：</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>包在哪处理</th>
+<th>绕内核方式</th>
+<th>编程模型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>XDP</strong></td>
+<td>内核态（驱动层）</td>
+<td>在驱动收包后、协议栈之前 hook</td>
+<td>eBPF 程序</td>
+</tr>
+<tr>
+<td><strong>DPDK</strong></td>
+<td>用户态</td>
+<td>完全旁路内核，UIO/VFIO 接管网卡</td>
+<td>用户态 PMD 轮询</td>
+</tr>
+<tr>
+<td><strong>AF_XDP</strong></td>
+<td>用户态</td>
+<td>XDP 把包重定向到用户态 socket</td>
+<td>XDP + umem 零拷贝</td>
+</tr>
+</tbody>
+</table>
+<p>下面逐个拆。</p>
+<hr>
+<h2 id="二、XDP：在驱动层跑-eBPF-的「最快内核路径」">二、XDP：在驱动层跑 eBPF 的「最快内核路径」</h2>
+<h3 id="2-1-核心思想">2.1 核心思想</h3>
+<p>XDP（eXpress Data Path）的洞察是：<strong>大部分包根本不需要走完整协议栈</strong>。一个 DDoS 攻击包、一个要丢弃的非法包，在驱动收完包之后、还没进 <code>netif_receive_skb</code> 之前就该被处理掉。</p>
+<p>XDP 给你在<strong>网卡驱动收包后第一时间</strong>挂一个 eBPF 程序的钩子。这个程序拿到原始包（<code>xdp_buff</code>，连 <code>sk_buff</code> 都还没构造），可以决定包的 destiny：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// XDP 程序的返回码（verdict）</span></span><br><span class="line">XDP_DROP      <span class="comment">// 直接丢，常用于 DDoS 防护</span></span><br><span class="line">XDP_PASS      <span class="comment">// 放行进正常协议栈</span></span><br><span class="line">XDP_TX        <span class="comment">// 从收到包的同一网卡原路发回</span></span><br><span class="line">XDP_REDIRECT  <span class="comment">// 重定向到别处（另一个网卡 / CPU / AF_XDP socket）</span></span><br><span class="line">XDP_ABORTED   <span class="comment">// 出错，丢弃</span></span><br></pre></td></tr></table></figure>
+<h3 id="2-2-数据流">2.2 数据流</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">网卡 RX → DMA → 驱动收包 → 【XDP eBPF 钩子】 ← 在这里决策</span><br><span class="line">                            ├─ DROP   → 直接释放，不进协议栈</span><br><span class="line">                            ├─ PASS   → 构造 sk_buff，进协议栈（正常路径）</span><br><span class="line">                            ├─ TX     → 驱动直接发回</span><br><span class="line">                            └─ REDIRECT → 发往 AF_XDP socket / 另一网卡</span><br></pre></td></tr></table></figure>
+<p>关键点：XDP 钩子<strong>早于 <code>sk_buff</code> 分配</strong>，所以 DROP/REDIRECT 路径<strong>完全没有 skb 开销</strong>，这是它快的根因。而且 XDP 程序跑在<strong>软中断上下文里的 native 编译模式</strong>（JIT 成本机指令），不是解释执行，性能接近手写内核模块。</p>
+<h3 id="2-3-三种运行模式">2.3 三种运行模式</h3>
+<ul>
+<li><strong>Native XDP</strong>：eBPF 程序由驱动在 RX 路径直接调用，最快。需要驱动支持。</li>
+<li><strong>Offloaded XDP</strong>：eBPF 程序下放到<strong>网卡硬件</strong>（智能 NIC，如 Netronome）执行，CPU 零开销。</li>
+<li><strong>Generic XDP</strong>（<code>SKB_MODE</code>）：为了兼容老驱动，在 <code>sk_buff</code> 构造之后才调用 eBPF，慢一些，用于开发调试。</li>
+</ul>
+<h3 id="2-4-安全模型：eBPF-verifier">2.4 安全模型：eBPF verifier</h3>
+<p>XDP 程序进内核有 verifier 限制：<strong>不能有死循环、不能越界访问、必须能被静态证明会终止</strong>。这是 XDP 比 DPDK 安全但表达力弱的原因——DPDK 里你能跑任意 C 代码，XDP 里你只能跑 verifier 放心的 eBPF 字节码。</p>
+<h3 id="2-5-典型用法">2.5 典型用法</h3>
+<ul>
+<li><strong>DDoS 清洗 / 防火墙</strong>：百万 pps 级 drop，CPU 几乎不涨。</li>
+<li><strong>L4 负载均衡</strong>（如 Cilium、Katran）：<code>XDP_TX</code> 把包改头后原路发回，做 L4 DSR。</li>
+<li><strong>AF_XDP 后端</strong>：见第四节。</li>
+<li><strong>采样/监控</strong>：XDP 程序把包元数据送到 perf ring。</li>
+</ul>
+<blockquote>
+<p><strong>面试要点</strong>：XDP 是「在内核里、但早于协议栈」的 eBPF fast path。它<strong>没有绕过内核</strong>（依然在内核态、用内核驱动收包），只是把决策点前移到驱动层，省掉协议栈和 skb 开销。所以 XDP 的定位是「<strong>最快的、仍受内核管理的包处理路径</strong>」，不是 kernel bypass。</p>
+</blockquote>
+<hr>
+<h2 id="三、DPDK：完全旁路内核的用户态包处理">三、DPDK：完全旁路内核的用户态包处理</h2>
+<h3 id="3-1-核心思想">3.1 核心思想</h3>
+<p>DPDK（Data Plane Development Kit，Intel 起家，现 Linux Foundation）走得更彻底：<strong>既然内核是瓶颈，就完全不让内核碰网卡</strong>。</p>
+<p>机制：用 <strong>UIO / VFIO</strong> 驱动把网卡从内核标准驱动「解绑」并接管，网卡寄存器和 DMA 缓冲区<strong>直接映射到用户态进程地址空间</strong>。用户态进程用 <strong>PMD（Poll Mode Driver，轮询模式驱动）</strong> 不断轮询网卡 RX 环，收到的包直接在用户态处理，<strong>全程零内核参与、零中断、零上下文切换</strong>。</p>
+<h3 id="3-2-数据流">3.2 数据流</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">网卡 ──(VFIO/UIO 接管)── 用户态进程</span><br><span class="line">                    │</span><br><span class="line">   PMD 死循环 poll RX 环 ←── DMA 直接写到用户态 mmap 的大页内存</span><br><span class="line">                    │</span><br><span class="line">              用户态业务逻辑（L4-L7）</span><br><span class="line">                    │</span><br><span class="line">              PMD poll TX 环 → DMA 发出</span><br></pre></td></tr></table></figure>
+<p>整个收发包路径<strong>没有一次系统调用、没有一次中断、没有一次拷贝</strong>（DMA 直写用户态内存）。这就是 DPDK 拐点跑到千万 pps 的原因。</p>
+<h3 id="3-3-关键工程组件">3.3 关键工程组件</h3>
+<ul>
+<li><strong>Hugepages（大页内存）</strong>：用 2MB/1GB 大页，减少 TLB miss，DPDK 的 mempool 全建在大页上。</li>
+<li><strong>Mempool</strong>：预分配的包缓冲池，避免运行时 <code>malloc</code>，恒定时间取放。</li>
+<li><strong>PMD（Poll Mode Driver）</strong>：绑死一个 CPU 核 100% 轮询，不等中断。代价是该核 CPU 满载。</li>
+<li><strong>rte_ring（无锁队列）</strong>：核间通信用无锁环形队列，避免锁竞争。</li>
+<li><strong>VFIO/VFIO-NOIOMMU / UIO</strong>：把设备暴露给用户态的方式。VFIO 带 IOMMU 保护，生产首选；UIO 简单但无保护。</li>
+<li><strong>Flow Bifurcation / RDMA 共存</strong>：DPDK 可以和内核栈分流量，部分包仍交给内核。</li>
+</ul>
+<h3 id="3-4-DPDK-的代价">3.4 DPDK 的代价</h3>
+<ul>
+<li><strong>独占网卡</strong>：网卡被 VFIO 接管后，内核看不到它，标准 <code>ifconfig</code>/<code>ssh</code> 失效，得用 DPDK 自带工具（如 <code>testpmd</code>、<code>dpdk</code> 命令）。</li>
+<li><strong>CPU 100% 占用</strong>：PMD 轮询意味着即使没包也满载，所以 DPDK 需要专门的核，常配合容器隔离。</li>
+<li><strong>无内核服务</strong>：路由表、conntrack、iptables 全用不了，要在用户态重写或用 DPDK 的 FIB/ACL 库。</li>
+<li><strong>开发门槛高</strong>：要写 C，理解 PMD/rte_mbuf/mempool 那一套，还要懂 NUMA 绑核。</li>
+</ul>
+<h3 id="3-5-典型用法">3.5 典型用法</h3>
+<ul>
+<li><strong>NFV 网元</strong>：vRouter、vFW、vLB、vSwitch（OVS-DPDK 是经典组合）。</li>
+<li><strong>电信 5G UPF</strong>：GTP 隧道转发，千万 pps。</li>
+<li><strong>高性能 L4-L7</strong>：F5、NGINX 加速、高频行情网关。</li>
+<li><strong>存储</strong>：SPDK（存储性能开发包）是 DPDK 思路搬到 NVMe 的姊妹项目。</li>
+</ul>
+<blockquote>
+<p><strong>面试要点</strong>：DPDK = <strong>完全 kernel bypass + 用户态 PMD 轮询</strong>。它是三条路径里「最激进、最快、也最重」的：用独占网卡和满载 CPU 核换极致吞吐。表达力无限制（任意 C），但失去所有内核网络服务。</p>
+</blockquote>
+<hr>
+<h2 id="四、AF-XDP：XDP-与用户态的「中间道路」">四、AF_XDP：XDP 与用户态的「中间道路」</h2>
+<h3 id="4-1-定位：为什么要有-AF-XDP">4.1 定位：为什么要有 AF_XDP</h3>
+<p>XDP 快但只能跑在内核态、受 eBPF 限制（写不了复杂业务逻辑）；DPDK 自由但太重（要独占网卡、要写 PMD、丢掉内核服务）。<strong>AF_XDP 就是这两者之间的桥</strong>：</p>
+<blockquote>
+<p>用 XDP 在驱动层把包 <code>XDP_REDIRECT</code> 到一个特殊的 socket（AF_XDP），让用户态进程在<strong>零拷贝</strong>下拿到原始包，但<strong>网卡仍由内核驱动管理、仍能跑正常协议栈</strong>。</p>
+</blockquote>
+<p>一句话：XDP 当「快速分流器」，用户态当「业务处理器」，两者之间用一块共享内存（umem）零拷贝传包。</p>
+<h3 id="4-2-数据流">4.2 数据流</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">网卡 RX → 驱动 → 【XDP eBPF】</span><br><span class="line">                     │</span><br><span class="line">                     └─ XDP_REDIRECT ─→ AF_XDP socket</span><br><span class="line">                                          │</span><br><span class="line">                            umem（用户态 mmap 的共享环形缓冲区）</span><br><span class="line">                                          │</span><br><span class="line">                              用户态进程 poll 拿包处理</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>umem</strong>：用户态进程申请的一块内存，<strong>同时映射给内核</strong>作为 DMA 目标。包 DMA 进来后，XDP 程序只改一个描述符指针，就让这块数据「归」用户态可见——<strong>零拷贝</strong>。</li>
+<li><strong>FILL ring / COMPLETION ring</strong>：两对环形队列管理 umem 描述符的借用/归还。</li>
+<li><strong>两种模式</strong>：<code>XDP_FLAGS_DRV_MODE</code>（驱动 native，零拷贝，需驱动支持）、<code>XDP_FLAGS_SKB_MODE</code>（generic，有拷贝，兼容性好）。</li>
+</ul>
+<h3 id="4-3-编程模型">4.3 编程模型</h3>
+<ul>
+<li>内核侧：写一个 XDP eBPF 程序，逻辑通常就是「按 5 元组/端口过滤，符合的 <code>bpf_redirect_map</code> 到 xsks map」。</li>
+<li>用户侧：标准 socket API（<code>socket(AF_XDP, SOCK_RAW)</code>），配 <code>libbpf</code> 或 <code>libxdp</code>，绑 umem，poll 收包。</li>
+</ul>
+<p>库 <code>libbpf</code> + <code>xdp-tools</code>（<code>libxdp</code>）是现在主流组合。Cilium、Cloudflare 都在生产用 AF_XDP 做高 pps 入口。</p>
+<h3 id="4-4-UMEM、Fill-Ring-与-Rx-Ring：零拷贝的「循环快递柜」">4.4 UMEM、Fill Ring 与 Rx Ring：零拷贝的「循环快递柜」</h3>
+<p>要理解 AF_XDP 的零拷贝，绕不开三个东西：<strong>UMEM、Fill Ring、Rx Ring</strong>。它们构成了数据从网卡到用户程序的高速公路，可以用一个「循环快递柜」系统来类比：</p>
+<ul>
+<li><strong>UMEM</strong> = 一大片划分好的快递柜（内存帧）。由用户态分配、同时映射给内核，是数据真正存放的地方。</li>
+<li><strong>Fill Ring</strong> = 用户告诉内核「这些空柜子可以用」的通知单。</li>
+<li><strong>Rx Ring</strong> = 内核放好包裹后，告诉用户「包裹在几号柜」的取件码。</li>
+</ul>
+<h4 id="UMEM-是什么">UMEM 是什么</h4>
+<p>UMEM（User-space MEmory）是零拷贝的基石：用户程序 <code>mmap</code> 一块连续内存并向内核注册，内部按等长划分为许多 <strong>frame</strong>。所有收发数据包都存在这些 frame 里，每个 frame 用一个 <code>addr</code>（在 UMEM 中的偏移量）唯一标识。因为 UMEM 被用户态和内核共享，包在两边流转时<strong>无需拷贝</strong>，只交换描述符。</p>
+<h4 id="Fill-Ring-vs-Rx-Ring">Fill Ring vs Rx Ring</h4>
+<p>两者是 UMEM 的配套管理结构，核心区别在「谁生产、谁消费、传什么」：</p>
+<table>
+<thead>
+<tr>
+<th>特性</th>
+<th>Fill Ring（填充环）</th>
+<th>Rx Ring（接收环）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>通俗理解</td>
+<td>「可用空柜子」通知单</td>
+<td>「已放包裹」取件码</td>
+</tr>
+<tr>
+<td>生产者</td>
+<td>用户程序</td>
+<td>内核（网卡驱动）</td>
+</tr>
+<tr>
+<td>消费者</td>
+<td>内核（网卡驱动）</td>
+<td>用户程序</td>
+</tr>
+<tr>
+<td>传递内容</td>
+<td>空闲帧的 <code>addr</code></td>
+<td>含数据帧的 <code>addr</code> + 长度</td>
+</tr>
+<tr>
+<td>核心作用</td>
+<td>用户向内核提供空闲内存</td>
+<td>内核向用户交付数据包</td>
+</tr>
+<tr>
+<td>所有权转移</td>
+<td>用户空间 → 内核空间</td>
+<td>内核空间 → 用户空间</td>
+</tr>
+</tbody>
+</table>
+<h4 id="收包全流程（四步循环）">收包全流程（四步循环）</h4>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">用户程序                              内核 / 网卡</span><br><span class="line">────────                              ──────────</span><br><span class="line">① 把空闲帧 addr 入 Fill Ring  ──→  内核从 Fill Ring 取 addr，获得帧所有权</span><br><span class="line">                                        │</span><br><span class="line">                                ② 网卡 DMA 直接把包写入该帧（CPU 不参与）</span><br><span class="line">                                        │</span><br><span class="line">④ poll 醒来，从 Rx Ring 取 addr    ←──  ③ 内核把 addr+len 入 Rx Ring，通知用户取件</span><br><span class="line">     │</span><br><span class="line">     └→ 处理完，把该帧 addr 重新塞回 Fill Ring（归还，循环使用）</span><br></pre></td></tr></table></figure>
+<p>关键：<strong>Fill Ring 和 Rx Ring 配合，构成无锁的零拷贝接收链</strong>。发送方向对称地由 **Tx Ring（发送环）**和 **Completion Ring（完成环）**配合完成。这是理解 AF_XDP 性能的钥匙。</p>
+<blockquote>
+<p>一句话：<strong>Fill Ring 是用户向内核「送弹药」（空闲内存）的通道，Rx Ring 是内核向用户「交战果」（数据包）的通道</strong>。</p>
+</blockquote>
+<h3 id="4-5-bind-与-poll-：贴门牌号与按门铃等待">4.5 bind() 与 poll()：贴门牌号与按门铃等待</h3>
+<p><code>bind()</code> 和 <code>poll()</code> 是网络编程最基础的两个系统调用，但职责完全不同——<strong>一个管「贴门牌号」，一个管「按门铃等待」</strong>。</p>
+<h4 id="bind-：给套接字贴门牌号（命名与绑定）">bind()：给套接字贴门牌号（命名与绑定）</h4>
+<p>把一个 socket 与一个本地地址关联。你买了个手机（Socket），别人要打来必须知道号码；<code>bind</code> 就是插 SIM 卡激活号码。完成绑定后，系统才知道某个数据包该交给谁。</p>
+<ul>
+<li><strong>传统 TCP/UDP 服务（如 Nginx）</strong>：<code>bind</code> 到 <code>0.0.0.0:80</code>，告诉内核「所有发往本机 80 端口的 TCP 包都交给这个 socket」。</li>
+<li><strong>AF_XDP（<code>sockaddr_xdp</code> 结构体）</strong>：语义变成了「绑定到某网卡的某硬件队列」：</li>
+</ul>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">sxdp.sxdp_ifindex   = ifindex;   <span class="comment">// 绑定到特定网卡（如 eth0）</span></span><br><span class="line">sxdp.sxdp_queue_id  = queue_id;  <span class="comment">// 绑定到特定 CPU 收包队列（如 0）</span></span><br></pre></td></tr></table></figure>
+<p>绑完后，内核 XDP 程序通过 <code>bpf_redirect_map</code> 扔过来的包才会被<strong>精确投递</strong>到这个特定 socket。常见错误：端口被占用时 <code>bind</code> 返回 <code>-1</code>、<code>errno = EADDRINUSE</code>。</p>
+<h4 id="poll-：等门铃响（多路-I-O-复用）">poll()：等门铃响（多路 I/O 复用）</h4>
+<p>让当前线程<strong>主动让出 CPU 进入休眠</strong>，等待若干 fd 上的事件（可读/可写/出错）发生。类比：你不站在门口死盯（busy loop 会把 CPU 占满），而是坐沙发上睡觉、把门铃（fd）接在耳朵上；快递员按门铃，<code>poll</code> 被唤醒，你才起身开门（读数据）。</p>
+<p>为什么 AF_XDP 必须用它？主循环若是裸 <code>while(1)</code> 不停查 Rx Ring，CPU 会 100% 空转。<code>poll</code> 实现「有包极速响应、无包深度休眠」：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 不加 poll：死循环查 rx_ring，CPU 飙到 100%</span></span><br><span class="line"><span class="type">int</span> ret = poll(&amp;(<span class="keyword">struct</span> pollfd)&#123;.fd = sock, .events = POLLIN&#125;, <span class="number">1</span>, <span class="number">1000</span>);</span><br><span class="line"><span class="keyword">if</span> (ret &lt;= <span class="number">0</span>) <span class="keyword">continue</span>;   <span class="comment">// 没包就继续睡，有包就醒</span></span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>进阶：高并发（上万连接）服务器通常用 <code>epoll</code> 替代 <code>poll</code>（见 4.7）；但 AF_XDP 单队列、单线程、只盯 1 个 fd 的极简场景下，<code>poll</code> 性能足够且代码更简洁。</p>
+</blockquote>
+<h3 id="4-6-poll-在-AF-XDP-里到底干了什么（三件事）">4.6 poll 在 AF_XDP 里到底干了什么（三件事）</h3>
+<p>普通网络编程里 <code>poll</code> 只等「协议栈把数据备好」。AF_XDP 下它的责任被加重，干三件事：</p>
+<p><strong>① 等 Rx Ring 非空（取件码到位）。</strong> 用户态 <code>poll</code> 后 CPU 睡；网卡收到包、XDP 重定向进 Rx Ring 后，内核唤醒等待在该 socket 上的 <code>poll</code>，返回 <code>POLLIN</code>，告诉应用「Rx Ring 有新货了，快来 peek」。</p>
+<p><strong>② 等 Fill Ring 非满（反向背压）。</strong> AF_XDP 零拷贝下，网卡需要一块空闲 frame 放新包，这块内存由用户通过 Fill Ring 提供。若用户处理太慢、把 Fill Ring 的空闲内存用光，网卡就没地方放新包、驱动会卡住。此时 <code>poll</code> 不仅等 Rx，也等 Fill Ring 释放出空槽——一旦用户释放了旧帧内存、Fill Ring 有空位，<code>poll</code> 被唤醒，催应用「快补 Fill Ring」。</p>
+<p><strong>③ 配合 <code>XDP_USE_NEED_WAKEUP</code> 标志（性能关键）。</strong> 绑定时若设 <code>sxdp_flags = XDP_USE_NEED_WAKEUP</code>，<code>poll</code> 就承担「软中断触发」职能：</p>
+<ul>
+<li>极致性能下，驱动把包扔进 Rx Ring 后<strong>默认不主动触发硬中断</strong>，靠应用主动 busy-poll。</li>
+<li>但流量一断、应用还在死循环轮询就空转费电。<code>poll</code> 内部告诉内核「我去睡了，下次有包请触发中断叫醒我」。</li>
+<li>唤醒后 <code>poll</code> 返回，应用处理包；处理中显式 <code>sendto</code>/<code>xsk_ring_prod__submit</code> 时，内核看到 need_wakeup 标记，知道应用进入工作模式，于是暂时<strong>关中断</strong>，直到应用再次 <code>poll</code> 睡觉。</li>
+</ul>
+<blockquote>
+<p>一句话：AF_XDP 中 <code>poll</code> 是应用与网卡驱动之间的「<strong>节能开关</strong>」，在「无事可做时深度睡眠」与「有事发生时极速响应」间完美切换，避免 CPU 空转 100%。</p>
+</blockquote>
+<h3 id="4-7-epoll：poll-的高并发进化版">4.7 epoll：poll 的高并发进化版</h3>
+<p><code>epoll</code> 是 Linux 为高并发（成千上万连接）设计的 I/O 事件通知机制，是 <code>poll</code>/<code>select</code> 的替代。</p>
+<h4 id="与-poll-的核心区别">与 poll 的核心区别</h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>poll / select</th>
+<th>epoll</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>数据结构</td>
+<td>每次调用把<strong>全部</strong> fd 列表从用户态拷到内核态</td>
+<td>内核维护<strong>红黑树 + 就绪链表</strong>，注册一次即可</td>
+</tr>
+<tr>
+<td>扫描方式</td>
+<td>遍历整个 fd 数组 O(n)，挨个查谁就绪</td>
+<td><strong>事件回调</strong> O(1)，谁就绪内核直接挂到就绪链表</td>
+</tr>
+<tr>
+<td>返回结果</td>
+<td>只返回就绪 fd 总数，应用仍需<strong>遍历全部</strong>找谁就绪</td>
+<td>直接返回<strong>就绪 fd 列表</strong>，无需遍历</td>
+</tr>
+<tr>
+<td>适用场景</td>
+<td>监控 fd 少（几十个内）</td>
+<td>监控 fd 极多（上万），活跃度不均（Nginx、Redis）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="两种工作模式（epoll-独有）">两种工作模式（epoll 独有）</h4>
+<ul>
+<li><strong>LT（水平触发，默认）</strong>：只要 fd 还有数据没读完，<code>epoll_wait</code> 就一直返回该事件。安全不易丢，但效率稍低（类似 poll）。</li>
+<li><strong>ET（边沿触发）</strong>：只在 fd 状态<strong>变化</strong>时（不可读→可读）通知一次。本次没读完，下次不再提醒，直到新数据进来。<strong>迫使应用一次性读尽</strong>，极大减少系统调用次数，性能极高，但编程难度大（须配非阻塞 socket）。</li>
+</ul>
+<h4 id="在-AF-XDP-场景：用-poll-还是-epoll？">在 AF_XDP 场景：用 poll 还是 epoll？</h4>
+<ul>
+<li><strong>单队列（1 个 AF_XDP socket）→ <code>poll</code></strong>：只盯 1 个 fd，<code>epoll</code> 要额外建实例、注册、红黑树查找，反而更重。官方 <code>libbpf</code> 的 <code>xsk</code> 示例默认就用 <code>poll</code>。</li>
+<li><strong>多队列（多 socket，如 16 个 RSS 硬件队列绑不同核）→ <code>epoll</code></strong>：一个主线程统一管 16 个 fd，用 <code>poll</code> 每次要遍历 16 个；<code>epoll</code> 把它们全加进去、用 ET 模式在流量洪峰时减少无效唤醒，更标准高效。</li>
+<li><strong>混合场景（AF_XDP 数据面 + 普通 TCP 控制面，如 8080 配置端口）→ <code>epoll</code></strong>：把高速数据 fd 与常规 TCP listen fd 「混聚」一起等，是唯一优雅选择。</li>
+</ul>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">多队列 / 混合管理拓扑（epoll）:</span><br><span class="line">  NIC Queue0 ─ XDP ─ AF_XDP sock0 ─┐</span><br><span class="line">  NIC Queue1 ─ XDP ─ AF_XDP sock1 ─┤</span><br><span class="line">  ...                               ├─→ epoll（主线程，事件回调） ─→ 分发处理</span><br><span class="line">  NIC QueueN ─ XDP ─ AF_XDP sockN ─┤</span><br><span class="line">  TCP listen :8080（控制面）      ─┘</span><br><span class="line"></span><br><span class="line">vs.</span><br><span class="line"></span><br><span class="line">单队列拓扑（poll）:</span><br><span class="line">  NIC Queue0 ─ XDP ─ AF_XDP sock ─ poll() ─ 应用线程</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p><strong>面试要点</strong>：<code>epoll</code> 解决的是「<strong>fd 多、活跃少</strong>」时的 O(n) 扫描浪费。AF_XDP 单队列只有 1 个 fd，<code>poll</code> 更轻；一旦多队列或混入 TCP 控制面，<code>epoll</code> 的红黑树+就绪链表+ET 模式才显出价值。<strong>bind 解决「数据送到哪里」的空间定位，poll/epoll 解决「数据何时送来」的时间等待</strong>。</p>
+</blockquote>
+<h3 id="4-8-取舍">4.8 取舍</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>AF_XDP 表现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>性能</td>
+<td>介于 XDP（内核态）和 DPDK（纯用户态）之间，零拷贝模式下接近 DPDK</td>
+</tr>
+<tr>
+<td>网卡归属</td>
+<td>内核仍管，能同时跑 ssh/mgmt 流量</td>
+</tr>
+<tr>
+<td>表达力</td>
+<td>用户态任意 C/Rust，复杂业务能写</td>
+</tr>
+<tr>
+<td>中断</td>
+<td>仍有，但可用 <code>XDP_USE_NEED_WAKEUP</code> + 批量 poll 减小开销</td>
+</tr>
+<tr>
+<td>开发门槛</td>
+<td>比 DPDK 低，比纯 XDP 高</td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-9-典型用法">4.9 典型用法</h3>
+<ul>
+<li><strong>L7 负载均衡 / API 网关</strong>入口分流：XDP 把流量按规则甩到用户态业务进程。</li>
+<li><strong>DDoS 防护</strong>：XDP 速 drop 明显攻击，可疑流量 AF_XDP 上送用户态深度检测。</li>
+<li><strong>可观测 / 抓包</strong>：替代 <code>tcpdump</code>（pcap 走内核栈，pps 高就丢），AF_XDP 能扛千万 pps 不丢。</li>
+<li><strong>边车 / Service Mesh 数据面</strong>：把特定端口流量重定向到 sidecar，绕开 iptables。</li>
+</ul>
+<blockquote>
+<p><strong>面试要点</strong>：AF_XDP = <strong>XDP redirect + 用户态 socket + umem 零拷贝</strong>。它继承了 XDP「快入口」和用户态「强表达力」两者的优点，又不像 DPDK 那样独占网卡。是当下 cloud-native 高性能数据面的主流选择之一（Cilium 1.12+ 即支持）。</p>
+</blockquote>
+<hr>
+<h2 id="五、三者横向对比（一张表定调）">五、三者横向对比（一张表定调）</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>XDP</th>
+<th>DPDK</th>
+<th>AF_XDP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>包最终处理位置</td>
+<td>内核态（驱动层）</td>
+<td>用户态</td>
+<td>用户态</td>
+</tr>
+<tr>
+<td>是否绕过内核</td>
+<td>否（早于协议栈，但仍内核态）</td>
+<td>完全旁路</td>
+<td>半旁路（驱动在内核，包送用户态）</td>
+</tr>
+<tr>
+<td>网卡归属</td>
+<td>内核</td>
+<td>DPDK 进程独占</td>
+<td>内核</td>
+</tr>
+<tr>
+<td>编程模型</td>
+<td>eBPF（受限、verifier 保证安全）</td>
+<td>任意 C（PMD）</td>
+<td>用户态任意 + eBPF redirect</td>
+</tr>
+<tr>
+<td>中断</td>
+<td>仍有软中断</td>
+<td>无中断（轮询）</td>
+<td>仍有（可优化）</td>
+</tr>
+<tr>
+<td>CPU 占用</td>
+<td>低</td>
+<td>满载（专核轮询）</td>
+<td>中</td>
+</tr>
+<tr>
+<td>性能</td>
+<td>高（百万~千万 pps drop）</td>
+<td>最高（千万 pps 线速）</td>
+<td>高（接近 DPDK）</td>
+</tr>
+<tr>
+<td>内核服务可用</td>
+<td>全部</td>
+<td>几乎无（路由/conntrack/iptables 全废）</td>
+<td>全部</td>
+</tr>
+<tr>
+<td>部署门槛</td>
+<td>中（编译 eBPF + libbpf）</td>
+<td>高（绑核、大页、VFIO、写 PMD）</td>
+<td>中</td>
+</tr>
+<tr>
+<td>典型场景</td>
+<td>DDoS drop、L4 DSR、XDP_LB</td>
+<td>NFV、5G UPF、vSwitch、行情网关</td>
+<td>L7 网关、边车数据面、抓包</td>
+</tr>
+</tbody>
+</table>
+<h3 id="选型口诀">选型口诀</h3>
+<ul>
+<li>只想<strong>快速丢/转发包</strong>、逻辑简单 → <strong>XDP</strong>。</li>
+<li>要<strong>线速 + 复杂业务</strong>、能接受独占网卡和满载 CPU → <strong>DPDK</strong>。</li>
+<li>要<strong>高吞吐 + 复杂业务</strong>、又要保留内核网络服务、用 eBPF 生态 → <strong>AF_XDP</strong>。</li>
+</ul>
+<hr>
+<h2 id="六、与大模型-Infra-的关系（面试连接点）">六、与大模型 Infra 的关系（面试连接点）</h2>
+<p>虽然 XDP/DPDK/AF_XDP 主要用于网络功能/网关，但和大模型 Infra 有几处直接交叉，面试能聊就是加分：</p>
+<ol>
+<li><strong>NCCL / RDMA 路径旁路</strong>：千卡训练的 all-reduce 走 RDMA（RoCE/IB），本身已是 kernel bypass（绕过 TCP 栈，用户态直写 NIC）。DPDK 的思想（用户态 PMD、零拷贝、大页、无中断）和 RDMAverbs 的 <code>ibv_post_send</code> 轮询模型<strong>同源</strong>。能讲清「为什么训练通信要 bypass 内核」就接得上。</li>
+<li><strong>推理网关 / Token 流量</strong>：大模型推理服务（vLLM/TGI 前面）的 L7 网关，百万 QPS 的 TLS/路由，Cilium + AF_XDP / Envoy 是常见数据面。</li>
+<li><strong>可观测性</strong>：eBPF（XDP 的母体）是 GPU/CPU/网络全栈观测的事实标准——PyTorch profiler、Parca、Pixie 都靠 eBPF 采火焰图和延迟分布。</li>
+<li><strong>KV-cache 跨节点直读</strong>：未来 P-D 分离里 worker 直读参数/远端 KV，绕过内核的 RDMA/DPDK 思路直接相关。</li>
+</ol>
+<blockquote>
+<p>一句话桥接：<strong>RDMA 是「训练通信」的 kernel bypass，XDP/DPDK/AF_XDP 是「通用包处理」的 kernel bypass</strong>，底层动机完全一致——把数据面从内核解放出来，用轮询+零拷贝+用户态换线速。</p>
+</blockquote>
+<hr>
+<h2 id="七、面试高频速答">七、面试高频速答</h2>
+<p><strong>Q1：XDP 和 DPDK 都绕过内核，区别是什么？</strong><br>
+XDP 不绕过内核——它仍在内核态、用内核驱动收包，只是把 eBPF 决策点放在协议栈之前；DPDK 是真 bypass，用 VFIO 接管网卡、用户态 PMD 轮询、零中断。XDP 安全（verifier）但弱，DPDK 自由但重。</p>
+<p><strong>Q2：AF_XDP 的零拷贝怎么做到的？</strong><br>
+umem：一块用户态申请、同时映射给内核的内存，作为 DMA 目标。包 DMA 进 umem 后，XDP 程序把描述符 enqueue 到 RX ring，用户态进程直接读 umem 对应位置，全程不拷贝数据。</p>
+<p><strong>Q3：为什么 DPDK 要绑核 100% 轮询？不能中断吗？</strong><br>
+高 pps 下中断本身是瓶颈，每包一次中断会让 CPU 全在硬中断里。PMD 轮询去掉中断、去掉上下文切换，用「一个核满载换线速」。所以 DPDK 部署要 dedicate 核并隔离。</p>
+<p><strong>Q4：XDP 程序为什么安全？</strong><br>
+eBPF verifier 在加载时静态分析：保证程序必终止（无无界循环）、所有内存访问在边界内、符合调用约定。unsafe 的程序根本 load 不进内核。代价是不能写任意逻辑。</p>
+<p><strong>Q5：要保留内核协议栈又要高吞吐，选哪个？</strong><br>
+AF_XDP。它网卡归内核管（ssh/mgmt 流量照跑），同时 XDP 把业务流量零拷贝送到用户态，兼顾吞吐和内核服务。</p>
+<p><strong>Q6：DPDK 和 RDMA 都是 kernel bypass，区别？</strong><br>
+DPDK 是「接管整个 NIC，用户态轮询 RX 环」；RDMA 是「NIC 硬件直接读写远端内存，CPU 不参与」，走 verbs API 和 RDMA 协议栈。DPDK 处理通用包，RDMA 处理内存语义的远程读写。训练里 NCCL 用 RDMA，NFV 用 DPDK。</p>
+<hr>
+<h2 id="八、总结">八、总结</h2>
+<p>把三条路径放在一条光谱上：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">      内核参与多 ◀─────────────────────────────▶ 内核参与少</span><br><span class="line">┌─────────────┬──────────────┬─────────────┐</span><br><span class="line">│   XDP        │   AF_XDP      │   DPDK       │</span><br><span class="line">│ 内核态 eBPF  │ XDP→用户态   │ 纯用户态 PMD│</span><br><span class="line">│ 快丢/快转    │ 零拷贝+强逻辑│ 线速+独占网卡│</span><br><span class="line">└─────────────┴──────────────┴─────────────┘</span><br><span class="line"> 安全但弱        中庸，cloud-native 主流        最快但最重</span><br></pre></td></tr></table></figure>
+<p>记一条主线就够了：<strong>它们都是把数据面从内核协议栈解放出来，区别只在于「解放到什么程度、用什么换、付出什么代价」</strong>——XDP 前移到驱动层、AF_XDP 用 umem 送到用户态、DPDK 彻底接管网卡。掌握这条光谱，再记住「轮询 + 零拷贝 + 用户态」这三板斧的共同动机，面试就稳了。</p>
+<h2 id="参考资料">参考资料</h2>
+<ul>
+<li><a target="_blank" rel="noopener" href="https://docs.kernel.org/networking/filter.html">BPF &amp; XDP 官方文档 (kernel.org)</a></li>
+<li><a target="_blank" rel="noopener" href="https://doc.dpdk.org/">DPDK 官方文档</a></li>
+<li><a target="_blank" rel="noopener" href="https://docs.kernel.org/networking/af_xdp.html">AF_XDP 教程 (Linux kernel docs)</a></li>
+<li><a target="_blank" rel="noopener" href="https://docs.cilium.io/">Cilium BPF &amp; XDP 指南</a></li>
+<li><a target="_blank" rel="noopener" href="https://blog.cloudflare.com/">Cloudflare AF_XDP 实践</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/">http://example.com/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C/">高性能网络</a><a class="post-meta__tags" href="/tags/%E7%BD%91%E7%BB%9C/">网络</a><a class="post-meta__tags" href="/tags/XDP/">XDP</a><a class="post-meta__tags" href="/tags/DPDK/">DPDK</a><a class="post-meta__tags" href="/tags/eBPF/">eBPF</a><a class="post-meta__tags" href="/tags/Kernel-Bypass/">Kernel Bypass</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">OpenSandbox 项目学习</div></div><div class="info-2"><div class="info-item-1">OpenSandbox 项目学习 项目地址：https://github.com/opensandbox-group/OpenSandbox 官方文档：https://open-sandbox.ai 一、它是什么 一句话：OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform），提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。 为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：  隔离：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。 可编程：统一的...</div></div></div></a><a class="pagination-related" href="/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/" title="Speculator as a Service：大模型推理架构的一次“解耦”演进"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Speculator as a Service：大模型推理架构的一次“解耦”演进</div></div><div class="info-2"><div class="info-item-1"> 在当今大模型推理优化领域，推测解码（Speculative Decoding） 已成为降低推理延迟、提升吞吐的主流技术之一。然而，随着业务的发展和模型的演进，一个显著的趋势正在显现：Draft Model（草稿模型）正在变得越来越大。 这一变化引发了一系列资源分配的矛盾，也促使我们重新思考推理架构的设计。本文将探讨一种新的架构思路——将 Speculator 从 Target Model 中分离出去，构建“Speculator as a Service”。  一、矛盾：为何要将 Speculator “请”出去？ 在传统的推测式解码架构中，Draft Model 和 Target Model 通常部署在同一个推理实例甚至同一个 GPU 上。这在早期 Draft Model 极小时（如极小的 GPT 或 ngram 模型）是合理的。但现在的趋势发生了变化：  Draft Model 变大带来的收益递增：为了追求更高的接受率和更长的平均接受长度，业界倾向于使用能力更强、参数量更大的 Draft Model。 算力资源的“零和博弈”：GPU 的算力是有限的。如果 Draft Mode...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/12/04/2025-12-04-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9CInfiniBand-&-ROCE%E5%AD%A6%E4%B9%A0/" title="高性能网络InfiniBand &amp; ROCE学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/ROCE.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-12-04</div><div class="info-item-2">高性能网络InfiniBand &amp; ROCE学习</div></div><div class="info-2"><div class="info-item-1">高性能网络InfiniBand &amp; ROCE学习 第一章：导论 - 为什么标准以太网（TCP/IP）“喂不饱” GPU？: https://blog.csdn.net/qq_38334677/article/details/154359174 这篇文章的核心是解释为什么传统TCP/IP网络无法满足大规模AI训练的需求，并引入RDMA技术作为解决方案。文章逻辑清晰，层层递进： 一、核心问题：TCP/IP在AI训练中的瓶颈 1.1 AI训练对网络的极端要求  分布式训练：尤其是AllReduce操作，需要频繁同步梯度 三大核心需求：  极低延迟：GPU集群计算步伐受最慢网络节点制约 高带宽：需要匹配GPU间的高速通信（如NVLink的数百GB/s） 低CPU开销：CPU应专注于数据处理，而非网络任务    1.2 TCP/IP的根本缺陷 缺陷一：高昂的CPU开销与内核干预 123TCP/IP数据发送流程：应用数据 → 系统调用 → 用户空间到内核空间拷贝 → TCP/IP协议栈处理 → 内核到网卡驱动拷贝 → 网卡发送 性能杀手：  系统调用：用户态/内核态切换（0.5-2微...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" title="RDMA 技术栈全解——ML 系统研发面试通关"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">RDMA 技术栈全解——ML 系统研发面试通关</div></div><div class="info-2"><div class="info-item-1">RDMA 技术栈全解——ML 系统研发面试通关  本文目标：让你在面试官问&quot;你们大模型训练集群用的什么网络、为什么用 RDMA、RDMA 怎么做到零拷贝、RoCEv2 和 InfiniBand 区别、NCCL 里 RDMA 起什么作用&quot;时，能从原理到工程对答如流。 全文按&quot;为什么 → 是什么 → 怎么用 → 在 ML 系统里怎么用 → 面试问答&quot;组织。   一、为什么需要 RDMA：传统网络栈的瓶颈 先看传统 TCP/IP 协议栈一次发送数据的完整路径（以应用 A 发数据到应用 B 为例）：  A 应用调用 send()，数据从用户态缓冲区通过 copy_to_user-like 的拷贝进入内核态 socket buffer（第一次拷贝）。 协议栈（TCP/IP）逐层封装报文头，经过内核协议栈处理。 数据通过 DMA 从内核缓冲区拷到网卡（NIC）的发送环（第二次拷贝）。 网卡把数据发到网线上。 B 端网卡收到数据，DMA 拷到内核 socket buffer。 B 应用调用 recv()，数据从内核态拷回用户态（第三次拷贝）。  问题有三...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E5%86%85%E6%A0%B8%E5%8D%8F%E8%AE%AE%E6%A0%88%E4%B8%8D%E5%A4%9F%E5%BF%AB"><span class="toc-number">1.</span> <span class="toc-text">一、为什么内核协议栈不够快</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81XDP%EF%BC%9A%E5%9C%A8%E9%A9%B1%E5%8A%A8%E5%B1%82%E8%B7%91-eBPF-%E7%9A%84%E3%80%8C%E6%9C%80%E5%BF%AB%E5%86%85%E6%A0%B8%E8%B7%AF%E5%BE%84%E3%80%8D"><span class="toc-number">2.</span> <span class="toc-text">二、XDP：在驱动层跑 eBPF 的「最快内核路径」</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E6%A0%B8%E5%BF%83%E6%80%9D%E6%83%B3"><span class="toc-number">2.1.</span> <span class="toc-text">2.1 核心思想</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E6%95%B0%E6%8D%AE%E6%B5%81"><span class="toc-number">2.2.</span> <span class="toc-text">2.2 数据流</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E4%B8%89%E7%A7%8D%E8%BF%90%E8%A1%8C%E6%A8%A1%E5%BC%8F"><span class="toc-number">2.3.</span> <span class="toc-text">2.3 三种运行模式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E5%AE%89%E5%85%A8%E6%A8%A1%E5%9E%8B%EF%BC%9AeBPF-verifier"><span class="toc-number">2.4.</span> <span class="toc-text">2.4 安全模型：eBPF verifier</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E5%85%B8%E5%9E%8B%E7%94%A8%E6%B3%95"><span class="toc-number">2.5.</span> <span class="toc-text">2.5 典型用法</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81DPDK%EF%BC%9A%E5%AE%8C%E5%85%A8%E6%97%81%E8%B7%AF%E5%86%85%E6%A0%B8%E7%9A%84%E7%94%A8%E6%88%B7%E6%80%81%E5%8C%85%E5%A4%84%E7%90%86"><span class="toc-number">3.</span> <span class="toc-text">三、DPDK：完全旁路内核的用户态包处理</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E6%A0%B8%E5%BF%83%E6%80%9D%E6%83%B3"><span class="toc-number">3.1.</span> <span class="toc-text">3.1 核心思想</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E6%95%B0%E6%8D%AE%E6%B5%81"><span class="toc-number">3.2.</span> <span class="toc-text">3.2 数据流</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E5%85%B3%E9%94%AE%E5%B7%A5%E7%A8%8B%E7%BB%84%E4%BB%B6"><span class="toc-number">3.3.</span> <span class="toc-text">3.3 关键工程组件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-DPDK-%E7%9A%84%E4%BB%A3%E4%BB%B7"><span class="toc-number">3.4.</span> <span class="toc-text">3.4 DPDK 的代价</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E5%85%B8%E5%9E%8B%E7%94%A8%E6%B3%95"><span class="toc-number">3.5.</span> <span class="toc-text">3.5 典型用法</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81AF-XDP%EF%BC%9AXDP-%E4%B8%8E%E7%94%A8%E6%88%B7%E6%80%81%E7%9A%84%E3%80%8C%E4%B8%AD%E9%97%B4%E9%81%93%E8%B7%AF%E3%80%8D"><span class="toc-number">4.</span> <span class="toc-text">四、AF_XDP：XDP 与用户态的「中间道路」</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%AE%9A%E4%BD%8D%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E6%9C%89-AF-XDP"><span class="toc-number">4.1.</span> <span class="toc-text">4.1 定位：为什么要有 AF_XDP</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E6%95%B0%E6%8D%AE%E6%B5%81"><span class="toc-number">4.2.</span> <span class="toc-text">4.2 数据流</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E7%BC%96%E7%A8%8B%E6%A8%A1%E5%9E%8B"><span class="toc-number">4.3.</span> <span class="toc-text">4.3 编程模型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-UMEM%E3%80%81Fill-Ring-%E4%B8%8E-Rx-Ring%EF%BC%9A%E9%9B%B6%E6%8B%B7%E8%B4%9D%E7%9A%84%E3%80%8C%E5%BE%AA%E7%8E%AF%E5%BF%AB%E9%80%92%E6%9F%9C%E3%80%8D"><span class="toc-number">4.4.</span> <span class="toc-text">4.4 UMEM、Fill Ring 与 Rx Ring：零拷贝的「循环快递柜」</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#UMEM-%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">4.4.1.</span> <span class="toc-text">UMEM 是什么</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Fill-Ring-vs-Rx-Ring"><span class="toc-number">4.4.2.</span> <span class="toc-text">Fill Ring vs Rx Ring</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%94%B6%E5%8C%85%E5%85%A8%E6%B5%81%E7%A8%8B%EF%BC%88%E5%9B%9B%E6%AD%A5%E5%BE%AA%E7%8E%AF%EF%BC%89"><span class="toc-number">4.4.3.</span> <span class="toc-text">收包全流程（四步循环）</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-bind-%E4%B8%8E-poll-%EF%BC%9A%E8%B4%B4%E9%97%A8%E7%89%8C%E5%8F%B7%E4%B8%8E%E6%8C%89%E9%97%A8%E9%93%83%E7%AD%89%E5%BE%85"><span class="toc-number">4.5.</span> <span class="toc-text">4.5 bind() 与 poll()：贴门牌号与按门铃等待</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#bind-%EF%BC%9A%E7%BB%99%E5%A5%97%E6%8E%A5%E5%AD%97%E8%B4%B4%E9%97%A8%E7%89%8C%E5%8F%B7%EF%BC%88%E5%91%BD%E5%90%8D%E4%B8%8E%E7%BB%91%E5%AE%9A%EF%BC%89"><span class="toc-number">4.5.1.</span> <span class="toc-text">bind()：给套接字贴门牌号（命名与绑定）</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#poll-%EF%BC%9A%E7%AD%89%E9%97%A8%E9%93%83%E5%93%8D%EF%BC%88%E5%A4%9A%E8%B7%AF-I-O-%E5%A4%8D%E7%94%A8%EF%BC%89"><span class="toc-number">4.5.2.</span> <span class="toc-text">poll()：等门铃响（多路 I&#x2F;O 复用）</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-6-poll-%E5%9C%A8-AF-XDP-%E9%87%8C%E5%88%B0%E5%BA%95%E5%B9%B2%E4%BA%86%E4%BB%80%E4%B9%88%EF%BC%88%E4%B8%89%E4%BB%B6%E4%BA%8B%EF%BC%89"><span class="toc-number">4.6.</span> <span class="toc-text">4.6 poll 在 AF_XDP 里到底干了什么（三件事）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-7-epoll%EF%BC%9Apoll-%E7%9A%84%E9%AB%98%E5%B9%B6%E5%8F%91%E8%BF%9B%E5%8C%96%E7%89%88"><span class="toc-number">4.7.</span> <span class="toc-text">4.7 epoll：poll 的高并发进化版</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%8E-poll-%E7%9A%84%E6%A0%B8%E5%BF%83%E5%8C%BA%E5%88%AB"><span class="toc-number">4.7.1.</span> <span class="toc-text">与 poll 的核心区别</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%A4%E7%A7%8D%E5%B7%A5%E4%BD%9C%E6%A8%A1%E5%BC%8F%EF%BC%88epoll-%E7%8B%AC%E6%9C%89%EF%BC%89"><span class="toc-number">4.7.2.</span> <span class="toc-text">两种工作模式（epoll 独有）</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%9C%A8-AF-XDP-%E5%9C%BA%E6%99%AF%EF%BC%9A%E7%94%A8-poll-%E8%BF%98%E6%98%AF-epoll%EF%BC%9F"><span class="toc-number">4.7.3.</span> <span class="toc-text">在 AF_XDP 场景：用 poll 还是 epoll？</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-8-%E5%8F%96%E8%88%8D"><span class="toc-number">4.8.</span> <span class="toc-text">4.8 取舍</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-9-%E5%85%B8%E5%9E%8B%E7%94%A8%E6%B3%95"><span class="toc-number">4.9.</span> <span class="toc-text">4.9 典型用法</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E4%B8%89%E8%80%85%E6%A8%AA%E5%90%91%E5%AF%B9%E6%AF%94%EF%BC%88%E4%B8%80%E5%BC%A0%E8%A1%A8%E5%AE%9A%E8%B0%83%EF%BC%89"><span class="toc-number">5.</span> <span class="toc-text">五、三者横向对比（一张表定调）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%80%89%E5%9E%8B%E5%8F%A3%E8%AF%80"><span class="toc-number">5.1.</span> <span class="toc-text">选型口诀</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E4%B8%8E%E5%A4%A7%E6%A8%A1%E5%9E%8B-Infra-%E7%9A%84%E5%85%B3%E7%B3%BB%EF%BC%88%E9%9D%A2%E8%AF%95%E8%BF%9E%E6%8E%A5%E7%82%B9%EF%BC%89"><span class="toc-number">6.</span> <span class="toc-text">六、与大模型 Infra 的关系（面试连接点）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91%E9%80%9F%E7%AD%94"><span class="toc-number">7.</span> <span class="toc-text">七、面试高频速答</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%80%BB%E7%BB%93"><span class="toc-number">8.</span> <span class="toc-text">八、总结</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">9.</span> <span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mcp-sandbox-router.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="一个 MCP 沙箱路由调度框架的架构分析"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析">一个 MCP 沙箱路由调度框架的架构分析</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/firecracker-microvm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="OpenSandbox 项目学习"/></a><div class="content"><a class="title" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习">OpenSandbox 项目学习</a><time datetime="2026-08-09T16:00:00.000Z" title="发表于 2026-08-10 00:00:00">2026-08-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/31/2026-07-31-2026%E5%B9%B4%E6%98%BE%E5%8D%A1%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97-%E4%BB%8E%E6%B8%B8%E6%88%8F%E5%A4%A9%E6%A2%AF%E5%9B%BE%E5%88%B0AI%E7%AE%97%E5%8A%9B%E5%B7%85%E5%B3%B0/" title="2026年显卡全景指南：从游戏天梯图到AI算力巅峰">2026年显卡全景指南：从游戏天梯图到AI算力巅峰</a><time datetime="2026-07-30T16:00:00.000Z" title="发表于 2026-07-31 00:00:00">2026-07-31</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

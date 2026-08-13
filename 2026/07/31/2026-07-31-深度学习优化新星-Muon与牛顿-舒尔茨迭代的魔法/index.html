@@ -1,0 +1,366 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="深入浅出地拆解牛顿-舒尔茨迭代及其在 Muon 优化器中的应用，讲清动量、正交化与奇异值的来龙去脉。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法">
+<meta property="og:url" content="http://example.com/2026/07/31/2026-07-31-%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0%E4%BC%98%E5%8C%96%E6%96%B0%E6%98%9F-Muon%E4%B8%8E%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%E7%9A%84%E9%AD%94%E6%B3%95/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="深入浅出地拆解牛顿-舒尔茨迭代及其在 Muon 优化器中的应用，讲清动量、正交化与奇异值的来龙去脉。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-30T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-31T08:56:41.712Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="深度学习">
+<meta property="article:tag" content="优化器">
+<meta property="article:tag" content="Muon">
+<meta property="article:tag" content="牛顿-舒尔茨迭代">
+<meta property="article:tag" content="数学">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法",
+  "url": "http://example.com/2026/07/31/2026-07-31-%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0%E4%BC%98%E5%8C%96%E6%96%B0%E6%98%9F-Muon%E4%B8%8E%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%E7%9A%84%E9%AD%94%E6%B3%95/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-30T16:00:00.000Z",
+  "dateModified": "2026-07-31T08:56:41.712Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/31/2026-07-31-%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0%E4%BC%98%E5%8C%96%E6%96%B0%E6%98%9F-Muon%E4%B8%8E%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%E7%9A%84%E9%AD%94%E6%B3%95/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-30T16:00:00.000Z" title="发表于 2026-07-31 00:00:00">2026-07-31</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-31T08:56:41.712Z" title="更新于 2026-07-31 16:56:41">2026-07-31</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0/">深度学习</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/31/2026-07-31-%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0%E4%BC%98%E5%8C%96%E6%96%B0%E6%98%9F-Muon%E4%B8%8E%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%E7%9A%84%E9%AD%94%E6%B3%95/" data-flag-title="深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>在深度学习的世界里，优化器就是模型的“导航员”。我们熟悉 Adam、AdamW，也听说过 SGD（随机梯度下降）。但最近，一个名为 <strong>Muon</strong> 的新型优化器引起了轰动，特别是在训练大规模模型（如 LLM）和生成模型（如 GAN）时表现惊艳。</p>
+<p>Muon 的核心秘密武器不是复杂的神经网络结构，而是一个古老的数学技巧——<strong>牛顿-舒尔茨迭代</strong>。</p>
+<p>今天，我们就来拆解一下：这个牛顿-舒尔茨迭代到底是什么？Muon 是如何用它来“驯服”梯度的？以及这其中涉及到的动量、正交和奇异值到底又是什么？</p>
+</blockquote>
+<h2 id="一、什么是牛顿-舒尔茨迭代？">一、什么是牛顿-舒尔茨迭代？</h2>
+<p>简单来说，牛顿-舒尔茨迭代是一种极其高效的<strong>矩阵求逆（或近似求逆）算法</strong>。</p>
+<p>在数学上，如果你想求一个矩阵 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>A</mi></mrow><annotation encoding="application/x-tex">A</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal">A</span></span></span></span> 的逆矩阵 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>A</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup></mrow><annotation encoding="application/x-tex">A^{-1}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">−</span><span class="mord mtight">1</span></span></span></span></span></span></span></span></span></span></span></span>，通常需要做复杂的矩阵分解（如 SVD），计算量非常大。但牛顿-舒尔茨迭代提供了一个简单的迭代公式：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>X</mi><mrow><mi>k</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>X</mi><mi>k</mi></msub><mo stretchy="false">(</mo><mn>2</mn><mi>I</mi><mo>−</mo><mi>A</mi><msub><mi>X</mi><mi>k</mi></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">X_{k+1} = X_k (2I - A X_k)
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8917em;vertical-align:-0.2083em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0785em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span><span class="mbin mtight">+</span><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2083em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0785em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord">2</span><span class="mord mathnormal" style="margin-right:0.07847em;">I</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal">A</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0785em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span></span></p>
+<p>其中 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>X</mi><mi>k</mi></msub></mrow><annotation encoding="application/x-tex">X_k</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0785em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> 是我们对逆矩阵的猜测，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>I</mi></mrow><annotation encoding="application/x-tex">I</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.07847em;">I</span></span></span></span> 是单位矩阵。</p>
+<p><strong>为什么它这么好用？</strong></p>
+<ul>
+<li><strong>速度极快</strong>：它不需要复杂的分解，只需要做矩阵乘法。现代 GPU（如 NVIDIA 的架构）对矩阵乘法有着极致的优化，这使得该算法在 GPU 上跑得飞快。</li>
+<li><strong>二次收敛</strong>：这意味着每迭代一次，精度大约翻倍。通常只需要 3-5 次迭代，就能得到非常精确的结果。</li>
+</ul>
+<h2 id="二、Muon-优化器：给-SGD-装上了“稳定器”">二、Muon 优化器：给 SGD 装上了“稳定器”</h2>
+<p>Muon 优化器的本质是 <strong>SGD（随机梯度下降）+ 动量 + 牛顿-舒尔茨迭代</strong>。</p>
+<p>标准的 SGD 动量更新是这样的：</p>
+<ol>
+<li>计算当前梯度。</li>
+<li>把它加到历史动量中（惯性）。</li>
+<li>用这个动量直接去更新权重。</li>
+</ol>
+<p>但这有个问题：动量累积得多了，步子容易迈得太大，或者在某些方向上走得太偏，导致训练不稳定。</p>
+<p><strong>Muon 的做法是：</strong></p>
+<p>在用动量更新权重之前，先把这个动量矩阵扔给<strong>牛顿-舒尔茨迭代</strong>处理一下。</p>
+<blockquote>
+<p>Muon 的核心逻辑：<br>
+不要用原始的动量直接更新权重，而是用牛顿-舒尔茨迭代把动量矩阵“修正”为一个<strong>正交矩阵</strong>，然后再去更新。</p>
+</blockquote>
+<h2 id="三、为什么要“正交化”？奇异值又是啥？">三、为什么要“正交化”？奇异值又是啥？</h2>
+<p>要理解为什么 Muon 要这么做，我们需要引入两个关键概念：<strong>奇异值</strong>和<strong>正交</strong>。</p>
+<h3 id="1-奇异值：矩阵的“拉伸力”">1. 奇异值：矩阵的“拉伸力”</h3>
+<p>想象一下，你手里拿着一块橡皮泥（代表输入数据），你用一个模具（代表矩阵）去压它：</p>
+<ul>
+<li>如果模具把橡皮泥拉得很长，那个方向的奇异值就<strong>很大</strong>。</li>
+<li>如果模具把橡皮泥压得很扁，奇异值就<strong>很小</strong>。</li>
+<li>如果模具只是转动了橡皮泥，没改变形状，奇异值就是 <strong>1</strong>。</li>
+</ul>
+<p>在深度学习中，如果动量矩阵的奇异值很大，意味着更新步子太大，可能会把模型参数“崩飞”；如果奇异值太小，模型就学不动。</p>
+<h3 id="2-正交：完美的“旋转”">2. 正交：完美的“旋转”</h3>
+<p>如果一个矩阵是正交的，意味着它只会对数据进行<strong>旋转</strong>，而不会拉伸或压缩（即所有奇异值都严格等于 1）。</p>
+<p>这就好比你转动一个魔方，魔方的结构没有任何形变，只是方向变了。</p>
+<h3 id="3-牛顿-舒尔茨在这里干了什么？">3. 牛顿-舒尔茨在这里干了什么？</h3>
+<p>牛顿-舒尔茨迭代在 Muon 中的任务，就是把动量矩阵中那些乱七八糟的奇异值（有的很大，有的很小）统统<strong>修正为 1</strong>。</p>
+<ul>
+<li><strong>原始动量</strong>：可能是一个畸形的更新，步子忽大忽小。</li>
+<li><strong>经过 NS 处理</strong>：变成了一个正交矩阵，更新步子在各个方向上都长度一致，非常稳定。</li>
+</ul>
+<p>这就是为什么 Muon 即使在很大的学习率下也能稳定训练的原因——它把更新方向“掰正”了。</p>
+<h2 id="四、核心概念速查表">四、核心概念速查表</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>一句话解释</th>
+<th>在 Muon 中的作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SGD 动量</strong></td>
+<td>累积历史梯度的惯性，加速收敛</td>
+<td>捕捉梯度下降的趋势，提供更新方向</td>
+</tr>
+<tr>
+<td><strong>牛顿-舒尔茨迭代</strong></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>X</mi><mrow><mi>k</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>X</mi><mi>k</mi></msub><mo stretchy="false">(</mo><mn>2</mn><mi>I</mi><mo>−</mo><mi>A</mi><msub><mi>X</mi><mi>k</mi></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">X_{k+1}=X_k(2I-AX_k)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8917em;vertical-align:-0.2083em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0785em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span><span class="mbin mtight">+</span><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2083em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0785em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord">2</span><span class="mord mathnormal" style="margin-right:0.07847em;">I</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal">A</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0785em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span>，迭代式近似矩阵求逆</td>
+<td>以极低的计算成本正交化动量矩阵</td>
+</tr>
+<tr>
+<td><strong>奇异值</strong></td>
+<td>矩阵在各方向上的“拉伸力”大小</td>
+<td>衡量更新步子是否忽大忽小</td>
+</tr>
+<tr>
+<td><strong>正交矩阵</strong></td>
+<td>只旋转、不拉伸压缩（所有奇异值为 1）</td>
+<td>让更新步子在各个方向上长度一致</td>
+</tr>
+<tr>
+<td><strong>二次收敛</strong></td>
+<td>每次迭代精度翻倍，3-5 次即可</td>
+<td>保证正交化几乎不增加训练开销</td>
+</tr>
+</tbody>
+</table>
+<h2 id="五、总结">五、总结</h2>
+<p>Muon 优化器之所以强大，是因为它巧妙地结合了<strong>经典与现代</strong>：</p>
+<ul>
+<li>它利用 <strong>SGD 动量</strong>来捕捉梯度下降的趋势。</li>
+<li>它利用<strong>牛顿-舒尔茨迭代</strong>（一种古老的数学技巧），以极低的计算成本，将更新矩阵正交化。</li>
+</ul>
+<p>这就好比你开着一辆赛车（SGD 动量），但在车轮上装了一个极其精密的自动平衡系统（牛顿-舒尔茨迭代）。无论路面多么颠簸（梯度多么不稳定），这个系统都能瞬间修正车轮的角度，确保车子稳稳地贴地飞行。</p>
+<p>这就是数学之美在深度学习中的完美体现！</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/31/2026-07-31-%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0%E4%BC%98%E5%8C%96%E6%96%B0%E6%98%9F-Muon%E4%B8%8E%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%E7%9A%84%E9%AD%94%E6%B3%95/">http://example.com/2026/07/31/2026-07-31-%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0%E4%BC%98%E5%8C%96%E6%96%B0%E6%98%9F-Muon%E4%B8%8E%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%E7%9A%84%E9%AD%94%E6%B3%95/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0/">深度学习</a><a class="post-meta__tags" href="/tags/%E4%BC%98%E5%8C%96%E5%99%A8/">优化器</a><a class="post-meta__tags" href="/tags/Muon/">Muon</a><a class="post-meta__tags" href="/tags/%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3/">牛顿-舒尔茨迭代</a><a class="post-meta__tags" href="/tags/%E6%95%B0%E5%AD%A6/">数学</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/" title="Speculator as a Service：大模型推理架构的一次“解耦”演进"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Speculator as a Service：大模型推理架构的一次“解耦”演进</div></div><div class="info-2"><div class="info-item-1"> 在当今大模型推理优化领域，推测解码（Speculative Decoding） 已成为降低推理延迟、提升吞吐的主流技术之一。然而，随着业务的发展和模型的演进，一个显著的趋势正在显现：Draft Model（草稿模型）正在变得越来越大。 这一变化引发了一系列资源分配的矛盾，也促使我们重新思考推理架构的设计。本文将探讨一种新的架构思路——将 Speculator 从 Target Model 中分离出去，构建“Speculator as a Service”。  一、矛盾：为何要将 Speculator “请”出去？ 在传统的推测式解码架构中，Draft Model 和 Target Model 通常部署在同一个推理实例甚至同一个 GPU 上。这在早期 Draft Model 极小时（如极小的 GPT 或 ngram 模型）是合理的。但现在的趋势发生了变化：  Draft Model 变大带来的收益递增：为了追求更高的接受率和更长的平均接受长度，业界倾向于使用能力更强、参数量更大的 Draft Model。 算力资源的“零和博弈”：GPU 的算力是有限的。如果 Draft Mode...</div></div></div></a><a class="pagination-related" href="/2026/07/31/2026-07-31-2026%E5%B9%B4%E6%98%BE%E5%8D%A1%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97-%E4%BB%8E%E6%B8%B8%E6%88%8F%E5%A4%A9%E6%A2%AF%E5%9B%BE%E5%88%B0AI%E7%AE%97%E5%8A%9B%E5%B7%85%E5%B3%B0/" title="2026年显卡全景指南：从游戏天梯图到AI算力巅峰"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">2026年显卡全景指南：从游戏天梯图到AI算力巅峰</div></div><div class="info-2"><div class="info-item-1"> 在 2026 年的今天，显卡（GPU）早已不仅仅是“玩游戏”的工具。随着 AI 大模型的爆发，GPU 成为了数字时代的“核心资产”。无论你是追求 4K 光追极致体验的游戏玩家，还是在本地部署大模型的开发者，亦或是构建算力集群的企业架构师，理清当前的显卡格局都至关重要。 本文将综合 NVIDIA、AMD、Intel 三大厂商的最新产品线，从桌面消费级到数据中心计算卡，为您带来一份详尽的显卡分级指南，并深入探讨目前 AI 算力的“天花板”究竟在哪里。  一、桌面显卡分级：玩家的“天梯图” 对于绝大多数个人用户而言，桌面显卡是日常接触的核心硬件。我们将当前在售的主流型号划分为五个档位，涵盖了 NVIDIA、AMD 和 Intel 三大阵营。 1. 档位总览表    档位 定位 NVIDIA AMD Intel     旗舰级 4K 光追 / 极致发烧 RTX 5090 / 5090D RX 9070 XT —   高端级 2K/4K 高画质畅玩 RTX 5080 / 4090 RX 7900 XTX Arc B580（越级挑战）   中端级 1080P 高画质 / 2K 入门 RTX...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/09/2024-09-09-%E6%AE%8B%E5%B7%AE%E8%BF%9E%E6%8E%A5/" title="残差连接（Residual Connection）"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/%E6%AE%8B%E5%B7%AE%E8%BF%9E%E6%8E%A5.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-09</div><div class="info-item-2">残差连接（Residual Connection）</div></div><div class="info-2"><div class="info-item-1">残差连接（Residual Connection） 【深度学习 | ResNet核心思想】残差连接 &amp; 跳跃连接：让信息自由流动的神奇之道-CSDN博客  背景： 在深度神经网络中，随着层数的增加，网络的性能在一定程度上会提高（网格退化 Degradation）。然而，深度网络的训练也面临着一些挑战，其中之一是梯度消失或梯度爆炸的问题。当反向传播过程中的梯度变得非常小或非常大时，网络的参数更新会受到影响，导致训练变得困难。 梯度消失和梯度爆炸： 概念： 梯度消失：在深层网络中，梯度需要通过多个层次进行反向传播。根据链式法则，梯度在传播过程中会不断相乘，当层数较多时，梯度值可能会以指数形式衰减并趋近于零，导致梯度消失。 梯度爆炸：深层网络中的梯度在传播过程中也可能因链式法则的连乘效应而迅速增长，甚至呈指数级增长，导致网络参数更新过大，网络不稳定。 为什么会梯度消失： 在使用激活函数为Sigmoid或Tanh等饱和激活函数时，因为这些函数在输入较大或较小的情况下会饱和并导致梯度变得非常小。当输入接近1时，Sigmoid函数的输出值会接近于1，导数趋近于0。于是在反向传播过程中...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%BB%80%E4%B9%88%E6%98%AF%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%EF%BC%9F"><span class="toc-number">1.</span> <span class="toc-text">一、什么是牛顿-舒尔茨迭代？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Muon-%E4%BC%98%E5%8C%96%E5%99%A8%EF%BC%9A%E7%BB%99-SGD-%E8%A3%85%E4%B8%8A%E4%BA%86%E2%80%9C%E7%A8%B3%E5%AE%9A%E5%99%A8%E2%80%9D"><span class="toc-number">2.</span> <span class="toc-text">二、Muon 优化器：给 SGD 装上了“稳定器”</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E2%80%9C%E6%AD%A3%E4%BA%A4%E5%8C%96%E2%80%9D%EF%BC%9F%E5%A5%87%E5%BC%82%E5%80%BC%E5%8F%88%E6%98%AF%E5%95%A5%EF%BC%9F"><span class="toc-number">3.</span> <span class="toc-text">三、为什么要“正交化”？奇异值又是啥？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%A5%87%E5%BC%82%E5%80%BC%EF%BC%9A%E7%9F%A9%E9%98%B5%E7%9A%84%E2%80%9C%E6%8B%89%E4%BC%B8%E5%8A%9B%E2%80%9D"><span class="toc-number">3.1.</span> <span class="toc-text">1. 奇异值：矩阵的“拉伸力”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E6%AD%A3%E4%BA%A4%EF%BC%9A%E5%AE%8C%E7%BE%8E%E7%9A%84%E2%80%9C%E6%97%8B%E8%BD%AC%E2%80%9D"><span class="toc-number">3.2.</span> <span class="toc-text">2. 正交：完美的“旋转”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E5%9C%A8%E8%BF%99%E9%87%8C%E5%B9%B2%E4%BA%86%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-number">3.3.</span> <span class="toc-text">3. 牛顿-舒尔茨在这里干了什么？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%A0%B8%E5%BF%83%E6%A6%82%E5%BF%B5%E9%80%9F%E6%9F%A5%E8%A1%A8"><span class="toc-number">4.</span> <span class="toc-text">四、核心概念速查表</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E6%80%BB%E7%BB%93"><span class="toc-number">5.</span> <span class="toc-text">五、总结</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mcp-sandbox-router.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="一个 MCP 沙箱路由调度框架的架构分析"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析">一个 MCP 沙箱路由调度框架的架构分析</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/firecracker-microvm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="OpenSandbox 项目学习"/></a><div class="content"><a class="title" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习">OpenSandbox 项目学习</a><time datetime="2026-08-09T16:00:00.000Z" title="发表于 2026-08-10 00:00:00">2026-08-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/31/2026-07-31-2026%E5%B9%B4%E6%98%BE%E5%8D%A1%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97-%E4%BB%8E%E6%B8%B8%E6%88%8F%E5%A4%A9%E6%A2%AF%E5%9B%BE%E5%88%B0AI%E7%AE%97%E5%8A%9B%E5%B7%85%E5%B3%B0/" title="2026年显卡全景指南：从游戏天梯图到AI算力巅峰">2026年显卡全景指南：从游戏天梯图到AI算力巅峰</a><time datetime="2026-07-30T16:00:00.000Z" title="发表于 2026-07-31 00:00:00">2026-07-31</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

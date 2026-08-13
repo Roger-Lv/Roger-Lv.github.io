@@ -1,0 +1,519 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>一个 MCP 沙箱路由调度框架的架构分析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="本文拆解一个面向 MCP 的 Go 沙箱路由与调度框架,从引擎抽象、确定性调度、二层网络高可用路由、沙箱管理器、MCP 代理与 SDK、参数渲染与密钥引用等维度分析其架构与关键代码。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="一个 MCP 沙箱路由调度框架的架构分析">
+<meta property="og:url" content="http://example.com/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="本文拆解一个面向 MCP 的 Go 沙箱路由与调度框架,从引擎抽象、确定性调度、二层网络高可用路由、沙箱管理器、MCP 代理与 SDK、参数渲染与密钥引用等维度分析其架构与关键代码。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/mcp-sandbox-router.png">
+<meta property="article:published_time" content="2026-08-12T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-13T09:38:27.167Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="MCP">
+<meta property="article:tag" content="Go">
+<meta property="article:tag" content="Sandbox">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="调度">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/mcp-sandbox-router.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "一个 MCP 沙箱路由调度框架的架构分析",
+  "url": "http://example.com/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/",
+  "image": "http://example.com/img/cover/mcp-sandbox-router.png",
+  "datePublished": "2026-08-12T16:00:00.000Z",
+  "dateModified": "2026-08-13T09:38:27.167Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '一个 MCP 沙箱路由调度框架的架构分析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">一个 MCP 沙箱路由调度框架的架构分析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">一个 MCP 沙箱路由调度框架的架构分析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-13T09:38:27.167Z" title="更新于 2026-08-13 17:38:27">2026-08-13</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/Agent%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD/">Agent基础设施</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" data-flag-title="一个 MCP 沙箱路由调度框架的架构分析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>一个 MCP 沙箱路由调度框架的架构分析</h1>
+<p>本文分析一个用 Go 实现、面向 MCP(Model Context Protocol)的沙箱路由与调度框架。它把&quot;给 agent 起一个隔离环境跑工具&quot;这件事标准化、规模化、多引擎化。</p>
+<h2 id="一、它是什么">一、它是什么</h2>
+<p>一句话:<strong>一个面向 MCP 的沙箱路由与调度框架</strong>,用 Go 写成,直接基于官方 <code>modelcontextprotocol/go-sdk</code>,把沙箱的创建、路由、调度、生命周期、计量都做成了一套基础设施。</p>
+<p>它跟&quot;控制面 Python + 数据面 Go、协议优先的通用沙箱平台&quot;是两种不同路线:本框架<strong>全 Go</strong>、<strong>MCP 原生</strong>(直接用官方 SDK),更强调<strong>调度</strong>(快照+Epoch 的确定性调度)和<strong>路由</strong>(二层网络高可用网格)。它的&quot;沙箱&quot;抽象本质是一个 <code>http.RoundTripper</code>——工具调用就是 HTTP,没有单独的执行协议。</p>
+<p>核心能力:</p>
+<ul>
+<li><strong>沙箱路由</strong>:按沙箱类型分发、MCP 会话生命周期管理、按下游负载动态调整、二层网络高可用。</li>
+<li><strong>沙箱引擎</strong>:Echo / FileServer / Git / Process / Container / Combination,计划 VM。</li>
+<li><strong>MCP 代理</strong>:把现有 MCP 服务代理接入,统一管理调度。</li>
+</ul>
+<h2 id="二、整体架构">二、整体架构</h2>
+<p>八个二进制(build 配置里的 build 段):</p>
+<table>
+<thead>
+<tr>
+<th>二进制</th>
+<th>角色</th>
+<th>关键包</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gateway</code></td>
+<td>新入口,前置调度器选 runtime</td>
+<td><code>pkg/gateway</code></td>
+</tr>
+<tr>
+<td><code>router</code></td>
+<td>MCP 沙箱路由,二层 WS 网格</td>
+<td><code>pkg/router</code></td>
+</tr>
+<tr>
+<td><code>scheduler-server</code></td>
+<td>调度决策中心,快照+Epoch</td>
+<td><code>pkg/scheduler/server</code></td>
+</tr>
+<tr>
+<td><code>sandbox-manager</code></td>
+<td>节点级沙箱生命周期 owner</td>
+<td><code>pkg/manager</code></td>
+</tr>
+<tr>
+<td><code>sandbox-agent</code></td>
+<td>跑在沙箱内部,暴露 <code>/tools</code></td>
+<td><code>pkg/agent</code></td>
+</tr>
+<tr>
+<td><code>mcp-proxy</code></td>
+<td>把远端 MCP server 接成 router 叶子</td>
+<td><code>pkg/mcpproxy</code></td>
+</tr>
+<tr>
+<td><code>sandbox-sidecar</code></td>
+<td>Firecracker VM 内的存储挂载助手</td>
+<td><code>pkg/engine/container/sidecar</code></td>
+</tr>
+<tr>
+<td><code>runtime-sidecar</code></td>
+<td>调度器执行器 HTTP 接口(非 Go runtime 用)</td>
+<td><code>pkg/scheduler/runtime/server</code></td>
+</tr>
+</tbody>
+</table>
+<p>完整拓扑(两条接入路径 + 调度/路由/叶子/沙箱内 + 旁路组件):</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                                客户端层                                      │</span><br><span class="line">│        Go SDK (sdk/golang)              Python SDK (sdk/python)              │</span><br><span class="line">│        Streamable-HTTP /mcp + 沙箱参数头(JSON) + Mcp-Session-Id              │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────────────┘</span><br><span class="line">        │ 路径A(新)                              │ 路径B(旧)</span><br><span class="line">        ▼                                         ▼</span><br><span class="line">┌─────────────────────────────┐   ┌──────────────────────────────────────────┐</span><br><span class="line">│  gateway(无状态)            │   │  router 二层网格                          │</span><br><span class="line">│  抽 sandbox 身份            │   │  ┌──────────────────────────────────────┐ │</span><br><span class="line">│  → ScheduleOne 选 runtime   │   │  │ export 层 StatefulSet                   │ │</span><br><span class="line">│  反代(经 scheduler 隧道     │   │  │  pod-0..N 稳定DNS + Redis 共享缓存      │ │</span><br><span class="line">│   或直连)                   │   │  │  session/leaf/sandbox 三张缓存(TTL)     │ │</span><br><span class="line">└──────────┬──────────────────┘   │  └──────────────┬───────────────────────┘ │</span><br><span class="line">           │                       │  ┌──────────────▼───────────────────────┐ │</span><br><span class="line">           │                       │  │ connect 层 Deployment                │ │</span><br><span class="line">           │                       │  │  按序号拨所有 export pod(WS 隧道自愈)│ │</span><br><span class="line">           │                       │  └──────────────┬───────────────────────┘ │</span><br><span class="line">           │                       └──────────────────┼──────────────────────────┘</span><br><span class="line">           ▼                                          ▼ WS 反向隧道</span><br><span class="line">┌──────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│                      scheduler-server(调度决策中心)                          │</span><br><span class="line">│  K8s Lease 选主 ─ Leader / Follower ─ Epoch 同步(WS,最多 5 并发周期)         │</span><br><span class="line">│  快照 Snapshot(Runtimes + ProcessRuntime + ThreadRuntime 两张索引)           │</span><br><span class="line">│  调度管线: DeterministicSelector → ProcessSticky → Availability              │</span><br><span class="line">│             → Affinity → ProcessSelector   (线程级 sticky 快路径先行)        │</span><br><span class="line">│  POST /api/schedule    ANY /api/proxy/:runtime/*url(反向隧道,节点无需公网)    │</span><br><span class="line">│  runtime 主动连入 :9090/api/runtime/connect + /watch SSE 增量(30s 全量兜底) │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────────────┘</span><br><span class="line">        │ 选定 runtime(节点)                              ▲ runtime 反向拨入</span><br><span class="line">        ▼                                                  │</span><br><span class="line">┌──────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│  叶子节点(每个 = 一个 runtime):sandbox-manager                                │</span><br><span class="line">│                                                                              │</span><br><span class="line">│  装饰器栈: metering.Engine( warmpool.Wrapper( container|process|... Engine ))│</span><br><span class="line">│    ├ metering: Create/Destroy 事件 → ClickHouse(start/recycle)              │</span><br><span class="line">│    └ warmpool: 预热池 N 个热沙箱 → Activate() 毫秒接管,不计入 Weight          │</span><br><span class="line">│                                                                              │</span><br><span class="line">│  /mcp MCP server ─ 会话↔沙箱绑定 ─ SandboxLock(引用计数,过期销毁)           │</span><br><span class="line">│     工具 = 经沙箱 RoundTripper GET http://sandbox.local/tools                │</span><br><span class="line">│  sraUploadWeight 每 1s → scheduler SetIdleWeight(富余容量)                   │</span><br><span class="line">│  AddProcess / AddThread → scheduler(会话生命周期上报)                         │</span><br><span class="line">└───────────────────────────────────────┬──────────────────────────────────────┘</span><br><span class="line">                                        │ RoundTripper(沙箱 = http.RoundTripper)</span><br><span class="line">                                        ▼</span><br><span class="line">┌──────────────────────────────────────────────────────────────────────────────┐</span><br><span class="line">│  沙箱内部:container / process / firecracker-microVM                          │</span><br><span class="line">│  sandbox-agent(/tools, /tools/:tool)                                        │</span><br><span class="line">│     directLauncher(冷启) | warmupLauncher(热启: /warmup/status, /warmup/active)│</span><br><span class="line">│     toolmanager: config | mcp | filesystem | git | skills                    │</span><br><span class="line">│     MCP 连接池(64, ping 健康检查) → 外部 MCP server(command/sse/streamable)  │</span><br><span class="line">│  [Firecracker] sandbox-sidecar(1391, 存储挂载 direct/pre/active/unmount)     │</span><br><span class="line">│  [runtime-sidecar] 非 Go 执行器 HTTP 封装(AddProcess/...)                    │</span><br><span class="line">└──────────────────────────────────────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">旁路组件:</span><br><span class="line">  mcp-proxy   : 远端 MCP server → 接成 router 叶子(无状态前门,会话可漫游 &quot;*&quot;)</span><br><span class="line">  ClickHouse  : 计量事件(start/recycle, tenant/user)</span><br><span class="line">  Redis       : router 路由缓存(多副本 export 共享,任一 pod 服务任一会话)</span><br><span class="line">  K8s Lease   : scheduler 选主(失主/换主 os.Exit 重起)</span><br></pre></td></tr></table></figure>
+<p><code>pkg</code> 下约 244 个 Go 文件,最大的是 <code>engine</code>(约 111)和 <code>agent</code>(约 43)。关键依赖很说明问题:<code>modelcontextprotocol/go-sdk</code>(MCP 官方 SDK)、<code>gin</code>、<code>gorilla/websocket</code>、<code>ttlcache</code>、<code>miekg/dns</code>、<code>redis</code>、<code>ClickHouse</code>(计量)、<code>netlink/netns</code>(沙箱网络)、<code>sprig</code>(参数模板)、<code>jsonschema-go</code>(工具 schema)、<code>spf13/afero</code>(虚拟 FS)、<code>k8s/client-go</code>(Lease 选主),外加若干内部公共库(日志、反向代理隧道等)。</p>
+<h2 id="三、核心抽象-Engine-Sandbox-装饰器">三、核心抽象:Engine / Sandbox / 装饰器</h2>
+<p>整个框架的脊梁是两个接口,极其简洁(<code>pkg/engine/</code>):</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// engines.go</span></span><br><span class="line"><span class="keyword">type</span> Engine <span class="keyword">interface</span> &#123;</span><br><span class="line">    Init(ctx context.Context) <span class="type">error</span></span><br><span class="line">    List() ([]SandboxInfo, <span class="type">error</span>)</span><br><span class="line">    Get(id <span class="type">string</span>) (Sandbox, <span class="type">error</span>)</span><br><span class="line">    Create(id <span class="type">string</span>, params <span class="keyword">map</span>[<span class="type">string</span>]<span class="type">string</span>) (Sandbox, <span class="type">error</span>)</span><br><span class="line">    Destroy(id <span class="type">string</span>) (Sandbox, <span class="type">error</span>)</span><br><span class="line">    SandboxDestroyed(sandbox Sandbox) <span class="type">bool</span></span><br><span class="line">    Weight() WeightInfo</span><br><span class="line">    GetSupportedClasses() []<span class="type">string</span></span><br><span class="line">    GetLimit() <span class="type">int</span></span><br><span class="line">    Wait()</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// sandbox.go</span></span><br><span class="line"><span class="keyword">type</span> Sandbox <span class="keyword">interface</span> &#123;</span><br><span class="line">    ID() <span class="type">string</span></span><br><span class="line">    Info() SandboxInfo</span><br><span class="line">    Refresh(ctx context.Context) <span class="type">error</span></span><br><span class="line">    WaitForReady(ctx context.Context) <span class="type">error</span></span><br><span class="line">    http.RoundTripper          <span class="comment">// ← 关键:沙箱就是一个 RoundTripper</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>最妙的一笔是 <code>Sandbox</code> 嵌入了 <code>http.RoundTripper</code></strong>。意味着&quot;在沙箱里跑工具&quot;= “往这个 sandbox stamp 一个 header 后发 HTTP 请求”。没有单独的 exec API、没有 RPC,工具调用统一是 HTTP。<code>generic.LocalServer</code> 给每个沙箱起一张 gin 路由表(<code>/tools</code>、<code>/tools/:tool</code>),<code>RoundTrip</code> 在请求上盖个沙箱 ID header 路由到对应沙箱的本地 server。</p>
+<p><strong>装饰器链</strong>:<code>EngineDecorator</code> 包裹一个 Engine 形成新 Engine。<code>pkg/manager/manager.go:88-105</code> 启动时把引擎包成:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">metering.Engine( warmpool.Wrapper( container.Engine(...) ) )</span><br></pre></td></tr></table></figure>
+<p>warmpool 在内层(管预热),metering 在外层(记生命周期事件)。横切关注点(计量、预热)和具体隔离实现(容器/进程/git)正交解耦,很干净。</p>
+<p><strong>注册</strong>:<code>engines.go</code> 的 <code>supportedEngines map[string]EngineCreator</code>,各引擎包 <code>init()</code> 自注册。container 包一口气注册三个 kind:<code>container</code>、<code>docker</code>、<code>firecracker</code>(后者注入 <code>--command=ctr --runtime=aws.firecracker</code>)。选引擎就是 <code>CreateEngine(kind, class, opts, args...)</code> 查表 + 套装饰器。</p>
+<h2 id="四、沙箱引擎全家桶">四、沙箱引擎全家桶</h2>
+<p>所有引擎 embed <code>generic.GenericEngine[S]</code>(<code>generic/engine.go</code>),它把生命周期拆成可覆盖的 hook(<code>SandboxNewE</code>/<code>SandboxStartE</code>/<code>SandboxStopE</code>/<code>SandboxDeleteE</code>),<code>Create</code> 校验 <code>params[&quot;class&quot;]</code> 是否在 <code>SupportedClasses</code> 里,<code>Destroy</code> 优先用 <code>SandboxDeleteE</code> 否则 stop+delete。<code>Weight() = Limit - len(Sandboxes)</code>。</p>
+<p>逐个看:</p>
+<ul>
+<li><strong>echo</strong>(<code>pkg/engine/echo</code>):一个 <code>/echo</code> 路由写 <code>&quot;Hello World!&quot;</code>,无隔离,测试用。</li>
+<li><strong>fileserver</strong>(<code>pkg/engine/fileserver</code> + <code>pkg/utils/fileserver</code>):基于 <code>afero</code>(OsFs + BasePathFs + CacheOnReadFs)的文件服务器,<code>ServeHTTP</code> 提供 GET/PUT/POST/DELETE,读时按 <code>sabhiram/go-gitignore</code> 过滤。选项 <code>workdir/mode(web)/readonly/write_echo</code>。还 shell out <code>zip</code> 提供 <code>/zip</code>。工具是 MCP <code>filesystem</code> 工具集。</li>
+<li><strong>git</strong>(<code>pkg/engine/git</code>):全部 <code>exec.CommandContext(git, args)</code> 走 git CLI(不是纯 Go 库)。工具集(<code>pkg/agent/toolmanager/examples/git/executable.go</code>)暴露只读(status/diff/log/show/current_branch)+ 写(commit/add/reset 软/混合/硬=回滚/create_branch/checkout_branch/checkout_files=恢复/init/config)。还有 <code>/git/archive</code>、<code>/git/bundle</code>。</li>
+<li><strong>process</strong>(<code>pkg/engine/process</code>):起一个 OS 子进程跑 <code>sandbox-agent</code>,用 <strong>unix socket</strong>(<code>sandbox-agent.sock</code>)当 HTTP 传输层,<code>RoundTrip</code> 把 host 改写成 <code>sandbox.local</code>。<code>stop()</code> 杀进程,delete 异步重试到确认死。</li>
+<li><strong>container</strong>(<code>pkg/engine/container</code>):核心引擎。runtime 抽象成 <code>runtime.Runtime</code> 接口,两个实现:
+<ul>
+<li><code>DockerRuntime</code>:<code>docker run --rm --name ... -v --mount -p hostport:8080 -e --cpus --memory --network --runtime --dns --privileged</code> 全是 CLI shell-out,<code>docker inspect/port/ps/stop/rm</code>。</li>
+<li><code>FirecrackerRuntime</code>:用 <code>ctr</code> + <code>nerdctl</code>,namespace 形如 <code>sandbox-firecracker</code>,runtime <code>aws.firecracker</code>——<strong>这就是 README 里&quot;计划 VM&quot;的当前实现</strong>:在 Firecracker microVM 里跑容器。无 host port 映射,sandbox + sidecars 共用一个 microVM。</li>
+<li>hooks:<code>NewImageHook</code>(docker build 建镜像)、<code>NewStorageHook</code>(workdir 挂载)、<code>NewNetworkHook</code>(DNS + iptables/tc 出站策略)、<code>NewWarmupHook</code>。container 是唯一实现 <code>ActivatableEngine</code> 的引擎(给 warmpool 用)。</li>
+</ul>
+</li>
+<li><strong>combination</strong>(<code>pkg/engine/combination</code>):<strong>组合的不是引擎,是外部 MCP 后端</strong>。YAML 配置一组 <code>SandboxBackend&#123;Address, Headers, Prefix, ToolRename, HideTools, CacheTools, Params, Reroutes&#125;</code>,每个 backend 拨一个远端 MCP agent,列出它的工具,按规则重命名/隐藏/加前缀,合并成一个工具命名空间;HTTP <code>Reroutes</code>(<code>&quot;/api&quot;→&quot;/v1&quot;</code>)用 <code>httputil.ReverseProxy</code> 转发到对应 backend。<code>Params</code> 是对用户参数跑 Go template。每分钟热重载配置。</li>
+<li><strong>reverseproxy</strong>(<code>pkg/engine/reverseproxy</code>):不是完整沙箱,而是把&quot;反向拨进 router 本身&quot;的客户端当成沙箱。<code>GET /:id</code> 盖沙箱 ID header 后用 dialer 转发,客户端连着就算 online,断了 offline。</li>
+<li><strong>warmpool</strong>(<code>pkg/engine/warmpool</code>):装饰器,<code>WarmPoolSize&lt;=0</code> 时 no-op。包一个 <code>ActivatableEngine</code>,用 <code>pool.ObjectPool</code> 保持 N 个预热好的沙箱(<code>params[&quot;warm&quot;]=&quot;true&quot;</code> + 随机 localID,<code>WaitForReady</code> 通过才入池,1s ticker + Get 触发补充)。<code>Create</code> 弹一个预热沙箱,调 <code>Activate(localID, &#123;UserSandboxID: id, Params&#125;)</code>——把用户 ID 接到已热的沙箱上;失败就销毁预热沙箱退回直接建。<strong>关键:预热沙箱不计入 Weight 容量</strong>,所以节点能立刻对外广告富余容量。</li>
+<li><strong>metering</strong>(<code>pkg/engine/metering</code>):装饰器,拦截 <code>Create</code>/<code>Destroy</code> 发 <code>Event&#123;start|recycle, timestamp, sandbox_id, class, client_id, tenant_id, user_id, reason&#125;</code> 到 ClickHouse MergeTree 表(<code>clickhouse-go/v2</code> driver),destroy 前记 tenant/user meta。</li>
+</ul>
+<h2 id="五、调度器-快照-Epoch-的确定性调度">五、调度器:快照 + Epoch 的确定性调度</h2>
+<p>这是我认为全项目设计最考究的部分。调度架构文档很完整,核心是<strong>快照驱动的确定性调度</strong>。</p>
+<h3 id="5-1-核心抽象-pkg-scheduler-types-go">5.1 核心抽象(<code>pkg/scheduler/types.go</code>)</h3>
+<ul>
+<li><strong>Runtime</strong>:执行节点(ID + Class + Metadata + IdleWeight 容量权重)。</li>
+<li><strong>Process</strong>:Runtime 上的逻辑实例(如一个沙箱)。<strong>同一 processID 必须落在同一 runtime(sticky)</strong>。</li>
+<li><strong>Thread</strong>:process 下最小调度单元(如一次 MCP 请求/session),全局唯一。</li>
+<li><strong>Snapshot</strong>:所有 Runtime + <code>ProcessRuntime</code>(process→runtime 列表)+ <code>ThreadRuntime</code>(&quot;pid/tid&quot;→runtime)两张索引。</li>
+<li><strong>Epoch</strong>:Leader 产出的带版本号 Snapshot,全集群一致。</li>
+</ul>
+<h3 id="5-2-调度管线-pkg-scheduler-pipeline-go-server-server-go-DefaultPipeline">5.2 调度管线(<code>pkg/scheduler/pipeline.go</code> + <code>server/server.go:DefaultPipeline</code>)</h3>
+<p><code>SchedulePipeline</code> = <code>[]Filter</code> + <code>Selector</code>,顺序跑 Filter 收窄候选,Selector 选一个。默认链:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">DeterministicSelector → ProcessStickyFilter → AvailabilityFilter → AffinityFilter → ProcessSelectorFilter</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>ProcessStickyFilter</strong>:<code>req.Sticky</code> 且 process 已在某 runtime,只保留那个。</li>
+<li><strong>AvailabilityFilter</strong>:留 <code>Available</code> 且各维 <code>IdleWeight&gt;0</code> 的;<strong>饱和 runtime 若已持有该 process 仍放行</strong>。</li>
+<li><strong>AffinityFilter</strong>:<code>equal/not_equal/exists/latest_version</code>(semver 比较)串行 AND。</li>
+<li><strong>ProcessSelectorFilter</strong>:已持有 process 的 runtime 要满足 <code>thread.ProcessSelector ⊆ ProcessSnapshot.Metadata</code>。</li>
+<li><strong>DeterministicSelector</strong>:按 <code>SortBy</code> 排序、把已持 process 的前置、截断 <code>ReplicasLimit</code>、配了 <code>ChooseWeightBy</code> 就加权随机,否则<strong>对 thread ID 做确定性 hash</strong>(<code>seed = seed*131 + r</code>)——同一 thread 在同一 snapshot 内必落同一 runtime。</li>
+</ul>
+<p><code>Schedule()</code> 在管线前还有个<strong>线程级 sticky 快路径</strong>:<code>ThreadRuntime[&quot;pid/tid&quot;]</code> 命中且可用就直接返回。注意:<strong>没有调度队列</strong>,候选来自 <code>snapshot.Runtimes[class]</code>,分配记录就是 <code>ThreadRuntime</code> 那张 map——典型的快照索引驱动,不是排队驱动。</p>
+<h3 id="5-3-选主与-Epoch-同步-pkg-scheduler-epoch-go-server-go">5.3 选主与 Epoch 同步(<code>pkg/scheduler/epoch.go</code> + <code>server.go</code>)</h3>
+<ul>
+<li><strong>选主</strong>:K8s <code>coordination.k8s.io/v1</code> Lease。<code>OnStartedLeading→RunLeader</code>;失主或换主直接 <code>os.Exit(0)</code> 靠 restartPolicy 重起。</li>
+<li><strong>Epoch 同步</strong>:Leader↔Follower WebSocket,消息 <code>announce/collect/commit/error</code>。1s ticker + Emit 触发周期,每周期 5s 超时,<strong>最多 5 个并发周期</strong>(慢 follower 不阻塞),<code>MergeSnapshots</code> 合并,只留最近 5 个 epoch。Follower 有本地 epoch 快照就能本地调度,否则转发给 Leader——这就是 HA 降级。</li>
+</ul>
+<h3 id="5-4-反向隧道-SSE-增量-pkg-scheduler-runtime-runtime-go">5.4 反向隧道 + SSE 增量(<code>pkg/scheduler/runtime/runtime.go</code>)</h3>
+<p>Runtime(Sidecar)嵌在 sandbox-manager 节点里。它<strong>不暴露公网地址</strong>,而是主动经反向代理隧道库连到 Scheduler 的 <code>:9090/api/runtime/connect</code>(带 <code>X-Runtime-Info</code>),建立反向隧道;Scheduler 通过隧道去拨 Runtime 的 <code>/watch</code> SSE。Runtime 累积 <code>pendingDelta</code>,SSE 推增量(add-then-remove 互相抵消),<strong>每 30s 心跳推一次全量快照</strong>兜底。重连指数退避。</p>
+<h3 id="5-5-HTTP-API-server-go-serveHTTP">5.5 HTTP API(<code>server.go:serveHTTP</code>)</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">GET  /api/sync/:id            Follower WS 同步</span><br><span class="line">GET  /api/epoch                当前 epoch id</span><br><span class="line">GET  /api/epoch/:id/snapshot   epoch 快照</span><br><span class="line">POST /api/schedule             调度</span><br><span class="line">GET  /api/runtime/:id          runtime 信息</span><br><span class="line">ANY  /api/proxy/:runtime/*url  反向代理到 runtime(经隧道)</span><br><span class="line">GET/POST/DELETE /api/cache/:key  分布式缓存(TTLCache 900s)</span><br></pre></td></tr></table></figure>
+<p><code>/api/proxy/:runtime/*url</code> 很关键——gateway 选定 runtime 后,通过这条隧道把请求反代到节点,节点无需公网。</p>
+<h2 id="六、路由器-二层网络高可用网格">六、路由器:二层网络高可用网格</h2>
+<p><code>router</code> 是较早的接入路径,&quot;二层网络高可用&quot;指的就是它。注意:<strong>这里没有 ARP/VIP/netns 的 L2 帧</strong>,netlink/netns 只用于沙箱容器网络(<code>pkg/utils/net.go</code>)。所谓&quot;二层&quot;是 <strong>chart 拓扑的两层 + 反向隧道的两层</strong>。</p>
+<h3 id="6-1-二层拓扑-chart-router-templates">6.1 二层拓扑(chart/router/templates)</h3>
+<ul>
+<li><strong>export 层</strong>(<code>network-statefulset.yaml</code>):<code>StatefulSet</code>,<code>podManagementPolicy: Parallel</code>,headless Service(<code>clusterIP: None</code>,<code>publishNotReadyAddresses: true</code>)→ 每个 export pod 有稳定 DNS 名 <code>&#123;release&#125;-export-&#123;i&#125;.&#123;release&#125;-headless.&#123;ns&#125;</code>。多副本时<strong>共享 Redis</strong>,路由缓存(<code>sessionLeafCache</code>/<code>sandboxLeafCache</code>)存 Redis——<strong>任一 export pod 都能服务任一 MCP 会话</strong>,这就是 HA 的基石。helper 还会 <code>fail</code> 掉&quot;多副本无 Redis&quot;的配置。就绪探针 <code>GET /healthz</code>,只有连够 <code>--expected-connectors</code> 个客户端才返回 200。</li>
+<li><strong>connect 层</strong>(<code>network-deployment.yaml</code>):无状态 <code>Deployment</code>,<strong>按序号拨所有 export pod</strong>(<code>--upstream-address=http://&#123;release&#125;-export-&#123;i&#125;.&#123;release&#125;-headless...</code>),任一 connect pod 都能到任一 export pod。<code>mode: singleton</code> 时退化为单 Deployment。</li>
+</ul>
+<h3 id="6-2-路由决策-pkg-router-schedule-go-scheduleOnce">6.2 路由决策(<code>pkg/router/schedule.go:scheduleOnce</code>)</h3>
+<p>优先级阶梯,逐级降级:</p>
+<ol>
+<li>会话路由缓存命中(<code>sessionRouteCache</code>);</li>
+<li>显式叶子(header <code>Sandbox-Manager-Id</code>);</li>
+<li>偏好叶子(<code>Prefer-Sandbox-Manager-Id</code>);</li>
+<li>会话-叶子绑定(<code>sessionLeafCache</code>,<code>&quot;*&quot;</code>=会话可漫游,给 mcp-proxy 用);</li>
+<li>任意可用缓存客户端;</li>
+<li>沙箱 ID 绑定(<code>sandboxLeafCache</code>);</li>
+<li>按 <code>class</code> 加权分配(<code>ClientsManager.Allocate</code>)。</li>
+</ol>
+<p><code>schedule</code> 每 200ms 重试。<code>handleAutoProxy</code> 把选择结果盖到隧道参数 header(反向代理参数,base64 JSON),经隧道库反代到叶子 manager 的 <code>/mcp</code>;响应头里的实际叶子 ID 回填三张缓存,holder goroutine 每分钟续 TTL。</p>
+<h3 id="6-3-负载感知与加权分配-clients-manager-go">6.3 负载感知与加权分配(<code>clients_manager.go</code>)</h3>
+<ul>
+<li><strong>负载来源</strong>:router 每 5s ticker 经隧道拨每个叶子的 <code>GET /weight</code>;叶子端(<code>pkg/manager/handlers.go:handleGetWeight</code>)报 <code>Weights&#123;Type: leaf, Weight: engine.Weight().Weight, SupportedClasses, WarmPoolSize&#125;</code>。</li>
+<li><strong>打分</strong>:<code>Allocate</code> 用 <code>RevMean</code>(叶子的各 class 权重<strong>调和平均</strong>)乘以客户端权重算分;<strong>有 <code>WarmPoolSize&gt;0</code> 且分&gt;0 的客户端优先</strong>(请求往预热好的节点送);否则按分加权随机。</li>
+<li><strong>router 自重</strong>随连接数反比:<code>1000000/(activeConnections+999)</code>,忙的 export 自重低,上游分流。</li>
+<li><strong>隧道自愈</strong>:每条上游连接以 1s 间隔重试重拨;<code>/healthz</code> 连够数才 200。客户端失活从分配池摘除。</li>
+</ul>
+<h2 id="七、网关-调度器前置入口">七、网关:调度器前置入口</h2>
+<p><code>gateway</code>(<code>pkg/gateway</code>)是更新的无状态入口,前置<strong>调度器</strong>而非 router。<code>handleAutoProxy</code> 三步:从请求抽 sandbox 身份、调 <code>scheduleManager.ScheduleOne(Sticky:true, LoadBalanceConfig)</code> 选 runtime、反代——要么经调度器隧道(<code>/api/proxy/:runtime/:url</code>),要么直连。</p>
+<p>身份抽取很灵活(<code>getInfoFromRequest</code>):<code>--class-from/--process-id-from/--thread-id-from</code> 接受 <code>default/random/mcp-session/header:/query:/path_field:</code> 等来源策略。<code>thread-id-from=mcp-session</code> 时从 <code>Mcp-Session-Id</code> 取,没有就生成 uuid 并回写期望会话 ID header。两级重试(外层 20ms→1s 退避,内层固定 50ms),TTL 缓存(scheduler 分布式缓存的前缀包装)15 分钟,holder 每分钟续。默认 <code>LoadBalanceConfig&#123;ReplicasLimit:16, SortBy:&quot;-weight&quot;, ChooseWeightBy:&quot;weight&quot;&#125;</code>。</p>
+<h2 id="八、沙箱管理器-沙箱代理-sidecar">八、沙箱管理器 + 沙箱代理 + sidecar</h2>
+<h3 id="8-1-sandbox-manager-pkg-manager">8.1 sandbox-manager(<code>pkg/manager</code>)</h3>
+<p>节点级 owner,管沙箱记录(内存 <code>Sandboxes</code> map,<strong>不用 CRD</strong>),生命周期委托给 <code>engine.Engine</code>。装饰器栈就是 <code>metering → warmpool → 具体引擎</code>。</p>
+<p>HTTP API(<code>handlers.go:registerHandlers</code>):<code>GET /weight</code>、<code>GET/POST/DELETE/POST refresh /sandboxes/:id</code>、<code>POST /sandboxes/:id/toolcall</code>、<code>ANY /sandboxes/:id/proxy/*path</code>、会话版 <code>/sessions/:session/toolcall|proxy/*path</code>、<code>ANY /mcp</code>(MCP 入口)。建沙箱路径:合并 header/query/JSON 参数 → 默认 id/class → <strong><code>RenderSandboxParams</code> 模板渲染</strong> → <code>engine.Create</code>;失败销毁半成品以便同 ID 重试。</p>
+<p><strong>会话↔沙箱绑定</strong>(<code>mcp.go:handleMcp</code>):<code>HTTPWriter</code> 的 <code>HeaderHandler</code> 把 <code>sessions[sessionID]=sandboxID</code>,按 <code>expire_seconds</code> 给每个沙箱加 <code>SandboxLock</code>(引用计数,过期销毁要等在用完),并向调度器 runtime 报 <code>AddProcess(sandboxId)</code> + <code>AddThread(sandboxId, sessionId)</code>。MCP server 工具来自 <code>fetchSandboxTools</code> = <code>toolmanager.Tools(ctx, sandbox)</code> = 经沙箱自己的 <code>RoundTripper</code> GET <code>http://sandbox.local/tools</code>。</p>
+<p><strong>权重上报</strong>:<code>sraUploadWeight</code> 每 1s 调 <code>engine.Weight()</code> → <code>sra.SetIdleWeight(weightMap)</code>;warm pool 不计预热沙箱,所以上报的是真实富余。</p>
+<h3 id="8-2-sandbox-agent-pkg-agent">8.2 sandbox-agent(<code>pkg/agent</code>)</h3>
+<p>跑在沙箱内部(容器镜像内或挂载为 <code>/sandbox-agent</code>)。两种启动器:<code>directLauncher</code>(冷启:立刻 activate 并服务)、<code>warmupLauncher</code>(热启:先暴露 <code>/warmup/status</code> + <code>POST /warmup/active</code>,之后全转给激活后的 router)。</p>
+<p><code>init</code>(<code>agent_init.go</code>)按 <code>params.Type</code> 建 toolmanager:<code>config</code>(声明式 script/http 工具)、<code>mcp</code>(外部 MCP server)、<code>filesystem</code>、<code>git</code>、<code>skills</code>。工具 API:<code>GET /tools</code>、<code>POST /tools/:tool</code>。</p>
+<p><strong>MCP 连接池</strong>在 <code>pkg/agent/toolmanager/examples/mcp/mcp.go</code>:<code>MCPToolManager</code> 用 <code>poolSize=64</code> 的 <code>chan *mcp.ClientSession</code>。<code>GetSession</code> 取池里 session,<strong>ping 健康检查</strong>,死掉丢弃新建,池空即时建;<code>ReturnSession</code> 满则关。<code>Call</code> 每调用借一个 session 跑 <code>sess.CallTool(ctx, &amp;mcp.CallToolParams&#123;Meta: meta, Name, Arguments&#125;)</code>,Meta 从 <code>additionalParams[&quot;_user_meta&quot;]</code> 透传。这是给&quot;沙箱内 agent 调外部 MCP server&quot;用的连接池。</p>
+<h3 id="8-3-两个-sidecar">8.3 两个 sidecar</h3>
+<ul>
+<li><strong>sandbox-sidecar</strong>(<code>pkg/engine/container/sidecar/server.go</code>):HTTP(默认 1391),暴露存储挂载 API(<code>/storage/:type/&#123;direct-mount,pre-mount,active-mount,unmount&#125;</code>、<code>/storage/hostpath/upload</code>)。<strong>只在 Firecracker VM 里注入</strong>——每个 <code>SidecarConfig</code> 变成共享 VM 的 containerd 容器,manager 端 storage manager 调它执行挂载。Docker 模式不启动它。有 IP 校验中间件拒 VM 本地 IP。</li>
+<li><strong>runtime-sidecar</strong>(<code>cmd/runtime-sidecar</code>):<strong>和沙箱容器无关</strong>,是给非 Go 的调度器执行器用的 HTTP 封装(<code>POST /AddProcess /RemoveProcess /AddThread /RemoveThread /SetIdleWeight</code>),包 <code>pkg/scheduler/runtime.Runtime</code>。</li>
+</ul>
+<p>Firecracker 部署示例(chart 里的 <code>firecracker-example.yaml</code>)把 VM 支持说得很清楚:<code>runtime.image</code> 用 firecracker-containerd 运行时镜像 + FC 命名空间/containerd sock/CNI 子网,<code>engineArgs: --privileged --mount-sandbox-agent=/opt/bin/sandbox-agent</code>,<code>sidecars</code> 里一个 <code>fc-sidecar</code>(command: <code>sandbox-sidecar</code>, privileged, hostPID),<code>className</code> 形如 <code>firecracker-sandbox</code>,<code>limit: 8</code>,<code>expireSeconds: 60</code>。</p>
+<h2 id="九、MCP-代理-SDK">九、MCP 代理 + SDK</h2>
+<h3 id="9-1-mcp-proxy-pkg-mcpproxy">9.1 mcp-proxy(<code>pkg/mcpproxy</code>)</h3>
+<p>把远端 MCP server 接成 router 的叶子。<code>httputil.NewSingleHostReverseProxy</code> 转发,<code>Director</code> 强制 <code>req.Host</code> + 注入配置 header。路由:<code>GET /weight</code>(报叶子权重 + <code>SupportedClasses</code>)、<code>/mcp</code>(改写 path 转发)、自定义 <code>ProxyLocations</code>。它<strong>无状态</strong>,MCP session 由上游 MCP server 发,自己只做&quot;带 header 注入、注册成叶子、负载均衡的前门&quot;。<code>ClientID = &quot;proxy-&quot;+uuid</code>,有 upstream 就连上游 router。</p>
+<h3 id="9-2-SDK">9.2 SDK</h3>
+<p>Go(<code>sdk/golang</code>)和 Python(<code>sdk/python</code>)。都是 Streamable-HTTP MCP 打 <code>/mcp</code>,沙箱参数塞自定义沙箱参数 header(JSON),per-request 带 <code>Mcp-Session-Id</code>。</p>
+<p>Go SDK <code>agent_http.go</code>:<code>NewSandboxAgent</code> 用 <code>mcp.StreamableClientTransport&#123;Endpoint: server+&quot;/mcp&quot;&#125;</code>,HTTPClient 套 <code>NewModifierTransport</code>:<strong>首次连接</strong>(无 session)带全参数含 <code>id</code>;<strong>后续</strong>(有 session)带折叠参数 <code>&#123;id, class, no_create:true&#125;</code> 缩小 header。<code>CallTool</code> 默认 POST <code>&#123;server&#125;/sessions/&#123;sessionID&#125;/proxy/tools/&#123;tool&#125;</code>(带 <code>Mcp-Session-Id</code> + 用户 meta header),<code>WithRawMCP</code> 模式直连 <code>/mcp</code>。<code>sessionManager</code> 用 <code>SandboxLock</code> 串行会话,ping 失败重连。</p>
+<p>Python SDK <code>sandbox_mcp.py</code>:<code>SandboxMcpTransport(StreamableHttpTransport)</code> 合并 FastMCP headers;<code>sandbox.py</code> 同样把请求改写到 <code>&#123;server&#125;/sessions/&#123;session_id&#125;/proxy&#123;path&#125;</code>。依赖 <code>mcp&gt;=1.12.0</code>、<code>fastmcp&gt;=0.4.0</code>。</p>
+<h2 id="十、参数渲染与密钥引用">十、参数渲染与密钥引用</h2>
+<p>参数渲染与密钥引用是两个值得讲的特性。<code>pkg/utils/sandbox_params.go:RenderSandboxParams</code>:参数值含 <code>&#123;&#123;` 就用 `text/template` + `sprig.TxtFuncMap()` 渲染,数据是 `&#123;"config": configmap, "secrets": secrets&#125;`,来自两个 header:
+
+- 沙箱配置头(JSON map[string]string)→ `.config`;
+- 沙箱密钥头(JSON map[string]SecretRef)→ `.secrets`。
+
+**密钥引用**(`pkg/utils/params_render/`):`SecretProvider` 接口 `FetchSecret(ref)`,当前支持一种平台 KMS provider。其 `FetchSecret`(`agent_platform.go`):payload `AgentPlatformSecretInfo&#123;SecretId, Address, SecretData, WrappedDek, Algo, KeyVersion&#125;`,带 `Authorization: Bearer <app-jwt>` 调 `POST &#123;address&#125;/api/v2/DecryptDEK`(解包 DEK),再本地 `aesGCMOpen` AES-256-GCM 解密,反序列化成 `map[string]any`。所以真实 secret 从不进工作负载——manager 在渲染参数时解密注入,渲染后的明文只在 debug 模式时留存,正常只留含引用的 `printable_params` 给 tracer。这套是把"沙箱参数里引用平台 KMS 托管的加密字段"做得相当完整。
+
+## 十一、warmpool 如何降延迟
+
+单独拎出来讲,因为它是"通用沙箱平台"和"agent 实战"的关键桥梁。冷启一个容器沙箱要秒级(pull/build/起),agent 等不起。warmpool 的解法:
+
+1. 节点启动时 `pool.NewObjectPool(WarmPoolSize, factory, 1s)` 预建 N 个沙箱,`WaitForReady`(running + warmup probe)通过才入池;
+2. 池子 1s ticker + 每次 Get 触发补充,保持 `ready+creating ≤ capacity`;
+3. 来请求时 `acquireWarmSandbox` 弹一个热的,调 `Activate(localID, &#123;UserSandboxID: id, Params&#125;)`——把用户 ID 接到已热的沙箱上(`POST /warmup/active`),毫秒级;
+4. 激活失败就销毁热的退回直接建(优雅降级);
+5. **预热沙箱不计入 `Weight`**,节点能立刻广告富余容量,调度器把请求分过来时已经有热的等着。
+
+关键接口 `ActivatableEngine.Activate(id, ActivateParams)`,只有 container 引擎实现——因为只有容器沙箱能在"已起"和"已绑定用户"之间分离(warmup 期就起好容器、装好依赖、跑好 agent,只等绑定 workdir 和 user id)。
+
+## 十二、端到端链路实例
+
+举个具体场景把整条链路走一遍。假设一个 **Python agent** 要接一个**容器沙箱**跑 `git` 类工具,走"新路径"(gateway → scheduler)。
+
+### 12.1 场景设定
+
+- gateway 地址:`gateway.svc:8080`
+- 沙箱参数:`&#123;id: "sbx-123", class: "docker", expire_seconds: 300&#125;`
+- 参数里引用一个平台托管的密钥(`&#123;&#123; .secrets.db_token &#125;&#125;</code>)和一个配置项(<code>&#123;&#123; .config.repo &#125;&#125;</code>)</p>
+<ul>
+<li>目标工具:<code>git_clone</code>(沙箱内 sandbox-agent 经 toolmanager 暴露)</li>
+</ul>
+<p>注:沙箱的&quot;起法&quot;是一个隔离强度谱系,由 engine kind + runtime 决定,本例取 <code>docker</code> 一档为例:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">进程内 HTTP(echo/git/fileserver)  &lt;  OS 子进程(process)  &lt;  容器 docker run(container/Docker)  &lt;  Firecracker microVM(container/Firecracker)</span><br></pre></td></tr></table></figure>
+<p>不是只有 <code>docker run</code>:container 引擎内部把&quot;怎么跑&quot;抽象成 <code>runtime.Runtime</code> 接口,<code>DockerRuntime</code> 走 <code>docker run</code>,<code>FirecrackerRuntime</code> 走 <code>ctr</code>/<code>nerdctl</code> 在 Firecracker microVM 里起容器(namespace <code>sandbox-firecracker</code>、runtime <code>aws.firecracker</code>、无 host port 映射、靠 <code>sandbox-sidecar</code> 做 VM 内存储挂载);更轻的 <code>process</code> 引擎干脆不起容器/VM,只起 OS 子进程 + unix socket。预热池对 Docker 和 Firecracker 都适用(container 是唯一实现 <code>ActivatableEngine</code> 的引擎,可预建一批 microVM 等着接管)。本文链路里的 <code>engine.Create</code> / <code>warmpool 弹热沙箱</code> / <code>RoundTrip</code> 转发对各档都成立,差别只在底层是 <code>docker run</code>、<code>ctr</code> 起 microVM、还是子进程 + unix socket。</p>
+<h3 id="12-2-端到端时序-带具体值与-header">12.2 端到端时序(带具体值与 header)</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br></pre></td><td class="code"><pre><span class="line">[1] 首次连接(建会话 + 建沙箱)</span><br><span class="line">agent(Python SDK)</span><br><span class="line">  │  POST gateway/mcp</span><br><span class="line">  │  headers: Mcp-Session-Id: &lt;new&gt;            (SDK 生成)</span><br><span class="line">  │           沙箱参数头: &#123;&quot;id&quot;:&quot;sbx-123&quot;,&quot;class&quot;:&quot;docker&quot;,&quot;expire_seconds&quot;:300&#125;</span><br><span class="line">  │           沙箱配置头: &#123;&quot;repo&quot;:&quot;https://...&quot;&#125;</span><br><span class="line">  │           沙箱密钥头: &#123;&quot;db_token&quot;: &#123;provider:&quot;agent-platform&quot;, secret_id:&quot;S42&quot;, address:&quot;kms.svc&quot;&#125;&#125;</span><br><span class="line">  ▼</span><br><span class="line">gateway.handleAutoProxy</span><br><span class="line">  │  抽:processID=sbx-123, class=docker, threadID=&lt;new&gt;</span><br><span class="line">  │  查 threadCache/processCache → 未命中</span><br><span class="line">  │  → scheduleManager.ScheduleOne(Sticky:true, LoadBalanceConfig)</span><br><span class="line">  ▼</span><br><span class="line">scheduler-server /api/schedule</span><br><span class="line">  │  快路径 ThreadRuntime[&quot;sbx-123/&lt;new&gt;&quot;] → 未命中</span><br><span class="line">  │  管线:</span><br><span class="line">  │    ProcessStickyFilter   → 首次无绑定,全候选</span><br><span class="line">  │    AvailabilityFilter    → 留 IdleWeight 富余的节点(预热沙箱不计容量,热节点富余多)</span><br><span class="line">  │    AffinityFilter        → 按 class=docker 等约束收窄</span><br><span class="line">  │    DeterministicSelector → 按 -weight 排序 + threadID 确定性 hash → 选定节点 X</span><br><span class="line">  ▼</span><br><span class="line">gateway 反代: ANY /api/proxy/&#123;nodeX&#125;/mcp  (经反向隧道,节点 X 无需公网)</span><br><span class="line">  ▼</span><br><span class="line">sandbox-manager@nodeX  /mcp  (handleMcp)</span><br><span class="line">  │  a. RenderSandboxParams:把 &#123;&#123;.config.repo&#125;&#125;、&#123;&#123;.secrets.db_token&#125;&#125; 渲染掉</span><br><span class="line">  │       → 密钥:调 KMS DecryptDEK(wrapped_dek) 拿 DEK,本地 AES-256-GCM 解密出明文 token</span><br><span class="line">  │       → 明文只注入到给沙箱的参数,不落盘(printable_params 只留引用)</span><br><span class="line">  │  b. 会话绑定 sessions[&lt;new&gt;]=sbx-123 + SandboxLock(引用计数,300s 过期)</span><br><span class="line">  │  c. 沙箱不存在 → engine.Create(&quot;sbx-123&quot;, params):</span><br><span class="line">  │       warmpool 弹一个预热好的容器沙箱(已起好容器+agent,只差绑 workdir/userid)</span><br><span class="line">  │       → Activate(localID, &#123;UserSandboxID:&quot;sbx-123&quot;, Params&#125;)</span><br><span class="line">  │       → POST /warmup/active 给沙箱内 agent,毫秒级接管</span><br><span class="line">  │       (没热的就 docker run 新建,WaitForReady)</span><br><span class="line">  │  d. 向 scheduler 上报: AddProcess(&quot;sbx-123&quot;) + AddThread(&quot;sbx-123&quot;, &lt;new&gt;)</span><br><span class="line">  │       → SSE 增量推给 scheduler,写进下个 Epoch 快照(以后同 sandbox/thread 自动 sticky 到 X)</span><br><span class="line">  │  e. 注册工具:经沙箱 RoundTripper GET http://sandbox.local/tools → [git_clone, ...]</span><br><span class="line">  ▼</span><br><span class="line">sandbox-agent(容器内)  /tools</span><br><span class="line">  │  toolmanager 建 git 类(ExecutableGitToolManager)</span><br><span class="line">  │  返回工具列表</span><br><span class="line">  ▼</span><br><span class="line">响应回流: MCP initialize + tools/list,带 Mcp-Session-Id: &lt;new&gt;(后续复用)</span><br><span class="line">  ▼</span><br><span class="line">agent 拿到会话 ID</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">[2] 后续工具调用(复用会话,折叠参数)</span><br><span class="line">agent</span><br><span class="line">  │  POST gateway/sessions/&lt;new&gt;/proxy/tools/git_clone</span><br><span class="line">  │  headers: Mcp-Session-Id: &lt;new&gt;</span><br><span class="line">  │           沙箱参数头(折叠): &#123;&quot;id&quot;:&quot;sbx-123&quot;,&quot;class&quot;:&quot;docker&quot;,&quot;no_create&quot;:true&#125;  ← header 变小</span><br><span class="line">  │           用户 meta 头: &#123;&quot;user&quot;:&quot;alice&quot;&#125;</span><br><span class="line">  ▼</span><br><span class="line">gateway → threadCache 命中(&lt;new&gt; → nodeX)→ 直接反代(不再调度)</span><br><span class="line">  ▼</span><br><span class="line">sandbox-manager@nodeX</span><br><span class="line">  │  会话→沙箱映射命中 sbx-123,经沙箱 RoundTripper</span><br><span class="line">  │  POST http://sandbox.local/tools/git_clone  (带用户 meta 头)</span><br><span class="line">  ▼</span><br><span class="line">sandbox-agent.HandleToolCall</span><br><span class="line">  │  ToolManager → invokeApprover(白名单/禁用 gate)</span><br><span class="line">  │  → ToolSource.Call(git_clone, args, meta)</span><br><span class="line">  │  → exec git clone ... (CLI)</span><br><span class="line">  ▼</span><br><span class="line">结果回流: ToolCallResult → ToMCPCallToolResult → MCP CallToolResult(JSON)</span><br><span class="line">  ▼</span><br><span class="line">agent 拿到结果(stdout/exitcode/数据)</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">[3] 会话结束与销毁</span><br><span class="line">agent  DELETE /sessions/&lt;new&gt;  (2xx)</span><br><span class="line">  ▼</span><br><span class="line">sandbox-manager: 释放 SandboxLock + RemoveThread(&quot;sbx-123&quot;, &lt;new&gt;)</span><br><span class="line">  (沙箱本身还在,TTL 300s 内可被同/新会话复用)</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">[4] 过期回收(无人用后)</span><br><span class="line">300s 到期 → solveLockExpiration(等在用完)</span><br><span class="line">  → engine.Destroy(&quot;sbx-123&quot;)</span><br><span class="line">       metering 装饰器记 Event&#123;recycle, sandbox_id:sbx-123, tenant/user&#125; → ClickHouse</span><br><span class="line">       warmpool/容器销毁,池子补充新预热沙箱</span><br></pre></td></tr></table></figure>
+<h3 id="12-3-关键环节点睛">12.3 关键环节点睛</h3>
+<ol>
+<li><strong>为什么选到节点 X</strong>:X 装了 warmpool,预热沙箱不计入 <code>Weight</code>,所以 <code>IdleWeight</code> 富余多,<code>AvailabilityFilter</code> + <code>DeterministicSelector</code> 偏好它——这是&quot;负载感知 + 预热偏好&quot;的落点。</li>
+<li><strong>为什么第二次请求直接打到 X 不再调度</strong>:<code>AddProcess/AddThread</code> 把 <code>sbx-123</code>→X、<code>sbx-123/&lt;new&gt;</code>→X 写进了 scheduler 快照,gateway 的 <code>threadCache</code> 也缓存了 <code>&lt;new&gt;</code>→X。sticky 在调度器(guaranteed)和网关(快路径)两层都有。</li>
+<li><strong>沙箱为什么是毫秒级起来</strong>:warmpool 早就预建好了容器、装好依赖、跑好 sandbox-agent,只等 <code>Activate</code> 绑 workdir + user id。冷启的 docker run 只在池空时兜底。</li>
+<li><strong>密钥怎么不泄漏</strong>:<code>&#123;&#123; .secrets.db_token &#125;&#125;</code> 在 manager 渲染参数时才解密,DEK 走 KMS <code>DecryptDEK</code>,明文 AES-GCM 在本地解出后只塞进给沙箱的运行参数;落盘/打日志的 <code>printable_params</code> 只保留引用形式,debug 模式才留明文。</li>
+<li><strong>工具调用为什么是 HTTP</strong>:沙箱 = <code>http.RoundTripper</code>,manager 给请求盖个沙箱 ID header 后转发到沙箱内 sandbox-agent 的 <code>/tools/:tool</code>。没有单独 exec 协议,SDK/manager/agent 全用 HTTP。</li>
+<li><strong>计贯穿穿全程</strong>:Create 时记 <code>start</code>,Destroy 时记 <code>recycle</code>,都带 tenant/user/sandbox_id 进 ClickHouse——这是 metering 装饰器在 engine 栈最外层拦截到的。</li>
+</ol>
+<h3 id="12-4-路径-B-router-的差异">12.4 路径 B(router)的差异</h3>
+<p>如果走老路径(router 二层网格):SDK 打到 router export 层而非 gateway;router 不调 scheduler,而是用七级阶梯(会话缓存→显式叶子→偏好叶子→会话绑定→任意可用→沙箱 ID 绑定→class 加权)选叶子,经 WS 反向隧道到 sandbox-manager 的 <code>/mcp</code>,之后从 sandbox-manager 往下完全一样。多副本 export 时会话缓存存 Redis,任一 export pod 都能服务同一会话——这是 router 的 HA 方式,而 gateway 的 HA 靠 scheduler 集群 + 选主。</p>
+<h3 id="12-5-一句话">12.5 一句话</h3>
+<p><strong>agent 用 SDK 带 <code>id</code>+<code>class</code>+<code>Mcp-Session-Id</code> 打 gateway → scheduler 按快照确定性选个富余节点 → 经反向隧道到该节点 sandbox-manager → 渲染参数(含密钥解密)→ warmpool 弹热沙箱 Activate 接管 → 会话绑定 + 上报 scheduler(下次 sticky)→ agent 复用会话折叠参数打工具 → manager 经 RoundTripper 转到沙箱内 agent 的 <code>/tools</code> → 结果回流 → 会话结束释放锁,沙箱 TTL 到期销毁并记计量。</strong> 整条链路里&quot;建沙箱&quot;只发生一次,之后全是 HTTP 工具调用 + sticky 路由。</p>
+<h2 id="十三、读后感">十三、读后感</h2>
+<p>读完这个框架,几个设计我印象很深:</p>
+<ol>
+<li><strong><code>Sandbox = http.RoundTripper</code></strong>:一个接口把&quot;沙箱&quot;抽象到极致,工具调用统一 HTTP,没有多余协议层。优雅。</li>
+<li><strong>装饰器链</strong>:metering/warmpool 与具体引擎正交,横切关注点组合得很干净。</li>
+<li><strong>快照+Epoch 确定性调度</strong>:同一 thread 必落同一 runtime、leader/follower 降级、反向隧道节点无需公网、SSE 增量+30s 全量——这是把&quot;分布式调度&quot;做扎实了的工程。</li>
+<li><strong>router 二层网格</strong>:export StatefulSet(稳定 DNS + Redis 共享会话缓存)+ connect Deployment(拨所有 export),自愈隧道 + 调和平均加权 + 预热偏好。HA 想得很透。</li>
+<li><strong>密钥渲染</strong>:参数里 <code>&#123;&#123; .secrets.xxx &#125;&#125;</code> 引用 KMS,本地 AES-GCM 解密注入,明文不落盘——agent 场景的安全细节到位。</li>
+</ol>
+<p>它把&quot;沙箱&quot;这件历史上散落在脚本里的事,做成了可调度、可观测、可组合的基础设施:全栈 Go 工程化、MCP 原生、调度做强。对照&quot;协议优先 + 多语言 SDK + 进程级强隔离&quot;的通用沙箱平台路线,这是另一种值得借鉴的打法。</p>
+<p>后续可深挖:<code>pkg/scheduler/epoch.go</code> 的并发周期合并细节、router <code>ClientsManager.Allocate</code> 的调和平均实现、combination 的多 backend 工具合并冲突处理、Firecracker microVM 的 CNI 网络与 sidecar 挂载时序。</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li>MCP Go SDK:<code>github.com/modelcontextprotocol/go-sdk</code></li>
+<li>调度架构文档:<code>docs/scheduler-architecture.md</code></li>
+<li>接口定义:<code>pkg/engine/engines.go</code>、<code>pkg/engine/sandbox.go</code></li>
+<li>调度管线:<code>pkg/scheduler/pipeline.go</code>、<code>pkg/scheduler/server/server.go</code></li>
+<li>路由:<code>pkg/router/router.go</code>、<code>pkg/router/schedule.go</code>、<code>pkg/router/clients_manager.go</code></li>
+<li>引擎:<code>pkg/engine/&#123;engines.go, generic/, container/, warmpool/, metering/, combination/&#125;</code></li>
+<li>密钥渲染:<code>pkg/utils/&#123;sandbox_params.go, params_render/&#125;</code></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/">http://example.com/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/MCP/">MCP</a><a class="post-meta__tags" href="/tags/Go/">Go</a><a class="post-meta__tags" href="/tags/Sandbox/">Sandbox</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E8%B0%83%E5%BA%A6/">调度</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/mcp-sandbox-router.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/firecracker-microvm.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a><a class="pagination-related" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">OpenSandbox 项目学习</div></div><div class="info-2"><div class="info-item-1">OpenSandbox 项目学习 项目地址：https://github.com/opensandbox-group/OpenSandbox 官方文档：https://open-sandbox.ai 一、它是什么 一句话：OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform），提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。 为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：  隔离：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。 可编程：统一的...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-10</div><div class="info-item-2">OpenSandbox 项目学习</div></div><div class="info-2"><div class="info-item-1">OpenSandbox 项目学习 项目地址：https://github.com/opensandbox-group/OpenSandbox 官方文档：https://open-sandbox.ai 一、它是什么 一句话：OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform），提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。 为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：  隔离：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。 可编程：统一的...</div></div></div></a><a class="pagination-related" href="/2025/08/13/2025-08-13-MCP-Zero%EF%BC%9ALLM%E6%99%BA%E8%83%BD%E4%BD%93%E4%B8%BB%E5%8A%A8%E5%B7%A5%E5%85%B7%E5%8F%91%E7%8E%B0%E7%9A%84%E6%96%B0%E8%8C%83%E5%BC%8F/" title="MCP-Zero：LLM智能体主动工具发现的新范式"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-13</div><div class="info-item-2">MCP-Zero：LLM智能体主动工具发现的新范式</div></div><div class="info-2"><div class="info-item-1">MCP-Zero：LLM智能体主动工具发现的新范式 转自：https://zhuanlan.zhihu.com/p/1928760473630798292 引言 大语言模型（LLMs）在处理复杂任务时，通常需要借助外部工具来扩展其能力范围。然而，当前 LLM 智能体与工具集成的主流范式存在显著局限性：它们往往将预定义的工具模式注入到系统提示中，导致模型扮演被动选择者的角色，而非主动发现所需能力。这种方法不仅造成了巨大的上下文开销，也限制了模型的决策自主性。 为了解决这些问题，本文引入了 MCP-Zero，一个旨在恢复 LLM 智能体工具发现自主性的主动框架。MCP-Zero 的核心思想是，智能体能够主动识别自身能力差距，并按需请求特定工具，从而将自身从大规模检索器转变为真正的自主智能体。该框架通过三大核心机制运行：主动工具请求、分层语义路由和迭代能力扩展。这些机制共同作用，使得 MCP-Zero 能够在最小化上下文开销和保持高准确性的前提下，动态构建多步工具链。   图：LLM 智能体的工具选择范例比较。(a) 基于系统提示的方法将所有 MCP 工具模式注入上下文，导致提示过长，...</div></div></div></a><a class="pagination-related" href="/2025/09/03/2025-09-03-%E6%B7%B1%E5%85%A5-FastMCP-%E6%BA%90%E7%A0%81%E8%AE%A4%E8%AF%86-tool()%E3%80%81resource()-%E5%92%8C-prompt()-%E8%A3%85%E9%A5%B0%E5%99%A8/" title="深入 FastMCP 源码:认识 tool()、resource() 和 prompt() 装饰器"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/agent.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-03</div><div class="info-item-2">深入 FastMCP 源码:认识 tool()、resource() 和 prompt() 装饰器</div></div><div class="info-2"><div class="info-item-1">深入 FastMCP 源码:认识 tool()、resource() 和 prompt() 装饰器 在使用 FastMCP 开发 MCP 服务器时经常会用到 @mcp.tool() 等装饰器。虽然它们用起来很简单，但当作黑匣子总让人感觉&quot;不得劲&quot;。接下来我们将深入相关的源码实现，别担心，不会钻没有意义的“兔子洞”，你可以通过这篇文章了解到：  如何简单启动本地的 MCP Server 和 MCP Inspector 这些装饰器具体做了什么  @mcp.tool() @mcp.resource() @mcp.prompt()    MCP 官方 Python SDK 地址：https://github.com/modelcontextprotocol/python-sdk。 代码文件下载：server.py，debug_func_metadata.py 安装库 需要注意的是，Python&gt;=3.10 才可以安装 MCP： 1pip install mcp server.py 下面是一个简化的 server.py 示例： 123456789101112131...</div></div></div></a><a class="pagination-related" href="/2025/09/04/2025-09-04-ICML25-%E5%8D%A1%E5%86%85%E5%9F%BA%E6%A2%85%E9%9A%86%E5%A4%A7%E5%AD%A6%E8%AE%A9Agent%E4%BB%8E%E2%80%9C%E5%A4%8D%E8%AF%BB%E6%9C%BA%E2%80%9D%E5%8F%98%E2%80%9C%E6%8E%A2%E7%B4%A2%E5%AE%B6%E2%80%9D/" title="ICML&#39;25 卡内基梅隆大学让Agent从“复读机”变“探索家”"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/agent.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-04</div><div class="info-item-2">ICML&#39;25 卡内基梅隆大学让Agent从“复读机”变“探索家”</div></div><div class="info-2"><div class="info-item-1">ICML’25 卡内基梅隆大学让Agent从“复读机”变“探索家” 一、先聊个痛点：LLM的“探索无能症” 在说PAPRIKA之前，得先搞懂一个核心问题：为什么现在的AI这么“被动”？ 我们平时用ChatGPT、文心一言，大多是“你问我答”的单轮交互——你问“北京天气”，它答“25度”；你问“怎么做番茄炒蛋”，它给步骤。但生活里很多事需要“多轮探索”：比如你丢了快递，得先问快递员“有没有派件记录”，再根据记录查“是不是送错小区”，再针对性找物业——这是一个“行动→看反馈→调整行动”的循环。 LLM在这种循环里特别笨拙，主要因为两个坎：  真实交互数据太少，还危险要教AI“探索”，得让它在真实环境里试错——比如让AI真的帮人修家电，修坏了就得赔钱；让AI玩真实游戏，输多了用户就跑了。而且真实场景的交互数据特别乱，比如用户可能说“冰箱响得像拖拉机”，AI很难从中提取关键信息。 传统训练是“死记硬背”，不会迁移。之前有研究给AI练“多臂老虎机”（类似选哪个按钮中奖率高），练得再好，换个“猜单词”任务，AI又变回原样。就像学生只会背数学题，换个物理题就懵了——它没学会“通用的探索方法”。...</div></div></div></a><a class="pagination-related" href="/2025/09/04/2025-09-04-ITBenchEvaluating-AI-Agents-across-Diverse-Real-World-IT-Automation-Tasks/" title="ITBench:Evaluating AI Agents across Diverse Real-World IT Automation Tasks"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/ITBench.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-04</div><div class="info-item-2">ITBench:Evaluating AI Agents across Diverse Real-World IT Automation Tasks</div></div><div class="info-2"><div class="info-item-1">ITBench: Evaluating AI Agents across Diverse Real-World IT Automation Tasks  1. 研究背景与核心问题 本文介绍了ITBench，一个用于评估AI代理在真实世界IT自动化任务中表现的基准测试框架。随着现代IT系统复杂性不断增长，尤其是微服务和无服务器计算架构的普及，IT可靠性挑战日益严峻。尽管大型语言模型(LLMs)和AI代理被广泛尝试应用于IT自动化领域，但其实际效能缺乏系统性评估。 研究指出，尽管在IT自动化领域已有大量研究（包括故障检测、诊断、缓解等），但&quot;完全自动化事件解决或向人类提供可行见解仍然难以实现&quot;，主要挑战在于：  真实系统的复杂性 事件的多变性 将上下文知识整合到AI系统中的困难  2. ITBench框架设计 2.1 框架定位与目标 ITBench是一个开源框架，旨在：  为研究人员和从业者提供评估AI代理在IT自动化任务中表现的标准基准 模拟真实IT环境，使代理能够与系统交互并执行任务 促进IT领域AI驱动自动化的创新，确保其&quot;正确、安全、快速&quo...</div></div></div></a><a class="pagination-related" href="/2025/08/13/Alita%20Generalist%20Agent%20Enabling%20Scalable%20Agentic%20Reasoning%20with%20Minimal%20Predefinition%20and%20Maximal%20Self-Evolution/" title="Alita:Generalist Agent Enabling Scalable Agentic Reasoning with Minimal Predefinition and Maximal Self-Evolution"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-13</div><div class="info-item-2">Alita:Generalist Agent Enabling Scalable Agentic Reasoning with Minimal Predefinition and Maximal Self-Evolution</div></div><div class="info-2"><div class="info-item-1">Alita: Generalist Agent Enabling Scalable Agentic Reasoning with Minimal Predefinition and Maximal Self-Evolution Alita: Generalist Agent Enabling Scalable Agentic Reasoning with Minimal Predefinition and Maximal Self-Evolution 参考：https://zhuanlan.zhihu.com/p/1915741399036438446 Alita 提出了一种通过最小预定义实现最大自演化的通用智能体范式，摒弃传统 LLM agent 对手工设计工具和复杂流程的依赖，仅以一个内置 Web Agent 为核心，借助开放网络自主生成、测试并封装可重用的任务工具（MCPs），展现出无需人工干预即可构建复杂推理能力的潜力；在多个高难度基准任务中即便搭配弱模型也能优于现有方法，同时具备高度的工具迁移性与知识蒸馏价值，为智能体系统的可扩展性与共享生态奠定基础。 Introduc...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">一个 MCP 沙箱路由调度框架的架构分析</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%AE%83%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.1.</span> <span class="toc-text">一、它是什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84"><span class="toc-number">1.2.</span> <span class="toc-text">二、整体架构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%A0%B8%E5%BF%83%E6%8A%BD%E8%B1%A1-Engine-Sandbox-%E8%A3%85%E9%A5%B0%E5%99%A8"><span class="toc-number">1.3.</span> <span class="toc-text">三、核心抽象:Engine &#x2F; Sandbox &#x2F; 装饰器</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%B2%99%E7%AE%B1%E5%BC%95%E6%93%8E%E5%85%A8%E5%AE%B6%E6%A1%B6"><span class="toc-number">1.4.</span> <span class="toc-text">四、沙箱引擎全家桶</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E8%B0%83%E5%BA%A6%E5%99%A8-%E5%BF%AB%E7%85%A7-Epoch-%E7%9A%84%E7%A1%AE%E5%AE%9A%E6%80%A7%E8%B0%83%E5%BA%A6"><span class="toc-number">1.5.</span> <span class="toc-text">五、调度器:快照 + Epoch 的确定性调度</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E6%A0%B8%E5%BF%83%E6%8A%BD%E8%B1%A1-pkg-scheduler-types-go"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 核心抽象(pkg&#x2F;scheduler&#x2F;types.go)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E8%B0%83%E5%BA%A6%E7%AE%A1%E7%BA%BF-pkg-scheduler-pipeline-go-server-server-go-DefaultPipeline"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 调度管线(pkg&#x2F;scheduler&#x2F;pipeline.go + server&#x2F;server.go:DefaultPipeline)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E9%80%89%E4%B8%BB%E4%B8%8E-Epoch-%E5%90%8C%E6%AD%A5-pkg-scheduler-epoch-go-server-go"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 选主与 Epoch 同步(pkg&#x2F;scheduler&#x2F;epoch.go + server.go)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E5%8F%8D%E5%90%91%E9%9A%A7%E9%81%93-SSE-%E5%A2%9E%E9%87%8F-pkg-scheduler-runtime-runtime-go"><span class="toc-number">1.5.4.</span> <span class="toc-text">5.4 反向隧道 + SSE 增量(pkg&#x2F;scheduler&#x2F;runtime&#x2F;runtime.go)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-HTTP-API-server-go-serveHTTP"><span class="toc-number">1.5.5.</span> <span class="toc-text">5.5 HTTP API(server.go:serveHTTP)</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E8%B7%AF%E7%94%B1%E5%99%A8-%E4%BA%8C%E5%B1%82%E7%BD%91%E7%BB%9C%E9%AB%98%E5%8F%AF%E7%94%A8%E7%BD%91%E6%A0%BC"><span class="toc-number">1.6.</span> <span class="toc-text">六、路由器:二层网络高可用网格</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E4%BA%8C%E5%B1%82%E6%8B%93%E6%89%91-chart-router-templates"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 二层拓扑(chart&#x2F;router&#x2F;templates)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E8%B7%AF%E7%94%B1%E5%86%B3%E7%AD%96-pkg-router-schedule-go-scheduleOnce"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 路由决策(pkg&#x2F;router&#x2F;schedule.go:scheduleOnce)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E8%B4%9F%E8%BD%BD%E6%84%9F%E7%9F%A5%E4%B8%8E%E5%8A%A0%E6%9D%83%E5%88%86%E9%85%8D-clients-manager-go"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 负载感知与加权分配(clients_manager.go)</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E7%BD%91%E5%85%B3-%E8%B0%83%E5%BA%A6%E5%99%A8%E5%89%8D%E7%BD%AE%E5%85%A5%E5%8F%A3"><span class="toc-number">1.7.</span> <span class="toc-text">七、网关:调度器前置入口</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%B2%99%E7%AE%B1%E7%AE%A1%E7%90%86%E5%99%A8-%E6%B2%99%E7%AE%B1%E4%BB%A3%E7%90%86-sidecar"><span class="toc-number">1.8.</span> <span class="toc-text">八、沙箱管理器 + 沙箱代理 + sidecar</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-sandbox-manager-pkg-manager"><span class="toc-number">1.8.1.</span> <span class="toc-text">8.1 sandbox-manager(pkg&#x2F;manager)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-sandbox-agent-pkg-agent"><span class="toc-number">1.8.2.</span> <span class="toc-text">8.2 sandbox-agent(pkg&#x2F;agent)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-3-%E4%B8%A4%E4%B8%AA-sidecar"><span class="toc-number">1.8.3.</span> <span class="toc-text">8.3 两个 sidecar</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81MCP-%E4%BB%A3%E7%90%86-SDK"><span class="toc-number">1.9.</span> <span class="toc-text">九、MCP 代理 + SDK</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#9-1-mcp-proxy-pkg-mcpproxy"><span class="toc-number">1.9.1.</span> <span class="toc-text">9.1 mcp-proxy(pkg&#x2F;mcpproxy)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-2-SDK"><span class="toc-number">1.9.2.</span> <span class="toc-text">9.2 SDK</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E5%8F%82%E6%95%B0%E6%B8%B2%E6%9F%93%E4%B8%8E%E5%AF%86%E9%92%A5%E5%BC%95%E7%94%A8"><span class="toc-number">1.10.</span> <span class="toc-text">十、参数渲染与密钥引用</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#12-2-%E7%AB%AF%E5%88%B0%E7%AB%AF%E6%97%B6%E5%BA%8F-%E5%B8%A6%E5%85%B7%E4%BD%93%E5%80%BC%E4%B8%8E-header"><span class="toc-number">1.10.1.</span> <span class="toc-text">12.2 端到端时序(带具体值与 header)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-3-%E5%85%B3%E9%94%AE%E7%8E%AF%E8%8A%82%E7%82%B9%E7%9D%9B"><span class="toc-number">1.10.2.</span> <span class="toc-text">12.3 关键环节点睛</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-4-%E8%B7%AF%E5%BE%84-B-router-%E7%9A%84%E5%B7%AE%E5%BC%82"><span class="toc-number">1.10.3.</span> <span class="toc-text">12.4 路径 B(router)的差异</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-5-%E4%B8%80%E5%8F%A5%E8%AF%9D"><span class="toc-number">1.10.4.</span> <span class="toc-text">12.5 一句话</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%89%E3%80%81%E8%AF%BB%E5%90%8E%E6%84%9F"><span class="toc-number">1.11.</span> <span class="toc-text">十三、读后感</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.12.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mcp-sandbox-router.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="一个 MCP 沙箱路由调度框架的架构分析"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析">一个 MCP 沙箱路由调度框架的架构分析</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/firecracker-microvm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="OpenSandbox 项目学习"/></a><div class="content"><a class="title" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习">OpenSandbox 项目学习</a><time datetime="2026-08-09T16:00:00.000Z" title="发表于 2026-08-10 00:00:00">2026-08-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/31/2026-07-31-2026%E5%B9%B4%E6%98%BE%E5%8D%A1%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97-%E4%BB%8E%E6%B8%B8%E6%88%8F%E5%A4%A9%E6%A2%AF%E5%9B%BE%E5%88%B0AI%E7%AE%97%E5%8A%9B%E5%B7%85%E5%B3%B0/" title="2026年显卡全景指南：从游戏天梯图到AI算力巅峰">2026年显卡全景指南：从游戏天梯图到AI算力巅峰</a><time datetime="2026-07-30T16:00:00.000Z" title="发表于 2026-07-31 00:00:00">2026-07-31</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

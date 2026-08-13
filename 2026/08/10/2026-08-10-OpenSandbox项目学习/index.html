@@ -1,0 +1,814 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>OpenSandbox 项目学习 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="OpenSandbox 是面向 AI 应用的通用沙箱平台，本文从协议、控制面、运行时、数据面、网络与安全面梳理其架构与核心流程。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="OpenSandbox 项目学习">
+<meta property="og:url" content="http://example.com/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="OpenSandbox 是面向 AI 应用的通用沙箱平台，本文从协议、控制面、运行时、数据面、网络与安全面梳理其架构与核心流程。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/opensandbox.png">
+<meta property="article:published_time" content="2026-08-09T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-10T07:55:49.803Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Agent">
+<meta property="article:tag" content="Docker">
+<meta property="article:tag" content="Sandbox">
+<meta property="article:tag" content="Kubernetes">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/opensandbox.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "OpenSandbox 项目学习",
+  "url": "http://example.com/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/",
+  "image": "http://example.com/img/cover/opensandbox.png",
+  "datePublished": "2026-08-09T16:00:00.000Z",
+  "dateModified": "2026-08-10T07:55:49.803Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'OpenSandbox 项目学习',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">OpenSandbox 项目学习</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">OpenSandbox 项目学习</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-09T16:00:00.000Z" title="发表于 2026-08-10 00:00:00">2026-08-10</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-10T07:55:49.803Z" title="更新于 2026-08-10 15:55:49">2026-08-10</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/Agent%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD/">Agent基础设施</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" data-flag-title="OpenSandbox 项目学习"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>OpenSandbox 项目学习</h1>
+<p>项目地址：<a target="_blank" rel="noopener" href="https://github.com/opensandbox-group/OpenSandbox">https://github.com/opensandbox-group/OpenSandbox</a></p>
+<p>官方文档：<a target="_blank" rel="noopener" href="https://open-sandbox.ai">https://open-sandbox.ai</a></p>
+<h2 id="一、它是什么">一、它是什么</h2>
+<p>一句话：<strong>OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform）</strong>，提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。</p>
+<p>为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：</p>
+<ul>
+<li><strong>隔离</strong>：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。</li>
+<li><strong>可编程</strong>：统一的生命周期 API + 沙箱内执行 API（命令、文件、代码解释器、PTY），多语言 SDK + CLI + MCP。</li>
+<li><strong>可调度</strong>：本地 Docker 单机跑，也能上 K8s 用 BatchSandbox / Pool 做池化与高吞吐交付。</li>
+</ul>
+<p>它已进入 CNCF Landscape、有 OpenSSF Best Practices 徽章，是阿里开源、社区化运营的项目。</p>
+<h2 id="二、整体架构：六个表面">二、整体架构：六个表面</h2>
+<p>OpenSandbox 的设计核心是<strong>分层 + 协议优先</strong>。官方把系统拆成六个「表面（surface）」，理解这六个面就能拿住全貌：</p>
+<ol>
+<li><strong>Client surface</strong> — SDK（Python/JS/TS/Java/Kotlin/C#/.NET/Go）、<code>osb</code> CLI、MCP server。</li>
+<li><strong>Protocol surface</strong> — <code>specs/</code> 下的 OpenAPI 契约（生命周期、诊断、execd 执行、egress 策略），是整个系统的「真理之源」。</li>
+<li><strong>Lifecycle control plane</strong> — <code>server/</code> 下的 FastAPI 服务器，负责鉴权、校验、编排、端点解析、诊断、持久化。</li>
+<li><strong>Runtime backends</strong> — Docker（本地/单机）与 Kubernetes（通过 BatchSandbox 或 <code>kubernetes-sigs/agent-sandbox</code> 工作负载提供方）。</li>
+<li><strong>Sandbox data plane</strong> — 用户工作负载容器 + 注入的 <code>execd</code> 守护进程 + 可选 Jupyter/code-interpreter + 卷 + 可选 egress sidecar。</li>
+<li><strong>Network &amp; security plane</strong> — 端点解析、server 代理、K8s ingress 网关路由、安全端点访问、egress 策略、资源限额、安全容器运行时。</li>
+</ol>
+<p>这种切分是有意的：</p>
+<blockquote>
+<p>SDK 和工具依赖<strong>公共契约</strong>；server 只负责<strong>生命周期编排</strong>；runtime provider 负责平台相关的<strong>资源创建</strong>；<code>execd</code>/egress 负责<strong>沙箱网络与文件命名空间内</strong>的操作。</p>
+</blockquote>
+<p>也就是经典的 <strong>control plane vs data plane</strong> + <strong>runtime-neutral API, runtime-specific execution</strong>。</p>
+<h2 id="三、协议面（specs-）">三、协议面（specs/）</h2>
+<p>OpenSandbox 把 <code>specs/</code> 当作公开契约的唯一来源（single source of truth），改 spec 等于改公开 API，要同步动 server / SDK / docs / CLI。主要四份：</p>
+<ul>
+<li>
+<p><strong><code>sandbox-lifecycle.yml</code></strong> — 生命周期 API，base path <code>/v1</code>，由 server 提供。包含：</p>
+<ul>
+<li><strong>Sandboxes</strong>：从 image 或 snapshot 创建、list、get、delete、pause、resume、续期、解析端口端点。</li>
+<li><strong>Snapshots</strong>：从 sandbox 创建持久快照、list、get、delete。</li>
+<li>请求体特性丰富：<code>image</code>/<code>snapshotId</code> 启动源、<code>entrypoint</code>/环境变量/metadata/不透明 <code>extensions</code>、<code>resourceLimits</code>（CPU/内存/GPU）、<code>platform</code> 约束、<code>volumes</code>（host / pvc / ossfs）、<code>networkPolicy</code>（egress sidecar 配置）、<code>secureAccess</code>（K8s ingress 网关端点凭证）。</li>
+</ul>
+</li>
+<li>
+<p><strong><code>execd-api.yaml</code></strong> — 沙箱内执行 API，由 <code>execd</code> 暴露：<code>/ping</code>、<code>/code/contexts</code>、<code>/code</code>、<code>/session</code>、<code>/command</code>、后台命令日志、<code>/files/*</code>、<code>/directories</code>、<code>/metrics</code>、<code>/metrics/watch</code>。命令与代码执行用 <strong>SSE 流式输出</strong>，另有 PTY WebSocket（<code>/pty</code>）做长连接 shell。</p>
+</li>
+<li>
+<p><strong><code>egress-api.yaml</code></strong> — egress sidecar 直接暴露的策略 API：<code>GET /policy</code>、<code>PATCH /policy</code>，支持运行时热更新。</p>
+</li>
+<li>
+<p><strong><code>diagnostic-api.yml</code></strong> — 沙箱日志/事件的最佳努力诊断描述，另有面向运维和 AI 排障工作流的纯文本诊断路由。</p>
+</li>
+</ul>
+<p><strong>协议优先</strong>的好处：多语言 SDK 可以从同一份 OpenAPI 生成普通请求/响应客户端，再在之上加手写适配层做流式、传输生命周期、错误映射、高层模型。spec、实现、SDK、文档、配置、CLI 行为需要保持对齐。</p>
+<h2 id="四、控制面（server-）">四、控制面（server/）</h2>
+<p><code>server/</code> 是 FastAPI 生命周期服务器。关键包：</p>
+<ul>
+<li><code>main.py</code> — app 启动、中间件、路由注册、运行时校验、renew-intent 启动。</li>
+<li><code>api/</code> — 生命周期路由、代理路由、池路由、诊断路由、请求/响应 schema。</li>
+<li><code>services/</code> — 生命周期服务接口 + Docker / K8s 实现。</li>
+<li><code>services/k8s/</code> — K8s 工作负载提供方、端点解析、卷/egress 辅助、informer。</li>
+<li><code>repositories/</code> — 持久化适配器（目前用于 server 管理的快照记录）。</li>
+<li><code>integrations/renew_intent/</code> — 可选的「访问即续期」集成。</li>
+<li><code>middleware/</code> — API-key 鉴权、request ID 中间件。</li>
+</ul>
+<p>几个值得记的设计点：</p>
+<ol>
+<li>
+<p><strong>运行时服务二选一</strong>：<code>[runtime].type</code> 决定 <code>docker</code> → <code>DockerSandboxService</code> 或 <code>kubernetes</code> → <code>KubernetesSandboxService</code>，两者实现同一个 <code>SandboxService</code> 接口，于是 API 路由很薄，只委托给 service，平台细节藏在 service 边界后。</p>
+</li>
+<li>
+<p><strong>持久化</strong>：<code>[store]</code> 选 server 管理的元数据存储，默认 SQLite（<code>~/.opensandbox/opensandbox.db</code>）。快照元数据是第一个被持久化的 server 资源；未来的持久化记录复用同一个 repository 边界。</p>
+</li>
+<li>
+<p><strong>端点解析 + server 代理</strong>：生命周期端点 API 返回沙箱内某端口的可达地址，按运行时与配置可能是：</p>
+<ul>
+<li>Docker host/bridge 映射端点；</li>
+<li>K8s ingress 网关端点；</li>
+<li><code>use_server_proxy=true</code> 时的 server 代理 URL（<code>/sandboxes/&#123;sandboxId&#125;/proxy/&#123;port&#125;</code>），支持 HTTP 和 WebSocket，并可挂钩 renew-on-access。</li>
+</ul>
+</li>
+</ol>
+<h2 id="五、运行时后端">五、运行时后端</h2>
+<h3 id="5-1-Docker-运行时">5.1 Docker 运行时</h3>
+<p>本地/单机后端，直接和 Docker daemon 对话，管容器、timer、label、volume、port、可选 sidecar、snapshot。核心职责：</p>
+<ul>
+<li>拉取公共/私有镜像（支持 per-request registry 鉴权）；</li>
+<li>用 CPU/内存/GPU/platform/capability/AppArmor/seccomp/PID/安全运行时设置建容器；</li>
+<li><strong>把 <code>execd</code> 二进制从 <code>[runtime].execd_image</code> 暂存进沙箱，装一个 bootstrap launcher，再启动用户 entrypoint</strong>；</li>
+<li>网络 <code>host</code>/<code>bridge</code>/自定义网络；非 host 模式下为 execd 与用户服务端点分配宿主端口；</li>
+<li>服务重启后恢复已有受管容器的过期 timer；</li>
+<li>支持 host bind mount、Docker named volume（<code>pvc</code> 模型）、OSSFS 挂载；</li>
+<li>请求 <code>networkPolicy</code> 时挂 egress sidecar；</li>
+<li>把沙箱 commit 成本地镜像做持久快照、并支持从快照镜像恢复。</li>
+</ul>
+<p>Docker 的 pause/resume 直接用容器级 pause/resume。</p>
+<h3 id="5-2-Kubernetes-运行时">5.2 Kubernetes 运行时</h3>
+<p>K8s 运行时把真正的负载创建委托给 <code>kubernetes.workload_provider</code> 选定的工作负载提供方：</p>
+<ul>
+<li><code>batchsandbox</code>（默认）— 背靠 OpenSandbox 自己的 controller 和 <code>BatchSandbox</code> CRD；</li>
+<li><code>agent-sandbox</code> — 背靠 <code>kubernetes-sigs/agent-sandbox</code>。</li>
+</ul>
+<p>K8s 服务端路径负责：K8s client 初始化 + 可选 informer；从 image 请求建负载（<code>snapshotId</code> 启动时解析到存储的可恢复镜像）；BatchSandbox 与 agent-sandbox manifest 的模板合并；per-request image pull secrets；资源限额 + GPU → K8s extended resources 的翻译；platform 约束 + RuntimeClass 接入安全运行时；卷、egress sidecar、安全端点访问注解；端点解析；pause/resume 委托给 provider；K8s 资源的纯文本诊断。</p>
+<h3 id="5-3-BatchSandbox-Controller">5.3 BatchSandbox Controller</h3>
+<p><code>kubernetes/</code> 下的 controller 实现了 OpenSandbox 专属 CRD，做高吞吐 + 池化的沙箱交付：</p>
+<ul>
+<li><strong><code>BatchSandbox</code></strong> — 从一个 pod template 建一个或多个沙箱副本；</li>
+<li><strong><code>Pool</code></strong> — 维护预热资源，实现快速分配；</li>
+<li><strong><code>SandboxSnapshot</code></strong> — K8s pause/resume 用的内部 rootfs 快照记录。</li>
+</ul>
+<p>BatchSandbox 同时支持<strong>模板建法</strong>和<strong>池化建法</strong>（<code>extensions.poolRef</code>），并可选任务编排（batch / RL 类负载）。</p>
+<p><strong>K8s pause/resume 的实现很有意思</strong>：对 <code>BatchSandbox.spec.replicas=1</code>，pause 把沙箱 rootfs commit 成 OCI 镜像并释放运行时资源；resume 把负载模板改写为使用该快照镜像、重建运行时，同时<strong>保留 sandbox ID</strong>。注意公共快照 API 目前只有 Docker 运行时实现；K8s pause/resume 走的是 controller 内部 <code>SandboxSnapshot</code> 流程，是一套独立的运行时关注点。</p>
+<h2 id="六、沙箱数据面">六、沙箱数据面</h2>
+<h3 id="6-1-execd">6.1 execd</h3>
+<p><code>components/execd/</code> 是用 Gin 写的 Go 守护进程，跑在沙箱<strong>内部</strong>，暴露执行 API。职责：</p>
+<ul>
+<li>shell 命令执行（SSE 流式）；</li>
+<li>后台命令状态 + 增量日志拉取；</li>
+<li>持久 bash session；</li>
+<li>PTY 交互式 session（WebSocket）；</li>
+<li>文件/目录操作；</li>
+<li>基于 Jupyter 的代码上下文与代码执行；</li>
+<li>本地 CPU/内存 metrics，可选 OpenTelemetry 导出；</li>
+<li>可选 <code>X-EXECD-ACCESS-TOKEN</code> 共享访问令牌强制。</li>
+</ul>
+<p><strong>execd 的注入方式</strong>：Docker 里由 server 把 execd 暂存进容器并装 bootstrap 脚本；K8s BatchSandbox 模板模式下，用一个 init container 从配置好的 <code>execd_image</code> 把 <code>execd</code> 和 <code>bootstrap.sh</code> 拷进一个 <code>emptyDir</code> volume，再挂给主沙箱容器。这是一种典型的「sidecar/initcontainer 注入控制进程」模式。</p>
+<h3 id="6-2-Code-Interpreter-运行时">6.2 Code Interpreter 运行时</h3>
+<p>官方 code-interpreter 镜像在沙箱内启动 Jupyter，<code>execd</code> 通过 HTTP/WebSocket 和 Jupyter 通信，把 kernel message 翻译成 OpenSandbox 流式事件。镜像支持 Python/Java/Node.js/Go 运行时，以及 Python/Java/TS/JS/Go/Bash 的 Jupyter kernel，语言版本由 <code>PYTHON_VERSION</code> 等环境变量控制。Code Interpreter SDK 是可选高层客户端，底层执行 API 始终可用。</p>
+<h3 id="6-3-卷（Volumes）">6.3 卷（Volumes）</h3>
+<p>生命周期 API 暴露运行时无关的卷模型：</p>
+<ul>
+<li><code>host</code>：绑定允许的宿主路径；</li>
+<li><code>pvc</code>：平台管理的命名存储——Docker 映射成 Docker named volume，K8s 映射成 PVC；</li>
+<li><code>ossfs</code>：通过 server/运行时集成挂载阿里云 OSS。</li>
+</ul>
+<p>不同 provider 校验和物化方式不同，但 API 形状共享。</p>
+<h3 id="6-4-Egress-Sidecar">6.4 Egress Sidecar</h3>
+<p><code>components/egress/</code> 从沙箱网络命名空间强制出站网络策略：</p>
+<ul>
+<li>FQDN + 通配域名 allow/deny；</li>
+<li><code>dns</code> 模式做 DNS 过滤；</li>
+<li><code>dns+nft</code> 模式在 DNS 之外用 nftables 强制已解析 IP 与 CIDR/IP 规则（环境支持时）；</li>
+<li>运行时 <code>/policy</code> 检查与 patch；</li>
+<li>可选 sidecar 鉴权、平台强制的 always-allow / always-deny 叠加、实验性透明 HTTPS MITM。</li>
+</ul>
+<p>部署形态：Docker 把 egress 当独立容器起，主沙箱容器跑在 sidecar 网络命名空间里；K8s 把 egress sidecar 追加进 pod spec，并从主沙箱容器 drop 掉 <code>NET_ADMIN</code>，保证只有 sidecar 能改网络规则——这是个很干净的<strong>最小权限</strong>实践。</p>
+<h2 id="七、网络与访问">七、网络与访问</h2>
+<h3 id="7-1-Ingress-网关">7.1 Ingress 网关</h3>
+<p><code>components/ingress/</code> 是 K8s 导向的 HTTP/WebSocket 反向代理，watch 沙箱资源并把流量路由到沙箱端口。路由模式：</p>
+<ul>
+<li><strong>Header 模式</strong>：<code>OpenSandbox-Ingress-To: &lt;sandbox-id&gt;-&lt;port&gt;</code> 或 host 解析；</li>
+<li><strong>URI 模式</strong>：<code>/&lt;sandbox-id&gt;/&lt;port&gt;/&lt;path&gt;</code>；</li>
+<li><strong>通配 host 模式</strong>：经 server 端点格式化。</li>
+</ul>
+<p>BatchSandbox 下 ingress 读 <code>sandbox.opensandbox.io/endpoints</code> 注解；agent-sandbox 下读 <code>status.serviceFQDN</code>。</p>
+<h3 id="7-2-Secure-Access-Auto-Renew">7.2 Secure Access / Auto-Renew</h3>
+<ul>
+<li><strong><code>secureAccess</code></strong>：当前仅支持经 ingress 网关暴露的 K8s 沙箱。开启后 server 给端点配凭证，端点响应里带回必需 header；网关 secure-access 签名密钥配好时还支持签名路由 token。</li>
+<li><strong>Auto-renew on access</strong>：可选 renew-intent 集成，观察到访问就延长沙箱 TTL，触发源可以是 server 代理请求或经 Redis 投递的 ingress 网关事件。单沙箱 opt-in 由 <code>extensions[&quot;access.renew.extend.seconds&quot;]</code> 控制。</li>
+</ul>
+<h2 id="八、核心流程串讲">八、核心流程串讲</h2>
+<p>把上面几节串成五条主线：</p>
+<p><strong>1. 沙箱创建</strong>（异步）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">Client/SDK/CLI/MCP</span><br><span class="line">  -&gt; POST /v1/sandboxes</span><br><span class="line">  -&gt; FastAPI 校验请求与配置</span><br><span class="line">  -&gt; 选定运行时建 Docker 容器 / K8s 负载</span><br><span class="line">  -&gt; 运行时暂存 execd + 可选 egress/volume/network 配置</span><br><span class="line">  -&gt; 沙箱进入 Running 或报 Failed（带 reason/message）</span><br></pre></td></tr></table></figure>
+<p>客户端应轮询 <code>GET /v1/sandboxes/&#123;sandboxId&#125;</code> 或用 SDK 就绪辅助方法。</p>
+<p><strong>2. 命令/文件/代码执行</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Client</span><br><span class="line">  -&gt; 从沙箱元数据或 server 代理解析 execd 端点</span><br><span class="line">  -&gt; 必要时带 X-EXECD-ACCESS-TOKEN</span><br><span class="line">  -&gt; execd 跑命令/文件操作/session/PTY/Jupyter 代码</span><br><span class="line">  -&gt; execd 用 SSE/WebSocket 流式输出或返回结构化响应</span><br></pre></td></tr></table></figure>
+<p><strong>3. 服务暴露</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Client</span><br><span class="line">  -&gt; GET /v1/sandboxes/&#123;sandboxId&#125;/endpoints/&#123;port&#125;</span><br><span class="line">  -&gt; server 返回 Docker 映射 / ingress 网关 / server 代理端点</span><br><span class="line">  -&gt; secure access 或 sidecar auth 要求时带返回的 header</span><br><span class="line">  -&gt; HTTP/WebSocket 流量打到目标沙箱端口</span><br></pre></td></tr></table></figure>
+<p><strong>4. Egress 策略</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">创建请求带 networkPolicy</span><br><span class="line">  -&gt; server 校验 [egress] 配置</span><br><span class="line">  -&gt; 运行时挂 egress sidecar（带初始策略）</span><br><span class="line">  -&gt; 沙箱出站 DNS/网络流量被 sidecar 过滤</span><br><span class="line">  -&gt; 客户端可解析 egress 端点并运行时 PATCH /policy</span><br></pre></td></tr></table></figure>
+<p><strong>5. Pause/Resume 与 Snapshot</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Pause/Resume</span><br><span class="line">  -&gt; 生命周期 server 委托给运行时 provider</span><br><span class="line">  -&gt; Docker 容器级 pause/resume</span><br><span class="line">  -&gt; BatchSandbox 用 rootfs 快照 commit/recreate（单副本时）</span><br><span class="line"></span><br><span class="line">公共 Snapshot API</span><br><span class="line">  -&gt; server 持久化快照元数据</span><br><span class="line">  -&gt; Docker 运行时把沙箱 commit 成可恢复镜像</span><br><span class="line">  -&gt; 从快照创建时解析该镜像并起新沙箱</span><br></pre></td></tr></table></figure>
+<h2 id="九、设计原则小结">九、设计原则小结</h2>
+<p>读完源码与架构文档，OpenSandbox 反复强调几条原则，很值得做基础设施时借鉴：</p>
+<ol>
+<li><strong>Protocol First</strong> — 公开行为从 <code>specs/</code> 的 OpenAPI 契约出发，生成产物要重新生成而非手工补丁。</li>
+<li><strong>Control plane vs Data plane</strong> — server 只编排与校验，平台相关 provisioning 进 runtime service，沙箱内操作进 execd/egress。</li>
+<li><strong>Runtime-neutral API, Runtime-specific execution</strong> — 共享概念（resource limits、volumes、endpoints、network policy、metadata），Docker/K8s 各自物化但保持契约。</li>
+<li><strong>Secure defaults with explicit escape hatches</strong> — API-key 鉴权、无鉴权模式启动 guardrail、资源限额、capability drop、可选安全运行时、egress 控制、端点 header、平台网络隔离；更宽松的模式留给本地开发或显式运营选择。</li>
+<li><strong>Observable failures</strong> — 沙箱状态有 <code>state</code>/<code>reason</code>/<code>message</code>/transition time；execd 暴露 metrics，server 暴露诊断，ingress/egress/execd 有日志与 OTel，request ID 全链路传播便于排障。</li>
+</ol>
+<h2 id="十、典型用例">十、典型用例</h2>
+<ul>
+<li><strong>Coding agents</strong>：在隔离沙箱里跑 Claude Code / Gemini CLI / Codex CLI / Qwen Code / Kimi CLI 等。</li>
+<li><strong>AI code execution</strong>：执行模型生成代码，用命令/文件/code-interpreter API 拿流式反馈。</li>
+<li><strong>浏览器自动化</strong>：受控文件系统与网络行为下跑 Chrome / Playwright。</li>
+<li><strong>远程开发</strong>：经沙箱端点暴露 VS Code Web、桌面、VNC、开发服务器。</li>
+<li><strong>RL 与评测</strong>：用 K8s BatchSandbox、Pool、任务编排做高吞吐沙箱交付（一个 trial 一个沙箱）。</li>
+<li><strong>企业级隔离</strong>：组合安全运行时 + ingress + egress + 端点访问 header + K8s 部署控制。</li>
+</ul>
+<h2 id="十一、本地快速上手">十一、本地快速上手</h2>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 安装并配置沙箱服务器</span></span><br><span class="line">uvx opensandbox-server init-config ~/.sandbox.toml --example docker</span><br><span class="line">uvx opensandbox-server</span><br><span class="line"></span><br><span class="line"><span class="comment"># CLI 速用</span></span><br><span class="line">pip install opensandbox-cli</span><br><span class="line">osb config init</span><br><span class="line">osb config <span class="built_in">set</span> connection.domain localhost:8080</span><br><span class="line">osb config <span class="built_in">set</span> connection.protocol http</span><br><span class="line">osb config <span class="built_in">set</span> connection.api_key &lt;your-api-key&gt;</span><br><span class="line">osb sandbox create --image python:3.12 --<span class="built_in">timeout</span> 30m -o json</span><br><span class="line">osb <span class="built_in">command</span> run &lt;sandbox-id&gt; -o raw -- python -c <span class="string">&quot;print(1 + 1)&quot;</span></span><br></pre></td></tr></table></figure>
+<p>Python SDK 起一个 code interpreter 的最小例子：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> asyncio</span><br><span class="line"><span class="keyword">from</span> datetime <span class="keyword">import</span> timedelta</span><br><span class="line"><span class="keyword">from</span> code_interpreter <span class="keyword">import</span> CodeInterpreter, SupportedLanguage</span><br><span class="line"><span class="keyword">from</span> opensandbox <span class="keyword">import</span> Sandbox</span><br><span class="line"><span class="keyword">from</span> opensandbox.models <span class="keyword">import</span> WriteEntry</span><br><span class="line"></span><br><span class="line"><span class="keyword">async</span> <span class="keyword">def</span> <span class="title function_">main</span>() -&gt; <span class="literal">None</span>:</span><br><span class="line">    sandbox = <span class="keyword">await</span> Sandbox.create(</span><br><span class="line">        <span class="string">&quot;opensandbox/code-interpreter:v1.1.0&quot;</span>,</span><br><span class="line">        entrypoint=[<span class="string">&quot;/opt/code-interpreter/code-interpreter.sh&quot;</span>],</span><br><span class="line">        env=&#123;<span class="string">&quot;PYTHON_VERSION&quot;</span>: <span class="string">&quot;3.11&quot;</span>&#125;,</span><br><span class="line">        timeout=timedelta(minutes=<span class="number">10</span>),</span><br><span class="line">    )</span><br><span class="line">    <span class="keyword">async</span> <span class="keyword">with</span> sandbox:</span><br><span class="line">        execution = <span class="keyword">await</span> sandbox.commands.run(<span class="string">&quot;echo &#x27;Hello OpenSandbox!&#x27;&quot;</span>)</span><br><span class="line">        <span class="built_in">print</span>(execution.logs.stdout[<span class="number">0</span>].text)</span><br><span class="line">        <span class="keyword">await</span> sandbox.files.write_files([</span><br><span class="line">            WriteEntry(path=<span class="string">&quot;/tmp/hello.txt&quot;</span>, data=<span class="string">&quot;Hello World&quot;</span>, mode=<span class="number">644</span>)</span><br><span class="line">        ])</span><br><span class="line">        content = <span class="keyword">await</span> sandbox.files.read_file(<span class="string">&quot;/tmp/hello.txt&quot;</span>)</span><br><span class="line">        <span class="built_in">print</span>(<span class="string">f&quot;Content: <span class="subst">&#123;content&#125;</span>&quot;</span>)</span><br><span class="line">        interpreter = <span class="keyword">await</span> CodeInterpreter.create(sandbox)</span><br><span class="line">        result = <span class="keyword">await</span> interpreter.codes.run(</span><br><span class="line">            <span class="string">&quot;import sys\nprint(sys.version)\nresult = 2 + 2\nresult&quot;</span>,</span><br><span class="line">            language=SupportedLanguage.PYTHON,</span><br><span class="line">        )</span><br><span class="line">        <span class="built_in">print</span>(result.result[<span class="number">0</span>].text)   <span class="comment"># 4</span></span><br><span class="line">        <span class="built_in">print</span>(result.logs.stdout[<span class="number">0</span>].text)  <span class="comment"># 3.11.x</span></span><br><span class="line">        <span class="keyword">await</span> sandbox.kill()</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> __name__ == <span class="string">&quot;__main__&quot;</span>:</span><br><span class="line">    asyncio.run(main())</span><br></pre></td></tr></table></figure>
+<h2 id="十二、实战-云上-Agent-接入沙箱">十二、实战:云上 Agent 接入沙箱</h2>
+<p>上面是本地把 server 起起来玩的路径。更常见的真实需求是:<strong>我在云上已经部署好了 agent,想给它接一个沙箱/起一个沙箱</strong>。这一节专门讲这条路。</p>
+<h3 id="12-1-先理清调用关系">12.1 先理清调用关系</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">你的 agent (云上)</span><br><span class="line">   │  HTTP/OpenAPI + API key</span><br><span class="line">   ▼</span><br><span class="line">OpenSandbox server (控制面)   ← 你要先有一台跑起来的 server</span><br><span class="line">   │  生命周期编排</span><br><span class="line">   ▼</span><br><span class="line">真实沙箱容器 (Docker / K8s pod)</span><br><span class="line">   └─ 注入 execd 守护进程 ← agent 后续在这里跑命令/代码/读写文件</span><br></pre></td></tr></table></figure>
+<p>关键认知:agent <strong>不直连沙箱</strong>,而是连 OpenSandbox <strong>server</strong>(控制面);server 负责把沙箱建起来并告诉你 execd 的端点;之后 agent 再直接打 execd 做命令/文件/代码执行。所以「接一个沙箱」=「让 agent 学会调 OpenSandbox server 的 API」。</p>
+<h3 id="12-2-前置-先有一台-server">12.2 前置:先有一台 server</h3>
+<p>如果云上还没有 OpenSandbox server,最快的起法(单机 Docker):</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 在你云上某台机器,装好 Docker 后</span></span><br><span class="line">uvx opensandbox-server init-config ~/.sandbox.toml --example docker</span><br><span class="line"><span class="comment"># 编辑 ~/.sandbox.toml:</span></span><br><span class="line"><span class="comment">#   - 改 api_key(给一个强随机串,这就是 agent 要带的鉴权凭据)</span></span><br><span class="line"><span class="comment">#   - 暴露端口 / 是否启用 TLS</span></span><br><span class="line">uvx opensandbox-server</span><br></pre></td></tr></table></figure>
+<p>规模化、要池化/高吞吐就上 K8s 部署(<code>kubernetes/</code> 下有 Helm chart,用 BatchSandbox + Pool 预热)。生产建议直接走 K8s。</p>
+<p><strong>云上必须确认三件事:</strong></p>
+<ol>
+<li>server 的域名/端口对 agent 可达(同 VPC 或公网 + 鉴权);</li>
+<li>server 所在机器能访问 Docker daemon 或 K8s 集群;</li>
+<li>配好 <code>api_key</code>,关掉无鉴权模式(server 有启动 guardrail)。</li>
+</ol>
+<h3 id="12-3-三种接入方式-按你的-agent-形态选">12.3 三种接入方式,按你的 agent 形态选</h3>
+<table>
+<thead>
+<tr>
+<th>你的 agent 形态</th>
+<th>推荐方式</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自研 Python/Java/JS/Go 后端服务</td>
+<td><strong>SDK 直连</strong></td>
+<td>程序里 <code>import</code> 调用,最灵活,生产首选</td>
+</tr>
+<tr>
+<td>Claude Code / Cursor / 其它 MCP 客户端</td>
+<td><strong>MCP server</strong></td>
+<td>装一个 <code>opensandbox-mcp</code>,工具自动暴露给 agent</td>
+</tr>
+<tr>
+<td>运维脚本 / 临时排查</td>
+<td><strong><code>osb</code> CLI</strong></td>
+<td>终端一行起沙箱</td>
+</tr>
+</tbody>
+</table>
+<h4 id="方式-A-SDK-直连-最常见">方式 A:SDK 直连(最常见)</h4>
+<p>装 SDK:<code>pip install opensandbox</code>(也有 Java/Kotlin、JS/TS、C#、Go 版本)。最小可用例子:</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> asyncio</span><br><span class="line"><span class="keyword">from</span> datetime <span class="keyword">import</span> timedelta</span><br><span class="line"><span class="keyword">from</span> opensandbox.sandbox <span class="keyword">import</span> Sandbox</span><br><span class="line"><span class="keyword">from</span> opensandbox.config <span class="keyword">import</span> ConnectionConfig</span><br><span class="line"><span class="keyword">from</span> opensandbox.models <span class="keyword">import</span> WriteEntry</span><br><span class="line"></span><br><span class="line"><span class="keyword">async</span> <span class="keyword">def</span> <span class="title function_">main</span>():</span><br><span class="line">    <span class="comment"># 1. 配置连接 —— 指向你云上的 OpenSandbox server</span></span><br><span class="line">    config = ConnectionConfig(</span><br><span class="line">        domain=<span class="string">&quot;sandbox.your-cloud.example&quot;</span>,  <span class="comment"># server 地址</span></span><br><span class="line">        api_key=<span class="string">&quot;your-api-key&quot;</span>,               <span class="comment"># ~/.sandbox.toml 里设的那个</span></span><br><span class="line">    )</span><br><span class="line"></span><br><span class="line">    <span class="comment"># 2. 起一个沙箱</span></span><br><span class="line">    sandbox = <span class="keyword">await</span> Sandbox.create(</span><br><span class="line">        <span class="string">&quot;python:3.12&quot;</span>,                  <span class="comment"># 镜像;或用 opensandbox/code-interpreter:v1.1.0</span></span><br><span class="line">        connection_config=config,</span><br><span class="line">        timeout=timedelta(minutes=<span class="number">15</span>),  <span class="comment"># 过期自动回收,别忘设</span></span><br><span class="line">    )</span><br><span class="line">    <span class="keyword">try</span>:</span><br><span class="line">        <span class="comment"># 3. 在沙箱里跑命令</span></span><br><span class="line">        exec_res = <span class="keyword">await</span> sandbox.commands.run(</span><br><span class="line">            <span class="string">&quot;pip install numpy &amp;&amp; python -c &#x27;import numpy; print(numpy.__version__)&#x27;&quot;</span></span><br><span class="line">        )</span><br><span class="line">        <span class="built_in">print</span>(exec_res.logs.stdout[<span class="number">0</span>].text)</span><br><span class="line"></span><br><span class="line">        <span class="comment"># 4. 读写文件</span></span><br><span class="line">        <span class="keyword">await</span> sandbox.files.write_files([</span><br><span class="line">            WriteEntry(path=<span class="string">&quot;/tmp/in.txt&quot;</span>, data=<span class="string">&quot;hello&quot;</span>, mode=<span class="number">644</span>)</span><br><span class="line">        ])</span><br><span class="line"></span><br><span class="line">        <span class="comment"># 5. (可选)暴露沙箱内某端口给 agent / 外部访问</span></span><br><span class="line">        endpoint = <span class="keyword">await</span> sandbox.get_endpoint(<span class="number">8080</span>)  <span class="comment"># 返回可达地址 + 必要 header</span></span><br><span class="line">        <span class="built_in">print</span>(endpoint)</span><br><span class="line">    <span class="keyword">finally</span>:</span><br><span class="line">        <span class="comment"># 6. 用完销毁(destroy = kill + close 本地资源)</span></span><br><span class="line">        <span class="keyword">await</span> sandbox.destroy()</span><br><span class="line"></span><br><span class="line">asyncio.run(main())</span><br></pre></td></tr></table></figure>
+<p>把它包进你 agent 的工具函数里,agent 就「接上沙箱」了。如果 agent 是同步栈,用 <code>SandboxSync</code> / <code>ConnectionConfigSync</code>,语义一致。</p>
+<h4 id="方式-B-MCP-给-Claude-Code-Cursor-用">方式 B:MCP(给 Claude Code / Cursor 用)</h4>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">pip install opensandbox-mcp</span><br><span class="line">opensandbox-mcp --domain sandbox.your-cloud.example --protocol http</span><br></pre></td></tr></table></figure>
+<p>客户端配置(stdio):</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;mcpServers&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">    <span class="attr">&quot;opensandbox&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">      <span class="attr">&quot;command&quot;</span><span class="punctuation">:</span> <span class="string">&quot;opensandbox-mcp&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;args&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="string">&quot;--domain&quot;</span><span class="punctuation">,</span> <span class="string">&quot;sandbox.your-cloud.example&quot;</span><span class="punctuation">,</span> <span class="string">&quot;--protocol&quot;</span><span class="punctuation">,</span> <span class="string">&quot;http&quot;</span><span class="punctuation">]</span></span><br><span class="line">    <span class="punctuation">&#125;</span></span><br><span class="line">  <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>之后 agent 自动多出「创建沙箱 / 跑命令 / 读写文件」几个工具,无需写代码。</p>
+<h4 id="方式-C-CLI-临时-运维">方式 C:CLI(临时/运维)</h4>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">osb config <span class="built_in">set</span> connection.domain sandbox.your-cloud.example</span><br><span class="line">osb config <span class="built_in">set</span> connection.api_key your-api-key</span><br><span class="line">osb sandbox create --image python:3.12 --<span class="built_in">timeout</span> 15m -o json   <span class="comment"># 拿 sandbox-id</span></span><br><span class="line">osb <span class="built_in">command</span> run &lt;sandbox-id&gt; -o raw -- python -c <span class="string">&quot;print(1+1)&quot;</span></span><br></pre></td></tr></table></figure>
+<h3 id="12-4-云上生产的几个要点">12.4 云上生产的几个要点</h3>
+<ol>
+<li><strong>一定要设 <code>timeout</code></strong>:沙箱有 TTL,到期自动回收。长时间任务用 <code>renew</code>(续期)或开启 <strong>auto-renew on access</strong>(<code>extensions[&quot;access.renew.extend.seconds&quot;]</code>),有人访问就自动续命。</li>
+<li><strong>池化预热降延迟</strong>:如果 agent 高频起沙箱,用 <code>Pool</code> 预热一批就绪沙箱,SDK 端用 <code>SandboxPoolSync</code> 直接 acquire,免掉冷启动。</li>
+<li><strong>egress 策略</strong>:沙箱要访问外部 API/数据源时,用 <code>networkPolicy</code> 挂 egress sidecar,只放行白名单 FQDN——不可信代码跑在沙箱里时这条尤其重要。</li>
+<li><strong>端点暴露</strong>:<code>get_endpoint(port)</code> 拿到地址;K8s ingress 网关模式下若开了 <code>secureAccess</code>,响应会带回必需 header,agent 后续请求要带上。</li>
+<li><strong>用完 <code>destroy()</code></strong>:<code>create-use-discard</code> 流程务必销毁,否则沙箱堆积吃资源;池化场景由池管理生命周期。</li>
+<li><strong>不可信代码隔离</strong>:跑模型生成代码/第三方依赖时,叠加 gVisor / Kata / Firecracker 安全运行时(RuntimeClass),别只用裸容器。</li>
+<li><strong>诊断</strong>:出问题用 <code>GET /v1/sandboxes/&#123;id&#125;</code> 看 <code>state/reason/message</code>,server 有纯文本诊断路由,execd 暴露 <code>/metrics</code>,且全链路带 request id 便于排障。</li>
+</ol>
+<h3 id="12-5-一句话总结流程">12.5 一句话总结流程</h3>
+<p><strong>部署/确认 server → agent 用 SDK(或 MCP/CLI)带 api_key 调 <code>Sandbox.create</code> → 拿 execd 端点跑命令/代码 → 用完 <code>destroy()</code></strong>。</p>
+<h2 id="十三、读后感">十三、读后感</h2>
+<p>OpenSandbox 的工程化水平相当成熟：把「沙箱」这种历史上散落在各种脚本里的东西，按<strong>协议 → 控制面 → 运行时 → 数据面 → 网络安全面</strong>严格分层，每层都用 OpenAPI 契约钉死边界，再让 Docker/K8s 各自实现。几个印象深刻之处：</p>
+<ul>
+<li><strong>execd 注入模式</strong>：把控制进程暂存进沙箱、用 init container 拷进 emptyDir，是「在不可信环境里长出可控 API」的标准解法，比硬塞 agent 进容器干净得多。</li>
+<li><strong>K8s pause/resume 用 rootfs 快照</strong>：commit 成 OCI 镜像 + 释放运行时 + 保留 sandbox ID，兼顾「省资源」和「ID 连续」，对 RL/评测的高频 pause/resume 很实用。</li>
+<li><strong>egress 的最小权限</strong>：K8s 里从主容器 drop <code>NET_ADMIN</code>、只让 sidecar 改规则，把「谁能改网络」收敛到一处。</li>
+<li><strong>协议优先 + 多语言 SDK 生成</strong>：避免「五份 SDK 五份行为」，是做开放平台该有的姿势。</li>
+</ul>
+<p>后续可以顺着几条线深挖：<code>specs/</code> 的 OpenAPI 全文 + SDK 生成流水线、BatchSandbox controller 的 reconcile 与池化调度算法、egress 的 <code>dns+nft</code> 双重过滤实现、以及 secure container runtime（gVisor/Kata/Firecracker）的具体接入点。</p>
+<h2 id="十四、底层技术栈与关键代码架构">十四、底层技术栈与关键代码架构</h2>
+<p>读完架构文档还不够,真正想理解&quot;沙箱底层用的是什么&quot;,得去翻代码。这一节给出按调用链梳理的实打实说明,均带文件位置。</p>
+<h3 id="14-1-底层技术栈">14.1 底层技术栈</h3>
+<p>OpenSandbox 自己<strong>不发明容器/虚拟化技术</strong>,而是分层组合现成的内核与容器原语:</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>用什么</th>
+<th>在哪</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>隔离(粗粒度)</td>
+<td>Docker 容器 / Kubernetes Pod(+ 可选 RuntimeClass:gVisor、Kata、Firecracker microVM)</td>
+<td><code>server/services/docker/</code>、<code>server/services/k8s/</code></td>
+</tr>
+<tr>
+<td>隔离(细粒度,进程级)</td>
+<td><strong>bubblewrap (bwrap) + overlay + seccomp-bpf</strong></td>
+<td><code>components/execd/pkg/isolation/</code></td>
+</tr>
+<tr>
+<td>控制面</td>
+<td>Python + <strong>FastAPI</strong></td>
+<td><code>server/opensandbox_server/</code></td>
+</tr>
+<tr>
+<td>数据面(execd/ingress/egress)</td>
+<td><strong>Go 1.25</strong> + Gin / gorilla-websocket / creack/pty / gopsutil / OTel</td>
+<td><code>components/execd</code>、<code>components/ingress</code>、<code>components/egress</code></td>
+</tr>
+<tr>
+<td>调度面</td>
+<td>Go + <strong>kubebuilder</strong> 风格 controller + 自研 scheduler</td>
+<td><code>kubernetes/</code></td>
+</tr>
+<tr>
+<td>网络出入站</td>
+<td>nftables / iptables / 自建 DNS proxy / mitmproxy(透明 HTTPS MITM)</td>
+<td><code>components/egress/</code></td>
+</tr>
+</tbody>
+</table>
+<p>go.mod 里几个关键依赖很说明问题:<code>elastic/go-seccomp-bpf</code>(seccomp)、<code>creack/pty</code>(终端)、<code>knative.dev/pkg</code>(informer/controller 框架)、<code>redis/go-redis</code>(ingress 续期事件)、<code>pelletier/go-toml</code>(配置)。</p>
+<h3 id="14-2-关键认知-隔离是-两层-的">14.2 关键认知:隔离是&quot;两层&quot;的</h3>
+<p>很多人以为&quot;沙箱 = 一个 Docker 容器&quot;,OpenSandbox 不是。它有<strong>两层隔离</strong>:</p>
+<p><strong>第一层(容器/Pod 级)</strong>:server 建一个 Docker 容器或 K8s Pod,可选叠加安全运行时。这一层隔离的是&quot;这个工作负载 vs 宿主机/其他工作负载&quot;。</p>
+<p><strong>第二层(进程级,execd 内部)</strong>:这是最有料的部分。<code>execd</code> 跑在沙箱里,但<strong>它执行每条用户命令时,会再用 <code>bwrap</code> + seccomp 把这条命令包进一层隔离</strong>——独立的 mount namespace、tmpfs、overlay upper 层、seccomp-bpf 系统调用过滤。也就是说,沙箱里跑的命令本身还套着一层&quot;OS 级沙箱&quot;。</p>
+<p>代码证据(<code>components/execd/pkg/isolation/</code>):</p>
+<ul>
+<li><code>bwrap.go</code> — 构造 bubblewrap 命令行 argv:<code>bwrapNamespaceSegment</code>(userns/mount)、<code>bwrapTmpSegment</code>、<code>bwrapWorkspaceSegment</code>、<code>bwrapEnvSegment</code>,并把 seccomp fd 通过 <code>--seccomp</code> 注入;</li>
+<li><code>seccomp_gen.go</code> — 生成 seccomp-bpf filter;</li>
+<li><code>upper.go</code> — overlay 的 upper 层(写时复制的工作区);</li>
+<li><code>probe.go</code> — 启动时探测内核能力(<code>isolation.Probe</code>),决定能不能用 bwrap,不能用就降级(<code>bwrap_stub.go</code> 报 <code>Available=false</code>);</li>
+<li><code>main.go</code> 启动流程里:<code>isolation.LoadConfig</code> → <code>isolation.Probe</code> → 拿到 isolator,后续 <code>runtime</code> 跑命令时 <code>Wrap(exec.Cmd)</code> 套上。</li>
+</ul>
+<h3 id="14-3-关键代码架构-按调用链">14.3 关键代码架构(按调用链)</h3>
+<p><strong>控制面(server,FastAPI)</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">client → FastAPI 路由 (api/) → services/factory.py + runtime_resolver.py</span><br><span class="line">        按 [runtime].type 二选一 SandboxService 接口实现:</span><br><span class="line">        ├─ DockerSandboxService   (services/docker/docker_service.py:create_sandbox @626)</span><br><span class="line">        └─ KubernetesSandboxService (services/k8s/kubernetes_service.py)</span><br></pre></td></tr></table></figure>
+<ul>
+<li><code>main.py</code> — app 启动、中间件、<code>startup_guard</code>(api_key 强制)、<code>renew_intent</code> consumer;</li>
+<li><code>services/sandbox_service.py</code> — 公共 <code>SandboxService</code> 接口,API 路由很薄,只委托;</li>
+<li><code>services/docker/</code> — <code>docker_service.py</code>(创建)、<code>container_ops.py</code>、<code>port_allocator.py</code>、<code>networking.py</code>、<code>volumes.py</code>、<code>ossfs_mixin.py</code>、<code>docker_diagnostics.py</code>、<code>snapshot_runtime.py</code>;</li>
+<li><code>services/k8s/</code> — <code>kubernetes_service.py</code>、<code>batchsandbox_template.py</code>(生成 BatchSandbox manifest)、<code>workload_mapper.py</code>、<code>security_context.py</code>(RuntimeClass/cap drop)、<code>volume_helper.py</code>;</li>
+<li><code>repositories/</code> — SQLite 持久化快照元数据(默认 <code>~/.opensandbox/opensandbox.db</code>);</li>
+<li><code>middleware/</code> — api_key 鉴权 + request id。</li>
+</ul>
+<p><strong>Docker 运行时核心</strong>:<code>docker_service.py:create_sandbox</code> 做的事:拉镜像 → 建容器(挂 CPU/mem/GPU/capability/AppArmor/seccomp/PID/secure-runtime)→ <strong>把 execd 二进制从 <code>execd_image</code> 暂存(staging)进容器</strong> → 装 <code>bootstrap.sh</code> 启动器 → 配端口/host bind/named volume/OSSFS → 可选挂 egress sidecar → 启动用户 entrypoint。快照走 <code>snapshot_runtime.py</code>(把容器 commit 成镜像)。</p>
+<p><strong>Kubernetes 运行时 + 控制器</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">server kubernetes_service → 生成 BatchSandbox manifest → 提交到集群</span><br><span class="line">        ↓</span><br><span class="line">kubernetes/ 控制器 (kubebuilder) reconcile BatchSandbox CRD:</span><br><span class="line">  apis/sandbox/v1alpha1/&#123;batchsandbox,pool,sandboxsnapshot&#125;_types.go</span><br><span class="line">  internal/controller/&#123;algorithm,strategy,poolassign,recycle,eviction&#125;/</span><br><span class="line">  internal/scheduler/      ← 池化调度</span><br><span class="line">  internal/task-executor/  ← batch/RL 任务编排 (runtime/server/storage/manager)</span><br></pre></td></tr></table></figure>
+<p>CRD 状态机很清晰:<code>Pending → Succeed</code>,以及 <code>Pausing ⇄ Paused ⇄ Resuming</code>,失败转 <code>Failed</code>(条件类型有 <code>Ready/Progressing/Paused/PauseFailed/ResumeFailed/PodFailed</code>)。pause/resume 的 rootfs 快照逻辑挂在 controller 里。execd 注入走 <strong>init container</strong> 从 <code>execd_image</code> 拷进 <code>emptyDir</code>。</p>
+<p><strong>数据面 execd(Go)</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">main.go → flag.InitFlags → isolation.LoadConfig/Probe → web(Gin) → controller/</span><br><span class="line">        → runtime/Controller: command.go / bash_session.go / pty_session.go</span><br><span class="line">                            / jupyter.go / isolated_session.go / context.go / replay_buffer.go</span><br></pre></td></tr></table></figure>
+<ul>
+<li><code>runtime/command.go</code> — 命令执行 + SSE 流式;<code>command_status.go</code> — 后台命令状态/增量日志;</li>
+<li><code>runtime/bash_session.go</code> — 持久 bash 会话(<code>exec.CommandContext</code> + export 解析保 cwd/env);</li>
+<li><code>runtime/pty_session.go</code> — <code>creack/pty</code> + WebSocket 长连接 shell;</li>
+<li><code>runtime/jupyter.go</code> + <code>pkg/jupyter/</code> — code interpreter,把 kernel message 翻成流式事件;</li>
+<li><code>runtime/isolated_session.go</code> — 命令级隔离会话(配合 bwrap);</li>
+<li><code>runtime/replay_buffer.go</code> — 重放缓冲,断线重连能拿回历史输出。</li>
+</ul>
+<p><strong>网络面</strong>:</p>
+<ul>
+<li><strong>ingress</strong>(<code>components/ingress/</code>):Go 反代,<code>pkg/proxy</code>(HTTP/WS 转发)、<code>pkg/sandbox</code>(watch 沙箱资源拿端点)、<code>pkg/signature</code>(安全路由签名 token)、<code>pkg/renewintent</code>(消费 Redis 续期事件)。用 <code>knative.dev/pkg</code> 的 informer 框架做 watch。</li>
+<li><strong>egress</strong>(<code>components/egress/</code>):<code>pkg/nftables</code>(nft 规则)+ <code>pkg/dnsproxy</code>(DNS 过滤)+ <code>pkg/iptables</code>(降级方案)+ <code>pkg/mitmproxy</code>(<code>mitmproxy_transparent.go</code> 透明 HTTPS MITM)+ <code>pkg/credentialvault</code>(凭证注入,真实 secret 不进工作负载)+ <code>pkg/policy</code>(<code>/policy</code> GET/PATCH 热更新)。<code>nft.go</code> 里的 <code>setupNft</code> 把静态策略写到 nft,再把 DNS 解析出的 IP 动态加进 allow set——这是 dns+nft 双重过滤的实现。</li>
+</ul>
+<h3 id="14-4-三个最值得看的实现点">14.4 三个最值得看的实现点</h3>
+<ol>
+<li><strong>进程级隔离层</strong> <code>components/execd/pkg/isolation/</code>:bwrap 构造 mount namespace + overlay upper + seccomp-bpf 注入。沙箱里再套沙箱,这是它&quot;通用 + 安全&quot;的底座。</li>
+<li><strong>K8s 调度器</strong> <code>kubernetes/internal/controller/&#123;algorithm,strategy,poolassign,recycle,eviction&#125;/</code> + <code>internal/scheduler/</code>:池化预热、分配、回收、驱逐策略,这是高吞吐 RL/评测场景的核心,比单纯&quot;起个 Pod&quot;复杂得多。</li>
+<li><strong>egress 的 dns+nft 动态联动</strong> <code>components/egress/nft.go</code> + <code>pkg/dnsproxy</code>:DNS 过滤拿到解析 IP 后动态写入 nft allow set,既过滤域名又能处理 CDN 多 IP,加 mitmproxy 做透明 HTTPS 拦截 + credential vault 注入凭证——这是&quot;可控出站&quot;的完整工程化。</li>
+</ol>
+<h3 id="14-5-控制面-vs-数据面-执行边界">14.5 控制面 vs 数据面:执行边界</h3>
+<p>一个容易混淆的点:控制面 server 会根据请求创建 Pod,但<strong>它不在里面执行命令</strong>。执行走的是数据面(execd),agent 直连 execd,不再经过 server。两阶段、两条不同链路:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────────┐</span><br><span class="line">│ 阶段① 生命周期(过控制面 server)                                  │</span><br><span class="line">│                                                                   │</span><br><span class="line">│  agent → POST /v1/sandboxes (FastAPI server)                      │</span><br><span class="line">│         → KubernetesSandboxService 生成 BatchSandbox manifest      │</span><br><span class="line">│         → 提交到集群 → controller reconcile → 起 Pod              │</span><br><span class="line">│            (init container 把 execd 拷进 emptyDir → 主容器起 execd)│</span><br><span class="line">│  agent → GET /v1/sandboxes/&#123;id&#125;/endpoints/&#123;port&#125;                  │</span><br><span class="line">│         → server 返回 execd 的可达地址(+ secureAccess 时的 header) │</span><br><span class="line">└─────────────────────────────────────────────────────────────────┘</span><br><span class="line">                            ↓ Pod 起来,execd 在监听</span><br><span class="line">┌─────────────────────────────────────────────────────────────────┐</span><br><span class="line">│ 阶段② 执行(直连数据面 execd,绕开 server)                         │</span><br><span class="line">│                                                                   │</span><br><span class="line">│  agent → execd 端点 /command、/files、/code、/pty               │</span><br><span class="line">│         → execd 在 Pod 内部用 bwrap+seccomp 跑命令/读写文件       │</span><br><span class="line">│         → SSE/WebSocket 流式回输出                                 │</span><br><span class="line">└─────────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>逐字澄清:</p>
+<ul>
+<li><strong>控制面根据请求创建 Pod</strong> —— 是。K8s 模式下 <code>KubernetesSandboxService</code> 把 create 请求翻译成 <code>BatchSandbox</code> manifest 提交,controller 负责 reconcile 出真正的 Pod(<code>services/k8s/kubernetes_service.py</code> + <code>batchsandbox_template.py</code>)。Docker 模式下则是 <code>DockerSandboxService</code> 调 Docker daemon 建容器。</li>
+<li><strong>然后在里面执行对应的命令</strong> —— 不是。Pod 起来后,server 的活就基本干完了(只剩端点解析/续期/诊断/快照这些生命周期管理)。<strong>执行命令是 agent 直接连 Pod 里的 <code>execd</code></strong>,server 不参与、不做中转、不解析输出。</li>
+</ul>
+<p><strong>为什么这样设计</strong>:就是架构文档反复强调的 Control plane vs Data plane。server(控制面)只做编排与校验——鉴权、配额、资源限额翻译、工作负载创建、端点解析、pause/resume、快照元数据持久化,是&quot;管理面&quot;,不碰业务数据流;<code>execd</code>(数据面)做沙箱内的一切实际操作——跑命令、读写文件、PTY、Jupyter 代码执行,它跑在 Pod 里,和用户工作负载共享网络/文件命名空间,所以能直接操作沙箱内部。好处是执行流量(可能很大,有流式输出、长连接 PTY)<strong>不经过控制面</strong>,server 不会被业务流量打爆;execd 失败只影响单个沙箱,不波及全局调度。</p>
+<p><strong>一个例外:server proxy</strong>。如果网络拓扑让 agent 摸不到 execd 直连地址,可以开 <code>use_server_proxy=true</code>,server 会用 <code>/sandboxes/&#123;sandboxId&#125;/proxy/&#123;port&#125;</code> <strong>转发</strong> HTTP/WebSocket 流量到 execd。但注意——这仍是<strong>转发</strong>,不是 server 自己执行命令;真正的执行还是在 Pod 里的 execd。这是逃生通道,不是默认路径。</p>
+<p>落到代码位置:</p>
+<table>
+<thead>
+<tr>
+<th>行为</th>
+<th>谁干</th>
+<th>代码位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>create → 建 Pod</td>
+<td>控制面 server</td>
+<td><code>server/services/k8s/kubernetes_service.py</code> → <code>batchsandbox_template.py</code></td>
+</tr>
+<tr>
+<td>BatchSandbox CRD → 真 Pod</td>
+<td>K8s controller</td>
+<td><code>kubernetes/internal/controller/</code> + <code>apis/sandbox/v1alpha1/batchsandbox_types.go</code></td>
+</tr>
+<tr>
+<td>端点解析(告诉 agent execd 在哪)</td>
+<td>控制面 server</td>
+<td>lifecycle endpoint API(<code>/v1/sandboxes/&#123;id&#125;/endpoints/&#123;port&#125;</code>)</td>
+</tr>
+<tr>
+<td>跑命令/文件/代码</td>
+<td>数据面 execd</td>
+<td><code>components/execd/pkg/web/controller/</code> + <code>pkg/runtime/</code>(command.go/bash_session.go/pty_session.go/jupyter.go)</td>
+</tr>
+</tbody>
+</table>
+<p>所以本质是:<strong>create 阶段过控制面建 Pod,execute 阶段 agent 直连 Pod 里的 execd</strong>——server 只管&quot;把沙箱建起来并告诉你地址&quot;,不管&quot;在沙箱里跑什么&quot;。</p>
+<p>一句话总结:<strong>底层 = Docker/K8s 容器(可叠安全运行时)+ execd 内部 bwrap/seccomp 进程级隔离;控制面 FastAPI,数据面/网络面/调度面全是 Go;关键代码集中在 <code>server/services/docker|k8s</code>、<code>components/execd/pkg/&#123;isolation,runtime,web&#125;</code>、<code>kubernetes/internal/&#123;controller,scheduler,task-executor&#125;</code>、<code>components/&#123;ingress,egress&#125;</code>。</strong></p>
+<h2 id="十五、鉴权到底怎么做的-大白话版">十五、鉴权到底怎么做的(大白话版)</h2>
+<p>很多人第一反应是:这玩意跑在 K8s 上,鉴权肯定用 ServiceAccount token 吧?<strong>不是。</strong> 先把结论摆这儿:agent 访问沙箱全程不用 K8s 的 SA token,用的全是 OpenSandbox 自己生成的 api_key 和随机字符串;SA token 只在一个不沾边的地方出现——server 自己去调 K8s 接口时。</p>
+<h3 id="15-1-打个比方-进一个沙箱像进一套房子">15.1 打个比方:进一个沙箱像进一套房子</h3>
+<p>把你要访问的沙箱想象成一套房子,要过四道门禁:</p>
+<table>
+<thead>
+<tr>
+<th>门禁</th>
+<th>你到哪了</th>
+<th>刷什么卡</th>
+<th>谁发的卡</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>小区大门</td>
+<td>agent → server(控制面)</td>
+<td><code>OPEN-SANDBOX-API-KEY</code></td>
+<td>运维配的 api_key</td>
+</tr>
+<tr>
+<td>楼栋门</td>
+<td>agent → ingress 网关</td>
+<td><code>OpenSandbox-Secure-Access</code> + 签名</td>
+<td>server 随机生成,塞进 K8s 注解</td>
+</tr>
+<tr>
+<td>入户门</td>
+<td>agent → execd(数据面)</td>
+<td><code>X-EXECD-ACCESS-TOKEN</code></td>
+<td>execd 启动时带的 token</td>
+</tr>
+<tr>
+<td>阳台门</td>
+<td>agent → egress sidecar</td>
+<td><code>OpenSandbox-Egress-Auth</code></td>
+<td>server 随机生成</td>
+</tr>
+</tbody>
+</table>
+<p><strong>没有一道门用的是 K8s SA token。</strong> 全是&quot;小区物业&quot;自己印的卡。</p>
+<h3 id="15-2-SA-token-到底在哪——只有一个地方">15.2 SA token 到底在哪——只有一个地方</h3>
+<p><code>server/services/k8s/client.py</code> 里:</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> <span class="variable language_">self</span>.config.kubeconfig_path:</span><br><span class="line">    config.load_kube_config(...)    <span class="comment"># 用 kubeconfig 文件</span></span><br><span class="line"><span class="keyword">else</span>:</span><br><span class="line">    config.load_incluster_config()  <span class="comment"># 用集群里挂进来的 ServiceAccount token</span></span><br></pre></td></tr></table></figure>
+<p>意思是:server 这个程序自己要去跟 K8s “说话”(建 Pod、查状态、建 PVC),它说话时得亮明自己是谁——这时才用 SA token(或 kubeconfig)。这就像<strong>物业经理进物业系统办业务要刷自己的工牌</strong>,跟业主(agent)能不能进房子毫无关系。agent 永远拿不到这张工牌,也不需要。</p>
+<h3 id="15-3-四道门禁逐个说">15.3 四道门禁逐个说</h3>
+<p><strong>① 小区大门:api_key(<code>OPEN-SANDBOX-API-KEY</code>)</strong></p>
+<p>最外层。你在 <code>~/.sandbox.toml</code> 里配的那个 <code>api_key</code>,agent 每次调 server 都得在 header 里带上。server 的 <code>middleware/auth.py</code> 负责验:单租户模式直接比对你配的那串;多租户模式拿 api_key 去 <code>tenant_provider.lookup()</code> 查你是哪个租户。没带或不匹配直接拒。还有个 <code>startup_guard</code> 守门:你要是不配 api_key 想裸跑,它不让你在公网上启动,防止&quot;大门敞开&quot;。</p>
+<p><strong>② 楼栋门:secureAccess(<code>OpenSandbox-Secure-Access</code>)</strong></p>
+<p>这一道只在你走 K8s ingress 网关模式、且开了 <code>secureAccess</code> 时才有。server 建沙箱时随手生成一个随机串(<code>secrets.token_urlsafe(24)</code>,24 字节随机数编码成 url 安全字符串),写进这个沙箱的 K8s 注解里存着;你问&quot;端点在哪&quot;时,server 把这串塞进响应的 header 还给你。你后续请求网关就带着这个 header,网关(<code>components/ingress/pkg/signature</code>)对一下注解里的值,对得上才放行。如果还配了签名密钥,网关再验一个 HMAC 签名,防止这串被改过。</p>
+<p>说句实在话:这串是<strong>明文存在 K8s 注解里</strong>的,网关只要有权限读注解就能看到。所以它的定位是&quot;路由层挡一挡&quot;,不是什么高强度机密保护——真要防黑客级别的攻击,得靠后面那道入户门 + 网络隔离。</p>
+<p><strong>③ 入户门:execd token(<code>X-EXECD-ACCESS-TOKEN</code>)</strong></p>
+<p>这是真正到了 Pod 里、要操作沙箱(execd)时的门禁。execd 启动时通过 <code>--access-token</code> 参数或 <code>EXECD_ACCESS_TOKEN</code> 环境变量拿到一个 token;你调 <code>/command</code>、<code>/files</code> 这些接口必须在 header 里带 <code>X-EXECD-ACCESS-TOKEN</code>,execd 的 <code>accessTokenMiddleware</code>(<code>pkg/web/router.go</code>)拿你给的跟自己存的比对,对不上返回 401。</p>
+<p>有个坑要注意:这串是 execd 启动参数传的,<strong>如果你不配(token 为空),execd 直接跳过校验——等于入户门没锁</strong>。本地开发可以这么干,生产环境务必配上。</p>
+<p><strong>④ 阳台门:egress auth(<code>OpenSandbox-Egress-Auth</code>)</strong></p>
+<p>挂了 egress sidecar、想运行时改出站策略(<code>PATCH /policy</code>)才用得上。同样是 server 随机生成一个 token,端点响应里带给你,你改策略时带上,sidecar 验。机制跟 secureAccess 一样,随机串 + header 比对。</p>
+<h3 id="15-4-为什么不用-SA-token">15.4 为什么不用 SA token</h3>
+<p>不是不会用,是<strong>不该用</strong>:</p>
+<ol>
+<li><strong>agent 多半不在 K8s 集群里</strong>,它压根拿不到 SA token;就算在,把 SA token 给 agent 等于把 K8s API 的钥匙交出去了——SA token 能干的事太多(看 secrets、建 Pod……),粒度太粗,给一个只想跑两条命令的 agent 太危险。</li>
+<li><strong>沙箱是短命的、一次性的</strong>,起起停停,每个都该有自己的临时钥匙。SA token 是长期的、namespace 级的&quot;工牌&quot;,跟&quot;用完就扔&quot;的沙箱对不上号。</li>
+<li><strong>server 当中间人发卡最合适</strong>:api_key 是你长期持有的&quot;业主卡&quot;;secureAccess 和 egress 两把是 server 给每个沙箱临时随机发的&quot;访客卡&quot;,沙箱一销毁就废;<strong>但 execd token 是运维在 execd 镜像/配置里静态配的,不随沙箱发放</strong>(详见 15.6)。</li>
+</ol>
+<p>所以整套就是个<strong>自研的轻量凭据体系</strong>:一道长期 api_key 守大门,三类随机 token 守到 Pod 各个面,SA token 只服务 server 自己跟 K8s 打交道。</p>
+<h3 id="15-5-一句话总结">15.5 一句话总结</h3>
+<p>agent 进沙箱过四道门:api_key(进 server)、secureAccess token(进网关)、execd token(进数据面)、egress token(改出站策略)——其中 secureAccess/egress 是 server 现场随机发的,execd token 是运维静态配的(不配则不校验),<strong>没有一把是 K8s ServiceAccount token</strong>;SA token 只有 server 自己调 K8s API 时当&quot;工牌&quot;用,agent 看不见也用不着。代码都在 <code>server/middleware/auth.py</code>、<code>server/services/endpoint_auth.py</code>、<code>server/services/k8s/&#123;create_helpers,endpoint_resolver&#125;.py</code>、<code>components/execd/pkg/web/router.go</code>、<code>components/ingress/pkg/signature</code>。</p>
+<h3 id="15-6-secureAccess-token-vs-execd-token-别搞混这两把">15.6 secureAccess token vs execd token:别搞混这两把</h3>
+<p>secureAccess token 和 execd token 都是&quot;门禁卡&quot;,但<strong>管的是两道不同的门、由不同的人发卡、在不同位置校验</strong>,而且是串联关系,不是替代关系。</p>
+<p>对比表:</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>secureAccess token</th>
+<th>execd token</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>header 名</td>
+<td><code>OpenSandbox-Secure-Access</code></td>
+<td><code>X-EXECD-ACCESS-TOKEN</code></td>
+</tr>
+<tr>
+<td><strong>谁生成</strong></td>
+<td>server 现场随机(<code>secrets.token_urlsafe(24)</code>)</td>
+<td>运维/execd 镜像静态配置(<code>--access-token</code> / <code>EXECD_ACCESS_TOKEN</code>)</td>
+</tr>
+<tr>
+<td><strong>存哪</strong></td>
+<td>K8s 注解 / Docker label</td>
+<td>execd 进程内存</td>
+</tr>
+<tr>
+<td><strong>谁校验</strong></td>
+<td>ingress 网关(<code>components/ingress/pkg/signature</code>)</td>
+<td>execd 自己(<code>pkg/web/router.go:accessTokenMiddleware</code>)</td>
+</tr>
+<tr>
+<td><strong>校验位置</strong></td>
+<td>agent → 网关 这一跳</td>
+<td>agent → execd 这一跳</td>
+</tr>
+<tr>
+<td><strong>适用场景</strong></td>
+<td>仅 K8s 网关模式 + 开了 <code>secureAccess</code></td>
+<td>所有模式,只要 execd 配了 token</td>
+</tr>
+<tr>
+<td><strong>粒度</strong></td>
+<td>per-sandbox,每把不同</td>
+<td>一个 execd 镜像/配置一把(可能多沙箱同值)</td>
+</tr>
+<tr>
+<td><strong>防伪强度</strong></td>
+<td>随机串 + 可选 HMAC 签名(OSEP-0011)</td>
+<td>纯字符串比对,不配就跳过(等于没锁)</td>
+</tr>
+<tr>
+<td><strong>作用对象</strong></td>
+<td>路由层:能不能走网关进这个沙箱</td>
+<td>执行层:能不能调 execd 跑命令/读写文件</td>
+</tr>
+</tbody>
+</table>
+<p><strong>它俩是串联的,各管一段</strong>。K8s 网关模式 + secureAccess + execd 配了 token 的完整链路:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">agent 请求</span><br><span class="line">  │  带 OpenSandbox-Secure-Access</span><br><span class="line">  ▼</span><br><span class="line">ingress 网关 ── 验 secureAccess token(查注解 + 验 HMAC 签名)  ← 第一道门</span><br><span class="line">  │  放行,转发到该 Pod:44772</span><br><span class="line">  ▼</span><br><span class="line">execd ── 验 X-EXECD-ACCESS-TOKEN(字符串比对)              ← 第二道门</span><br><span class="line">  │  放行,执行 /command /files /code</span><br><span class="line">  ▼</span><br><span class="line">真正跑命令</span><br></pre></td></tr></table></figure>
+<p>一个请求要<strong>两道都过</strong>才能执行:secureAccess 管&quot;你能不能从网关进来&quot;,execd token 管&quot;你能不能调执行 API&quot;。两把钥匙互不通用——网关不认 execd token,execd 也不认 secureAccess token。</p>
+<p>几个容易混的点:</p>
+<ol>
+<li><strong>Docker 模式下没有 secureAccess 这道门</strong>。secureAccess 只在 K8s ingress 网关模式有效(server 会校验 <code>ingress.mode == gateway</code> 才允许开 secureAccess)。Docker 模式 agent 直连宿主端口到 execd,只过 execd token 这一道(若配了)。</li>
+<li><strong>execd token 不配等于没锁</strong>。execd 中间件逻辑是 <code>if token == &quot;&quot; → 跳过校验</code>,空串直接放行。secureAccess 不一样——它要靠 server 显式生成并写进注解才存在,不生成就没有这道门的概念。</li>
+<li><strong>发卡方不同导致轮换难度不同</strong>。secureAccess 是 server per-sandbox 现场发的,沙箱一销毁就废,天然短期;execd token 是运维配的固定值,要轮换得改 execd 镜像/配置重启,多个沙箱可能共用同一把。</li>
+<li><strong>强度不同</strong>。secureAccess 可叠加 HMAC 签名(防 token 被改/重放);execd token 是裸字符串比对,没签名机制,主要防&quot;随手乱调&quot;,不防&quot;认真攻击&quot;。</li>
+</ol>
+<p>一句话:<strong>secureAccess token = 网关发的路由通行证(server 随机发、网关验、仅 K8s 网关模式);execd token = execd 自己的执行 API 钥匙(运维配、execd 验、所有模式)。一个管&quot;进不进得来&quot;,一个管&quot;能不能动手&quot;,串联在一起。</strong></p>
+<h2 id="参考">参考</h2>
+<ul>
+<li>项目：<a target="_blank" rel="noopener" href="https://github.com/opensandbox-group/OpenSandbox">https://github.com/opensandbox-group/OpenSandbox</a></li>
+<li>架构文档：<code>docs/architecture/index.md</code></li>
+<li>协议：<code>specs/sandbox-lifecycle.yml</code>、<code>specs/execd-api.yaml</code>、<code>specs/egress-api.yaml</code>、<code>specs/diagnostic-api.yml</code></li>
+<li>ROADMAP：<code>ROADMAP.md</code></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/">http://example.com/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Agent/">Agent</a><a class="post-meta__tags" href="/tags/Docker/">Docker</a><a class="post-meta__tags" href="/tags/Sandbox/">Sandbox</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/opensandbox.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mcp-sandbox-router.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">一个 MCP 沙箱路由调度框架的架构分析</div></div><div class="info-2"><div class="info-item-1">一个 MCP 沙箱路由调度框架的架构分析 本文分析一个用 Go 实现、面向 MCP(Model Context Protocol)的沙箱路由与调度框架。它把&quot;给 agent 起一个隔离环境跑工具&quot;这件事标准化、规模化、多引擎化。 一、它是什么 一句话:一个面向 MCP 的沙箱路由与调度框架,用 Go 写成,直接基于官方 modelcontextprotocol/go-sdk,把沙箱的创建、路由、调度、生命周期、计量都做成了一套基础设施。 它跟&quot;控制面 Python + 数据面 Go、协议优先的通用沙箱平台&quot;是两种不同路线:本框架全 Go、MCP 原生(直接用官方 SDK),更强调调度(快照+Epoch 的确定性调度)和路由(二层网络高可用网格)。它的&quot;沙箱&quot;抽象本质是一个 http.RoundTripper——工具调用就是 HTTP,没有单独的执行协议。 核心能力:  沙箱路由:按沙箱类型分发、MCP 会话生命周期管理、按下游负载动态调整、二层网络高可用。 沙箱引擎:Echo / FileServer / Git / P...</div></div></div></a><a class="pagination-related" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</div></div><div class="info-2"><div class="info-item-1"> 做大模型 Infra 的人迟早会撞到「网络」这堵墙：千卡训练的 NCCL all-reduce、KV-cache 的 RDMA 直读、推理网关的百万 QPS……一旦标准内核协议栈不够用，就要在 XDP / DPDK / AF_XDP 这三条「绕过内核」的路径里做选择。本文把三者的原理、数据流、取舍一次性讲透。  一、为什么内核协议栈不够快 先建立基准：为什么需要绕过内核？ 标准 Linux 网络栈（sk_buff + TCP/IP 协议栈 + socket）每收一个包要走的路： 12网卡 RX → DMA 到内存 → 硬中断 → 软中断 NET_RX_SOFTIRQ → netif_receive_skb→ sk_buff 分配/拷贝 → IP/TCP 协议栈处理 → socket 接收队列 → 用户态 read() 这套路径有四个「慢点」：  上下文切换：硬中断 → 软中断 → 内核态 → 用户态，每个包多次跨越特权级。 sk_buff 分配/释放：每个包都 alloc_skb/kfree，这是热点里的内存分配抖动。 数据拷贝：内核缓冲区 → 用户态 buffer，至少一次 ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mcp-sandbox-router.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">一个 MCP 沙箱路由调度框架的架构分析</div></div><div class="info-2"><div class="info-item-1">一个 MCP 沙箱路由调度框架的架构分析 本文分析一个用 Go 实现、面向 MCP(Model Context Protocol)的沙箱路由与调度框架。它把&quot;给 agent 起一个隔离环境跑工具&quot;这件事标准化、规模化、多引擎化。 一、它是什么 一句话:一个面向 MCP 的沙箱路由与调度框架,用 Go 写成,直接基于官方 modelcontextprotocol/go-sdk,把沙箱的创建、路由、调度、生命周期、计量都做成了一套基础设施。 它跟&quot;控制面 Python + 数据面 Go、协议优先的通用沙箱平台&quot;是两种不同路线:本框架全 Go、MCP 原生(直接用官方 SDK),更强调调度(快照+Epoch 的确定性调度)和路由(二层网络高可用网格)。它的&quot;沙箱&quot;抽象本质是一个 http.RoundTripper——工具调用就是 HTTP,没有单独的执行协议。 核心能力:  沙箱路由:按沙箱类型分发、MCP 会话生命周期管理、按下游负载动态调整、二层网络高可用。 沙箱引擎:Echo / FileServer / Git / P...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-15-Camel%E6%A1%86%E6%9E%B6/" title="Camel框架"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/camel.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">Camel框架</div></div><div class="info-2"><div class="info-item-1">NeurIPS 2023｜AI Agents先行者CAMEL:第一个基于大模型的多智能体框架 转自：https://zhuanlan.zhihu.com/p/671093582 AI Agents是当下大模型领域备受关注的话题，用户可以引入多个扮演不同角色的LLM Agents参与到实际的任务中，Agents之间会进行竞争和协作等多种形式的动态交互，进而产生惊人的群体智能效果。本文介绍了来自KAUST研究团队的大模型心智交互CAMEL框架（“骆驼”），CAMEL框架是最早基于ChatGPT的autonomous agents知名项目，目前已被顶级人工智能会议NeurIPS 2023录用。  1777dbe9073c4bcd8ab59365481bcafc.png  论文题目： CAMEL: Communicative Agents for “Mind” Exploration of Large Scale Language Model Society 论文链接： https://ghli.org/camel.pdf 代码链接： https://github.com/camel-a...</div></div></div></a><a class="pagination-related" href="/2025/08/13/2025-08-13-MCP-Zero%EF%BC%9ALLM%E6%99%BA%E8%83%BD%E4%BD%93%E4%B8%BB%E5%8A%A8%E5%B7%A5%E5%85%B7%E5%8F%91%E7%8E%B0%E7%9A%84%E6%96%B0%E8%8C%83%E5%BC%8F/" title="MCP-Zero：LLM智能体主动工具发现的新范式"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-13</div><div class="info-item-2">MCP-Zero：LLM智能体主动工具发现的新范式</div></div><div class="info-2"><div class="info-item-1">MCP-Zero：LLM智能体主动工具发现的新范式 转自：https://zhuanlan.zhihu.com/p/1928760473630798292 引言 大语言模型（LLMs）在处理复杂任务时，通常需要借助外部工具来扩展其能力范围。然而，当前 LLM 智能体与工具集成的主流范式存在显著局限性：它们往往将预定义的工具模式注入到系统提示中，导致模型扮演被动选择者的角色，而非主动发现所需能力。这种方法不仅造成了巨大的上下文开销，也限制了模型的决策自主性。 为了解决这些问题，本文引入了 MCP-Zero，一个旨在恢复 LLM 智能体工具发现自主性的主动框架。MCP-Zero 的核心思想是，智能体能够主动识别自身能力差距，并按需请求特定工具，从而将自身从大规模检索器转变为真正的自主智能体。该框架通过三大核心机制运行：主动工具请求、分层语义路由和迭代能力扩展。这些机制共同作用，使得 MCP-Zero 能够在最小化上下文开销和保持高准确性的前提下，动态构建多步工具链。   图：LLM 智能体的工具选择范例比较。(a) 基于系统提示的方法将所有 MCP 工具模式注入上下文，导致提示过长，...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AgenticRL.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">Agentic RL</div></div><div class="info-2"><div class="info-item-1">转自：https://zhuanlan.zhihu.com/p/1913905349284591240 通过蒙特卡洛树搜索、过程监督与结果监督、强化学习来提高 LLM 的推理能力，从本质上来说，都是尽可能榨取 LLM 本身的能力，区别可能在于多次尝试、反馈信号、训练方法而已，这类方法可称之为“求诸内”。而由 scaling law 可知，模型的能力是有限的，那么该如何进一步提高LLM在具体问题上的表现呢？近期的答案是，类似 RAG，Multi-Agent 系统，让 LLM 学会使用工具，毕竟人与动物的关键区别也只是“能制造并使用工具”，这种方式则是“求诸外”。那么本篇就以此为中心，重点讨论以下问题：  Agentic LLM 的算法逻辑、具体方法与实际表现？ RL 如何训练 Agentic LLM，其与 tool using 的 SFT 的差异在哪？ Agentic RL 的工程化问题  一、Agentic RL 的算法设计 Agent 和 RL 都并非新鲜事物，而使用 RL 训练基于 LLM 的 agent 则是近期的研究的热点，那么，从算法角度来说，如何理解二者结合的动机、场...</div></div></div></a><a class="pagination-related" href="/2025/08/27/2025-08-27-InfiGUIAgent-A-Multimodal-Generalist-GUI-Agent-with-Native-Reasoning-and-Reflection/" title="InfiGUIAgent:A Multimodal Generalist GUI Agent with Native Reasoning and Reflection"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/InfiGUIAgent.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-27</div><div class="info-item-2">InfiGUIAgent:A Multimodal Generalist GUI Agent with Native Reasoning and Reflection</div></div><div class="info-2"><div class="info-item-1">InfiGUIAgent: A Multimodal Generalist GUI Agent with Native Reasoning and Reflection 2025-01-08｜ZJU, DLUT, Reallm Labs, ByteDance Inc, PolyU| 15 http://arxiv.org/abs/2501.04575v1 https://huggingface.co/papers/2501.04575 https://github.com/Reallm-Labs/InfiGUIAgent 研究背景与意义  在当今数字化时代，图形用户界面（GUI）智能体的应用愈发广泛，成为自动化任务的重要工具。现有的多模态大语言模型（MLLMs）为GUI智能体的智能化提供了基础，但其在多步骤推理和对文本注释的依赖上仍存在显著局限。本研究提出的InfiGUIAgent旨在解决这些挑战，强调了原生推理能力在提升GUI交互效率中的重要性，为自动化任务的执行提供了新的可能性。  当前挑战：现有的MLLM基础的GUI智能体在处理复杂操作时，往往受限于单步推理能力，无法有效利...</div></div></div></a><a class="pagination-related" href="/2025/08/27/2025-08-27-GUI-Agent%E7%BB%BC%E8%BF%B0/" title="GUI Agent综述"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/agent.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-27</div><div class="info-item-2">GUI Agent综述</div></div><div class="info-2"><div class="info-item-1">GUI Agent综述 转自：https://zhuanlan.zhihu.com/p/5934506835 最近在基础模型，特别是大型语言模型（LLMs）和多模态大型语言模型（MLLMs）方面的进步，使得智能体能够执行复杂任务。通过利用（M）LLMs处理和解释图形用户界面（GUIs）的能力，这些智能体可以模拟人类交互，如点击和打字，自主执行用户指令。本调查整合了近期关于（M）LLM基础GUI智能体的研究，突出了数据、框架和应用中的关键创新。我们首先讨论代表性的数据集和基准测试。接下来，我们总结了一个统一框架，涵盖了先前研究中使用的基本组件，并附有分类。此外，我们探索了（M）LLM基础GUI智能体的商业应用。基于现有工作，我们识别了几个关键挑战，并提出了未来的研究方向。我们希望本文能激发（M）LLM基础GUI智能体领域的进一步发展。 我们翻译解读最新论文：基于基础模型的图形用户界面智能体，文末有论文信息。  1 引言 图形用户界面（GUIs）作为人类与数字设备之间的主要交互点。人们每天都在手机和网站上与GUIs互动，一个设计良好的GUI智能体可以显著提升用户体验。因此，关于GUI...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">OpenSandbox 项目学习</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%AE%83%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.1.</span> <span class="toc-text">一、它是什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84%EF%BC%9A%E5%85%AD%E4%B8%AA%E8%A1%A8%E9%9D%A2"><span class="toc-number">1.2.</span> <span class="toc-text">二、整体架构：六个表面</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%8D%8F%E8%AE%AE%E9%9D%A2%EF%BC%88specs-%EF%BC%89"><span class="toc-number">1.3.</span> <span class="toc-text">三、协议面（specs&#x2F;）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%8E%A7%E5%88%B6%E9%9D%A2%EF%BC%88server-%EF%BC%89"><span class="toc-number">1.4.</span> <span class="toc-text">四、控制面（server&#x2F;）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E8%BF%90%E8%A1%8C%E6%97%B6%E5%90%8E%E7%AB%AF"><span class="toc-number">1.5.</span> <span class="toc-text">五、运行时后端</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-Docker-%E8%BF%90%E8%A1%8C%E6%97%B6"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 Docker 运行时</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-Kubernetes-%E8%BF%90%E8%A1%8C%E6%97%B6"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 Kubernetes 运行时</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-BatchSandbox-Controller"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 BatchSandbox Controller</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E6%B2%99%E7%AE%B1%E6%95%B0%E6%8D%AE%E9%9D%A2"><span class="toc-number">1.6.</span> <span class="toc-text">六、沙箱数据面</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-execd"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 execd</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-Code-Interpreter-%E8%BF%90%E8%A1%8C%E6%97%B6"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 Code Interpreter 运行时</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E5%8D%B7%EF%BC%88Volumes%EF%BC%89"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 卷（Volumes）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-Egress-Sidecar"><span class="toc-number">1.6.4.</span> <span class="toc-text">6.4 Egress Sidecar</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E7%BD%91%E7%BB%9C%E4%B8%8E%E8%AE%BF%E9%97%AE"><span class="toc-number">1.7.</span> <span class="toc-text">七、网络与访问</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-Ingress-%E7%BD%91%E5%85%B3"><span class="toc-number">1.7.1.</span> <span class="toc-text">7.1 Ingress 网关</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-Secure-Access-Auto-Renew"><span class="toc-number">1.7.2.</span> <span class="toc-text">7.2 Secure Access &#x2F; Auto-Renew</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%A0%B8%E5%BF%83%E6%B5%81%E7%A8%8B%E4%B8%B2%E8%AE%B2"><span class="toc-number">1.8.</span> <span class="toc-text">八、核心流程串讲</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E8%AE%BE%E8%AE%A1%E5%8E%9F%E5%88%99%E5%B0%8F%E7%BB%93"><span class="toc-number">1.9.</span> <span class="toc-text">九、设计原则小结</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E5%85%B8%E5%9E%8B%E7%94%A8%E4%BE%8B"><span class="toc-number">1.10.</span> <span class="toc-text">十、典型用例</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E6%9C%AC%E5%9C%B0%E5%BF%AB%E9%80%9F%E4%B8%8A%E6%89%8B"><span class="toc-number">1.11.</span> <span class="toc-text">十一、本地快速上手</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%BA%8C%E3%80%81%E5%AE%9E%E6%88%98-%E4%BA%91%E4%B8%8A-Agent-%E6%8E%A5%E5%85%A5%E6%B2%99%E7%AE%B1"><span class="toc-number">1.12.</span> <span class="toc-text">十二、实战:云上 Agent 接入沙箱</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#12-1-%E5%85%88%E7%90%86%E6%B8%85%E8%B0%83%E7%94%A8%E5%85%B3%E7%B3%BB"><span class="toc-number">1.12.1.</span> <span class="toc-text">12.1 先理清调用关系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-2-%E5%89%8D%E7%BD%AE-%E5%85%88%E6%9C%89%E4%B8%80%E5%8F%B0-server"><span class="toc-number">1.12.2.</span> <span class="toc-text">12.2 前置:先有一台 server</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-3-%E4%B8%89%E7%A7%8D%E6%8E%A5%E5%85%A5%E6%96%B9%E5%BC%8F-%E6%8C%89%E4%BD%A0%E7%9A%84-agent-%E5%BD%A2%E6%80%81%E9%80%89"><span class="toc-number">1.12.3.</span> <span class="toc-text">12.3 三种接入方式,按你的 agent 形态选</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%96%B9%E5%BC%8F-A-SDK-%E7%9B%B4%E8%BF%9E-%E6%9C%80%E5%B8%B8%E8%A7%81"><span class="toc-number">1.12.3.1.</span> <span class="toc-text">方式 A:SDK 直连(最常见)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%96%B9%E5%BC%8F-B-MCP-%E7%BB%99-Claude-Code-Cursor-%E7%94%A8"><span class="toc-number">1.12.3.2.</span> <span class="toc-text">方式 B:MCP(给 Claude Code &#x2F; Cursor 用)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%96%B9%E5%BC%8F-C-CLI-%E4%B8%B4%E6%97%B6-%E8%BF%90%E7%BB%B4"><span class="toc-number">1.12.3.3.</span> <span class="toc-text">方式 C:CLI(临时&#x2F;运维)</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-4-%E4%BA%91%E4%B8%8A%E7%94%9F%E4%BA%A7%E7%9A%84%E5%87%A0%E4%B8%AA%E8%A6%81%E7%82%B9"><span class="toc-number">1.12.4.</span> <span class="toc-text">12.4 云上生产的几个要点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-5-%E4%B8%80%E5%8F%A5%E8%AF%9D%E6%80%BB%E7%BB%93%E6%B5%81%E7%A8%8B"><span class="toc-number">1.12.5.</span> <span class="toc-text">12.5 一句话总结流程</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%89%E3%80%81%E8%AF%BB%E5%90%8E%E6%84%9F"><span class="toc-number">1.13.</span> <span class="toc-text">十三、读后感</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E5%9B%9B%E3%80%81%E5%BA%95%E5%B1%82%E6%8A%80%E6%9C%AF%E6%A0%88%E4%B8%8E%E5%85%B3%E9%94%AE%E4%BB%A3%E7%A0%81%E6%9E%B6%E6%9E%84"><span class="toc-number">1.14.</span> <span class="toc-text">十四、底层技术栈与关键代码架构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#14-1-%E5%BA%95%E5%B1%82%E6%8A%80%E6%9C%AF%E6%A0%88"><span class="toc-number">1.14.1.</span> <span class="toc-text">14.1 底层技术栈</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-2-%E5%85%B3%E9%94%AE%E8%AE%A4%E7%9F%A5-%E9%9A%94%E7%A6%BB%E6%98%AF-%E4%B8%A4%E5%B1%82-%E7%9A%84"><span class="toc-number">1.14.2.</span> <span class="toc-text">14.2 关键认知:隔离是&quot;两层&quot;的</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-3-%E5%85%B3%E9%94%AE%E4%BB%A3%E7%A0%81%E6%9E%B6%E6%9E%84-%E6%8C%89%E8%B0%83%E7%94%A8%E9%93%BE"><span class="toc-number">1.14.3.</span> <span class="toc-text">14.3 关键代码架构(按调用链)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-4-%E4%B8%89%E4%B8%AA%E6%9C%80%E5%80%BC%E5%BE%97%E7%9C%8B%E7%9A%84%E5%AE%9E%E7%8E%B0%E7%82%B9"><span class="toc-number">1.14.4.</span> <span class="toc-text">14.4 三个最值得看的实现点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-5-%E6%8E%A7%E5%88%B6%E9%9D%A2-vs-%E6%95%B0%E6%8D%AE%E9%9D%A2-%E6%89%A7%E8%A1%8C%E8%BE%B9%E7%95%8C"><span class="toc-number">1.14.5.</span> <span class="toc-text">14.5 控制面 vs 数据面:执行边界</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%BA%94%E3%80%81%E9%89%B4%E6%9D%83%E5%88%B0%E5%BA%95%E6%80%8E%E4%B9%88%E5%81%9A%E7%9A%84-%E5%A4%A7%E7%99%BD%E8%AF%9D%E7%89%88"><span class="toc-number">1.15.</span> <span class="toc-text">十五、鉴权到底怎么做的(大白话版)</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#15-1-%E6%89%93%E4%B8%AA%E6%AF%94%E6%96%B9-%E8%BF%9B%E4%B8%80%E4%B8%AA%E6%B2%99%E7%AE%B1%E5%83%8F%E8%BF%9B%E4%B8%80%E5%A5%97%E6%88%BF%E5%AD%90"><span class="toc-number">1.15.1.</span> <span class="toc-text">15.1 打个比方:进一个沙箱像进一套房子</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-2-SA-token-%E5%88%B0%E5%BA%95%E5%9C%A8%E5%93%AA%E2%80%94%E2%80%94%E5%8F%AA%E6%9C%89%E4%B8%80%E4%B8%AA%E5%9C%B0%E6%96%B9"><span class="toc-number">1.15.2.</span> <span class="toc-text">15.2 SA token 到底在哪——只有一个地方</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-3-%E5%9B%9B%E9%81%93%E9%97%A8%E7%A6%81%E9%80%90%E4%B8%AA%E8%AF%B4"><span class="toc-number">1.15.3.</span> <span class="toc-text">15.3 四道门禁逐个说</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-4-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E7%94%A8-SA-token"><span class="toc-number">1.15.4.</span> <span class="toc-text">15.4 为什么不用 SA token</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-5-%E4%B8%80%E5%8F%A5%E8%AF%9D%E6%80%BB%E7%BB%93"><span class="toc-number">1.15.5.</span> <span class="toc-text">15.5 一句话总结</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-6-secureAccess-token-vs-execd-token-%E5%88%AB%E6%90%9E%E6%B7%B7%E8%BF%99%E4%B8%A4%E6%8A%8A"><span class="toc-number">1.15.6.</span> <span class="toc-text">15.6 secureAccess token vs execd token:别搞混这两把</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.16.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mcp-sandbox-router.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="一个 MCP 沙箱路由调度框架的架构分析"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析">一个 MCP 沙箱路由调度框架的架构分析</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/firecracker-microvm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="OpenSandbox 项目学习"/></a><div class="content"><a class="title" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习">OpenSandbox 项目学习</a><time datetime="2026-08-09T16:00:00.000Z" title="发表于 2026-08-10 00:00:00">2026-08-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/31/2026-07-31-2026%E5%B9%B4%E6%98%BE%E5%8D%A1%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97-%E4%BB%8E%E6%B8%B8%E6%88%8F%E5%A4%A9%E6%A2%AF%E5%9B%BE%E5%88%B0AI%E7%AE%97%E5%8A%9B%E5%B7%85%E5%B3%B0/" title="2026年显卡全景指南：从游戏天梯图到AI算力巅峰">2026年显卡全景指南：从游戏天梯图到AI算力巅峰</a><time datetime="2026-07-30T16:00:00.000Z" title="发表于 2026-07-31 00:00:00">2026-07-31</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

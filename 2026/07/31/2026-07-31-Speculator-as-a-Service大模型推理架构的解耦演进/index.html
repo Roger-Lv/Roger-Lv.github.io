@@ -1,0 +1,313 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Speculator as a Service：大模型推理架构的一次“解耦”演进 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="探讨将 Speculator 从 Target Model 中分离部署的架构思路——Speculator as a Service，化解算力争抢、复用异构资源并实现 QPS 感知的动态调优。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Speculator as a Service：大模型推理架构的一次“解耦”演进">
+<meta property="og:url" content="http://example.com/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="探讨将 Speculator 从 Target Model 中分离部署的架构思路——Speculator as a Service，化解算力争抢、复用异构资源并实现 QPS 感知的动态调优。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-07-30T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-07-31T09:00:56.790Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="大模型推理">
+<meta property="article:tag" content="推测解码">
+<meta property="article:tag" content="架构设计">
+<meta property="article:tag" content="Speculator">
+<meta property="article:tag" content="服务化">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Speculator as a Service：大模型推理架构的一次“解耦”演进",
+  "url": "http://example.com/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-07-30T16:00:00.000Z",
+  "dateModified": "2026-07-31T09:00:56.790Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Speculator as a Service：大模型推理架构的一次“解耦”演进',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Speculator as a Service：大模型推理架构的一次“解耦”演进</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Speculator as a Service：大模型推理架构的一次“解耦”演进</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-07-30T16:00:00.000Z" title="发表于 2026-07-31 00:00:00">2026-07-31</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-07-31T09:00:56.790Z" title="更新于 2026-07-31 17:00:56">2026-07-31</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86/">大模型推理</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/" data-flag-title="Speculator as a Service：大模型推理架构的一次“解耦”演进"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>在当今大模型推理优化领域，<strong>推测解码（Speculative Decoding）</strong> 已成为降低推理延迟、提升吞吐的主流技术之一。然而，随着业务的发展和模型的演进，一个显著的趋势正在显现：<strong>Draft Model（草稿模型）正在变得越来越大</strong>。</p>
+<p>这一变化引发了一系列资源分配的矛盾，也促使我们重新思考推理架构的设计。本文将探讨一种新的架构思路——将 Speculator 从 Target Model 中分离出去，构建“<strong>Speculator as a Service</strong>”。</p>
+</blockquote>
+<h2 id="一、矛盾：为何要将-Speculator-“请”出去？">一、矛盾：为何要将 Speculator “请”出去？</h2>
+<p>在传统的推测式解码架构中，Draft Model 和 Target Model 通常部署在同一个推理实例甚至同一个 GPU 上。这在早期 Draft Model 极小时（如极小的 GPT 或 ngram 模型）是合理的。但现在的趋势发生了变化：</p>
+<ul>
+<li><strong>Draft Model 变大带来的收益递增</strong>：为了追求更高的接受率和更长的平均接受长度，业界倾向于使用能力更强、参数量更大的 Draft Model。</li>
+<li><strong>算力资源的“零和博弈”</strong>：GPU 的算力是有限的。如果 Draft Model 变大，它在推测阶段会抢占 Target Model 的计算资源。二者在同一设备上存在明显的资源冲突。</li>
+<li><strong>执行流的独立性</strong>：关键在于，Draft Model 并不直接影响 Target Model 的执行流。它本质上是一个“旁观者”或“建议者”，通过猜测 Token 来加速主流程，但主模型的验证逻辑是独立的。</li>
+</ul>
+<p>基于此，将 Speculator 从 Target Model 的进程/容器中剥离出去，进行<strong>分离部署</strong>，成为了解决资源冲突的必然选择。</p>
+<h2 id="二、架构：Speculator-as-a-Service-的设想">二、架构：Speculator as a Service 的设想</h2>
+<p>我们提出一种平台级的服务架构：<strong>Speculator as a Service</strong>。</p>
+<p>在这种架构下，Speculator 不再是某个具体 Target Model 的附属组件，而是一个<strong>独立运行、可被多个推理服务共享的通用能力层</strong>。</p>
+<h3 id="1-异构资源的极致利用">1. 异构资源的极致利用</h3>
+<p>分离部署最大的好处在于打破了硬件限制。Target Model（大模型）可以独占高性能 GPU（如 A100/H100），专注于高强度的验证计算；而 Speculator（Draft Model）可以灵活部署在异构算力上（如 CPU、低端 GPU 或空闲算力池）。这种<strong>错位竞争</strong>极大地提升了平台整体算力利用率。</p>
+<h3 id="2-网络瓶颈的消解">2. 网络瓶颈的消解</h3>
+<p>很多人担心分离部署带来的网络开销。实际上，在推测解码的场景中：</p>
+<ul>
+<li><strong>数据交互量极小</strong>：Speculator 与 Target Model 之间仅交换 Token 序列和少量的状态信息，并不涉及大规模的权重或激活值传输。</li>
+<li><strong>带宽要求低，延时敏感</strong>：这种模式对带宽需求不高，但对延时极其敏感。因此，在平台侧拉专线或使用高性能局域网即可满足需求，网络开销在可控范围内。</li>
+</ul>
+<h2 id="三、进阶：动态调优与-QPS-感知">三、进阶：动态调优与 QPS 感知</h2>
+<p>如果仅仅做到分离部署，只是完成了第一步。作为平台侧的服务，Speculator as a Service 还可以引入更智能的调度策略。</p>
+<h3 id="1-基于-EMA-的负载自适应">1. 基于 EMA 的负载自适应</h3>
+<p>线上请求的负载是动态变化的。平台可以基于近期负载的统计特征（如通过 <strong>EMA 指数移动平均</strong>算法），实时感知系统压力。</p>
+<ul>
+<li><strong>低 QPS 场景</strong>：可以激进地调大 Speculator 的参数（如推测步长），以最大化单次请求的加速比。</li>
+<li><strong>高 QPS 场景</strong>：系统吞吐成为瓶颈。此时可以动态调小 Speculator 的计算量，甚至暂时关闭推测功能，优先保障整体吞吐量。</li>
+</ul>
+<p>通过动态调整 Draft Model 的“旋钮”，平台能够最大化资源利用率，在延迟和吞吐之间找到最佳平衡点。</p>
+<h3 id="2-在线学习与参数更新">2. 在线学习与参数更新</h3>
+<p>更进一步，我们可以利用线上数据实现“<strong>数据飞轮</strong>”效应。根据真实业务数据的反馈，在线更新 Draft Model 的参数，使其更贴合 Target Model 的分布，从而持续提升接受率。这种闭环优化是传统静态部署难以实现的。</p>
+<h2 id="四、总结">四、总结</h2>
+<p>将 Speculator 从 Target Model 中剥离出去，不仅化解了两者在算力资源上的天然冲突，更通过服务化的方式，为异构计算和动态调度打开了新的空间。</p>
+<p><strong>Speculator as a Service 的核心价值在于：</strong></p>
+<ul>
+<li><strong>解耦</strong>：解决算力争抢，各司其职。</li>
+<li><strong>复用</strong>：充分利用异构算力，降低成本。</li>
+<li><strong>智能</strong>：基于 QPS 和负载特征的动态调优，实现全局最优。</li>
+</ul>
+<p>这或许是大模型推理架构从“单体”走向“微服务”的一个重要信号。未来，推理平台的竞争将不仅是模型能力的竞争，更是<strong>架构设计与资源调度能力</strong>的竞争。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/">http://example.com/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86/">大模型推理</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E6%B5%8B%E8%A7%A3%E7%A0%81/">推测解码</a><a class="post-meta__tags" href="/tags/%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1/">架构设计</a><a class="post-meta__tags" href="/tags/Speculator/">Speculator</a><a class="post-meta__tags" href="/tags/%E6%9C%8D%E5%8A%A1%E5%8C%96/">服务化</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</div></div><div class="info-2"><div class="info-item-1"> 做大模型 Infra 的人迟早会撞到「网络」这堵墙：千卡训练的 NCCL all-reduce、KV-cache 的 RDMA 直读、推理网关的百万 QPS……一旦标准内核协议栈不够用，就要在 XDP / DPDK / AF_XDP 这三条「绕过内核」的路径里做选择。本文把三者的原理、数据流、取舍一次性讲透。  一、为什么内核协议栈不够快 先建立基准：为什么需要绕过内核？ 标准 Linux 网络栈（sk_buff + TCP/IP 协议栈 + socket）每收一个包要走的路： 12网卡 RX → DMA 到内存 → 硬中断 → 软中断 NET_RX_SOFTIRQ → netif_receive_skb→ sk_buff 分配/拷贝 → IP/TCP 协议栈处理 → socket 接收队列 → 用户态 read() 这套路径有四个「慢点」：  上下文切换：硬中断 → 软中断 → 内核态 → 用户态，每个包多次跨越特权级。 sk_buff 分配/释放：每个包都 alloc_skb/kfree，这是热点里的内存分配抖动。 数据拷贝：内核缓冲区 → 用户态 buffer，至少一次 ...</div></div></div></a><a class="pagination-related" href="/2026/07/31/2026-07-31-%E6%B7%B1%E5%BA%A6%E5%AD%A6%E4%B9%A0%E4%BC%98%E5%8C%96%E6%96%B0%E6%98%9F-Muon%E4%B8%8E%E7%89%9B%E9%A1%BF-%E8%88%92%E5%B0%94%E8%8C%A8%E8%BF%AD%E4%BB%A3%E7%9A%84%E9%AD%94%E6%B3%95/" title="深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">深度学习优化新星：Muon 与牛顿-舒尔茨迭代的魔法</div></div><div class="info-2"><div class="info-item-1"> 在深度学习的世界里，优化器就是模型的“导航员”。我们熟悉 Adam、AdamW，也听说过 SGD（随机梯度下降）。但最近，一个名为 Muon 的新型优化器引起了轰动，特别是在训练大规模模型（如 LLM）和生成模型（如 GAN）时表现惊艳。 Muon 的核心秘密武器不是复杂的神经网络结构，而是一个古老的数学技巧——牛顿-舒尔茨迭代。 今天，我们就来拆解一下：这个牛顿-舒尔茨迭代到底是什么？Muon 是如何用它来“驯服”梯度的？以及这其中涉及到的动量、正交和奇异值到底又是什么？  一、什么是牛顿-舒尔茨迭代？ 简单来说，牛顿-舒尔茨迭代是一种极其高效的矩阵求逆（或近似求逆）算法。 在数学上，如果你想求一个矩阵 AAA 的逆矩阵 A−1A^{-1}A−1，通常需要做复杂的矩阵分解（如 SVD），计算量非常大。但牛顿-舒尔茨迭代提供了一个简单的迭代公式： Xk+1=Xk(2I−AXk)X_{k+1} = X_k (2I - A X_k) Xk+1​=Xk​(2I−AXk​) 其中 XkX_kXk​ 是我们对逆矩阵的猜测，III 是单位矩阵。 为什么它这么好用？  速度极快：它不需要复杂...</div></div></div></a></nav><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">236</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">247</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">71</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E7%9F%9B%E7%9B%BE%EF%BC%9A%E4%B8%BA%E4%BD%95%E8%A6%81%E5%B0%86-Speculator-%E2%80%9C%E8%AF%B7%E2%80%9D%E5%87%BA%E5%8E%BB%EF%BC%9F"><span class="toc-number">1.</span> <span class="toc-text">一、矛盾：为何要将 Speculator “请”出去？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%9E%B6%E6%9E%84%EF%BC%9ASpeculator-as-a-Service-%E7%9A%84%E8%AE%BE%E6%83%B3"><span class="toc-number">2.</span> <span class="toc-text">二、架构：Speculator as a Service 的设想</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%9A%84%E6%9E%81%E8%87%B4%E5%88%A9%E7%94%A8"><span class="toc-number">2.1.</span> <span class="toc-text">1. 异构资源的极致利用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E7%BD%91%E7%BB%9C%E7%93%B6%E9%A2%88%E7%9A%84%E6%B6%88%E8%A7%A3"><span class="toc-number">2.2.</span> <span class="toc-text">2. 网络瓶颈的消解</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E8%BF%9B%E9%98%B6%EF%BC%9A%E5%8A%A8%E6%80%81%E8%B0%83%E4%BC%98%E4%B8%8E-QPS-%E6%84%9F%E7%9F%A5"><span class="toc-number">3.</span> <span class="toc-text">三、进阶：动态调优与 QPS 感知</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%9F%BA%E4%BA%8E-EMA-%E7%9A%84%E8%B4%9F%E8%BD%BD%E8%87%AA%E9%80%82%E5%BA%94"><span class="toc-number">3.1.</span> <span class="toc-text">1. 基于 EMA 的负载自适应</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E5%9C%A8%E7%BA%BF%E5%AD%A6%E4%B9%A0%E4%B8%8E%E5%8F%82%E6%95%B0%E6%9B%B4%E6%96%B0"><span class="toc-number">3.2.</span> <span class="toc-text">2. 在线学习与参数更新</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%80%BB%E7%BB%93"><span class="toc-number">4.</span> <span class="toc-text">四、总结</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mcp-sandbox-router.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="一个 MCP 沙箱路由调度框架的架构分析"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析">一个 MCP 沙箱路由调度框架的架构分析</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/firecracker-microvm.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"/></a><div class="content"><a class="title" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</a><time datetime="2026-08-12T16:00:00.000Z" title="发表于 2026-08-13 00:00:00">2026-08-13</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/opensandbox.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="OpenSandbox 项目学习"/></a><div class="content"><a class="title" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习">OpenSandbox 项目学习</a><time datetime="2026-08-09T16:00:00.000Z" title="发表于 2026-08-10 00:00:00">2026-08-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</a><time datetime="2026-08-04T16:00:00.000Z" title="发表于 2026-08-05 00:00:00">2026-08-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/07/31/2026-07-31-2026%E5%B9%B4%E6%98%BE%E5%8D%A1%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97-%E4%BB%8E%E6%B8%B8%E6%88%8F%E5%A4%A9%E6%A2%AF%E5%9B%BE%E5%88%B0AI%E7%AE%97%E5%8A%9B%E5%B7%85%E5%B3%B0/" title="2026年显卡全景指南：从游戏天梯图到AI算力巅峰">2026年显卡全景指南：从游戏天梯图到AI算力巅峰</a><time datetime="2026-07-30T16:00:00.000Z" title="发表于 2026-07-31 00:00:00">2026-07-31</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
