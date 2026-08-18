@@ -1,0 +1,520 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="系统梳理分布式训练核心技术栈,从 FSDP 显存优化、DDP 完整链路,到底层 Ring-AllReduce 与 ACCL 的算法对决,建立完整知识图谱。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析">
+<meta property="og:url" content="http://example.com/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="系统梳理分布式训练核心技术栈,从 FSDP 显存优化、DDP 完整链路,到底层 Ring-AllReduce 与 ACCL 的算法对决,建立完整知识图谱。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/distributed-training.png">
+<meta property="article:published_time" content="2026-08-13T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-14T05:58:54.402Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="分布式训练">
+<meta property="article:tag" content="FSDP">
+<meta property="article:tag" content="DDP">
+<meta property="article:tag" content="All-Reduce">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/distributed-training.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析",
+  "url": "http://example.com/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/",
+  "image": "http://example.com/img/cover/distributed-training.png",
+  "datePublished": "2026-08-13T16:00:00.000Z",
+  "dateModified": "2026-08-14T05:58:54.402Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">241</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">258</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">73</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-13T16:00:00.000Z" title="发表于 2026-08-14 00:00:00">2026-08-14</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-14T05:58:54.402Z" title="更新于 2026-08-14 13:58:54">2026-08-14</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83/">分布式训练</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/" data-flag-title="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</h1>
+<h2 id="引言">引言</h2>
+<p>随着大语言模型(LLM)参数规模从亿级跃升至万亿级,单卡训练已成为历史。分布式训练技术成为每一位 AI 从业者的必修课。本文将带你系统性地梳理分布式训练的核心技术栈,从 <strong>FSDP</strong> 的显存优化,到 <strong>DDP</strong> 的完整链路,再到底层 <strong>Ring-AllReduce</strong> 与 <strong>ACCL</strong> 的算法对决,帮你建立完整的知识图谱。</p>
+<hr>
+<h2 id="一、FSDP-大模型训练的显存救星">一、FSDP:大模型训练的显存救星</h2>
+<h3 id="1-1-什么是-FSDP">1.1 什么是 FSDP?</h3>
+<p><strong>Fully Sharded Data Parallel (FSDP)</strong> 是 PyTorch 1.11 引入的分布式训练策略,其核心思想源于微软的 ZeRO(Zero Redundancy Optimizer)优化器。与传统 DDP 每个 GPU 保留完整模型副本不同,FSDP 将模型参数、梯度和优化器状态<strong>分片存储</strong>在所有 GPU 上。</p>
+<h3 id="1-2-核心适用场景">1.2 核心适用场景</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">场景类型</th>
+<th style="text-align:left">推荐方案</th>
+<th style="text-align:left">说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>大模型训练(&gt;500M 参数)</strong></td>
+<td style="text-align:left">FSDP</td>
+<td style="text-align:left">可降低 4-6 倍峰值显存占用</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>超大模型(&gt;20B 参数)</strong></td>
+<td style="text-align:left">FSDP / DeepSpeed</td>
+<td style="text-align:left">结合模型并行或 Offload 策略</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>小模型(&lt;500M 参数)</strong></td>
+<td style="text-align:left">DDP</td>
+<td style="text-align:left">避免不必要的通信开销</td>
+</tr>
+</tbody>
+</table>
+<h3 id="1-3-FSDP-vs-DDP-vs-DeepSpeed">1.3 FSDP vs DDP vs DeepSpeed</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">特性</th>
+<th style="text-align:left"><strong>FSDP</strong></th>
+<th style="text-align:left"><strong>DDP</strong></th>
+<th style="text-align:left"><strong>DeepSpeed</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>显存占用</strong></td>
+<td style="text-align:left">低</td>
+<td style="text-align:left">高</td>
+<td style="text-align:left">极低(支持 Offload)</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>通信开销</strong></td>
+<td style="text-align:left">中等</td>
+<td style="text-align:left">低</td>
+<td style="text-align:left">中等</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>配置复杂度</strong></td>
+<td style="text-align:left">中等</td>
+<td style="text-align:left">低</td>
+<td style="text-align:left">高</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>适用规模</strong></td>
+<td style="text-align:left">500M - 120B+</td>
+<td style="text-align:left">&lt; 500M</td>
+<td style="text-align:left">500M+</td>
+</tr>
+</tbody>
+</table>
+<h3 id="1-4-学习路线建议">1.4 学习路线建议</h3>
+<ol>
+<li><strong>入门</strong>:从 <code>pytorch-distributed-training-from-scratch</code> 理解核心通信模式</li>
+<li><strong>进阶</strong>:研究 <code>Megatron-FSDP</code> 等工业级实现</li>
+<li><strong>实战</strong>:参考 <code>fsdp_qlora</code> 学习 LLM 微调中的 FSDP 应用</li>
+</ol>
+<hr>
+<h2 id="二、DDP-完整工作链路解析">二、DDP 完整工作链路解析</h2>
+<h3 id="2-1-核心概念-进程组-Process-Group">2.1 核心概念:进程组(Process Group)</h3>
+<p>DDP 通过 <code>torch.distributed.init_process_group()</code> 为所有参与训练的进程建立进程组,需要指定:</p>
+<ul>
+<li><strong>后端(Backend)</strong>:NCCL(GPU)、Gloo(CPU)或 MPI</li>
+<li><strong>协调点</strong>:通过 <code>MASTER_ADDR</code> 和 <code>MASTER_PORT</code> 环境变量指定</li>
+</ul>
+<h3 id="2-2-五步工作链路">2.2 五步工作链路</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│  1. 初始化:建立进程组与通信后端                              │</span><br><span class="line">│     └── 为每个 GPU 创建独立进程,同步随机种子                │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  2. 数据分发与模型复制                                       │</span><br><span class="line">│     ├── DistributedSampler 分配不重叠数据批次               │</span><br><span class="line">│     └── 每个 GPU 创建完全相同的模型副本                     │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  3. 前向传播:各进程独立计算损失                             │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  4. 反向传播与梯度同步(关键步骤)                           │</span><br><span class="line">│     ├── Autograd Hooks 自动触发梯度同步                    │</span><br><span class="line">│     ├── 梯度融合(Bucket)减少通信次数                      │</span><br><span class="line">│     ├── 执行 All-Reduce 求平均梯度                         │</span><br><span class="line">│     └── 通信与计算重叠隐藏延迟                              │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  5. 参数更新:各进程独立执行 optimizer.step()               │</span><br><span class="line">│     └── 初始状态、数据和梯度一致 → 参数保持同步            │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="三、Ring-AllReduce-DDP-的通信引擎">三、Ring-AllReduce:DDP 的通信引擎</h2>
+<h3 id="3-1-拓扑结构-逻辑环-Ring">3.1 拓扑结构:逻辑环(Ring)</h3>
+<p>Ring-AllReduce 将所有 GPU 排列成一个逻辑环,每个 GPU 仅与环上的<strong>两个邻居</strong>通信。这种拓扑结构天然<strong>无单点瓶颈</strong>,通信负载均匀分布。</p>
+<h3 id="3-2-两阶段算法详解">3.2 两阶段算法详解</h3>
+<p>假设有 <strong>N=4</strong> 个 GPU,每个 GPU 上有一个长度为 4 的梯度张量 <code>[a₀, a₁, a₂, a₃]</code>。</p>
+<h4 id="阶段一-Reduce-Scatter-规约-分散">阶段一:Reduce-Scatter(规约-分散)</h4>
+<p><strong>目标</strong>:让每个 GPU 获得一块完整的累加和。</p>
+<blockquote>
+<p><strong>💡 关键洞察</strong>:<code>Reduce-Scatter</code> 比基础 <code>Reduce</code> 多做了&quot;分块+分发&quot;。<code>Reduce</code> 只是把完整结果给一个节点,而 <code>Reduce-Scatter</code> 将结果分块后分散给所有节点。</p>
+</blockquote>
+<p><strong>过程</strong>(N-1=3 步):</p>
+<ul>
+<li>第 1 步:GPU0→GPU1(累加第 0 块),GPU1→GPU2(累加第 1 块)…</li>
+<li>第 2 步:继续沿环传递累加</li>
+<li>第 3 步:每个 GPU 获得一块完整累加和
+<ul>
+<li>GPU0: Σa₀, GPU1: Σa₁, GPU2: Σa₂, GPU3: Σa₃</li>
+</ul>
+</li>
+</ul>
+<h4 id="阶段二-All-Gather-全部收集">阶段二:All-Gather(全部收集)</h4>
+<p><strong>目标</strong>:将分散的累加和分发到所有 GPU。</p>
+<p><strong>过程</strong>(N-1=3 步):</p>
+<ul>
+<li>沿环继续传递,每步每个 GPU 接收一块新的累加和</li>
+<li>3 步后,所有 GPU 都拥有完整的 <code>[Σa₀, Σa₁, Σa₂, Σa₃]</code></li>
+</ul>
+<h3 id="3-3-通信量分析">3.3 通信量分析</h3>
+<ul>
+<li><strong>每步通信量</strong>:N-1 个节点同时发送,每个发送数据量为总梯度/N</li>
+<li><strong>总通信量</strong>:2(N-1)/N ≈ 2 倍总数据量(最优)</li>
+<li><strong>延迟</strong>:随节点数线性增长 O(N)</li>
+</ul>
+<hr>
+<h2 id="四、ACCL-vs-Ring-AllReduce-算法对决">四、ACCL vs Ring-AllReduce:算法对决</h2>
+<h3 id="4-1-ACCL-的-Halving-Doubling-算法">4.1 ACCL 的 Halving-Doubling 算法</h3>
+<p><strong>ACCL</strong>(Alibaba Collective Communication Library)默认采用 <strong>Halving-Doubling (HD)</strong> 算法,与 Ring 算法的&quot;邻居接力&quot;不同,HD 采用&quot;结对跳跃&quot;策略。</p>
+<h3 id="4-2-核心对比">4.2 核心对比</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">对比维度</th>
+<th style="text-align:left"><strong>Ring All-Reduce</strong></th>
+<th style="text-align:left"><strong>ACCL (HD)</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>通信模式</strong></td>
+<td style="text-align:left">仅与两个相邻节点通信</td>
+<td style="text-align:left">与距离倍增的节点通信(1, 2, 4, 8…)</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>通信步骤</strong></td>
+<td style="text-align:left">2×(N-1) 步</td>
+<td style="text-align:left">2×log₂(N) 步</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>延迟特性</strong></td>
+<td style="text-align:left">随 N 线性增长 ⬆️</td>
+<td style="text-align:left">随 N 对数增长 ⬇️</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>链路稳定性</strong></td>
+<td style="text-align:left">高(固定链路)</td>
+<td style="text-align:left">低(链接不断变化)</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>拥塞风险</strong></td>
+<td style="text-align:left">低</td>
+<td style="text-align:left">在网络拓扑未知时可能引发拥塞</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>类比</strong></td>
+<td style="text-align:left">🏃 接力赛</td>
+<td style="text-align:left">♟️ 跳棋游戏</td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-3-场景选择指南">4.3 场景选择指南</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">场景特征</th>
+<th style="text-align:left">推荐算法</th>
+<th style="text-align:left">原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>大规模集群(N&gt;128)</strong></td>
+<td style="text-align:left">HD 算法</td>
+<td style="text-align:left">延迟对数增长,优势明显</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>对延迟敏感的训练</strong></td>
+<td style="text-align:left">HD 算法</td>
+<td style="text-align:left">通信步骤少</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>网络拓扑复杂/不稳定</strong></td>
+<td style="text-align:left">Ring 算法</td>
+<td style="text-align:left">链路固定,更稳定</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>小规模集群(N&lt;32)</strong></td>
+<td style="text-align:left">Ring 算法</td>
+<td style="text-align:left">实现简单,差异不大</td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-4-业界生态一览">4.4 业界生态一览</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">通信库</th>
+<th style="text-align:left">默认 All-Reduce 策略</th>
+<th style="text-align:left">特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><strong>NVIDIA NCCL</strong></td>
+<td style="text-align:left">Ring 算法</td>
+<td style="text-align:left">GPU 通信事实标准</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Alibaba ACCL</strong></td>
+<td style="text-align:left">Halving-Doubling</td>
+<td style="text-align:left">针对阿里云网络优化</td>
+</tr>
+<tr>
+<td style="text-align:left"><strong>Huawei HCCL</strong></td>
+<td style="text-align:left">混合策略(小消息 Ring,大消息 Tree)</td>
+<td style="text-align:left">动态选择最优算法</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>💡 发展趋势</strong>:主流通信库通常会根据<strong>消息大小、集群规模、网络拓扑</strong>等因素动态选择最优算法,并非&quot;一招鲜吃遍天&quot;。</p>
+</blockquote>
+<hr>
+<h2 id="五、总结与展望">五、总结与展望</h2>
+<h3 id="5-1-知识体系回顾">5.1 知识体系回顾</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">应用层:FSDP(显存优化) ↔ DDP(数据并行)</span><br><span class="line">         ↓                    ↓</span><br><span class="line">通信层:All-Reduce ← Ring-AllReduce / ACCL-HD</span><br><span class="line">         ↓</span><br><span class="line">硬件层:NCCL / ACCL / HCCL(厂商特定优化)</span><br></pre></td></tr></table></figure>
+<h3 id="5-2-关键-Takeaways">5.2 关键 Takeaways</h3>
+<ol>
+<li><strong>FSDP 是训练大模型的标配</strong>:在显存效率、训练速度和扩展性间取得良好平衡</li>
+<li><strong>DDP 的 Ring-AllReduce 是经典通信范式</strong>:理解其&quot;Reduce-Scatter + All-Gather&quot;两阶段流程是基础</li>
+<li><strong>Reduce-Scatter ≠ Reduce</strong>:前者多做了&quot;分块+分发&quot;,是实现负载均衡的关键</li>
+<li><strong>ACCL 的 HD 算法是 Ring 的演进方向</strong>:在大规模场景下延迟优势明显,但对网络稳定性要求更高</li>
+<li><strong>没有银弹</strong>:实际生产环境需根据集群规模、硬件、网络条件选择最优策略</li>
+</ol>
+<h3 id="5-3-延伸学习建议">5.3 延伸学习建议</h3>
+<ul>
+<li>研究 <strong>MiCS</strong>(Microsoft Collective Communication)的混合通信策略</li>
+<li>关注 <strong>PyTorch 2.0+</strong> 中 <code>torch.compile</code> 与分布式训练的协同优化</li>
+<li>深入理解 <strong>通信与计算重叠</strong> 的实现细节(如梯度分桶策略)</li>
+</ul>
+<hr>
+<p><em>📌 本文基于 2026 年主流分布式训练技术生态整理,具体实现细节请以官方文档为准。</em></p>
+<p><em>💬 欢迎在评论区交流讨论!</em></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/">http://example.com/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83/">分布式训练</a><a class="post-meta__tags" href="/tags/FSDP/">FSDP</a><a class="post-meta__tags" href="/tags/DDP/">DDP</a><a class="post-meta__tags" href="/tags/All-Reduce/">All-Reduce</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/distributed-training.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/14/2026-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%89%E4%BD%93%E9%97%AE%E9%A2%98%E8%AE%A1%E7%AE%97%E9%80%9A%E4%BF%A1%E4%B8%8E%E5%86%85%E5%AD%98/" title="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/llm-training-three-body.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of previous post"><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">大模型训练的"三体问题":计算、通信与内存的深度协同</div></div><div class="info-2"><div class="info-item-1">大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同 在大模型(LLM)预训练的万卡集群时代,算法架构(如 Transformer、MoE)的进步只是冰山一角。真正决定训练成本与效率的,是底层基础设施(AI Infra)的工程深度。当模型参数突破千亿,硬件算力(FLOPS)与显存带宽(HBM)、网络通信(NVLink/InfiniBand)之间的鸿沟日益扩大,性能瓶颈已从&quot;算法创新&quot;转向了&quot;硬件榨取&quot;。 本文将深入到单次训练迭代(Iteration)的微观尺度,从反向传播的数学本质出发,系统性地拆解计算墙(Kernel 优化)、通信墙(异步流水线)与内存墙(显存管理),并揭示顶级 AI Infra 团队如何通过精细的算子编写与调度策略,将 GPU 的有效算力(MFU)从 50% 拉升至 65% 以上。  一、 大模型训练的&quot;三堵墙&quot; 训练一个千亿参数的大模型,通常涉及数据并行(DP)、张量并行(TP)、流水线并行(PP)等多种并行策略的组合。在这个过程中,模型的前向与反向传播不再是简单的&quot;计...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/firecracker-microvm.png" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/29/2026-07-29-%E4%BB%8E%E6%BA%90%E7%A0%81%E7%90%86%E8%A7%A3FSDP-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E7%9A%84%E6%98%BE%E5%AD%98%E7%A0%B4%E5%B1%80%E4%B9%8B%E9%81%93/" title="从源码理解 FSDP：大模型分布式训练的显存破局之道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">从源码理解 FSDP：大模型分布式训练的显存破局之道</div></div><div class="info-2"><div class="info-item-1"> 本文基于 Tiny-FSDP 项目源码整理。该项目用极简的 PyTorch 代码同时实现了 DDP、ZeRO-3、FSDP 三种分布式策略，是把大模型分布式训练「拆开看」的绝佳教材。我借它准备大模型 Infra 岗面试，把 FSDP 的每一个关键点都讲透。  一、为什么需要 FSDP：从 DDP 的显存瓶颈说起 https://zhuanlan.zhihu.com/p/694288870 https://zhuanlan.zhihu.com/p/2010127853522540210 面试时第一个常问的问题就是：「DDP 为什么训不动大模型？」 1.1 DDP 的显存模型 DDP（Distributed Data Parallel）是最朴素的数据并行：每张卡上都有一份完整的模型参数 + 梯度 + 优化器状态，只是各卡处理不同的数据 batch，反向传播后用 all-reduce 把梯度同步一致。 对于一个有 PPP 个参数的模型、NNN 张卡，每张卡的显存占用是：    显存项 DDP 每卡占用     参数（FP16 + FP32 master） ≈6P\approx 6P≈...</div></div></div></a><a class="pagination-related" href="/2025/11/10/2025-11-10-NCCL%E9%80%9A%E4%BF%A1%E5%8E%9F%E8%AF%AD/" title="NCCL通信原语"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-11-10</div><div class="info-item-2">NCCL通信原语</div></div><div class="info-2"><div class="info-item-1">NCCL通信原语 参考： https://blog.csdn.net/2401_84208172/article/details/142610913?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=142610913&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link 1. Broadcast 其实就是把自己卡上面的东西让所有卡都知道 2. Scatter 其实就是把自己的东西分成多块，按照顺序向其他GPU发送data block 3. Reduce 就是把所有卡的部分在自己卡上面作一个sum。注意这里只有自己的卡作sum 4. Gather 其实对应于Scatter，是把分布在其他卡上的data block在自己卡上面拼起来。注意，这里也是只有自己这一张卡 5. AllReduce 每张卡都对所有卡作一个sum=reduce scatter+all gather, 通信成本也等于这俩加起来 官方说法：将每个节点的数据规约并...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">241</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">258</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">73</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BC%95%E8%A8%80"><span class="toc-number">1.1.</span> <span class="toc-text">引言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81FSDP-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E6%98%BE%E5%AD%98%E6%95%91%E6%98%9F"><span class="toc-number">1.2.</span> <span class="toc-text">一、FSDP:大模型训练的显存救星</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E4%BB%80%E4%B9%88%E6%98%AF-FSDP"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 什么是 FSDP?</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E6%A0%B8%E5%BF%83%E9%80%82%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 核心适用场景</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-FSDP-vs-DDP-vs-DeepSpeed"><span class="toc-number">1.2.3.</span> <span class="toc-text">1.3 FSDP vs DDP vs DeepSpeed</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-4-%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF%E5%BB%BA%E8%AE%AE"><span class="toc-number">1.2.4.</span> <span class="toc-text">1.4 学习路线建议</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81DDP-%E5%AE%8C%E6%95%B4%E5%B7%A5%E4%BD%9C%E9%93%BE%E8%B7%AF%E8%A7%A3%E6%9E%90"><span class="toc-number">1.3.</span> <span class="toc-text">二、DDP 完整工作链路解析</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E6%A0%B8%E5%BF%83%E6%A6%82%E5%BF%B5-%E8%BF%9B%E7%A8%8B%E7%BB%84-Process-Group"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 核心概念:进程组(Process Group)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E4%BA%94%E6%AD%A5%E5%B7%A5%E4%BD%9C%E9%93%BE%E8%B7%AF"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 五步工作链路</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Ring-AllReduce-DDP-%E7%9A%84%E9%80%9A%E4%BF%A1%E5%BC%95%E6%93%8E"><span class="toc-number">1.4.</span> <span class="toc-text">三、Ring-AllReduce:DDP 的通信引擎</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E6%8B%93%E6%89%91%E7%BB%93%E6%9E%84-%E9%80%BB%E8%BE%91%E7%8E%AF-Ring"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 拓扑结构:逻辑环(Ring)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E4%B8%A4%E9%98%B6%E6%AE%B5%E7%AE%97%E6%B3%95%E8%AF%A6%E8%A7%A3"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 两阶段算法详解</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%98%B6%E6%AE%B5%E4%B8%80-Reduce-Scatter-%E8%A7%84%E7%BA%A6-%E5%88%86%E6%95%A3"><span class="toc-number">1.4.2.1.</span> <span class="toc-text">阶段一:Reduce-Scatter(规约-分散)</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%98%B6%E6%AE%B5%E4%BA%8C-All-Gather-%E5%85%A8%E9%83%A8%E6%94%B6%E9%9B%86"><span class="toc-number">1.4.2.2.</span> <span class="toc-text">阶段二:All-Gather(全部收集)</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E9%80%9A%E4%BF%A1%E9%87%8F%E5%88%86%E6%9E%90"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 通信量分析</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81ACCL-vs-Ring-AllReduce-%E7%AE%97%E6%B3%95%E5%AF%B9%E5%86%B3"><span class="toc-number">1.5.</span> <span class="toc-text">四、ACCL vs Ring-AllReduce:算法对决</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-ACCL-%E7%9A%84-Halving-Doubling-%E7%AE%97%E6%B3%95"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 ACCL 的 Halving-Doubling 算法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E6%A0%B8%E5%BF%83%E5%AF%B9%E6%AF%94"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 核心对比</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E5%9C%BA%E6%99%AF%E9%80%89%E6%8B%A9%E6%8C%87%E5%8D%97"><span class="toc-number">1.5.3.</span> <span class="toc-text">4.3 场景选择指南</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E4%B8%9A%E7%95%8C%E7%94%9F%E6%80%81%E4%B8%80%E8%A7%88"><span class="toc-number">1.5.4.</span> <span class="toc-text">4.4 业界生态一览</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E6%80%BB%E7%BB%93%E4%B8%8E%E5%B1%95%E6%9C%9B"><span class="toc-number">1.6.</span> <span class="toc-text">五、总结与展望</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E7%9F%A5%E8%AF%86%E4%BD%93%E7%B3%BB%E5%9B%9E%E9%A1%BE"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 知识体系回顾</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E5%85%B3%E9%94%AE-Takeaways"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 关键 Takeaways</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E5%BB%B6%E4%BC%B8%E5%AD%A6%E4%B9%A0%E5%BB%BA%E8%AE%AE"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 延伸学习建议</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/" title="下一代 VPN 协议:WireGuard 完全指南"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/wireguard.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="下一代 VPN 协议:WireGuard 完全指南"/></a><div class="content"><a class="title" href="/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/" title="下一代 VPN 协议:WireGuard 完全指南">下一代 VPN 协议:WireGuard 完全指南</a><time datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</a><time datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/14/%E6%8A%80%E6%9C%AF%E5%80%BA%E6%95%B4%E7%90%86/" title="无标题">无标题</a><time datetime="2026-08-14T05:29:02.113Z" title="发表于 2026-08-14 13:29:02">2026-08-14</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/" title="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/distributed-training.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析"/></a><div class="content"><a class="title" href="/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/" title="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</a><time datetime="2026-08-13T16:00:00.000Z" title="发表于 2026-08-14 00:00:00">2026-08-14</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/14/2026-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%89%E4%BD%93%E9%97%AE%E9%A2%98%E8%AE%A1%E7%AE%97%E9%80%9A%E4%BF%A1%E4%B8%8E%E5%86%85%E5%AD%98/" title="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/llm-training-three-body.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同"/></a><div class="content"><a class="title" href="/2026/08/14/2026-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%89%E4%BD%93%E9%97%AE%E9%A2%98%E8%AE%A1%E7%AE%97%E9%80%9A%E4%BF%A1%E4%B8%8E%E5%86%85%E5%AD%98/" title="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同">大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同</a><time datetime="2026-08-13T16:00:00.000Z" title="发表于 2026-08-14 00:00:00">2026-08-14</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

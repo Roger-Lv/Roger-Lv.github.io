@@ -1,0 +1,441 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>下一代 VPN 协议:WireGuard 完全指南 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="WireGuard 是仅约 4000 行代码的极简 VPN 协议,2020 年并入 Linux 5.6 内核主线。本文从 Cryptokey Routing、加密算法、性能数据、配置示例到使用场景与局限,系统梳理其全貌。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="下一代 VPN 协议:WireGuard 完全指南">
+<meta property="og:url" content="http://example.com/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="WireGuard 是仅约 4000 行代码的极简 VPN 协议,2020 年并入 Linux 5.6 内核主线。本文从 Cryptokey Routing、加密算法、性能数据、配置示例到使用场景与局限,系统梳理其全貌。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/cover/wireguard.png">
+<meta property="article:published_time" content="2026-08-17T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-18T08:02:36.883Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="网络">
+<meta property="article:tag" content="WireGuard">
+<meta property="article:tag" content="VPN">
+<meta property="article:tag" content="加密">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/cover/wireguard.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "下一代 VPN 协议:WireGuard 完全指南",
+  "url": "http://example.com/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/",
+  "image": "http://example.com/img/cover/wireguard.png",
+  "datePublished": "2026-08-17T16:00:00.000Z",
+  "dateModified": "2026-08-18T08:02:36.883Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '下一代 VPN 协议:WireGuard 完全指南',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">241</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">258</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">73</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">下一代 VPN 协议:WireGuard 完全指南</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">下一代 VPN 协议:WireGuard 完全指南</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-18T08:02:36.883Z" title="更新于 2026-08-18 16:02:36">2026-08-18</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E7%BD%91%E7%BB%9C%E4%B8%8E%E5%AE%89%E5%85%A8/">网络与安全</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/" data-flag-title="下一代 VPN 协议:WireGuard 完全指南"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>下一代 VPN 协议:WireGuard 完全指南</h1>
+<h2 id="引言">引言</h2>
+<p>在 VPN 技术领域,WireGuard 的出现堪称一场革命。当 Linus Torvalds 在 2018 年将 WireGuard 合并到 Linux 内核主线时,他给出了一个极高的评价——“艺术品”(a work of art)。这个仅有约 4000 行代码的极简协议,正在重新定义我们对 VPN 的认知。</p>
+<hr>
+<h2 id="什么是-WireGuard">什么是 WireGuard?</h2>
+<p>WireGuard 是一个极简、高效且安全的 VPN 协议和实现。与传统的 OpenVPN(超过 10 万行代码)和 IPsec 相比,WireGuard 的设计哲学是<strong>简单到易于审计</strong>,从而从根本上减少潜在的安全漏洞。</p>
+<p>它于 2020 年正式合并到 Linux 内核 5.6 版本中,此后迅速成为 Linux 系统上最受欢迎的 VPN 解决方案之一。</p>
+<hr>
+<h2 id="核心原理-Cryptokey-Routing">核心原理:Cryptokey Routing</h2>
+<p>WireGuard 最核心的创新在于 <strong>Cryptokey Routing(加密密钥路由)</strong> 机制。简单来说,它将<strong>公钥</strong>与<strong>内网 IP 地址</strong>直接绑定,形成一个映射表。</p>
+<p>当 WireGuard 接口收到一个数据包时,处理流程如下:</p>
+<ol>
+<li>查询目标 IP 是否在映射表中</li>
+<li>如果在,使用对应的公钥加密数据包并发送</li>
+<li>如果不在,直接丢弃该包</li>
+</ol>
+<p>这种设计让 WireGuard 实现了真正的<strong>点对点(Peer-to-Peer)</strong> 通信架构,而非传统的客户端-服务器模型。每个节点既可以发起连接,也可以接受连接,配置极度简化。</p>
+<h3 id="加密算法">加密算法</h3>
+<p>WireGuard 使用了一套现代化的加密算法组合:</p>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>算法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>密钥交换</td>
+<td>Curve25519</td>
+</tr>
+<tr>
+<td>对称加密</td>
+<td>ChaCha20</td>
+</tr>
+<tr>
+<td>消息认证</td>
+<td>Poly1305</td>
+</tr>
+<tr>
+<td>哈希函数</td>
+<td>BLAKE2s</td>
+</tr>
+</tbody>
+</table>
+<p>这些算法在移动设备和嵌入式系统上表现尤为出色,计算开销远低于传统的 AES 加密。</p>
+<hr>
+<h2 id="性能优势-数据说话">性能优势:数据说话</h2>
+<p>性能是 WireGuard 最引以为傲的优势。多项独立研究证实了其卓越表现:</p>
+<h3 id="吞吐量对比">吞吐量对比</h3>
+<p>在慕尼黑工业大学的一项基准测试中,WireGuard 在 DPDK 上的流水线架构实现达到了 <strong>6.2 Mpps(百万包/秒)和 40 Gbit/s</strong> 的惊人吞吐量,是所有被评估 VPN 实现中最快的。</p>
+<p>另一项云部署测试显示,在单核 CPU 和 2GB RAM 的虚拟机配置下:</p>
+<table>
+<thead>
+<tr>
+<th>VPN 方案</th>
+<th>吞吐量</th>
+<th>相对性能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>WireGuard</td>
+<td>439 Mb/s(下行)/ 489 Mb/s(上行)</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>IPsec</td>
+<td>约一半</td>
+<td>~50%</td>
+</tr>
+<tr>
+<td>OpenVPN</td>
+<td>约四分之一</td>
+<td>~25%</td>
+</tr>
+</tbody>
+</table>
+<p>在多核环境下,WireGuard 同样表现优异,吞吐量可达 <strong>577 Mb/s</strong>,而 IPsec 仅为 211 Mb/s。</p>
+<h3 id="握手延迟">握手延迟</h3>
+<p>WireGuard 的握手时间仅需 <strong>1-2 毫秒</strong>,远优于 OpenVPN 的 10-20 毫秒和 IPsec 的 5-15 毫秒。这意味着连接建立几乎瞬时完成,对于需要频繁重连的移动设备场景至关重要。</p>
+<h3 id="资源占用">资源占用</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>WireGuard</th>
+<th>OpenVPN</th>
+<th>IPsec</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CPU 使用率</td>
+<td>≤ 5%</td>
+<td>20-30%</td>
+<td>15-25%</td>
+</tr>
+<tr>
+<td>内存占用</td>
+<td>≤ 10MB</td>
+<td>20-30MB</td>
+<td>25-35MB</td>
+</tr>
+</tbody>
+</table>
+<p>WireGuard 的轻量级设计使其在资源受限的设备(如树莓派、路由器)上也能流畅运行。</p>
+<hr>
+<h2 id="配置示例">配置示例</h2>
+<p>WireGuard 的配置极为简洁,这是它深受欢迎的重要原因之一。</p>
+<h3 id="基础配置-客户端-服务器">基础配置:客户端-服务器</h3>
+<p><strong>服务器配置</strong> (<code>/etc/wireguard/wg0.conf</code>):</p>
+<figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[Interface]</span></span><br><span class="line"><span class="attr">Address</span> = <span class="number">10.113</span>.<span class="number">0.1</span>/<span class="number">16</span></span><br><span class="line"><span class="attr">ListenPort</span> = <span class="number">51820</span></span><br><span class="line"><span class="attr">PrivateKey</span> = &lt;服务器私钥&gt;</span><br><span class="line"></span><br><span class="line"><span class="section">[Peer]</span></span><br><span class="line"><span class="attr">PublicKey</span> = &lt;客户端公钥&gt;</span><br><span class="line"><span class="attr">AllowedIPs</span> = <span class="number">10.113</span>.<span class="number">0.2</span>/<span class="number">32</span></span><br></pre></td></tr></table></figure>
+<p><strong>客户端配置</strong>:</p>
+<figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[Interface]</span></span><br><span class="line"><span class="attr">Address</span> = <span class="number">10.113</span>.<span class="number">0.2</span>/<span class="number">16</span></span><br><span class="line"><span class="attr">PrivateKey</span> = &lt;客户端私钥&gt;</span><br><span class="line"></span><br><span class="line"><span class="section">[Peer]</span></span><br><span class="line"><span class="attr">PublicKey</span> = &lt;服务器公钥&gt;</span><br><span class="line"><span class="attr">AllowedIPs</span> = <span class="number">0.0</span>.<span class="number">0.0</span>/<span class="number">0</span>          <span class="comment"># 所有流量走 VPN</span></span><br><span class="line"><span class="attr">Endpoint</span> = <span class="number">203.0</span>.<span class="number">113.1</span>:<span class="number">51820</span>    <span class="comment"># 服务器公网地址</span></span><br><span class="line"><span class="attr">PersistentKeepalive</span> = <span class="number">25</span></span><br></pre></td></tr></table></figure>
+<p>只需几行配置,一个安全的 VPN 连接就建立完成了。</p>
+<h3 id="站点到站点-Site-to-Site-互联">站点到站点(Site-to-Site)互联</h3>
+<p>假设两个办公室网络需要互联:</p>
+<p><strong>Site A 配置</strong>:</p>
+<figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[Interface]</span></span><br><span class="line"><span class="attr">Address</span> = <span class="number">10.113</span>.<span class="number">0.1</span>/<span class="number">16</span></span><br><span class="line"><span class="attr">PrivateKey</span> = &lt;Site A 私钥&gt;</span><br><span class="line"><span class="attr">ListenPort</span> = <span class="number">51820</span></span><br><span class="line"></span><br><span class="line"><span class="section">[Peer]</span></span><br><span class="line"><span class="attr">PublicKey</span> = &lt;Site B 公钥&gt;</span><br><span class="line"><span class="attr">AllowedIPs</span> = <span class="number">192.168</span>.<span class="number">2.0</span>/<span class="number">24</span>, <span class="number">10.113</span>.<span class="number">0.2</span>/<span class="number">32</span></span><br><span class="line"><span class="attr">Endpoint</span> = &lt;Site B 公网IP&gt;:<span class="number">51820</span></span><br></pre></td></tr></table></figure>
+<p><strong>Site B 配置</strong>:</p>
+<figure class="highlight ini"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[Interface]</span></span><br><span class="line"><span class="attr">Address</span> = <span class="number">10.113</span>.<span class="number">0.2</span>/<span class="number">16</span></span><br><span class="line"><span class="attr">PrivateKey</span> = &lt;Site B 私钥&gt;</span><br><span class="line"><span class="attr">ListenPort</span> = <span class="number">51820</span></span><br><span class="line"></span><br><span class="line"><span class="section">[Peer]</span></span><br><span class="line"><span class="attr">PublicKey</span> = &lt;Site A 公钥&gt;</span><br><span class="line"><span class="attr">AllowedIPs</span> = <span class="number">192.168</span>.<span class="number">1.0</span>/<span class="number">24</span>, <span class="number">10.113</span>.<span class="number">0.1</span>/<span class="number">32</span></span><br><span class="line"><span class="attr">Endpoint</span> = &lt;Site A 公网IP&gt;:<span class="number">51820</span></span><br></pre></td></tr></table></figure>
+<p>通过 <code>AllowedIPs</code> 字段,两个办公室的网络就像在同一个局域网中一样互通。</p>
+<h3 id="NAT-穿透与漫游">NAT 穿透与漫游</h3>
+<p>WireGuard 原生支持 <strong>NAT 穿透</strong>和 <strong>IP 漫游</strong>。当客户端的网络环境发生变化(如从 Wi-Fi 切换到 5G),它会自动用新的源 IP 和端口向服务器发送数据包。服务器收到后会自动更新对端的 Endpoint 信息,连接瞬时恢复,整个过程对用户完全透明。</p>
+<hr>
+<h2 id="主要使用场景">主要使用场景</h2>
+<h3 id="1-个人隐私保护">1. 个人隐私保护</h3>
+<p>加密公共 Wi-Fi 流量,隐藏真实 IP 地址,防止 ISP 和第三方追踪。</p>
+<h3 id="2-远程办公">2. 远程办公</h3>
+<p>员工安全接入公司内网,替代传统的 IPsec VPN。</p>
+<h3 id="3-多云-混合云互联">3. 多云/混合云互联</h3>
+<p>安全、高性能地连接不同云服务商的 VPC 或自建数据中心。</p>
+<h3 id="4-容器与微服务网络">4. 容器与微服务网络</h3>
+<p>作为 Kubernetes 等容器平台的底层网络方案(如 Flannel 的 WireGuard 后端),提供安全的跨主机通信。</p>
+<h3 id="5-零信任网络">5. 零信任网络</h3>
+<p>作为 Tailscale、ZeroTier 等零信任网络平台的基础技术。</p>
+<hr>
+<h2 id="局限性">局限性</h2>
+<p>当然,WireGuard 并非万能:</p>
+<table>
+<thead>
+<tr>
+<th>局限性</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>流量特征明显</strong></td>
+<td>无混淆功能,ISP 可识别 WireGuard 流量</td>
+</tr>
+<tr>
+<td><strong>认证方式单一</strong></td>
+<td>仅支持公钥认证,不支持用户名/密码</td>
+</tr>
+<tr>
+<td><strong>缺乏高级管理功能</strong></td>
+<td>无内置 Web 控制台、审计日志等(需配合第三方工具)</td>
+</tr>
+<tr>
+<td><strong>UDP 协议</strong></td>
+<td>在某些严格限制 UDP 的网络环境中可能受阻</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="总结">总结</h2>
+<p>WireGuard 用极简的设计实现了卓越的性能和安全性。它让 VPN 从复杂的企业级工具变成了人人可用的基础设施。无论是个人用户保护隐私,还是企业构建安全网络,WireGuard 都提供了一个优雅而强大的解决方案。</p>
+<p><strong>一句话总结</strong>:WireGuard 让 VPN 不再复杂——它简单、快速、安全,是现代网络通信的基石级工具。</p>
+<hr>
+<p><em>如果你对 WireGuard 的具体部署感兴趣,欢迎在评论区留言交流!</em></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/">http://example.com/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E7%BD%91%E7%BB%9C/">网络</a><a class="post-meta__tags" href="/tags/WireGuard/">WireGuard</a><a class="post-meta__tags" href="/tags/VPN/">VPN</a><a class="post-meta__tags" href="/tags/%E5%8A%A0%E5%AF%86/">加密</a></div><div class="post-share"><div class="social-share" data-image="/img/cover/wireguard.png" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</div></div><div class="info-2"><div class="info-item-1">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复  本文所有 IP、MAC、节点名、网卡名均为脱敏后的示意值，仅用于说明网络结构与排查思路，不代表真实生产环境。  背景 某次接到反馈：从公有云上访问某边缘 K8s 集群的推理服务不通。 网络架构上有两条专线（WireGuard 隧道）链路，分别接到集群内两个不同节点：  公有云 VM-1 → WireGuard 隧道-1 → 集群的 edge-gw 节点（一个不在 K8s 集群内的网关节点） ✅ 公有云 VM-2 → WireGuard 隧道-2 → 集群的 master 节点（K8s 控制面节点） ❌  诡异的是：两条链路打到的后端其实是同一个推理服务 Pod，一条通、一条不通。这种&quot;对称中又不对称&quot;的现象，往往最耗时间——因为它会反复推翻你的假设。 整体拓扑 12345678910111213141516171819202122232425262728293031323334353637383940414243444546474849505152535455565758596061626...</div></div></div></a><a class="pagination-related" href="/2026/08/14/%E6%8A%80%E6%9C%AF%E5%80%BA%E6%95%B4%E7%90%86/" title=""><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2"></div></div><div class="info-2"><div class="info-item-1">技术债整理 一、P0：训练系统的“底层因果链”——这是你最大的债 你现在大概是：  Kubernetes → Job/Pod → GPU → Megatron/FSDP → Timer → Metrics → Straggler  这些东西你都接触过。 但面试官如果继续往下追：  为什么 FSDP 会产生 All-Gather？ 为什么某个 rank 会变慢？ NCCL 到底在什么时候阻塞？ GPU utilization 下降到底是计算问题还是通信问题？ 一个 iteration 为什么突然从 10s 变成 15s？ 是 GPU、CPU、PCIe、NVLink、IB、NCCL 还是数据加载？  你现在的知识链条还没有完全打通。 这就是你最大的技术债。  你需要建立这一条完整链路 1234567891011121314151617181920212223Model  ↓Parallelism  ↓FSDP / TP / PP / DP  ↓Collective Communication  ↓NCCL  ↓NVLink / PCIe / NIC  ↓RoCE / IB / Eth...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" title="RDMA 技术栈全解——ML 系统研发面试通关"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">RDMA 技术栈全解——ML 系统研发面试通关</div></div><div class="info-2"><div class="info-item-1">RDMA 技术栈全解——ML 系统研发面试通关  本文目标：让你在面试官问&quot;你们大模型训练集群用的什么网络、为什么用 RDMA、RDMA 怎么做到零拷贝、RoCEv2 和 InfiniBand 区别、NCCL 里 RDMA 起什么作用&quot;时，能从原理到工程对答如流。 全文按&quot;为什么 → 是什么 → 怎么用 → 在 ML 系统里怎么用 → 面试问答&quot;组织。   一、为什么需要 RDMA：传统网络栈的瓶颈 先看传统 TCP/IP 协议栈一次发送数据的完整路径（以应用 A 发数据到应用 B 为例）：  A 应用调用 send()，数据从用户态缓冲区通过 copy_to_user-like 的拷贝进入内核态 socket buffer（第一次拷贝）。 协议栈（TCP/IP）逐层封装报文头，经过内核协议栈处理。 数据通过 DMA 从内核缓冲区拷到网卡（NIC）的发送环（第二次拷贝）。 网卡把数据发到网线上。 B 端网卡收到数据，DMA 拷到内核 socket buffer。 B 应用调用 recv()，数据从内核态拷回用户态（第三次拷贝）。  问题有三...</div></div></div></a><a class="pagination-related" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-05</div><div class="info-item-2">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</div></div><div class="info-2"><div class="info-item-1"> 做大模型 Infra 的人迟早会撞到「网络」这堵墙：千卡训练的 NCCL all-reduce、KV-cache 的 RDMA 直读、推理网关的百万 QPS……一旦标准内核协议栈不够用，就要在 XDP / DPDK / AF_XDP 这三条「绕过内核」的路径里做选择。本文把三者的原理、数据流、取舍一次性讲透。  一、为什么内核协议栈不够快 先建立基准：为什么需要绕过内核？ 标准 Linux 网络栈（sk_buff + TCP/IP 协议栈 + socket）每收一个包要走的路： 12网卡 RX → DMA 到内存 → 硬中断 → 软中断 NET_RX_SOFTIRQ → netif_receive_skb→ sk_buff 分配/拷贝 → IP/TCP 协议栈处理 → socket 接收队列 → 用户态 read() 这套路径有四个「慢点」：  上下文切换：硬中断 → 软中断 → 内核态 → 用户态，每个包多次跨越特权级。 sk_buff 分配/释放：每个包都 alloc_skb/kfree，这是热点里的内存分配抖动。 数据拷贝：内核缓冲区 → 用户态 buffer，至少一次 ...</div></div></div></a><a class="pagination-related" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-18</div><div class="info-item-2">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</div></div><div class="info-2"><div class="info-item-1">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复  本文所有 IP、MAC、节点名、网卡名均为脱敏后的示意值，仅用于说明网络结构与排查思路，不代表真实生产环境。  背景 某次接到反馈：从公有云上访问某边缘 K8s 集群的推理服务不通。 网络架构上有两条专线（WireGuard 隧道）链路，分别接到集群内两个不同节点：  公有云 VM-1 → WireGuard 隧道-1 → 集群的 edge-gw 节点（一个不在 K8s 集群内的网关节点） ✅ 公有云 VM-2 → WireGuard 隧道-2 → 集群的 master 节点（K8s 控制面节点） ❌  诡异的是：两条链路打到的后端其实是同一个推理服务 Pod，一条通、一条不通。这种&quot;对称中又不对称&quot;的现象，往往最耗时间——因为它会反复推翻你的假设。 整体拓扑 12345678910111213141516171819202122232425262728293031323334353637383940414243444546474849505152535455565758596061626...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">241</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">258</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">73</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">下一代 VPN 协议:WireGuard 完全指南</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BC%95%E8%A8%80"><span class="toc-number">1.1.</span> <span class="toc-text">引言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%80%E4%B9%88%E6%98%AF-WireGuard"><span class="toc-number">1.2.</span> <span class="toc-text">什么是 WireGuard?</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8E%9F%E7%90%86-Cryptokey-Routing"><span class="toc-number">1.3.</span> <span class="toc-text">核心原理:Cryptokey Routing</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8A%A0%E5%AF%86%E7%AE%97%E6%B3%95"><span class="toc-number">1.3.1.</span> <span class="toc-text">加密算法</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%A7%E8%83%BD%E4%BC%98%E5%8A%BF-%E6%95%B0%E6%8D%AE%E8%AF%B4%E8%AF%9D"><span class="toc-number">1.4.</span> <span class="toc-text">性能优势:数据说话</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%90%9E%E5%90%90%E9%87%8F%E5%AF%B9%E6%AF%94"><span class="toc-number">1.4.1.</span> <span class="toc-text">吞吐量对比</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8F%A1%E6%89%8B%E5%BB%B6%E8%BF%9F"><span class="toc-number">1.4.2.</span> <span class="toc-text">握手延迟</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B5%84%E6%BA%90%E5%8D%A0%E7%94%A8"><span class="toc-number">1.4.3.</span> <span class="toc-text">资源占用</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%85%8D%E7%BD%AE%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.5.</span> <span class="toc-text">配置示例</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9F%BA%E7%A1%80%E9%85%8D%E7%BD%AE-%E5%AE%A2%E6%88%B7%E7%AB%AF-%E6%9C%8D%E5%8A%A1%E5%99%A8"><span class="toc-number">1.5.1.</span> <span class="toc-text">基础配置:客户端-服务器</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AB%99%E7%82%B9%E5%88%B0%E7%AB%99%E7%82%B9-Site-to-Site-%E4%BA%92%E8%81%94"><span class="toc-number">1.5.2.</span> <span class="toc-text">站点到站点(Site-to-Site)互联</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#NAT-%E7%A9%BF%E9%80%8F%E4%B8%8E%E6%BC%AB%E6%B8%B8"><span class="toc-number">1.5.3.</span> <span class="toc-text">NAT 穿透与漫游</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BB%E8%A6%81%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.6.</span> <span class="toc-text">主要使用场景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E4%B8%AA%E4%BA%BA%E9%9A%90%E7%A7%81%E4%BF%9D%E6%8A%A4"><span class="toc-number">1.6.1.</span> <span class="toc-text">1. 个人隐私保护</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E8%BF%9C%E7%A8%8B%E5%8A%9E%E5%85%AC"><span class="toc-number">1.6.2.</span> <span class="toc-text">2. 远程办公</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E5%A4%9A%E4%BA%91-%E6%B7%B7%E5%90%88%E4%BA%91%E4%BA%92%E8%81%94"><span class="toc-number">1.6.3.</span> <span class="toc-text">3. 多云&#x2F;混合云互联</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E5%AE%B9%E5%99%A8%E4%B8%8E%E5%BE%AE%E6%9C%8D%E5%8A%A1%E7%BD%91%E7%BB%9C"><span class="toc-number">1.6.4.</span> <span class="toc-text">4. 容器与微服务网络</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E9%9B%B6%E4%BF%A1%E4%BB%BB%E7%BD%91%E7%BB%9C"><span class="toc-number">1.6.5.</span> <span class="toc-text">5. 零信任网络</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B1%80%E9%99%90%E6%80%A7"><span class="toc-number">1.7.</span> <span class="toc-text">局限性</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">1.8.</span> <span class="toc-text">总结</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/" title="下一代 VPN 协议:WireGuard 完全指南"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/wireguard.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="下一代 VPN 协议:WireGuard 完全指南"/></a><div class="content"><a class="title" href="/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/" title="下一代 VPN 协议:WireGuard 完全指南">下一代 VPN 协议:WireGuard 完全指南</a><time datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</a><time datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/14/%E6%8A%80%E6%9C%AF%E5%80%BA%E6%95%B4%E7%90%86/" title="无标题">无标题</a><time datetime="2026-08-14T05:29:02.113Z" title="发表于 2026-08-14 13:29:02">2026-08-14</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/" title="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/distributed-training.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析"/></a><div class="content"><a class="title" href="/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/" title="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</a><time datetime="2026-08-13T16:00:00.000Z" title="发表于 2026-08-14 00:00:00">2026-08-14</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/08/14/2026-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%89%E4%BD%93%E9%97%AE%E9%A2%98%E8%AE%A1%E7%AE%97%E9%80%9A%E4%BF%A1%E4%B8%8E%E5%86%85%E5%AD%98/" title="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/llm-training-three-body.png" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同"/></a><div class="content"><a class="title" href="/2026/08/14/2026-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%89%E4%BD%93%E9%97%AE%E9%A2%98%E8%AE%A1%E7%AE%97%E9%80%9A%E4%BF%A1%E4%B8%8E%E5%86%85%E5%AD%98/" title="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同">大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同</a><time datetime="2026-08-13T16:00:00.000Z" title="发表于 2026-08-14 00:00:00">2026-08-14</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
