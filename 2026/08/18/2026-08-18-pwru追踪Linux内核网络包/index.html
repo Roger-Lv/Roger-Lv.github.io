@@ -1,0 +1,417 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="pwru(Packet, Where Are You?)是 Cilium 团队基于 eBPF 的内核网络包追踪工具,小于 10MB 静态二进制无依赖。本文从原理、核心功能、安装、调试示例到适用场景,系统梳理如何用它定位 Linux 内核丢包点。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包">
+<meta property="og:url" content="http://example.com/2026/08/18/2026-08-18-pwru%E8%BF%BD%E8%B8%AALinux%E5%86%85%E6%A0%B8%E7%BD%91%E7%BB%9C%E5%8C%85/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="pwru(Packet, Where Are You?)是 Cilium 团队基于 eBPF 的内核网络包追踪工具,小于 10MB 静态二进制无依赖。本文从原理、核心功能、安装、调试示例到适用场景,系统梳理如何用它定位 Linux 内核丢包点。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-17T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-19T03:18:15.527Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="网络">
+<meta property="article:tag" content="eBPF">
+<meta property="article:tag" content="pwru">
+<meta property="article:tag" content="Linux内核">
+<meta property="article:tag" content="调试">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包",
+  "url": "http://example.com/2026/08/18/2026-08-18-pwru%E8%BF%BD%E8%B8%AALinux%E5%86%85%E6%A0%B8%E7%BD%91%E7%BB%9C%E5%8C%85/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-17T16:00:00.000Z",
+  "dateModified": "2026-08-19T03:18:15.527Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/18/2026-08-18-pwru%E8%BF%BD%E8%B8%AALinux%E5%86%85%E6%A0%B8%E7%BD%91%E7%BB%9C%E5%8C%85/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">243</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">268</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">74</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-19T03:18:15.527Z" title="更新于 2026-08-19 11:18:15">2026-08-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E7%BD%91%E7%BB%9C%E4%B8%8E%E5%AE%89%E5%85%A8/">网络与安全</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/18/2026-08-18-pwru%E8%BF%BD%E8%B8%AALinux%E5%86%85%E6%A0%B8%E7%BD%91%E7%BB%9C%E5%8C%85/" data-flag-title="网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包</h1>
+<h2 id="引言-当-tcpdump-不够用的时候">引言:当 tcpdump 不够用的时候</h2>
+<p>想象一下这个场景:你通过 <code>tcpdump</code> 确认数据包已经到达了网卡,但应用就是收不到;你怀疑是 iptables 规则或内核网络栈的某个环节把包丢了,却不知道具体丢在了哪里。Linux 内核网络栈的代码路径极其复杂,从网卡驱动、Netfilter 钩子、路由表、到 TCP/IP 协议栈,中间有数十上百个函数调用。传统工具很难精确定位问题出在哪个环节。</p>
+<p>这时候,你就需要一个能&quot;看见&quot;数据包在内核中每一个足迹的工具——<strong>pwru</strong>。</p>
+<p>pwru 是 <strong>Packet, Where Are You?</strong> 的缩写,顾名思义,它的使命就是帮你回答&quot;我的网络包到底去哪儿了?&quot;这个问题。</p>
+<h2 id="pwru-是什么">pwru 是什么?</h2>
+<p>pwru 是一个基于 <strong>eBPF</strong>(Extended Berkeley Packet Filter)技术的 Linux 内核网络调试工具。它能够追踪网络包在 Linux 内核网络栈中的完整路径,并提供强大的过滤能力,让开发者和管理员能够精细地观察内核状态,从而高效诊断网络连通性问题。</p>
+<p>pwru 由 Cilium 团队开发,在 FOSDEM 2024 等技术大会上都有过专题分享。最令人惊叹的是,它被打包成一个<strong>小于 10MB 的静态链接二进制文件,没有任何外部依赖</strong>——下载即用,部署极其简单。</p>
+<h2 id="工作原理-eBPF-探针如何追踪网络包">工作原理:eBPF 探针如何追踪网络包?</h2>
+<p>pwru 的核心工作原理其实很优雅:</p>
+<ol>
+<li>
+<p><strong>利用 BTF 信息</strong>:pwru 依赖内核的 BTF(BPF Type Format)信息,自动识别内核网络栈中所有接收 <code>sk_buff</code>(socket buffer,即网络包的内核数据结构)作为参数的函数。</p>
+</li>
+<li>
+<p><strong>注入 eBPF 探针</strong>:pwru 通过 kprobe(内核动态探针)或 fentry(更高效的函数入口跟踪)将这些函数挂载上 eBPF 程序。</p>
+</li>
+<li>
+<p><strong>实时输出</strong>:当网络包经过这些函数时,eBPF 程序会记录信息并上报给用户空间,让你看到包在内核中的完整&quot;旅行轨迹&quot;。</p>
+</li>
+</ol>
+<p>pwru 支持多种后端:传统的 <code>kprobe</code> 和性能更好的 <code>kprobe-multi</code>(需要内核 &gt;= 5.18)。</p>
+<h2 id="核心功能">核心功能</h2>
+<p>pwru 之所以强大,离不开它丰富的功能矩阵:</p>
+<h3 id="1-灵活的包过滤">1. 灵活的包过滤</h3>
+<p>pwru 支持标准的 <strong>pcap 过滤语法</strong>(就是 tcpdump 用的那一套),同时提供了大量专门的过滤选项:</p>
+<ul>
+<li>按 IP 地址过滤(源/目的)</li>
+<li>按端口过滤(源/目的)</li>
+<li>按协议过滤(TCP、UDP、ICMP)</li>
+<li>按网络命名空间(netns)过滤</li>
+<li>按 skb mark 过滤</li>
+<li>按内核函数名过滤(支持正则表达式)</li>
+</ul>
+<p>多个过滤器可以组合使用,只有全部匹配的包才会被追踪。</p>
+<h3 id="2-丰富的输出信息">2. 丰富的输出信息</h3>
+<p>pwru 可以输出多种维度的信息:</p>
+<ul>
+<li><strong>L4 元组</strong>(五元组信息)</li>
+<li><strong>调用栈</strong>(call stack)——帮你看到包是被哪个函数处理的</li>
+<li><strong>skb 元数据</strong>和完整内容</li>
+<li><strong>时间戳</strong>(支持相对时间、绝对时间等)</li>
+<li><strong>JSON 格式输出</strong>,方便后续分析</li>
+</ul>
+<h3 id="3-容器和云原生环境支持">3. 容器和云原生环境支持</h3>
+<p>pwru 天然支持容器环境,可以通过 netns 过滤追踪特定容器内的网络包,也可以与 Cilium 生态集成。</p>
+<h2 id="安装与快速上手">安装与快速上手</h2>
+<h3 id="环境要求">环境要求</h3>
+<p>pwru 需要 <strong>Linux 内核 &gt;= 5.3</strong>。部分高级功能(如 <code>--output-skb</code>)需要 &gt;= 5.9,<code>kprobe-multi</code> 后端需要 &gt;= 5.18。</p>
+<p>需要确保以下内核配置已启用:</p>
+<ul>
+<li><code>CONFIG_DEBUG_INFO_BTF=y</code></li>
+<li><code>CONFIG_KPROBES=y</code></li>
+<li><code>CONFIG_BPF=y</code></li>
+<li><code>CONFIG_BPF_SYSCALL=y</code></li>
+</ul>
+<p>可以用 <code>zgrep CONFIG_XXX /proc/config.gz</code> 来检查。</p>
+<p>另外需要挂载 debugfs:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">mount -t debugfs none /sys/kernel/debug</span><br></pre></td></tr></table></figure>
+<h3 id="安装">安装</h3>
+<p>直接从 GitHub Release 页面下载静态编译的可执行文件即可,支持 x86_64 和 arm64 架构:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 下载最新版本(示例)</span></span><br><span class="line">wget https://github.com/cilium/pwru/releases/download/v1.0.12/pwru-linux-amd64</span><br><span class="line"><span class="built_in">chmod</span> +x pwru-linux-amd64</span><br><span class="line"><span class="built_in">sudo</span> ./pwru-linux-amd64 --<span class="built_in">help</span></span><br></pre></td></tr></table></figure>
+<h3 id="一个完整的调试示例">一个完整的调试示例</h3>
+<p>假设你想追踪一个访问 <code>1.1.1.1:80</code> 的 TCP 请求,看看包在内核中的完整路径:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> ./pwru --filter-dst-ip=1.1.1.1 --filter-dst-port=80 --filter-proto=tcp --output-tuple</span><br></pre></td></tr></table></figure>
+<p>然后在另一个终端执行 <code>curl 1.1.1.1</code>,你就能看到这个包经过的每一个内核函数。</p>
+<p>接着添加一条 iptables 规则把包丢掉:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> iptables -t filter -I OUTPUT 1 -m tcp --proto tcp --dst 1.1.1.1/32 -j DROP</span><br></pre></td></tr></table></figure>
+<p>再执行一次 <code>curl</code>,pwru 会清楚地显示出包是在 <code>nf_hook_slow</code> 等 Netfilter 相关函数处被丢弃的。这就是 pwru 最典型的应用场景——<strong>快速定位丢包点</strong>。</p>
+<h2 id="高级用法">高级用法</h2>
+<h3 id="追踪特定内核函数">追踪特定内核函数</h3>
+<p>如果怀疑问题出在某个特定的内核函数上,可以用 <code>--filter-func</code> 精确追踪:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> ./pwru --filter-func=<span class="string">&#x27;nf_hook_slow|ip_rcv&#x27;</span> --output-stack</span><br></pre></td></tr></table></figure>
+<p>支持 RE2 正则表达式。</p>
+<h3 id="容器网络调试">容器网络调试</h3>
+<p>在 Kubernetes 集群中调试特定 Pod 的网络问题:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 先获取 Pod 的 netns inode</span></span><br><span class="line">docker inspect &lt;container-id&gt; | grep net</span><br><span class="line"><span class="comment"># 然后用 netns 过滤</span></span><br><span class="line"><span class="built_in">sudo</span> ./pwru --filter-netns=<span class="string">&quot;inode:123456789&quot;</span> --output-tuple</span><br></pre></td></tr></table></figure>
+<h3 id="追踪被释放的包">追踪被释放的包</h3>
+<p>有些场景下,包在被 kfree(释放)之后你可能还想继续追踪(比如桥接流量),可以用 <code>--filter-track-skb-by-stackid</code>。</p>
+<h3 id="JSON-输出">JSON 输出</h3>
+<p>将追踪结果输出为 JSON 格式,方便导入到其他分析工具:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> ./pwru --output-json --output-limit-lines=1000 &gt; trace.json</span><br></pre></td></tr></table></figure>
+<h2 id="适用场景">适用场景</h2>
+<p>pwru 特别适合以下场景:</p>
+<ol>
+<li>
+<p><strong>网络丢包问题</strong>:包到了网卡但应用收不到,快速定位是在 Netfilter、路由、还是协议栈哪一层丢了。</p>
+</li>
+<li>
+<p><strong>iptables/nftables 规则调试</strong>:验证规则是否按预期生效,包到底匹配了哪条规则。</p>
+</li>
+<li>
+<p><strong>容器网络问题</strong>:在复杂的容器网络环境下(如 Calico、Cilium 等 CNI),追踪包在宿主机内核和容器 netns 之间的流转。</p>
+</li>
+<li>
+<p><strong>内核网络开发</strong>:理解网络包在内核中的完整处理流程,学习或调试内核网络模块。</p>
+</li>
+<li>
+<p><strong>性能问题排查</strong>:配合 <code>--output-stack</code> 观察包处理的热点路径。</p>
+</li>
+</ol>
+<h2 id="与同类工具的对比">与同类工具的对比</h2>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>定位</th>
+<th>优势</th>
+<th>局限</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tcpdump</td>
+<td>抓包分析</td>
+<td>通用、轻量</td>
+<td>只能看到进出网卡的包,看不到内核内部处理</td>
+</tr>
+<tr>
+<td>bpftrace</td>
+<td>动态追踪</td>
+<td>灵活强大</td>
+<td>需要编写脚本,学习曲线陡峭</td>
+</tr>
+<tr>
+<td><strong>pwru</strong></td>
+<td><strong>内核网络包追踪</strong></td>
+<td><strong>开箱即用、自动探测所有网络函数、过滤强大</strong></td>
+<td>专注于网络包追踪</td>
+</tr>
+</tbody>
+</table>
+<p>pwru 填补了 tcpdump 和 bpftrace 之间的空白——它比 tcpdump 看得更深(能进内核),又比 bpftrace 更易用(无需写脚本)。</p>
+<h2 id="总结">总结</h2>
+<p>pwru 是一个<strong>强大而优雅</strong>的 Linux 网络调试工具。它利用 eBPF 技术,以极低的部署成本(一个 &lt;10MB 的静态二进制文件)提供了对内核网络包处理的深度洞察。</p>
+<p>无论你是:</p>
+<ul>
+<li>被复杂的网络问题困扰的系统管理员</li>
+<li>需要调试 CNI 或网络策略的 Kubernetes 运维</li>
+<li>研究 Linux 内核网络栈的开发者</li>
+</ul>
+<p>pwru 都能成为你工具箱里一件得力的&quot;透视镜&quot;,帮你在纷繁复杂的内核代码路径中,精准定位那个&quot;迷路&quot;的网络包。</p>
+<blockquote>
+<p><strong>Packet, where are you?</strong> —— 有了 pwru,你总能找到答案。</p>
+</blockquote>
+<hr>
+<p><em>项目地址:<a target="_blank" rel="noopener" href="https://github.com/cilium/pwru">https://github.com/cilium/pwru</a></em></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/18/2026-08-18-pwru%E8%BF%BD%E8%B8%AALinux%E5%86%85%E6%A0%B8%E7%BD%91%E7%BB%9C%E5%8C%85/">http://example.com/2026/08/18/2026-08-18-pwru%E8%BF%BD%E8%B8%AALinux%E5%86%85%E6%A0%B8%E7%BD%91%E7%BB%9C%E5%8C%85/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E7%BD%91%E7%BB%9C/">网络</a><a class="post-meta__tags" href="/tags/eBPF/">eBPF</a><a class="post-meta__tags" href="/tags/pwru/">pwru</a><a class="post-meta__tags" href="/tags/Linux%E5%86%85%E6%A0%B8/">Linux内核</a><a class="post-meta__tags" href="/tags/%E8%B0%83%E8%AF%95/">调试</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/21/2026-08-21-infini-agent-framework%E4%B8%AD%E9%97%B4%E4%BB%B6%E5%8E%9F%E7%90%86%E4%B8%8E%E8%87%AA%E5%AE%9A%E4%B9%89/" title="剖析 infini-agent-framework 的双层中间件:原理、实现与自定义"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">剖析 infini-agent-framework 的双层中间件:原理、实现与自定义</div></div><div class="info-2"><div class="info-item-1">剖析 infini-agent-framework 的双层中间件:原理、实现与自定义 引言 在构建一个 Agent 应用时,我们几乎一定会遇到这样的需求:在每次 LLM 调用前后打日志、压缩过长的对话历史、给工具调用加一层错误兜底、给 HTTP 请求注入上下文、采集 Prometheus 指标……这些需求有一个共同特征——它们不是业务本身,而是横切在业务调用链路上的通用能力。把它们硬塞进业务代码会让系统迅速腐化,于是&quot;中间件(Middleware)&quot;这种模式应运而生。 infini-agent-framework(以下简称框架)作为一个基于 LangGraph + FastAPI 的 Python Agent 框架,在中间件的设计上做了一个值得细看的选择:它没有另起炉灶造一套自研中间件类型,而是直接复用了 Starlette 与 LangChain 两套成熟的中间件抽象,并在此基础上做了组合与编排。这导致框架内存在两套独立、互不共享类型的中间件系统:    层级 基类来源 作用范围 文件位置     HTTP 中间件 Starlette BaseHTTPMid...</div></div></div></a><a class="pagination-related" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</div></div><div class="info-2"><div class="info-item-1">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复  本文所有 IP、MAC、节点名、网卡名均为脱敏后的示意值，仅用于说明网络结构与排查思路，不代表真实生产环境。  背景 某次接到反馈：从公有云上访问某边缘 K8s 集群的推理服务不通。 网络架构上有两条专线（WireGuard 隧道）链路，分别接到集群内两个不同节点：  公有云 VM-1 → WireGuard 隧道-1 → 集群的 edge-gw 节点（一个不在 K8s 集群内的网关节点） ✅ 公有云 VM-2 → WireGuard 隧道-2 → 集群的 master 节点（K8s 控制面节点） ❌  诡异的是：两条链路打到的后端其实是同一个推理服务 Pod，一条通、一条不通。这种&quot;对称中又不对称&quot;的现象，往往最耗时间——因为它会反复推翻你的假设。 整体拓扑 12345678910111213141516171819202122232425262728293031323334353637383940414243444546474849505152535455565758596061626...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-05</div><div class="info-item-2">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</div></div><div class="info-2"><div class="info-item-1"> 做大模型 Infra 的人迟早会撞到「网络」这堵墙：千卡训练的 NCCL all-reduce、KV-cache 的 RDMA 直读、推理网关的百万 QPS……一旦标准内核协议栈不够用，就要在 XDP / DPDK / AF_XDP 这三条「绕过内核」的路径里做选择。本文把三者的原理、数据流、取舍一次性讲透。  一、为什么内核协议栈不够快 先建立基准：为什么需要绕过内核？ 标准 Linux 网络栈（sk_buff + TCP/IP 协议栈 + socket）每收一个包要走的路： 12网卡 RX → DMA 到内存 → 硬中断 → 软中断 NET_RX_SOFTIRQ → netif_receive_skb→ sk_buff 分配/拷贝 → IP/TCP 协议栈处理 → socket 接收队列 → 用户态 read() 这套路径有四个「慢点」：  上下文切换：硬中断 → 软中断 → 内核态 → 用户态，每个包多次跨越特权级。 sk_buff 分配/释放：每个包都 alloc_skb/kfree，这是热点里的内存分配抖动。 数据拷贝：内核缓冲区 → 用户态 buffer，至少一次 ...</div></div></div></a><a class="pagination-related" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-18</div><div class="info-item-2">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</div></div><div class="info-2"><div class="info-item-1">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复  本文所有 IP、MAC、节点名、网卡名均为脱敏后的示意值，仅用于说明网络结构与排查思路，不代表真实生产环境。  背景 某次接到反馈：从公有云上访问某边缘 K8s 集群的推理服务不通。 网络架构上有两条专线（WireGuard 隧道）链路，分别接到集群内两个不同节点：  公有云 VM-1 → WireGuard 隧道-1 → 集群的 edge-gw 节点（一个不在 K8s 集群内的网关节点） ✅ 公有云 VM-2 → WireGuard 隧道-2 → 集群的 master 节点（K8s 控制面节点） ❌  诡异的是：两条链路打到的后端其实是同一个推理服务 Pod，一条通、一条不通。这种&quot;对称中又不对称&quot;的现象，往往最耗时间——因为它会反复推翻你的假设。 整体拓扑 12345678910111213141516171819202122232425262728293031323334353637383940414243444546474849505152535455565758596061626...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" title="RDMA 技术栈全解——ML 系统研发面试通关"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">RDMA 技术栈全解——ML 系统研发面试通关</div></div><div class="info-2"><div class="info-item-1">RDMA 技术栈全解——ML 系统研发面试通关  本文目标：让你在面试官问&quot;你们大模型训练集群用的什么网络、为什么用 RDMA、RDMA 怎么做到零拷贝、RoCEv2 和 InfiniBand 区别、NCCL 里 RDMA 起什么作用&quot;时，能从原理到工程对答如流。 全文按&quot;为什么 → 是什么 → 怎么用 → 在 ML 系统里怎么用 → 面试问答&quot;组织。   一、为什么需要 RDMA：传统网络栈的瓶颈 先看传统 TCP/IP 协议栈一次发送数据的完整路径（以应用 A 发数据到应用 B 为例）：  A 应用调用 send()，数据从用户态缓冲区通过 copy_to_user-like 的拷贝进入内核态 socket buffer（第一次拷贝）。 协议栈（TCP/IP）逐层封装报文头，经过内核协议栈处理。 数据通过 DMA 从内核缓冲区拷到网卡（NIC）的发送环（第二次拷贝）。 网卡把数据发到网线上。 B 端网卡收到数据，DMA 拷到内核 socket buffer。 B 应用调用 recv()，数据从内核态拷回用户态（第三次拷贝）。  问题有三...</div></div></div></a><a class="pagination-related" href="/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/" title="下一代 VPN 协议:WireGuard 完全指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-18</div><div class="info-item-2">下一代 VPN 协议:WireGuard 完全指南</div></div><div class="info-2"><div class="info-item-1">下一代 VPN 协议:WireGuard 完全指南 引言 在 VPN 技术领域,WireGuard 的出现堪称一场革命。当 Linus Torvalds 在 2018 年将 WireGuard 合并到 Linux 内核主线时,他给出了一个极高的评价——“艺术品”(a work of art)。这个仅有约 4000 行代码的极简协议,正在重新定义我们对 VPN 的认知。  什么是 WireGuard? WireGuard 是一个极简、高效且安全的 VPN 协议和实现。与传统的 OpenVPN(超过 10 万行代码)和 IPsec 相比,WireGuard 的设计哲学是简单到易于审计,从而从根本上减少潜在的安全漏洞。 它于 2020 年正式合并到 Linux 内核 5.6 版本中,此后迅速成为 Linux 系统上最受欢迎的 VPN 解决方案之一。  核心原理:Cryptokey Routing WireGuard 最核心的创新在于 Cryptokey Routing(加密密钥路由) 机制。简单来说,它将公钥与内网 IP 地址直接绑定,形成一个映射表。 当 WireGuard 接口收到...</div></div></div></a><a class="pagination-related" href="/2026/08/22/2026-08-22-DPDK%E5%AE%9E%E6%88%98-%E4%BB%8E%E5%BC%80%E6%BA%90%E7%A4%BA%E4%BE%8B%E9%A1%B9%E7%9B%AE%E6%8B%86%E8%A7%A3%E7%94%A8%E6%88%B7%E6%80%81%E5%8C%85%E5%A4%84%E7%90%86%E5%85%A8%E6%B5%81%E7%A8%8B/" title="DPDK 实战：从一个开源示例项目拆解用户态包处理的全流程"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-22</div><div class="info-item-2">DPDK 实战：从一个开源示例项目拆解用户态包处理的全流程</div></div><div class="info-2"><div class="info-item-1"> 上一篇《高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP》讲的是「三条 kernel bypass 路径怎么选」。这篇落到代码：拿一个真实的 DPDK 开源示例项目 The-DPDK-Examples，把概念、封装层、收发包主循环、三个数据面示例、LRU 实现和哈希基准测试一次性拆透。 但在拆代码之前，得先把 DPDK 里那一堆名词讲清楚——否则代码里每一行都看不懂。所以本文前半部分用拓扑图把概念讲透，后半部分逐文件拆代码。如果你已经熟悉 DPDK，可以直接跳到第五节。  一、为什么需要「内核旁路」 先建立基准：标准 Linux 收一个网络包，要走的路是这样的： 123456789101112131415161718192021222324┌─────────────────────────────────────────────────────────────────┐│                         传统内核网络栈                            ││                                     ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">243</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">268</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">74</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BC%95%E8%A8%80-%E5%BD%93-tcpdump-%E4%B8%8D%E5%A4%9F%E7%94%A8%E7%9A%84%E6%97%B6%E5%80%99"><span class="toc-number">1.1.</span> <span class="toc-text">引言:当 tcpdump 不够用的时候</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#pwru-%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.</span> <span class="toc-text">pwru 是什么?</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%B7%A5%E4%BD%9C%E5%8E%9F%E7%90%86-eBPF-%E6%8E%A2%E9%92%88%E5%A6%82%E4%BD%95%E8%BF%BD%E8%B8%AA%E7%BD%91%E7%BB%9C%E5%8C%85"><span class="toc-number">1.3.</span> <span class="toc-text">工作原理:eBPF 探针如何追踪网络包?</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8A%9F%E8%83%BD"><span class="toc-number">1.4.</span> <span class="toc-text">核心功能</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E7%81%B5%E6%B4%BB%E7%9A%84%E5%8C%85%E8%BF%87%E6%BB%A4"><span class="toc-number">1.4.1.</span> <span class="toc-text">1. 灵活的包过滤</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E4%B8%B0%E5%AF%8C%E7%9A%84%E8%BE%93%E5%87%BA%E4%BF%A1%E6%81%AF"><span class="toc-number">1.4.2.</span> <span class="toc-text">2. 丰富的输出信息</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E5%AE%B9%E5%99%A8%E5%92%8C%E4%BA%91%E5%8E%9F%E7%94%9F%E7%8E%AF%E5%A2%83%E6%94%AF%E6%8C%81"><span class="toc-number">1.4.3.</span> <span class="toc-text">3. 容器和云原生环境支持</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%AE%89%E8%A3%85%E4%B8%8E%E5%BF%AB%E9%80%9F%E4%B8%8A%E6%89%8B"><span class="toc-number">1.5.</span> <span class="toc-text">安装与快速上手</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%8E%AF%E5%A2%83%E8%A6%81%E6%B1%82"><span class="toc-number">1.5.1.</span> <span class="toc-text">环境要求</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%89%E8%A3%85"><span class="toc-number">1.5.2.</span> <span class="toc-text">安装</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E5%AE%8C%E6%95%B4%E7%9A%84%E8%B0%83%E8%AF%95%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.5.3.</span> <span class="toc-text">一个完整的调试示例</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%AB%98%E7%BA%A7%E7%94%A8%E6%B3%95"><span class="toc-number">1.6.</span> <span class="toc-text">高级用法</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%BD%E8%B8%AA%E7%89%B9%E5%AE%9A%E5%86%85%E6%A0%B8%E5%87%BD%E6%95%B0"><span class="toc-number">1.6.1.</span> <span class="toc-text">追踪特定内核函数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%B9%E5%99%A8%E7%BD%91%E7%BB%9C%E8%B0%83%E8%AF%95"><span class="toc-number">1.6.2.</span> <span class="toc-text">容器网络调试</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%BD%E8%B8%AA%E8%A2%AB%E9%87%8A%E6%94%BE%E7%9A%84%E5%8C%85"><span class="toc-number">1.6.3.</span> <span class="toc-text">追踪被释放的包</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#JSON-%E8%BE%93%E5%87%BA"><span class="toc-number">1.6.4.</span> <span class="toc-text">JSON 输出</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%80%82%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.7.</span> <span class="toc-text">适用场景</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%8E%E5%90%8C%E7%B1%BB%E5%B7%A5%E5%85%B7%E7%9A%84%E5%AF%B9%E6%AF%94"><span class="toc-number">1.8.</span> <span class="toc-text">与同类工具的对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">1.9.</span> <span class="toc-text">总结</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/22/2026-08-22-DPDK%E5%AE%9E%E6%88%98-%E4%BB%8E%E5%BC%80%E6%BA%90%E7%A4%BA%E4%BE%8B%E9%A1%B9%E7%9B%AE%E6%8B%86%E8%A7%A3%E7%94%A8%E6%88%B7%E6%80%81%E5%8C%85%E5%A4%84%E7%90%86%E5%85%A8%E6%B5%81%E7%A8%8B/" title="DPDK 实战：从一个开源示例项目拆解用户态包处理的全流程">DPDK 实战：从一个开源示例项目拆解用户态包处理的全流程</a><time datetime="2026-08-21T16:00:00.000Z" title="发表于 2026-08-22 00:00:00">2026-08-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/21/2026-08-21-infini-agent-framework%E4%B8%AD%E9%97%B4%E4%BB%B6%E5%8E%9F%E7%90%86%E4%B8%8E%E8%87%AA%E5%AE%9A%E4%B9%89/" title="剖析 infini-agent-framework 的双层中间件:原理、实现与自定义">剖析 infini-agent-framework 的双层中间件:原理、实现与自定义</a><time datetime="2026-08-20T16:00:00.000Z" title="发表于 2026-08-21 00:00:00">2026-08-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/18/2026-08-18-WireGuard%E5%AE%8C%E5%85%A8%E6%8C%87%E5%8D%97/" title="下一代 VPN 协议:WireGuard 完全指南">下一代 VPN 协议:WireGuard 完全指南</a><time datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</a><time datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/18/2026-08-18-pwru%E8%BF%BD%E8%B8%AALinux%E5%86%85%E6%A0%B8%E7%BD%91%E7%BB%9C%E5%8C%85/" title="网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包">网络包迷踪:用 eBPF 工具 pwru 追踪 Linux 内核网络包</a><time datetime="2026-08-17T16:00:00.000Z" title="发表于 2026-08-18 00:00:00">2026-08-18</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
