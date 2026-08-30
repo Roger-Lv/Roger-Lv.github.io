@@ -1,0 +1,468 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="以 kubernetes-sigs&#x2F;agent-sandbox 为样本,把一次完整的沙箱生命周期从 create_sandbox 到 terminate 拆到协议层面——控制面领养(Claim&#x2F;adopt,一次性)与数据面操作(经 Router 的 HTTP 请求,每次走一遍)走两条通道,由 SDK 句柄缝合。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">
+<meta property="og:url" content="http://example.com/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="以 kubernetes-sigs&#x2F;agent-sandbox 为样本,把一次完整的沙箱生命周期从 create_sandbox 到 terminate 拆到协议层面——控制面领养(Claim&#x2F;adopt,一次性)与数据面操作(经 Router 的 HTTP 请求,每次走一遍)走两条通道,由 SDK 句柄缝合。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-26T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-29T10:31:00.011Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Agent">
+<meta property="article:tag" content="控制面">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="Agent-Sandbox">
+<meta property="article:tag" content="数据面">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解",
+  "url": "http://example.com/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-26T16:00:00.000Z",
+  "dateModified": "2026-08-29T10:31:00.011Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-29T10:31:00.011Z" title="更新于 2026-08-29 18:31:00">2026-08-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" data-flag-title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</h1>
+<p>当 LLM Agent 需要执行一段自己生成的代码时,它会向隔离沙箱平台发起一个请求:“给我一个沙箱”。这个请求背后发生了什么?沙箱是怎么被分配的?后续的命令又是如何找到正确的沙箱的?</p>
+<p>这是 Agent 基础设施中最容易被一笔带过、却最值得拆解的一环。本文以 Kubernetes SIG 的 Agent Sandbox 项目(kubernetes-sigs/agent-sandbox)为样本,把一次完整的沙箱生命周期——从 <code>create_sandbox</code> 到 <code>terminate</code>——拆到协议层面。</p>
+<p><strong>核心结论先行:领养沙箱和操作沙箱走的是两条完全不同的通道。</strong> <code>create_sandbox</code> 触发的是控制面流程(K8s API 上的 Claim/adopt,一次性的);后续 <code>commands.run()</code>、<code>files.write()</code> 走的是数据面流程(HTTP 请求经网关/Router 打到具体的沙箱 Pod,每次操作都走一遍)。而把这两条通道缝在一起的,是 SDK 返回的那个&quot;句柄&quot;。</p>
+<blockquote>
+<p>关联阅读:本文讲的是&quot;沙箱怎么被领养、命令怎么找到沙箱&quot;(调度/路由层);沙箱<strong>底层用什么隔离</strong>(Firecracker/gVisor/Kata 的取舍)见同日 <a href="2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3.md#%E5%9B%9B%E3%80%81Agent-Infra-%E5%AE%9E%E6%88%98-%E4%B8%89%E7%A7%8D%E6%B2%99%E7%AE%B1%E7%9A%84%E9%80%89%E5%9E%8B%E9%80%BB%E8%BE%91">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</a>——两篇合起来正好是 Agent 沙箱的&quot;调度层&quot;与&quot;隔离层&quot;两个面。</p>
+</blockquote>
+<hr>
+<h2 id="一、角色与对象-谁声明什么">一、角色与对象:谁声明什么</h2>
+<p>在展开流程之前,先厘清各方的责任边界。Agent Sandbox 建立在**四个 CRD(自定义资源)**之上,每个对象归属于不同的角色:</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>由谁创建</th>
+<th>里面有什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RuntimeClass</strong>(K8s 原生对象)</td>
+<td>集群管理员,一次性</td>
+<td>指向节点上的 runtime 二进制(runsc / kata)</td>
+</tr>
+<tr>
+<td><strong>SandboxTemplate</strong></td>
+<td>平台管理员/平台团队</td>
+<td>镜像、资源限额、runtimeClassName、网络策略——隔离决策全在这里</td>
+</tr>
+<tr>
+<td><strong>SandboxWarmPool</strong></td>
+<td>平台管理员</td>
+<td>引用 Template,维持预热池水位</td>
+</tr>
+<tr>
+<td><strong>SandboxClaim</strong></td>
+<td>agent / 终端用户(SDK 代其创建)</td>
+<td>只指定&quot;我要认领哪个池&quot;,不涉及任何运行时细节</td>
+</tr>
+</tbody>
+</table>
+<p>这个分工是刻意的。Red Hat 的 Agent Sandbox 发行版文档说得非常直白:</p>
+<blockquote>
+<p>“开发者请求一个沙箱,平台交付一个。底层是 Kata Containers 还是别的运行时提供隔离,是平台管理员的选择,不是开发者的。”</p>
+</blockquote>
+<p>也就是说,agent 在代码里调用 <code>create_sandbox(warmpool=&quot;python-sandbox-pool&quot;)</code> 时,它选择的只是一个<strong>池子名</strong>。这个池子背后挂着的 Template 里写着 <code>runtimeClassName: kata</code> 还是 <code>gvisor</code>,对 agent 是<strong>完全透明</strong>的——agent 最多&quot;间接选择&quot;(挑了哪个池就等于挑了哪类隔离),但无法越权改写。这带来两个直接收益:</p>
+<ul>
+<li>agent 的代码对 gVisor、Kata、Firecracker 后端完全无感;</li>
+<li>平台换隔离技术、调池子水位、改网络策略,都不用通知任何一个 agent 的作者。</li>
+</ul>
+<hr>
+<h2 id="二、全景时序图">二、全景时序图</h2>
+<p>一次完整的沙箱生命周期,按时间顺序分为三个阶段:</p>
+<pre class="mermaid">sequenceDiagram
+    participant A as Agent 进程(你的代码)
+    participant SDK as Python/Go SDK
+    participant K8s as K8s API Server<br/>(控制面)
+    participant C as Sandbox Controller
+    participant P as 预热好的 Sandbox Pod<br/>(含 runtime server)
+    participant R as sandbox-router
+    participant G as Gateway / LB
+    Note over A,P: 阶段 0:池子预备(平台管理员提前做好)
+    C->>P: 按 Template 预建 N 个就绪沙箱入池
+    Note over A,K8s: 阶段 1:控制面——领养(一次性)
+    A->>SDK: client.create_sandbox(warmpool=...)
+    SDK->>K8s: 创建 SandboxClaim(引用 WarmPool)
+    K8s->>C: watch 到新 Claim
+    C->>K8s: 从池中选一个就绪沙箱,<br/>写入 claim.status.sandbox.name
+    K8s-->>SDK: Claim Ready,返回沙箱名/ns/pod IP
+    SDK-->>A: 返回句柄 sandbox(封装 id、ns、port、连接配置)
+    Note over C,P: 异步:WarmPool 控制器补建一个新沙箱入池
+    Note over A,G: 阶段 2:数据面——每次操作都走这条路
+    A->>SDK: sandbox.commands.run("python3 run.py")
+    SDK->>G: HTTP 请求 + Header<br/>(X-Sandbox-ID / X-Sandbox-Namespace / X-Sandbox-Port)
+    G->>R: 静态 HTTPRoute 全量转发给 router-svc
+    R->>R: 校验 header,构造内网 DNS
+    R->>P: 代理转发到 <id>.<ns>.svc.cluster.local:<port>
+    P->>P: runtime server 执行命令<br/>(如 FastAPI 的 /execute)
+    P-->>R: 返回 stdout/stderr/exit_code
+    R-->>G: 响应原路回传
+    G-->>SDK: HTTP 响应
+    SDK-->>A: result.stdout / result.exit_code
+    Note over A,K8s: 阶段 3:销毁(控制面)
+    A->>SDK: sandbox.terminate()
+    SDK->>K8s: 删 Claim → 级联删 Sandbox/Pod/Service
+    Note over C,P: 异步:WarmPool 补位回到目标水位</pre>
+<p>三个阶段对应三条不同的路径:<strong>领养只在阶段 1 发生一次,且不产生任何进入沙箱的流量;阶段 2 的每一次操作都是独立的 HTTP 请求;销毁回到控制面。</strong> 下面逐段拆解。</p>
+<hr>
+<h2 id="三、阶段-1-控制面——领养-一次纯-API-层面的-改归属">三、阶段 1:控制面——领养,一次纯 API 层面的&quot;改归属&quot;</h2>
+<p>是 agent(更准确说是 agent 进程里调用的 SDK)自主调用 <code>create_sandbox</code>。这一步触发的是纯 Kubernetes 控制面动作,全程分五步:</p>
+<p><strong>第 1 步:Claim 创建。</strong> SDK 向 K8s API 提交一个 <code>SandboxClaim</code>,引用目标 WarmPool:</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">sandbox = client.create_sandbox(warmpool=<span class="string">&quot;python-sandbox-pool&quot;</span>)</span><br></pre></td></tr></table></figure>
+<p><strong>第 2 步:控制器挑沙箱。</strong> SandboxClaim 控制器 watch 到新 Claim,进入 reconcile:在 WarmPool 维护的就绪沙箱集合里,按选择条件(包括 Template 版本匹配等)挑出一个匹配的沙箱。</p>
+<p><strong>第 3 步:绑定 + 状态回写。</strong> 控制器把选中的沙箱名写进 Claim 的 <code>status.sandbox.name</code>,Claim 状态转为 Ready。其中绝大部分时间是 K8s API 的 reconcile 往返,<strong>而不是冷启动</strong>——沙箱早就预热好了。</p>
+<p><strong>第 4 步:池子补位(异步)。</strong> WarmPool 控制器发现可用沙箱少了一个,立即按 Template 重建一个新 Pod 入池。补位发生在领养之后且是异步的,不在用户的请求路径上——agent 不用等。</p>
+<p><strong>第 5 步(释放时):级联清理。</strong> SDK 删除 Claim 时,级联删除其 Sandbox、Pod 和 headless Service,WarmPool 同步把水位补回目标值。</p>
+<p>这里有一个容易被误解的点:&quot;领养&quot;这个词听起来像数据面有流量动作,其实<strong>整个过程只发生在 Kubernetes 控制面,一个 HTTP 请求都不会打进沙箱</strong>。被领养的 Pod 从头到尾没有被销毁重建——它就是池子里那个预热好的实例,只是&quot;归属权&quot;从池子转移到了 Claim。这正是 adopt(领养)这个词的字面含义:<strong>认领现成的孩子,而不是现场生一个</strong>。</p>
+<hr>
+<h2 id="四、阶段-2-数据面——句柄-Header-路由-每次操作都是独立请求">四、阶段 2:数据面——句柄 + Header 路由,每次操作都是独立请求</h2>
+<p>这是整个架构最讲究的一环:海量的、短生命周期的沙箱,流量是怎么找到正确的那个的?</p>
+<h3 id="为什么需要一个-Router">为什么需要一个 Router?</h3>
+<p>官方文档的逻辑很直白:<strong>沙箱是海量的、临时性的,不可能给每个沙箱都在网关上建一条路由</strong>。所以所有流量先打到同一个静态入口(Gateway 提供的单一 IP),再由一个高可用的 router deployment 按 HTTP header 分流。<strong>一条静态路由服务上千个临时沙箱。</strong></p>
+<h3 id="一次-commands-run-的完整路径">一次 commands.run() 的完整路径</h3>
+<p>以生产 Gateway 模式为例:</p>
+<ol>
+<li>SDK 把命令封装成 HTTP 请求(如 <code>POST /execute</code>,body 是 <code>&#123;&quot;command&quot;: &quot;python3 run.py&quot;&#125;</code>),并在 header 里带上三个寻址字段:
+<ul>
+<li><code>X-Sandbox-ID</code>:沙箱名</li>
+<li><code>X-Sandbox-Namespace</code>:命名空间</li>
+<li><code>X-Sandbox-Port</code>:runtime server 监听的端口(默认 8888)</li>
+</ul>
+</li>
+<li>请求打到云负载均衡(Gateway)提供的单一静态 IP;</li>
+<li>一条静态 HTTPRoute 规则把所有流量无差别转发给 <code>sandbox-router-svc</code>;</li>
+<li>Router Service 把请求负载均衡到某个 router Pod;</li>
+<li>Router Pod 读取 header 做合法性校验(<strong>缺 <code>X-Sandbox-ID</code> 返回 400,namespace 含非法字符返回 400,端口非数字返回 400</strong>),然后用这三个字段拼出 Kubernetes 内部 DNS 名:<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">&lt;id&gt;.&lt;namespace&gt;.svc.cluster.local:&lt;port&gt;</span><br></pre></td></tr></table></figure>
+</li>
+<li>把原始请求代理过去;</li>
+<li>请求经目标沙箱的 headless Service 落到 Pod 里的 runtime server;</li>
+<li>响应沿同一路径流式回传。</li>
+</ol>
+<p>Router 的细节设定也很务实:默认代理超时 180 秒(可通过 <code>PROXY_TIMEOUT_SECONDS</code> 调大以支持长时间运行的命令);沙箱不可达时返回 502;原始 Host header 不转发进沙箱。</p>
+<h3 id="沙箱-Pod-里跑的是什么-——runtime-server">沙箱 Pod 里跑的是什么?——runtime server</h3>
+<p>需要澄清:Router 转发到的不是&quot;一个裸容器&quot;,而是沙箱 Pod 里运行的一个 <strong>runtime server 进程</strong>。以官方 Python Runtime Sandbox 模板为例,它是一个 FastAPI 服务,暴露 <code>/execute</code> 端点:接收 <code>&#123;&quot;command&quot;: ...&#125;</code>,返回 <code>&#123;stdout, stderr, exit_code&#125;</code>,命令执行有超时控制(默认 300 秒)。文件读写走类似的文件 API 端点。其他模板(Jupyter、computer-use runtime 等)换的是镜像里的 server,模式不变。</p>
+<blockquote>
+<p>SDK 的 <code>commands.run()</code> 之于 <code>/execute</code>,就像 ORM 之于 SQL——<strong>句柄是端点的客户端封装</strong>。</p>
+</blockquote>
+<hr>
+<h2 id="五、句柄-横跨两个平面的唯一纽带">五、句柄:横跨两个平面的唯一纽带</h2>
+<p>现在可以精确定义&quot;句柄&quot;了。<code>create_sandbox()</code> 返回的对象封装了三样东西:</p>
+<ul>
+<li><strong>沙箱身份</strong>:领养得到的 sandbox ID 和 namespace——控制面领养的结果,也是后续路由寻址的原料;</li>
+<li><strong>连接配置</strong>:router 地址或 Gateway URL,加上端口(默认 8888);</li>
+<li><strong>操作方法</strong>:<code>commands.run()</code>、<code>files.read()/write()</code>、<code>terminate()</code> 等。</li>
+</ul>
+<p>关键在于:<strong>agent 并不自己拼 header,句柄内部封装了这件事</strong>——每个沙箱对象持有自己的 id/ns/port,SDK 在每次调用时自动把它们塞进 header 并发往配置好的 router 地址。对写 agent 的人来说,这一切就是一行方法调用。</p>
+<p>一个典型的工作流:</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">from</span> k8s_agent_sandbox <span class="keyword">import</span> SandboxClient</span><br><span class="line"></span><br><span class="line">client = SandboxClient()</span><br><span class="line">sandbox = client.create_sandbox(warmpool=<span class="string">&quot;python-sandbox-pool&quot;</span>, namespace=<span class="string">&quot;default&quot;</span>)</span><br><span class="line"><span class="comment"># 下面每一行都是一次独立的、经 router 的 HTTP 数据面请求</span></span><br><span class="line">sandbox.files.write(<span class="string">&quot;/home/user/run.py&quot;</span>, generated_code)</span><br><span class="line">result = sandbox.commands.run(<span class="string">&quot;python3 /home/user/run.py&quot;</span>)</span><br><span class="line"><span class="built_in">print</span>(result.stdout, result.exit_code)</span><br><span class="line">sandbox.terminate()</span><br></pre></td></tr></table></figure>
+<p>如果拿数据库连接池做类比:<strong>Claim 领养相当于从连接池里拿到一条空闲连接,句柄就是那个 connection 对象</strong>——你不会拿它去碰底层 socket 细节,你只调用它上面的方法。</p>
+<hr>
+<h2 id="六、四种连接模式-同一套-API-四条数据通路">六、四种连接模式:同一套 API,四条数据通路</h2>
+<p>句柄的连接配置按部署形态有四种选择:</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>数据路径</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Gateway Mode</strong>(生产)</td>
+<td>Client → 云 LB(Gateway)→ 静态 HTTPRoute → router-svc → Router Pod → 沙箱 Pod</td>
+<td>大规模生产部署,沙箱量大</td>
+</tr>
+<tr>
+<td><strong>Tunnel Mode</strong>(开发)</td>
+<td>localhost → kubectl port-forward → router-svc → Router Pod → 沙箱 Pod</td>
+<td>本地开发、CI、Kind/Minikube,无需公网 IP</td>
+</tr>
+<tr>
+<td><strong>In-Cluster Mode</strong></td>
+<td>集群内 Client → 直连沙箱 Pod IP,不可用时回退到稳定 DNS <code>http://&#123;sandbox_id&#125;.&#123;namespace&#125;.svc.cluster.local:&#123;port&#125;</code></td>
+<td>agent 本身跑在同一集群里,绕过 router 少一跳</td>
+</tr>
+<tr>
+<td><strong>Advanced / Internal Mode</strong></td>
+<td>Client → 自定义 URL(如 <code>https://sandbox.example.com</code> 或 router Service DNS)</td>
+<td>自定义域名/HTTPS,或内部 agent 直连 router Service</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键观察</strong>:无论哪种模式,<code>create_sandbox</code> / <code>terminate</code> 的控制面行为完全一致——变的只是句柄里存的连接配置和后续请求的入口地址。这就是&quot;句柄 = 身份 + 连接配置 + 操作方法&quot;这个设计的价值:<strong>控制面与数据面被正交化,切换模式不改业务代码</strong>。</p>
+<hr>
+<h2 id="七、总结-两个平面-一个句柄">七、总结:两个平面,一个句柄</h2>
+<p>把整篇文章压缩成两句话:</p>
+<ul>
+<li><strong>控制面(<code>create_sandbox</code> / <code>terminate</code>)</strong>:agent 自主发起,SDK ↔ K8s API ↔ 控制器,通过 Claim 从暖池领养沙箱——决定&quot;你拥有哪个沙箱&quot;,全程不碰数据面;</li>
+<li><strong>数据面(<code>commands.run</code> / <code>files.write</code>)</strong>:每一次操作都是独立的 HTTP 请求,句柄携带的沙箱 ID 以 <code>X-Sandbox-ID</code> 等 header 的形式,经 Gateway → Router → 内部 DNS → 沙箱 Pod 的 runtime server 完成寻址与转发——决定&quot;这次操作打到哪&quot;。</li>
+</ul>
+<p><strong>句柄是横跨两个平面的唯一纽带</strong>:领养结果写进它的身份字段,后续操作消费这些字段。Router 的存在让数据面做到了&quot;一个静态 IP 服务上千个临时沙箱&quot;——不为每个沙箱建路由,一次 header 校验加 DNS 拼接就完成寻址。</p>
+<p>而这套设计里最值得借鉴的抽象是<strong>责任分层</strong>:</p>
+<ul>
+<li><strong>平台管理员</strong>用 Template + RuntimeClass 圈定&quot;沙箱长什么样、用什么隔离&quot;(静态决策,一次声明);</li>
+<li><strong>agent 运行时</strong>用 Claim + 句柄表达&quot;我要一个沙箱、并且这样用它&quot;(动态请求,按次发生);</li>
+<li><strong>领养机制</strong>把两者在控制面缝合,<strong>数据面由 Router 统一收敛</strong>。</li>
+</ul>
+<p>对写 agent 的人来说,你永远只跟句柄的方法打交道——网关、Router、RuntimeClass、暖池水位这些基础设施细节,全部被压在了句柄背后。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li><a target="_blank" rel="noopener" href="https://github.com/kubernetes-sigs/agent-sandbox">kubernetes-sigs/agent-sandbox 仓库</a></li>
+<li><a target="_blank" rel="noopener" href="https://agent-sandbox.sigs.k8s.io/">Agent Sandbox 官方文档(Router 与部署模式)</a></li>
+<li><a target="_blank" rel="noopener" href="https://kubernetes.io/blog/2026/03/20/running-agents-on-kubernetes-with-agent-sandbox/">Kubernetes 官方博客《Running Agents on Kubernetes with Agent Sandbox》</a></li>
+<li><a target="_blank" rel="noopener" href="https://developers.redhat.com/articles/2026/07/15/red-hat-build-agent-sandbox-isolated-workload-management-kubernetes">Red Hat《Agent Sandbox: Isolated workload management》</a></li>
+<li><a target="_blank" rel="noopener" href="https://katacontainers.io/blog/kata-containers-agent-sandbox-integration">Kata Containers 博客《What’s to Expect from Agent Sandbox》</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/">http://example.com/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Agent/">Agent</a><a class="post-meta__tags" href="/tags/%E6%8E%A7%E5%88%B6%E9%9D%A2/">控制面</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/Agent-Sandbox/">Agent-Sandbox</a><a class="post-meta__tags" href="/tags/%E6%95%B0%E6%8D%AE%E9%9D%A2/">数据面</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</div></div><div class="info-2"><div class="info-item-1">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐 DRA(Dynamic Resource Allocation)已经原生支持拓扑感知调度,而且这是它的核心设计目标之一——通过 ResourceSlice 暴露设备拓扑信息,配合 ResourceClaim 中的约束(constraint)让调度器在 Pod 绑定前就完成 NUMA / PCIe 级别的拓扑对齐。本文从实现机制、版本演进、使用示例和当前局限几个维度展开说明。  本文是 深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 的深入篇——那篇讲 HAMi 怎么用 DRA 做异构 GPU 分配,这篇专讲 DRA 本身的拓扑感知能力。   一、实现机制:拓扑如何参与调度决策 DRA 的拓扑感知能力建立在 KEP-4381(DRA Structured Parameters) 引入的结构化参数模型之上,核心链路分三层: 123456789101112131415161718192021222324              ┌─────────────────────────...</div></div></div></a><a class="pagination-related" href="/2026/08/24/2026-08-24-%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3GoChannel%E9%98%BB%E5%A1%9E%E4%B8%8EPanic/" title="深入理解 Go Channel:何时阻塞?何时引发 Panic?"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">深入理解 Go Channel:何时阻塞?何时引发 Panic?</div></div><div class="info-2"><div class="info-item-1">深入理解 Go Channel:何时阻塞?何时引发 Panic? 本文将深入探讨 Go 语言中 Channel 的底层行为机制,梳理在不同状态下发送、接收和关闭操作的阻塞与 Panic 场景,帮助你彻底避开并发编程中的死锁与崩溃陷阱。 在 Go 语言的并发编程中,有一句名言:“不要通过共享内存来通信,而应通过通信来共享内存”。作为这一哲学的核心载体,Channel(通道)是我们日常开发中最常用的并发原语。 然而,Channel 的使用并非毫无门槛。如果不清楚它在不同状态下的行为,极易写出导致死锁或 Panic 崩溃的代码。今天,我们就来彻底盘清楚:Go 的 Channel 到底在什么时候阻塞?什么时候报错? 一、 什么是阻塞?什么是报错? 在开始前,我们需要明确两个概念:  阻塞:当前 Goroutine 被挂起,暂停执行,等待条件满足后继续运行。如果条件永远不满足,就会导致死锁。 报错:程序发生严重错误,触发 panic,如果未被 recover 捕获,整个程序会崩溃退出。  二、 Channel 在什么时候会阻塞? Channel 的阻塞主要发生在数据未准备好、缓冲区满或空、...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-10</div><div class="info-item-2">OpenSandbox 项目学习</div></div><div class="info-2"><div class="info-item-1">OpenSandbox 项目学习 项目地址：https://github.com/opensandbox-group/OpenSandbox 官方文档：https://open-sandbox.ai 一、它是什么 一句话：OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform），提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。 为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：  隔离：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。 可编程：统一的...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">协议优先的沙箱执行框架:OpenSandbox 架构拆解</div></div><div class="info-2"><div class="info-item-1">协议优先的沙箱执行框架:OpenSandbox 架构拆解 先给一句话定位:阿里 OpenSandbox 是一个&quot;协议优先&quot;的开源沙箱执行框架——它自己不做隔离(隔离委托给 Docker/Kata/gVisor/Firecracker),而是用一套 OpenAPI 规范统一了&quot;沙箱生命周期&quot;和&quot;沙箱内执行&quot;两层接口,用注入到每个容器里的 Go 守护进程完成有状态的代码执行,再用 Pool/BatchSandbox 两级 CRD 在 Kubernetes 上把批量创建做到了 O(1) 复杂度。 需要先澄清一个容易混淆的点:市面上叫&quot;OpenSandbox&quot;的有两个东西——开源项目 OpenSandbox(GitHub opensandbox-group/OpenSandbox,Apache 2.0,2026 年初发布,两天破 3800 星)和阿里云上的托管服务 Agent Sandbox(商业产品,MicroVM 隔离 + 每分钟 15K 沙箱弹性)。本文以前者为主线,后者在结尾对比。  关联阅读:本文讲...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-15-Camel%E6%A1%86%E6%9E%B6/" title="Camel框架"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/camel.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">Camel框架</div></div><div class="info-2"><div class="info-item-1">NeurIPS 2023｜AI Agents先行者CAMEL:第一个基于大模型的多智能体框架 转自：https://zhuanlan.zhihu.com/p/671093582 AI Agents是当下大模型领域备受关注的话题，用户可以引入多个扮演不同角色的LLM Agents参与到实际的任务中，Agents之间会进行竞争和协作等多种形式的动态交互，进而产生惊人的群体智能效果。本文介绍了来自KAUST研究团队的大模型心智交互CAMEL框架（“骆驼”），CAMEL框架是最早基于ChatGPT的autonomous agents知名项目，目前已被顶级人工智能会议NeurIPS 2023录用。  1777dbe9073c4bcd8ab59365481bcafc.png  论文题目： CAMEL: Communicative Agents for “Mind” Exploration of Large Scale Language Model Society 论文链接： https://ghli.org/camel.pdf 代码链接： https://github.com/camel-a...</div></div></div></a><a class="pagination-related" href="/2025/08/13/2025-08-13-MCP-Zero%EF%BC%9ALLM%E6%99%BA%E8%83%BD%E4%BD%93%E4%B8%BB%E5%8A%A8%E5%B7%A5%E5%85%B7%E5%8F%91%E7%8E%B0%E7%9A%84%E6%96%B0%E8%8C%83%E5%BC%8F/" title="MCP-Zero：LLM智能体主动工具发现的新范式"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-13</div><div class="info-item-2">MCP-Zero：LLM智能体主动工具发现的新范式</div></div><div class="info-2"><div class="info-item-1">MCP-Zero：LLM智能体主动工具发现的新范式 转自：https://zhuanlan.zhihu.com/p/1928760473630798292 引言 大语言模型（LLMs）在处理复杂任务时，通常需要借助外部工具来扩展其能力范围。然而，当前 LLM 智能体与工具集成的主流范式存在显著局限性：它们往往将预定义的工具模式注入到系统提示中，导致模型扮演被动选择者的角色，而非主动发现所需能力。这种方法不仅造成了巨大的上下文开销，也限制了模型的决策自主性。 为了解决这些问题，本文引入了 MCP-Zero，一个旨在恢复 LLM 智能体工具发现自主性的主动框架。MCP-Zero 的核心思想是，智能体能够主动识别自身能力差距，并按需请求特定工具，从而将自身从大规模检索器转变为真正的自主智能体。该框架通过三大核心机制运行：主动工具请求、分层语义路由和迭代能力扩展。这些机制共同作用，使得 MCP-Zero 能够在最小化上下文开销和保持高准确性的前提下，动态构建多步工具链。   图：LLM 智能体的工具选择范例比较。(a) 基于系统提示的方法将所有 MCP 工具模式注入上下文，导致提示过长，...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AgenticRL.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">Agentic RL</div></div><div class="info-2"><div class="info-item-1">转自：https://zhuanlan.zhihu.com/p/1913905349284591240 通过蒙特卡洛树搜索、过程监督与结果监督、强化学习来提高 LLM 的推理能力，从本质上来说，都是尽可能榨取 LLM 本身的能力，区别可能在于多次尝试、反馈信号、训练方法而已，这类方法可称之为“求诸内”。而由 scaling law 可知，模型的能力是有限的，那么该如何进一步提高LLM在具体问题上的表现呢？近期的答案是，类似 RAG，Multi-Agent 系统，让 LLM 学会使用工具，毕竟人与动物的关键区别也只是“能制造并使用工具”，这种方式则是“求诸外”。那么本篇就以此为中心，重点讨论以下问题：  Agentic LLM 的算法逻辑、具体方法与实际表现？ RL 如何训练 Agentic LLM，其与 tool using 的 SFT 的差异在哪？ Agentic RL 的工程化问题  一、Agentic RL 的算法设计 Agent 和 RL 都并非新鲜事物，而使用 RL 训练基于 LLM 的 agent 则是近期的研究的热点，那么，从算法角度来说，如何理解二者结合的动机、场...</div></div></div></a><a class="pagination-related" href="/2025/08/27/2025-08-27-InfiGUIAgent-A-Multimodal-Generalist-GUI-Agent-with-Native-Reasoning-and-Reflection/" title="InfiGUIAgent:A Multimodal Generalist GUI Agent with Native Reasoning and Reflection"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/InfiGUIAgent.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-27</div><div class="info-item-2">InfiGUIAgent:A Multimodal Generalist GUI Agent with Native Reasoning and Reflection</div></div><div class="info-2"><div class="info-item-1">InfiGUIAgent: A Multimodal Generalist GUI Agent with Native Reasoning and Reflection 2025-01-08｜ZJU, DLUT, Reallm Labs, ByteDance Inc, PolyU| 15 http://arxiv.org/abs/2501.04575v1 https://huggingface.co/papers/2501.04575 https://github.com/Reallm-Labs/InfiGUIAgent 研究背景与意义  在当今数字化时代，图形用户界面（GUI）智能体的应用愈发广泛，成为自动化任务的重要工具。现有的多模态大语言模型（MLLMs）为GUI智能体的智能化提供了基础，但其在多步骤推理和对文本注释的依赖上仍存在显著局限。本研究提出的InfiGUIAgent旨在解决这些挑战，强调了原生推理能力在提升GUI交互效率中的重要性，为自动化任务的执行提供了新的可能性。  当前挑战：现有的MLLM基础的GUI智能体在处理复杂操作时，往往受限于单步推理能力，无法有效利...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%A7%92%E8%89%B2%E4%B8%8E%E5%AF%B9%E8%B1%A1-%E8%B0%81%E5%A3%B0%E6%98%8E%E4%BB%80%E4%B9%88"><span class="toc-number">1.1.</span> <span class="toc-text">一、角色与对象:谁声明什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%85%A8%E6%99%AF%E6%97%B6%E5%BA%8F%E5%9B%BE"><span class="toc-number">1.2.</span> <span class="toc-text">二、全景时序图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E9%98%B6%E6%AE%B5-1-%E6%8E%A7%E5%88%B6%E9%9D%A2%E2%80%94%E2%80%94%E9%A2%86%E5%85%BB-%E4%B8%80%E6%AC%A1%E7%BA%AF-API-%E5%B1%82%E9%9D%A2%E7%9A%84-%E6%94%B9%E5%BD%92%E5%B1%9E"><span class="toc-number">1.3.</span> <span class="toc-text">三、阶段 1:控制面——领养,一次纯 API 层面的&quot;改归属&quot;</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E9%98%B6%E6%AE%B5-2-%E6%95%B0%E6%8D%AE%E9%9D%A2%E2%80%94%E2%80%94%E5%8F%A5%E6%9F%84-Header-%E8%B7%AF%E7%94%B1-%E6%AF%8F%E6%AC%A1%E6%93%8D%E4%BD%9C%E9%83%BD%E6%98%AF%E7%8B%AC%E7%AB%8B%E8%AF%B7%E6%B1%82"><span class="toc-number">1.4.</span> <span class="toc-text">四、阶段 2:数据面——句柄 + Header 路由,每次操作都是独立请求</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81%E4%B8%80%E4%B8%AA-Router"><span class="toc-number">1.4.1.</span> <span class="toc-text">为什么需要一个 Router?</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E6%AC%A1-commands-run-%E7%9A%84%E5%AE%8C%E6%95%B4%E8%B7%AF%E5%BE%84"><span class="toc-number">1.4.2.</span> <span class="toc-text">一次 commands.run() 的完整路径</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B2%99%E7%AE%B1-Pod-%E9%87%8C%E8%B7%91%E7%9A%84%E6%98%AF%E4%BB%80%E4%B9%88-%E2%80%94%E2%80%94runtime-server"><span class="toc-number">1.4.3.</span> <span class="toc-text">沙箱 Pod 里跑的是什么?——runtime server</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%8F%A5%E6%9F%84-%E6%A8%AA%E8%B7%A8%E4%B8%A4%E4%B8%AA%E5%B9%B3%E9%9D%A2%E7%9A%84%E5%94%AF%E4%B8%80%E7%BA%BD%E5%B8%A6"><span class="toc-number">1.5.</span> <span class="toc-text">五、句柄:横跨两个平面的唯一纽带</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%9B%9B%E7%A7%8D%E8%BF%9E%E6%8E%A5%E6%A8%A1%E5%BC%8F-%E5%90%8C%E4%B8%80%E5%A5%97-API-%E5%9B%9B%E6%9D%A1%E6%95%B0%E6%8D%AE%E9%80%9A%E8%B7%AF"><span class="toc-number">1.6.</span> <span class="toc-text">六、四种连接模式:同一套 API,四条数据通路</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E6%80%BB%E7%BB%93-%E4%B8%A4%E4%B8%AA%E5%B9%B3%E9%9D%A2-%E4%B8%80%E4%B8%AA%E5%8F%A5%E6%9F%84"><span class="toc-number">1.7.</span> <span class="toc-text">七、总结:两个平面,一个句柄</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.7.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

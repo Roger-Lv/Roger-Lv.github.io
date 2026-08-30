@@ -1,0 +1,355 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>一个集群,多个调度器:Kubernetes 多调度器共存实践指南 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="kube-scheduler 与 Volcano 能否共存?本文沿&quot;机制→模式→坑→实践&quot;顺序,讲清 schedulerName 路由、四种共存模式、资源双重记账&#x2F;抢占不知情&#x2F;拓扑不互通三大坑,并给出判断框架。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="一个集群,多个调度器:Kubernetes 多调度器共存实践指南">
+<meta property="og:url" content="http://example.com/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="kube-scheduler 与 Volcano 能否共存?本文沿&quot;机制→模式→坑→实践&quot;顺序,讲清 schedulerName 路由、四种共存模式、资源双重记账&#x2F;抢占不知情&#x2F;拓扑不互通三大坑,并给出判断框架。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-22T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-23T05:51:05.662Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Volcano">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="调度器">
+<meta property="article:tag" content="Kueue">
+<meta property="article:tag" content="多调度器共存">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "一个集群,多个调度器:Kubernetes 多调度器共存实践指南",
+  "url": "http://example.com/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-22T16:00:00.000Z",
+  "dateModified": "2026-08-23T05:51:05.662Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '一个集群,多个调度器:Kubernetes 多调度器共存实践指南',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-22T16:00:00.000Z" title="发表于 2026-08-23 00:00:00">2026-08-23</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-23T05:51:05.662Z" title="更新于 2026-08-23 13:51:05">2026-08-23</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" data-flag-title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>一个集群,多个调度器:Kubernetes 多调度器共存实践指南</h1>
+<p>“我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。</p>
+<hr>
+<h2 id="一、为什么这个问题重要">一、为什么这个问题重要</h2>
+<p>大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。</p>
+<p>Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 <code>schedulerName</code> 字段指定由谁来调度,各调度器通过 watch API Server 只处理与自己名称匹配的 Pod,互相不感知、互不干扰。这是所有专用调度器(Volcano、Run:ai、Gödel 等)能够存在的基础机制。</p>
+<p>但机制归机制,真正落地时会遇到<strong>资源双重记账、抢占互相不知情、拓扑约束不互通</strong>这三个经典冲突。本文沿着&quot;机制→模式→坑→实践&quot;的顺序展开。</p>
+<hr>
+<h2 id="二、核心机制-schedulerName-路由">二、核心机制:schedulerName 路由</h2>
+<p>先看两个调度器如何分工。每个 Pod 的 spec 中都有一个 <code>schedulerName</code> 字段,默认值为 <code>default-scheduler</code>(即 kube-scheduler)。设为其他值时,Pod 被路由给对应调度器处理。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 由默认 kube-scheduler 调度(普通无状态服务)</span></span><br><span class="line"><span class="attr">apiVersion:</span> <span class="string">v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Pod</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">web-app</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">schedulerName:</span> <span class="string">default-scheduler</span>   <span class="comment"># 可省略,即默认值</span></span><br><span class="line">  <span class="attr">containers:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">nginx</span></span><br><span class="line">      <span class="attr">image:</span> <span class="string">nginx</span></span><br><span class="line"><span class="meta">---</span></span><br><span class="line"><span class="comment"># 由 Volcano 调度(AI 训练任务)</span></span><br><span class="line"><span class="attr">apiVersion:</span> <span class="string">batch.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Job</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">llm-training</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">schedulerName:</span> <span class="string">volcano</span>             <span class="comment"># 路由到 volcano-scheduler</span></span><br><span class="line">  <span class="attr">minAvailable:</span> <span class="number">3</span>                    <span class="comment"># Gang 调度门槛</span></span><br><span class="line">  <span class="attr">tasks:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">replicas:</span> <span class="number">3</span></span><br><span class="line">      <span class="attr">name:</span> <span class="string">worker</span></span><br><span class="line">      <span class="attr">template:</span></span><br><span class="line">        <span class="attr">spec:</span></span><br><span class="line">          <span class="attr">containers:</span></span><br><span class="line">            <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">pytorch</span></span><br><span class="line">              <span class="attr">image:</span> <span class="string">pytorch/pytorch</span></span><br></pre></td></tr></table></figure>
+<p>只要两个调度器都处于 Running 状态,普通服务走 kube-scheduler 的打散策略,训练任务走 Volcano 的 Gang + 拓扑感知策略,各得其所。</p>
+<p>这里有个容易被忽略的细节:多个调度器之间<strong>没有协调机制</strong>。kube-scheduler 不知道 Volcano 的存在,Volcano 也不关心 kube-scheduler 在做什么。它们唯一的共享事实是 etcd 里的节点资源和 Pod 状态——这个&quot;共享&quot;恰恰是所有冲突的根源,也是后文所有坑的出处。</p>
+<hr>
+<h2 id="三、四种典型的共存模式">三、四种典型的共存模式</h2>
+<h3 id="模式一-kube-scheduler-Volcano-最常见">模式一:kube-scheduler + Volcano(最常见)</h3>
+<p>Volcano 官方设计就是与默认调度器并存而非替代。Volcano 只接管设置了 <code>schedulerName: volcano</code> 的工作负载,其余 Pod 仍由 kube-scheduler 处理。华为云 CCE 等生产环境普遍采用这种架构。</p>
+<p><strong>适合场景</strong>:AI 训练集群、批处理与在线服务混合部署。</p>
+<h3 id="模式二-Kueue-的第三条路-控制器-而非调度器">模式二:Kueue 的第三条路(控制器,而非调度器)</h3>
+<p>Kueue 不是独立调度器,而是一个<strong>控制器层的队列管理器</strong>——它在 Pod 创建前拦截(通过 admission 或 Job 挂起机制),决定&quot;什么时候允许进入调度&quot;,而真正&quot;放在哪个节点&quot;仍由默认调度器完成。</p>
+<p>这个设计很聪明:它避免了多调度器并存的复杂性,天然复用了 kube-scheduler 的全部能力(包括 DRA、Topology Manager 等新特性)。代价是 Kueue 无法实现 Volcano 级别的深度调度干预——它管&quot;何时&quot;,不管&quot;何地&quot;。</p>
+<p><strong>适合场景</strong>:GCP 生态(GKE 官方推荐组合是 DWS + Kueue + JobSet)、需要队列配额管理但不需要深度 Gang 语义的团队。</p>
+<h3 id="模式三-多-Profile-单进程-轻量替代">模式三:多 Profile 单进程(轻量替代)</h3>
+<p>在引入第二调度器之前,值得先评估 K8s 的 <strong>Scheduling Profiles</strong> 机制:同一个 kube-scheduler 进程可以运行多个逻辑 Profile,每个 Profile 有自己的插件组合和调度器名称。不同 <code>schedulerName</code> 的 Pod 进入不同 Profile,走不同的打分策略——但共享同一个调度循环、同一份资源视图。</p>
+<p><strong>适合场景</strong>:差异只是&quot;打分策略不同&quot;(比如在线服务要 spread、批处理要 binpack),不需要改变调度循环的根基语义。如果差异到了 Gang 这种级别,Profile 就不够了,需要真正的第二调度器。</p>
+<h3 id="模式四-同一调度器多实例分片-吞吐扩展">模式四:同一调度器多实例分片(吞吐扩展)</h3>
+<p>当单实例调度器成为吞吐瓶颈(万节点级集群),Volcano 支持部署多个 volcano-scheduler 实例。早期方案通过节点 label 分片(每个调度器负责一组节点),新方案基于 hash 算法自动将 Job 和 Node 分配给不同实例,对用户透明。</p>
+<p><strong>适合场景</strong>:超大规模集群的调度器水平扩展。</p>
+<hr>
+<h2 id="四、三个必须警惕的坑">四、三个必须警惕的坑</h2>
+<p>多调度器共存最大的风险不是&quot;不工作&quot;,而是&quot;看起来工作,出问题时才爆发&quot;。以下三个坑都来自同一根源:<strong>各调度器只有自己的局部视图</strong>。</p>
+<h3 id="坑一-资源双重记账">坑一:资源双重记账</h3>
+<p>kube-scheduler 基于 Pod 的 resource requests 做调度决策,但它不知道 Volcano 侧 PodGroup 的 <code>minAvailable</code> 语义。极端情况:</p>
+<ul>
+<li><strong>Volcano 视角</strong>:一个 1000 卡的训练任务已凑齐 999 个 Worker,正在等待最后 1 个节点的资源释放,集群&quot;逻辑已分配&quot;1000 卡</li>
+<li><strong>kube-scheduler 视角</strong>:那个节点还有剩余可分配资源,把它分配给一个刚扩容的在线服务</li>
+</ul>
+<p>结果:训练任务永远凑不齐 Gang,而 kube-scheduler 认为一切正常。Volcano 的&quot;预留语义&quot;在 kube-scheduler 眼里就是&quot;空闲&quot;——这不是 bug,是两个调度器对资源语义的理解根本不同。</p>
+<p><strong>缓解方案</strong>:</p>
+<ul>
+<li><strong>节点池物理隔离(最推荐)</strong>:训练任务通过 nodeSelector/taint 约束到专用节点池,从根源上消除竞争</li>
+<li><strong>namespace 隔离 + ResourceQuota</strong>:在配额层面划清界限</li>
+</ul>
+<h3 id="坑二-抢占互相不知情">坑二:抢占互相不知情</h3>
+<p>Volcano 的 Gang 抢占(v1.15)只会驱逐自己管辖的 Pod,kube-scheduler 的抢占也只考虑默认调度的 Pod。这个坑的底层根因(共享资源视图无分布式锁、优先级语义不互通、抢占路径各自独立)与社区 KEP 演进方向,见 <a href="2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0.md#%E4%BA%8C%E3%80%81%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%B2%A1%E6%9C%89%E5%8E%9F%E7%94%9F%E6%94%AF%E6%8C%81">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</a>。跨调度器的抢占链会导致:</p>
+<ol>
+<li>一个高优先级 Pod 设置了 <code>schedulerName: default-scheduler</code>,被驱逐对象是 Volcano 管的训练 Worker</li>
+<li>kube-scheduler 并不理解&quot;驱逐这个 Worker 会破坏一个 999/1000 的 Gang&quot;,照常抢占</li>
+<li>训练任务整体失败,已消耗的 999 卡时全部浪费</li>
+</ol>
+<p><strong>缓解方案</strong>:</p>
+<ul>
+<li>通过 PriorityClass 做全局优先级对齐,确保跨调度器优先级语义一致</li>
+<li>设置 <code>preemptionPolicy: Never</code> 保护关键训练任务,把抢占决策权交给人工或上层编排</li>
+<li>最根本的:还是物理隔离</li>
+</ul>
+<h3 id="坑三-拓扑约束不互通">坑三:拓扑约束不互通</h3>
+<p>Volcano 的 HyperNode 拓扑域对 kube-scheduler 完全不可见。反过来,kube-scheduler 的默认 spread 策略也可能把 Volcano 希望聚拢的 TP 通信组打散到不同机架——两个调度器的&quot;好放置&quot;定义相互矛盾。</p>
+<p><strong>缓解方案</strong>:</p>
+<ul>
+<li>混部节点池上,为在线服务 Pod 显式设置 <code>topologySpreadConstraints</code>,避免误伤训练任务的通信域</li>
+<li>Volcano 侧通过 HyperNode 硬约束(<code>highestTierAllowed</code>)兜底,即使 kube-scheduler 打散了部分 Pod,Volcano 管的核心通信组仍能保证拓扑完整</li>
+</ul>
+<hr>
+<h2 id="五、实践建议-一套验证过的组合拳">五、实践建议:一套验证过的组合拳</h2>
+<p>综合社区经验,生产环境&quot;默认调度器 + Volcano&quot;的推荐做法:</p>
+<p><strong>第一层:工作负载分工明确</strong></p>
+<ul>
+<li>在线服务(Deployment/StatefulSet)→ kube-scheduler</li>
+<li>AI 训练和批处理(VolcanoJob、KubeRay、MPIJob)→ 显式指定 <code>schedulerName: volcano</code></li>
+<li>推理服务 → 视引擎而定:vLLM 原生 Pod 可留在 kube-scheduler + Kueue 组合,需要深度调度(PD 分离编排、KV 路由)时上 Kthena。Kthena 作为 Volcano 子项目正是&quot;第二个调度器&quot;在 LLM 推理场景的具体形态,见 <a href="2026-08-23-%E4%BB%8EKServe%E5%88%B0Kthena%E4%BA%91%E5%8E%9F%E7%94%9F%E6%A8%A1%E5%9E%8B%E6%9C%8D%E5%8A%A1%E5%B9%B3%E5%8F%B0%E6%BC%94%E8%BF%9B.md#%E5%9B%9B%E3%80%81Kthena-LLM-%E6%8E%A8%E7%90%86%E8%B0%83%E5%BA%A6%E7%9A%84%E4%B8%93%E7%A7%91%E5%8C%BB%E7%94%9F">从 KServe 到 Kthena:云原生模型服务平台的技术演进</a></li>
+</ul>
+<p><strong>第二层:节点池物理隔离</strong><br>
+训练节点池打 taint + label,在线节点池独立。这一步能同时消除三个坑的绝大多数风险,性价比最高。</p>
+<p><strong>第三层:优先级全局对齐</strong><br>
+定义统一的 PriorityClass 体系,两个调度器共用同一套优先级数值语义。</p>
+<p><strong>第四层:观测各自独立</strong><br>
+两套调度器各有自己的 metrics(kube-scheduler 的 <code>scheduler_</code> 系列、Volcano 的调度延迟/队列深度指标),监控面板分开建设,避免误判。</p>
+<hr>
+<h2 id="六、判断框架-什么时候需要第二个调度器">六、判断框架:什么时候需要第二个调度器</h2>
+<p>最后给一个决策框架。是否需要多调度器,取决于工作负载的调度语义差异是否大到无法用单一调度器的多 Profile 表达:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">差异只是打分策略不同(spread vs binpack)?</span><br><span class="line">  └─ 是 → kube-scheduler 多 Profile,不要引入第二调度器</span><br><span class="line">需要 Gang 调度、队列语义、任务级生命周期管理?</span><br><span class="line">  └─ 是 → 引入 Volcano,默认调度器共存模式</span><br><span class="line">需要队列配额但不需要深度调度干预?</span><br><span class="line">  └─ 是 → Kueue 即可,它不是调度器,没有共存问题</span><br><span class="line">集群规模到了单实例吞吐瓶颈?</span><br><span class="line">  └─ 是 → 考虑同一调度器多实例分片</span><br></pre></td></tr></table></figure>
+<p>一个判断:随着 K8s 原生 Gang 调度(v1.35 的 <code>scheduling.k8s.io/v1alpha1</code>)和 DRA 的 GA,&quot;通用调度器&quot;的生态位正在被标准化吞噬。多调度器共存的格局不会消失,但共存的理由会越来越集中到两个点上:<strong>拓扑深度感知</strong>(标准化尚未触及)和<strong>推理专用语义</strong>(新赛道)。中间地带的共存需求,未来大概率被上游标准的演进逐步吸收。</p>
+<hr>
+<p><em>本文技术细节参考 Kubernetes 官方文档的 Multiple Schedulers 章节、Volcano 官方文档与设计文档、Kueue 官方文档,以及各云厂商公开技术资料。数据截至 2026 年 8 月,具体版本特性请以官方最新文档为准。</em></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/">http://example.com/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Volcano/">Volcano</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E8%B0%83%E5%BA%A6%E5%99%A8/">调度器</a><a class="post-meta__tags" href="/tags/Kueue/">Kueue</a><a class="post-meta__tags" href="/tags/%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98/">多调度器共存</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/23/2026-08-23-Kafka%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86%E5%85%A8%E8%A7%88/" title="Kafka 设计原理全览:从分布式日志到高吞吐高可用"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Kafka 设计原理全览:从分布式日志到高吞吐高可用</div></div><div class="info-2"><div class="info-item-1">Kafka 设计原理全览:从分布式日志到高可用 引言 Kafka 最初由 LinkedIn 开发,后捐给 Apache 基金会,如今已是流式数据事实标准。它能在一台普通服务器上跑到 10 万级消息/秒的吞吐,同时保证消息的持久化与高可用——这背后不是玄学,而是一套围绕&quot;分布式日志&quot;的精巧设计。 本文以&quot;分布式日志&quot;为内核,系统梳理 Kafka 的架构与核心原理,目标是读完一篇就建立完整的心智模型。参考了腾讯云开发者社区《Kafka 设计原理全览》及若干资料,综合整理。  一、Kafka 是什么:不止是消息队列 Kafka 是一个分布式流处理平台,有三重身份:  消息系统:生产者发消息、消费者收消息,提供解耦、削峰、异步、系统恢复等能力,还支持顺序保证和回溯消费。 存储系统:消息以日志形式持久化到磁盘,配合多副本实现高可靠的冗余存储。 流处理平台:提供完整的流处理类库(Kafka Streams),可在消息之上做转换、聚合、连接。  为什么用它做消息队列?核心价值:解耦(上下游不直接耦合)、削峰(峰值流量暂存管道、下游按自己速度消费)、可扩展...</div></div></div></a><a class="pagination-related" href="/2026/08/22/2026-08-22-DPDK%E5%AE%9E%E6%88%98-%E4%BB%8E%E5%BC%80%E6%BA%90%E7%A4%BA%E4%BE%8B%E9%A1%B9%E7%9B%AE%E6%8B%86%E8%A7%A3%E7%94%A8%E6%88%B7%E6%80%81%E5%8C%85%E5%A4%84%E7%90%86%E5%85%A8%E6%B5%81%E7%A8%8B/" title="DPDK 实战：从一个开源示例项目拆解用户态包处理的全流程"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">DPDK 实战：从一个开源示例项目拆解用户态包处理的全流程</div></div><div class="info-2"><div class="info-item-1"> 上一篇《高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP》讲的是「三条 kernel bypass 路径怎么选」。这篇落到代码：拿一个真实的 DPDK 开源示例项目 The-DPDK-Examples，把概念、封装层、收发包主循环、三个数据面示例、LRU 实现和哈希基准测试一次性拆透。 但在拆代码之前，得先把 DPDK 里那一堆名词讲清楚——否则代码里每一行都看不懂。所以本文前半部分用拓扑图把概念讲透，后半部分逐文件拆代码。如果你已经熟悉 DPDK，可以直接跳到第五节。  一、为什么需要「内核旁路」 先建立基准：标准 Linux 收一个网络包，要走的路是这样的： 123456789101112131415161718192021222324┌─────────────────────────────────────────────────────────────────┐│                         传统内核网络栈                            ││                                     ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/" title="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</div></div><div class="info-2"><div class="info-item-1">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器 把一个千卡训练任务调度好,比把一百个 Web 服务调度好难得多。难点不在&quot;算力够不够&quot;,而在三件 Web 服务从不操心的事:  通信拓扑要聚拢:TP/PP 切出来的通信组,必须落在同一片 RDMA 交换机域里,跨机架一跳,AllReduce 延迟能差好几倍。 资源要&quot;留得住&quot;:训练任务动辄跑几小时几天,中途被别的任务抢占、重启就要从头来;但集群又要混部在线/离线,不能不让抢。 同卡型才好比:A100 节点和 H100 节点不能混进同一个通信组,不然快的等慢的,贵的卡当便宜的用。  通用调度器(kube-scheduler)对这三件事基本无解,Volcano 解决了 Gang 但也没碰拓扑。Sky-Scheduler 就是冲着这三件事来的——一个 Volcano 衍生的 Kubernetes 调度器,在 Volcano 的 session 框架上做了几处关键改造:把&quot;Pod→Node 一跳&quot;改成 “Task→Quota→Node 两跳”,引入...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-%E6%8E%A8%E7%90%86%E8%B0%83%E5%BA%A6%E5%99%A8%E8%B0%83%E7%A0%94%E6%8A%A5%E5%91%8A/" title="推理调度器(Inference Scheduler)调研报告"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">推理调度器(Inference Scheduler)调研报告</div></div><div class="info-2"><div class="info-item-1">推理调度器(Inference Scheduler)调研报告 当前主流推理调度方案可分为三层:引擎层调度(vLLM continuous batching、TensorRT-LLM in-flight batching)、集群层调度(Kthena、AIBrix、llm-d、KServe 等 K8s 原生方案)、路由层调度(KV Cache/Prefix 感知的请求级路由),而云厂商普遍采取&quot;引擎层优化 + 集群层自研 + 路由层智能化&quot;的组合策略。推理调度的核心矛盾已从训练场景的&quot;资源凑齐&quot;(Gang 调度)转向推理场景的&quot;延迟-吞吐-SLO-成本四方权衡&quot;,KV Cache 感知路由和 PD 分离(Prefill-Decode disaggregation)成为当前最活跃的技术竞争点。  一、推理调度与训练调度的本质差异 训练调度的核心是资源分配问题:用 Gang 调度保证分布式作业的所有 Worker 同时启动,用拓扑感知减少通信开销,调度粒度是&quot;作业级&quot;,一次决策影响整个训练过程。 推理调度的核...</div></div></div></a><a class="pagination-related" href="/2025/09/17/2025-09-17-Volcano%E8%B0%83%E5%BA%A6%E5%99%A8/" title="Volcano调度器"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-17</div><div class="info-item-2">Volcano调度器</div></div><div class="info-2"><div class="info-item-1">参考：https://zhuanlan.zhihu.com/p/700565336 在 Volcano 系统中，“Job” 和 “Task” 这两个词在 调度器（Scheduler）内部 和 用户/控制器（Controller）层面 代表的是完全不同的东西。 https://volcano.sh/zh/docs/ 丰富的调度策略  Gang Scheduling：确保作业的所有任务同时启动，适用于分布式训练、大数据等场景 Binpack Scheduling：通过任务紧凑分配优化资源利用率 Heterogeneous device scheduling：高效共享GPU异构资源，支持CUDA和MIG两种模式的GPU调度，支持NPU调度 Proportion/Capacity Scheduling：基于队列配额进行资源的共享/抢占/回收 NodeGroup Scheduling：支持节点分组亲和性调度，实现队列与节点组的绑定关系 DRF Scheduling：支持多维度资源的公平调度 SLA Scheduling：基于服务质量的调度保障 Task-topology Schedulin...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%99%E4%B8%AA%E9%97%AE%E9%A2%98%E9%87%8D%E8%A6%81"><span class="toc-number">1.1.</span> <span class="toc-text">一、为什么这个问题重要</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%A0%B8%E5%BF%83%E6%9C%BA%E5%88%B6-schedulerName-%E8%B7%AF%E7%94%B1"><span class="toc-number">1.2.</span> <span class="toc-text">二、核心机制:schedulerName 路由</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%9B%9B%E7%A7%8D%E5%85%B8%E5%9E%8B%E7%9A%84%E5%85%B1%E5%AD%98%E6%A8%A1%E5%BC%8F"><span class="toc-number">1.3.</span> <span class="toc-text">三、四种典型的共存模式</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A8%A1%E5%BC%8F%E4%B8%80-kube-scheduler-Volcano-%E6%9C%80%E5%B8%B8%E8%A7%81"><span class="toc-number">1.3.1.</span> <span class="toc-text">模式一:kube-scheduler + Volcano(最常见)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A8%A1%E5%BC%8F%E4%BA%8C-Kueue-%E7%9A%84%E7%AC%AC%E4%B8%89%E6%9D%A1%E8%B7%AF-%E6%8E%A7%E5%88%B6%E5%99%A8-%E8%80%8C%E9%9D%9E%E8%B0%83%E5%BA%A6%E5%99%A8"><span class="toc-number">1.3.2.</span> <span class="toc-text">模式二:Kueue 的第三条路(控制器,而非调度器)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A8%A1%E5%BC%8F%E4%B8%89-%E5%A4%9A-Profile-%E5%8D%95%E8%BF%9B%E7%A8%8B-%E8%BD%BB%E9%87%8F%E6%9B%BF%E4%BB%A3"><span class="toc-number">1.3.3.</span> <span class="toc-text">模式三:多 Profile 单进程(轻量替代)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%A8%A1%E5%BC%8F%E5%9B%9B-%E5%90%8C%E4%B8%80%E8%B0%83%E5%BA%A6%E5%99%A8%E5%A4%9A%E5%AE%9E%E4%BE%8B%E5%88%86%E7%89%87-%E5%90%9E%E5%90%90%E6%89%A9%E5%B1%95"><span class="toc-number">1.3.4.</span> <span class="toc-text">模式四:同一调度器多实例分片(吞吐扩展)</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%89%E4%B8%AA%E5%BF%85%E9%A1%BB%E8%AD%A6%E6%83%95%E7%9A%84%E5%9D%91"><span class="toc-number">1.4.</span> <span class="toc-text">四、三个必须警惕的坑</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9D%91%E4%B8%80-%E8%B5%84%E6%BA%90%E5%8F%8C%E9%87%8D%E8%AE%B0%E8%B4%A6"><span class="toc-number">1.4.1.</span> <span class="toc-text">坑一:资源双重记账</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9D%91%E4%BA%8C-%E6%8A%A2%E5%8D%A0%E4%BA%92%E7%9B%B8%E4%B8%8D%E7%9F%A5%E6%83%85"><span class="toc-number">1.4.2.</span> <span class="toc-text">坑二:抢占互相不知情</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9D%91%E4%B8%89-%E6%8B%93%E6%89%91%E7%BA%A6%E6%9D%9F%E4%B8%8D%E4%BA%92%E9%80%9A"><span class="toc-number">1.4.3.</span> <span class="toc-text">坑三:拓扑约束不互通</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%AE%9E%E8%B7%B5%E5%BB%BA%E8%AE%AE-%E4%B8%80%E5%A5%97%E9%AA%8C%E8%AF%81%E8%BF%87%E7%9A%84%E7%BB%84%E5%90%88%E6%8B%B3"><span class="toc-number">1.5.</span> <span class="toc-text">五、实践建议:一套验证过的组合拳</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%88%A4%E6%96%AD%E6%A1%86%E6%9E%B6-%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E9%9C%80%E8%A6%81%E7%AC%AC%E4%BA%8C%E4%B8%AA%E8%B0%83%E5%BA%A6%E5%99%A8"><span class="toc-number">1.6.</span> <span class="toc-text">六、判断框架:什么时候需要第二个调度器</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

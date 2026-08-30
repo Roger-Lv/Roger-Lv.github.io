@@ -1,0 +1,590 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="VLA 模型参数规模 1B-34B 刚好落在 FSDP 甜点区,加上异构多模态结构让 Megatron 难适配、HuggingFace 生态原生支持、单节点微调为主——四个 VLA 关键约束同时成立,决定了 FSDP 是 VLA 训练的事实标准。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">
+<meta property="og:url" content="http://example.com/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="VLA 模型参数规模 1B-34B 刚好落在 FSDP 甜点区,加上异构多模态结构让 Megatron 难适配、HuggingFace 生态原生支持、单节点微调为主——四个 VLA 关键约束同时成立,决定了 FSDP 是 VLA 训练的事实标准。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-28T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-29T18:17:05.634Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Megatron">
+<meta property="article:tag" content="分布式训练">
+<meta property="article:tag" content="FSDP">
+<meta property="article:tag" content="具身智能">
+<meta property="article:tag" content="VLA">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立",
+  "url": "http://example.com/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-28T16:00:00.000Z",
+  "dateModified": "2026-08-29T18:17:05.634Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-29T18:17:05.634Z" title="更新于 2026-08-30 02:17:05">2026-08-30</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" data-flag-title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</h1>
+<blockquote>
+<p>本文是 <a href="2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra.md">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a> 的姊妹篇——那篇给出了&quot;VLA 训练用 FSDP 而非 Megatron&quot;的结论,这篇把背后的逻辑彻底拆透。</p>
+</blockquote>
+<p>核心原因一句话:<strong>VLA 模型的参数规模(1B-34B)刚好落在 FSDP 的&quot;甜点区&quot;,加上它基于 HuggingFace 生态的异构多模态结构让 Megatron 类框架难以适配,而科研社区主导的开源生态天然偏向 PyTorch 原生方案</strong>。下面把逻辑拆开讲。</p>
+<hr>
+<h2 id="一、先看-VLA-训练的真实规模和场景">一、先看 VLA 训练的真实规模和场景</h2>
+<p>VLA 训练的参数量和你熟悉的 LLM 预训练完全不是一个量级:</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>参数规模</th>
+<th>典型硬件</th>
+<th>训练方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VLA 预训练</td>
+<td>7B(OpenVLA)/ 3B(π0)</td>
+<td>64 张 A100 × 15 天</td>
+<td>全量</td>
+</tr>
+<tr>
+<td>VLA 微调(主流场景)</td>
+<td>7B</td>
+<td>单节点 8 张 A100</td>
+<td>LoRA 或全量</td>
+</tr>
+<tr>
+<td>VLA-RL 后训练</td>
+<td>7B</td>
+<td>单节点到多节点</td>
+<td>FSDP 管理</td>
+</tr>
+<tr>
+<td>LLM 基座预训练</td>
+<td>70B-万亿级</td>
+<td>数千卡、跨多机</td>
+<td>Megatron 3D 并行</td>
+</tr>
+</tbody>
+</table>
+<p>这是最关键的判断依据:<strong>VLA 的主战场是&quot;7B 量级 + 单节点到少量多机 + 高频微调迭代&quot;,不是&quot;千亿级 + 数千卡&quot;</strong>。这直接决定了框架选型。</p>
+<hr>
+<h2 id="二、为什么不是-Megatron-三个硬性障碍">二、为什么不是 Megatron:三个硬性障碍</h2>
+<h3 id="障碍-1-VLA-是异构多模态模型-Megatron-的统一并行拓扑难以适配">障碍 1:VLA 是异构多模态模型,Megatron 的统一并行拓扑难以适配</h3>
+<p>Megatron-LM 官方已明确说明:它目前不原生支持&quot;同一多模态模型内不同子模块使用不同并行配置&quot;的场景——例如&quot;视觉编码器 TP=1、LLM TP=8&quot;这种分配在 Megatron 里开箱即用是做不到的。原因是 Megatron 的 TP/PP 通信组、流水线调度、参数同步、ckpt 加载都建立在<strong>全模型统一的全局并行拓扑</strong>之上,而 VLA 恰恰是&quot;DINOv2/SigLIP 视觉编码器 + LLM 主干 + Action Expert&quot;三段异构结构,各段的计算特征、显存压力、并行诉求都不同。</p>
+<p>FSDP 对此天然宽容——它只是按 module 边界做参数分片,每个子模块可以用不同的 <code>auto_wrap_policy</code> 灵活处理。</p>
+<h3 id="障碍-2-VLA-用不上流水线并行">障碍 2:VLA 用不上流水线并行</h3>
+<p>Megatron 的核心优势在 TP+PP+CP 组合下的千亿级扩展,流水线并行(PP)需要模型深、参数大才有意义。VLA 的 7B 模型在 8 卡单机上全量微调或 LoRA 都能跑下,用 PP 是杀鸡用牛刀——切两个 stage 带来的 bubble 反而拖慢吞吐。而 FSDP 在单节点 8 卡场景的开销几乎可以忽略,纯数据并行+参数分片已经够用。</p>
+<h3 id="障碍-3-Megatron-的代码侵入性太强">障碍 3:Megatron 的代码侵入性太强</h3>
+<p>Megatron 要求模型按它的 <code>GPTModel</code>/<code>MegatronModule</code> 规范重写,层的切分逻辑(<code>ColumnParallelLinear</code>/<code>RowParallelLinear</code>)要显式嵌入模型代码。OpenVLA 是在 Prismatic VLMs 这个 HuggingFace 生态项目上改出来的,π0 也是标准的 PyTorch 模型结构——把这样的模型迁移到 Megatron 意味着<strong>重写主干</strong>,成本高且每次跟进上游开源模型更新都会冲突。</p>
+<hr>
+<h2 id="三、为什么是-FSDP-四个匹配点">三、为什么是 FSDP:四个匹配点</h2>
+<h3 id="匹配-1-参数规模刚好卡在-FSDP-的效率甜点区">匹配 1:参数规模刚好卡在 FSDP 的效率甜点区</h3>
+<p>FSDP 通过参数/梯度/优化器状态分片(<code>FULL_SHARD</code>,等价于 ZeRO-3)解决显存问题,代价是引入 all-gather 通信。在 <strong>7B-34B 这个规模、单节点到少量多机(InfiniBand/NVLink 内)</strong>,通信开销可以被计算很好地掩盖,吞吐接近线性。OpenVLA 官方明确表述:</p>
+<blockquote>
+<p>“Powered by PyTorch FSDP and Flash-Attention, we can quickly and efficiently train models from 1B - 34B parameters”</p>
+</blockquote>
+<p>这条参数区间就是 FSDP 的舒适区。模型再往上(百亿到千亿),Megatron 的 TP+PP 才开始显著占优。</p>
+<h3 id="匹配-2-HuggingFace-生态的无缝集成">匹配 2:HuggingFace 生态的无缝集成</h3>
+<p>VLA 训练栈强依赖 HF 全家桶:<code>transformers</code> 加载 Llama/PaliGemma 底座、<code>timm</code> 加载视觉 encoder、<code>peft</code> 做 LoRA、<code>datasets</code> 处理数据。PyTorch FSDP 是 <strong>HF Accelerate 原生支持的分布式后端</strong>,配置 YAML 就能开启;<code>peft</code> 也有专门的 FSDP + LoRA 集成文档。这意味着你在 HF 上能跑通的单卡模型,几乎不改代码就能扩展到 8 卡 FSDP。Megatron 则需要脱离这套生态,自己处理 tokenizer、模型加载、数据格式——对快速迭代的科研代码是巨大负担。</p>
+<h3 id="匹配-3-微调场景的灵活性和易用性完胜">匹配 3:微调场景的灵活性和易用性完胜</h3>
+<p>VLA 的高频操作是&quot;拿 base ckpt 在自己机器人数据上微调&quot;,需要频繁切换 LoRA / 部分冻结 / 全量微调。FSDP 在这种场景下:</p>
+<ul>
+<li><strong>LoRA 微调</strong>:OpenVLA 用 LoRA 只训 1.4% 参数就能达到全量微调效果,FSDP+LoRA 在单卡到 8 卡上都能跑</li>
+<li><strong>全量微调</strong>:OpenVLA 官方路径就是&quot;native PyTorch FSDP using the Prismatic training script&quot;,推荐硬件是一个节点 8 张 A100</li>
+<li><strong>代码侵入</strong>:训练脚本就是 <code>torchrun</code> 启动 + FSDP wrap,几十行搞定</li>
+</ul>
+<p>相比之下 DeepSpeed 也能做 ZeRO-3,但 FSDP 的错误栈更可读、PyTorch 原生集成更深、不需要额外装包。HF 官方也指出 FSDP 在 bf16 精度下的行为比 DeepSpeed 更可预期。</p>
+<h3 id="匹配-4-科研开源社区的主流选择形成正循环">匹配 4:科研开源社区的主流选择形成正循环</h3>
+<p>看看 VLA 领域代表性工作的训练框架选择:</p>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>出处</th>
+<th>训练框架</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OpenVLA</strong></td>
+<td>伯克利</td>
+<td>PyTorch FSDP + Flash-Attention</td>
+</tr>
+<tr>
+<td><strong>VLA-RL</strong></td>
+<td>Online RL for VLA</td>
+<td>PyTorch FSDP 管理分布式训练</td>
+</tr>
+<tr>
+<td><strong>openpi</strong></td>
+<td>Physical Intelligence</td>
+<td>PyTorch 生态,多 GPU 训练通过 FSDP 配置开启</td>
+</tr>
+</tbody>
+</table>
+<p>这是典型的<strong>路径依赖</strong>:第一波开源 VLA 都在 HF 生态上构建,FSDP 是这个生态里最自然的分布式方案,后续工作为了复用数据加载、模型结构、LoRA 配方,继续沿用 FSDP。对要在这种生态里做 infra 的你来说,这是好消息——轮子都已经造好,你要做的是在上面加具身特有的能力(数据管线、评测、仿真调度)。</p>
+<hr>
+<h2 id="四、把这张选型逻辑说透">四、把这张选型逻辑说透</h2>
+<table>
+<thead>
+<tr>
+<th>决策因素</th>
+<th>Megatron</th>
+<th>DeepSpeed ZeRO-3</th>
+<th>FSDP</th>
+<th>对 VLA 的意义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>参数规模适配</td>
+<td>70B+ 优势明显</td>
+<td>7B-100B</td>
+<td>1B-34B 最优</td>
+<td>✅ VLA 主流在此区间</td>
+</tr>
+<tr>
+<td>异构多模态支持</td>
+<td>❌ 统一拓扑</td>
+<td>中</td>
+<td>✅ 按 module 灵活分片</td>
+<td>✅ VLA 三段式结构</td>
+</tr>
+<tr>
+<td>HF 生态集成</td>
+<td>❌ 需脱离</td>
+<td>中</td>
+<td>✅ Accelerate 原生</td>
+<td>✅ VLA 依赖 HF</td>
+</tr>
+<tr>
+<td>单节点 8 卡微调</td>
+<td>过度设计</td>
+<td>可以</td>
+<td>✅ 最轻量</td>
+<td>✅ VLA 高频操作</td>
+</tr>
+<tr>
+<td>LoRA 集成</td>
+<td>复杂</td>
+<td>可以</td>
+<td>✅ peft 原生</td>
+<td>✅ 微调主流</td>
+</tr>
+<tr>
+<td>代码侵入度</td>
+<td>高</td>
+<td>中</td>
+<td>低</td>
+<td>✅ 科研代码友好</td>
+</tr>
+<tr>
+<td>错误可读性/调试</td>
+<td>复杂</td>
+<td>中</td>
+<td>✅ 更友好</td>
+<td>✅ 快速迭代</td>
+</tr>
+</tbody>
+</table>
+<p>一句底层逻辑总结:<strong>FSDP 赢在&quot;7B-34B 参数规模 + HuggingFace 生态 + 单节点微调为主 + 异构多模态结构&quot;这四个 VLA 的关键约束同时成立</strong>——而 Megatron 的优势区间(千亿、数千卡、纯文本 LLM 预训练)在 VLA 场景里基本用不上。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">参数规模轴</span><br><span class="line">1B ────────── 7B(VLA主流) ── 34B ─────── 70B+ ──── 千亿</span><br><span class="line">     ◄──────── FSDP 甜点区 ────────►  ◄── Megatron 占优 ──►</span><br><span class="line">           (单节点~少多机,HF生态)         (数千卡,TP+PP+CP)</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="五、对-Megatron-背景的人意味着什么">五、对 Megatron 背景的人意味着什么</h2>
+<p><strong>需要主动迁移的心智</strong>:</p>
+<ul>
+<li><strong>通信分析</strong>:Megatron 的 TP all-reduce / PP p2p 分析框架仍然适用,FSDP 的 all-gather + reduce-scatter 模式可以类比理解</li>
+<li><strong>ckpt 管理</strong>:FSDP 用 <code>SHARDED_STATE_DICT</code>,和你做过的全周期 ckpt 管理思路一致</li>
+<li><strong>显存预算</strong>:FSDP 的参数分片量、激活 recomputation、通信-计算 overlap 这些调优手段你都熟</li>
+</ul>
+<p><strong>需要重建的认知</strong>:</p>
+<ul>
+<li>不再写 <code>ColumnParallelLinear</code>——FSDP 是在现有模型代码外做 wrap,模型本身保持纯 PyTorch 写法</li>
+<li>不再配 3D 并行——VLA 场景下通常就是 <code>FULL_SHARD</code> + 可选的 CPU offload,配置面窄得多</li>
+<li>不再关心 micro-batch 流水线调度——单节点数据并行,batch size 直接除以卡数</li>
+</ul>
+<p>入职具身团队后:大概率你不需要从零搭训练框架(openpi/openvla 已经能用),你的价值在于<strong>把 FSDP 训练栈接入公司的数据管线、评测链路、ckpt 管理体系</strong>——这正是你 Megatron 经验最能发挥的地方。如果未来模型规模上到 30B+ 或者引入大规模 RL 后训练(VLA-RL 路线),可以再评估是否需要引入更重的并行策略,但那是后话。</p>
+<hr>
+<h2 id="六、附-模型格式正交——权重存储-vs-架构设计">六、附:模型格式正交——权重存储 vs 架构设计</h2>
+<p>聊完训练框架选型,顺带厘清一个常被混在一起的概念:“格式”。这个词其实混了两个维度——<strong>一个是权重怎么存的,一个是模型怎么设计的</strong>。Megatron 格式、HF 格式、具身模型格式这三个概念并不在同一层:前两者是权重存储/ckpt 组织方式的区别,而&quot;具身模型&quot;是架构设计理念的区别。厘清这一点,三者关系就一目了然。</p>
+<h3 id="6-1-三个概念到底在比什么">6.1 三个概念到底在比什么</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Megatron 格式</th>
+<th>HF 格式</th>
+<th>具身模型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>本质</td>
+<td>分布式训练的 ckpt 存储规范</td>
+<td>通用权重存储/加载规范</td>
+<td>模型架构范式(VLM+Action)</td>
+</tr>
+<tr>
+<td>组织单位</td>
+<td>按 rank 切片的分布式 shard</td>
+<td>单文件或分片的 safetensors</td>
+<td>多模块组合(视觉+语言+动作)</td>
+</tr>
+<tr>
+<td>核心诉求</td>
+<td>大规模并行训练的高效保存/恢复</td>
+<td>通用性、可移植、易加载</td>
+<td>支持多模态输入+连续动作输出</td>
+</tr>
+<tr>
+<td>典型使用者</td>
+<td>Megatron-LM / NeMo / Megatron Bridge</td>
+<td>Transformers 生态全家桶</td>
+<td>OpenVLA / openpi / LeRobot</td>
+</tr>
+<tr>
+<td>典型文件形态</td>
+<td><code>model_optim_rng.pt</code> / <code>__0_0.distcp</code> 等</td>
+<td><code>config.json</code> + <code>model.safetensors</code> + <code>tokenizer.json</code></td>
+<td>HF 外壳 + 多模块权重 + policy 配置</td>
+</tr>
+<tr>
+<td>能否直接推理</td>
+<td>❌ 需转换或恢复并行环境</td>
+<td>✅ 直接 <code>from_pretrained</code></td>
+<td>✅ 但需配套前/后处理器</td>
+</tr>
+</tbody>
+</table>
+<p>理解这层区分后,一个关键结论浮出来:<strong>同一个 VLA 模型,它可以以 HF 格式保存,也可以以 Megatron 格式保存——格式和架构是正交的</strong>。OpenVLA 的官方仓库同时提供 HF 格式 ckpt(用于推理/LoRA 微调)和 Megatron 格式 ckpt(用于大规模预训练/全量微调),就是这两个维度正交的直接体现。</p>
+<h3 id="6-2-Megatron-格式-为-分布式并行训练-而生">6.2 Megatron 格式:为&quot;分布式并行训练&quot;而生</h3>
+<p>Megatron 格式不是一种文件类型,而是一种<strong>按并行度切分的目录结构</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">checkpoint/</span><br><span class="line">└── iter_0001000/</span><br><span class="line">    ├── mp_rank_00_000/          # TP rank 0, PP rank 0</span><br><span class="line">    │   ├── model_optim_rng.pt   # 模型+优化器+RNG 状态</span><br><span class="line">    │   └── distrib_optim.pt     # 分片优化器状态</span><br><span class="line">    ├── mp_rank_01_000/          # TP rank 1, PP rank 0</span><br><span class="line">    ├── mp_rank_00_001/          # TP rank 0, PP rank 1</span><br><span class="line">    ├── mp_rank_01_001/</span><br><span class="line">    ├── ...</span><br><span class="line">    └── latest_checkpointed_iteration.txt</span><br></pre></td></tr></table></figure>
+<p>关键特征:</p>
+<ul>
+<li><strong>按 rank 切片存储</strong>:一个 8B 模型在 TP=2、PP=4 的配置下训练,会产生 8 份 <code>mp_rank_*</code> 文件,每份只包含该 rank 负责的参数切片。保存时不做聚合——每个 rank 直接写自己那份,从而避免了单卡 OOM。</li>
+<li><strong>优化器状态也要存</strong>:训练恢复需要 optimizer momentum/variance,且这些也按 rank 切分。</li>
+<li><strong>新版支持异步保存</strong>:Megatron v0.7.0 之后引入异步 ckpt,文件形态变成 <code>__0_0.distcp</code>(基于 PyTorch DistributedCheckpoint),保存时和训练计算重叠,几乎不阻塞。</li>
+<li><strong>并行度信息嵌入文件名</strong>:换并行度(比如从 TP=2 改成 TP=4)需要专门的转换工具。</li>
+</ul>
+<p>这套格式的价值在于&quot;训练态高效&quot;——每个 rank 独立读写、支持异步、支持换并行度恢复。代价是&quot;推理态不方便&quot;——单卡想加载它,必须先转换。社区已经把 HF↔Megatron 的双向转换工具链打通了:<strong>Megatron Bridge</strong> 提供 <code>import_ckpt</code> / <code>export_ckpt</code> 两个一键 API,支持在转换过程中保持并行度信息;<strong>NeMo-RL</strong> 也提供 <code>convert_megatron_to_hf.py</code> 脚本。但转换永远会存在精度/元信息风险(比如 embedding tied/untied 处理、RMSNorm 权重命名差异),每次转换都要做一遍推理对齐验证。</p>
+<h3 id="6-3-HF-格式-为-通用性-而生">6.3 HF 格式:为&quot;通用性&quot;而生</h3>
+<p>HF Transformers 的模型目录是整个开源生态的事实标准,结构简单到近乎简陋:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">openvla-7b/</span><br><span class="line">├── config.json                     # 模型结构超参</span><br><span class="line">├── tokenizer.json                  # 分词器</span><br><span class="line">├── tokenizer_config.json</span><br><span class="line">├── processor_config.json           # 视觉处理器(VLA 会加)</span><br><span class="line">├── model.safetensors               # 完整权重(或分片)</span><br><span class="line">├── model-00001-of-00002.safetensors</span><br><span class="line">├── model-00002-of-00002.safetensors</span><br><span class="line">└── generation_config.json</span><br></pre></td></tr></table></figure>
+<p>关键特征:</p>
+<ul>
+<li><strong>单文件或少量分片</strong>:模型权重整体存成 safetensors(或分片),加载时一次性读进单进程,<code>from_pretrained</code> 一个调用搞定。</li>
+<li><strong>safetensors 格式</strong>:相对 <code>pytorch_model.bin</code> 的优势是零反序列化风险(不做 pickle)、加载更快、跨框架可读。</li>
+<li><strong>config.json 是语义描述</strong>:记录层数、hidden size、attention 头数、初始化方式,<code>AutoModel</code> 根据它实例化正确的类。</li>
+<li><strong>Tokenizer/Processor 独立保存</strong>:文本 tokenizer、视觉 processor 与权重解耦,VLA 里会额外放 <code>processor_config</code>。</li>
+</ul>
+<p>HF 格式的价值定位:<strong>它是&quot;交付格式&quot;而不是&quot;训练格式&quot;</strong>。下载、加载、推理、LoRA 微调、发布到 Hub——全部以这个格式为通用货币。但如果你要做千亿模型的 Megatron 3D 并行训练,HF 格式反而是负担——单文件存不下分布式 shard,必须先转换到 Megatron 格式再启动训练。</p>
+<h3 id="6-4-具身模型格式-架构层面的-多模态-Action">6.4 具身模型格式:架构层面的&quot;多模态 + Action&quot;</h3>
+<p>到了具身模型,&quot;格式&quot;的含义才真正变化——它不仅是存储方式变了,模型本身的构成也和纯文本 LLM 不同。一个 VLA 模型至少包含三个语义不同的模块:</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>典型选择</th>
+<th>参数量级</th>
+<th>训练时是否常冻结</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>视觉骨干</td>
+<td>DINOv2 + SigLIP 双流(OpenVLA)</td>
+<td>~500M</td>
+<td>常 LoRA / 冻结</td>
+</tr>
+<tr>
+<td>语言主干</td>
+<td>Llama-2 / PaliGemma / Qwen</td>
+<td>3B-7B</td>
+<td>常做部分冻结</td>
+</tr>
+<tr>
+<td>动作专家</td>
+<td>离散 token 头 / flow matching 头</td>
+<td>~100M-1B</td>
+<td>高频训练</td>
+</tr>
+</tbody>
+</table>
+<p>以 π0 为例:它用一个大型 VLM backbone + 一个小得多的 action expert,action expert 专门处理机器人状态和动作,通过共享 attention 和 VLM 交换信息。这个结构叫 <strong>Mixture-of-Transformers(MoT)</strong>,是当前 VLA 和世界动作模型(WAM)的默认架构。核心好处是:模态专属参数分离表征,但共享 attention 让视频和动作信息流通——既避免了&quot;同一套权重同时拟合稠密视觉 token 和稀疏动作目标&quot;的双重优化冲突,又保持了模态间的耦合能力。</p>
+<p>这带来一个重要的格式后果:<strong>VLA 的 ckpt 天然是&quot;多模块组合&quot;,不是单一 state_dict</strong>。具体体现在:</p>
+<ul>
+<li><strong>视觉/语言/动作模块参数各自独立命名空间</strong>:加载时要分别处理,LoRA 可能只挂在语言主干和 action expert 上。</li>
+<li><strong>必须配套前后处理器</strong>:视觉输入要归一化,动作输出要 un-normalize 到具体机器人的动作空间——OpenVLA 的 model card 明确说,“模型输出归一化的 7-DoF end-effector 增量,执行时需按 per-robot/per-dataset 的统计量 un-normalize”。这些统计量本身也是 ckpt 的一部分。</li>
+<li><strong>多本体适配层</strong>:同一个模型要服务多种机器人本体,需要 per-embodiment 的动作空间映射。</li>
+</ul>
+<h4 id="LeRobot-的-policy-目录结构-具身模型格式的代表">LeRobot 的 policy 目录结构:具身模型格式的代表</h4>
+<p>LeRobot 作为 HF 出具的具身全家桶,为&quot;policy&quot;(即具身模型的部署形态)定义了一套更完整的目录规范,比标准 HF 目录多了策略层的东西:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">pi0_checkpoint/</span><br><span class="line">├── config.json                         # policy 配置(含机器人类型、action_dim)</span><br><span class="line">├── model.safetensors                   # 策略权重</span><br><span class="line">├── policy_preprocessor_config.json     # 输入归一化配置</span><br><span class="line">├── policy_postprocessor_config.json    # 动作 un-normalize 配置</span><br><span class="line">├── normalizer.safetensors              # 归一化统计量</span><br><span class="line">├── unnormalizer.safetensors            # 反归一化统计量</span><br><span class="line">└── train_config.json                   # 训练配置(可选)</span><br></pre></td></tr></table></figure>
+<p>这就是&quot;具身模型格式&quot;和&quot;纯文本 LLM 格式&quot;最本质的区别:<strong>除了权重和结构,还必须携带一整套与具体机器人本体绑定的语义元信息</strong>。一个 Llama ckpt 下载下来就能推理,但一个 π0 ckpt 如果不知道目标机器人的动作空间定义、归一化统计量、相机配置,就完全无法使用。</p>
+<h4 id="一个现实痛点-具身模型格式尚未统一">一个现实痛点:具身模型格式尚未统一</h4>
+<p>这个领域的格式还在演化中,不同框架之间的转换有真实的坑。一个典型案例:<strong>openpi(JAX 训练)导出的 π0 PyTorch ckpt,目前没有官方路径能转换成 LeRobot 兼容的 policy 目录</strong>——不是权重本身读不了,而是缺少 <code>policy_preprocessor</code>/<code>postprocessor</code> 配置、<code>normalizer.safetensors</code>、以及 LeRobot 特定的 <code>config.json</code> 结构。这背后反映的是:具身模型格式的&quot;语义元信息&quot;部分还处在各家自定义的状态,没有像 LLM 那样形成 HF 一统天下的格局。</p>
+<h3 id="6-5-三者的转换关系与选型逻辑">6.5 三者的转换关系与选型逻辑</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">                  ┌─────────────────────────────────────┐</span><br><span class="line">                  │   同一个 VLA 模型权重,三种形态       │</span><br><span class="line">                  └─────────────────────────────────────┘</span><br><span class="line">                                   │</span><br><span class="line">       ┌───────────────────────────┼───────────────────────────┐</span><br><span class="line">       ↓                           ↓                           ↓</span><br><span class="line">┌─────────────┐          ┌──────────────────┐        ┌──────────────────┐</span><br><span class="line">│ HF 格式      │←──转换──→│ Megatron 格式     │        │ LeRobot Policy   │</span><br><span class="line">│ (交付/推理/  │          │ (大规模训练态)     │        │ (具身部署态)      │</span><br><span class="line">│  LoRA微调)   │          │                   │        │                  │</span><br><span class="line">└─────────────┘          └──────────────────┘        └──────────────────┘</span><br><span class="line">       ↑                                                    ↑</span><br><span class="line">       │                                                    │</span><br><span class="line">  [Megatron Bridge /                                     [LeRobot 自带]</span><br><span class="line">   NeMo-RL converters]</span><br></pre></td></tr></table></figure>
+<p>选型逻辑一句话:</p>
+<ul>
+<li>你要做千亿模型的 Megatron 3D 并行预训练 → 用 <strong>Megatron 格式</strong>,这是唯一高效方案</li>
+<li>你要发布开源模型、跑推理、做 LoRA → 用 <strong>HF 格式</strong>,通用货币</li>
+<li>你要部署到机器人本体、做真机评测、构建数据飞轮 → 用 <strong>LeRobot Policy 格式</strong>,因为它必须携带归一化统计量和前后处理器配置</li>
+</ul>
+<p>对具身 Infra 工程师来说,最核心的心智转变是:<strong>具身模型不是&quot;一个权重文件&quot;,而是&quot;权重 + 本体配置 + 归一化统计 + 前后处理器&quot;的完整包</strong>。这决定了你做过的全周期 ckpt 管理工作在具身场景下要多管一层:ckpt 不光要能恢复训练,还要能精确还原到某台机器人上能推理出正确动作。<strong>这个多出来的语义层,就是具身 infra 和 LLM infra 在&quot;模型格式&quot;这个话题上的分水岭</strong>。</p>
+<hr>
+<h3 id="参考">参考</h3>
+<ul>
+<li><a target="_blank" rel="noopener" href="https://openvla.github.io/">OpenVLA: An Open-Source Vision-Language-Action Model</a></li>
+<li>Physical Intelligence: <a target="_blank" rel="noopener" href="https://github.com/Physical-Intelligence/openpi">openpi</a></li>
+<li><a target="_blank" rel="noopener" href="https://pytorch.org/docs/stable/fsdp.html">PyTorch FSDP 文档</a></li>
+<li><a target="_blank" rel="noopener" href="https://huggingface.co/docs/accelerate/en/usage_guides/fsdp">HuggingFace Accelerate FSDP 集成</a></li>
+<li>本文姊妹篇:<a href="2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra.md">从 LLM Infra 到具身智能 Infra</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/">http://example.com/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Megatron/">Megatron</a><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83/">分布式训练</a><a class="post-meta__tags" href="/tags/FSDP/">FSDP</a><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a><a class="post-meta__tags" href="/tags/VLA/">VLA</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</div></div><div class="info-2"><div class="info-item-1">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 写给一位即将从大模型 Infra 转向具身智能 Infra 的工程师,也写给所有关注这个方向的人。  引言:一次心智模型的切换 过去三年做大模型 Infra 的人,心智模型基本是稳定的:海量文本 token 进、GPU 集群算、ckpt 出、推理服务化。但具身智能完全不同——它训练的不是&quot;下一个 token&quot;,而是&quot;机器人在物理世界里的下一步动作&quot;;它的数据不是从互联网爬来的,而是真机遥操作、仿真合成、人类视频多源混合出来的;它的基础设施不仅要支撑训练,还要支撑大规模并行仿真和真机数据回流这两个 LLM 时代从未存在过的环节。 如果你从 LLM Infra 背景切入这个领域,大约 60-70% 的工程经验可以直接平移,剩下 30-40% 需要新建心智模型。本文拆解其中三个最核心的新模块:仿真集群的算力形态、VLA 训练栈的真实结构、以及数据管线的工程全貌。  一、仿真集群:GPU 上的&quot;平行世界&quot; 1.1 它到底是什么 具身智能训...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/29/2026-07-29-%E4%BB%8E%E6%BA%90%E7%A0%81%E7%90%86%E8%A7%A3FSDP-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E7%9A%84%E6%98%BE%E5%AD%98%E7%A0%B4%E5%B1%80%E4%B9%8B%E9%81%93/" title="从源码理解 FSDP：大模型分布式训练的显存破局之道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-29</div><div class="info-item-2">从源码理解 FSDP：大模型分布式训练的显存破局之道</div></div><div class="info-2"><div class="info-item-1"> 本文基于 Tiny-FSDP 项目源码整理。该项目用极简的 PyTorch 代码同时实现了 DDP、ZeRO-3、FSDP 三种分布式策略，是把大模型分布式训练「拆开看」的绝佳教材。我借它准备大模型 Infra 岗面试，把 FSDP 的每一个关键点都讲透。  一、为什么需要 FSDP：从 DDP 的显存瓶颈说起 https://zhuanlan.zhihu.com/p/694288870 https://zhuanlan.zhihu.com/p/2010127853522540210 面试时第一个常问的问题就是：「DDP 为什么训不动大模型？」 1.1 DDP 的显存模型 DDP（Distributed Data Parallel）是最朴素的数据并行：每张卡上都有一份完整的模型参数 + 梯度 + 优化器状态，只是各卡处理不同的数据 batch，反向传播后用 all-reduce 把梯度同步一致。 对于一个有 PPP 个参数的模型、NNN 张卡，每张卡的显存占用是：    显存项 DDP 每卡占用     参数（FP16 + FP32 master） ≈6P\approx 6P≈...</div></div></div></a><a class="pagination-related" href="/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/" title="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-14</div><div class="info-item-2">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</div></div><div class="info-2"><div class="info-item-1">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析 引言 随着大语言模型(LLM)参数规模从亿级跃升至万亿级,单卡训练已成为历史。分布式训练技术成为每一位 AI 从业者的必修课。本文将带你系统性地梳理分布式训练的核心技术栈,从 FSDP 的显存优化,到 DDP 的完整链路,再到底层 Ring-AllReduce 与 ACCL 的算法对决,帮你建立完整的知识图谱。  一、FSDP:大模型训练的显存救星 1.1 什么是 FSDP? Fully Sharded Data Parallel (FSDP) 是 PyTorch 1.11 引入的分布式训练策略,其核心思想源于微软的 ZeRO(Zero Redundancy Optimizer)优化器。与传统 DDP 每个 GPU 保留完整模型副本不同,FSDP 将模型参数、梯度和优化器状态分片存储在所有 GPU 上。 1.2 核心适用场景    场景类型 推荐方案 说明     大模型训练(&gt;500M 参数) FSDP 可降低 4-6 倍峰值显存占用   超大模型(&gt;20B 参数) FSDP / DeepSp...</div></div></div></a><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</div></div><div class="info-2"><div class="info-item-1">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 写给一位即将从大模型 Infra 转向具身智能 Infra 的工程师,也写给所有关注这个方向的人。  引言:一次心智模型的切换 过去三年做大模型 Infra 的人,心智模型基本是稳定的:海量文本 token 进、GPU 集群算、ckpt 出、推理服务化。但具身智能完全不同——它训练的不是&quot;下一个 token&quot;,而是&quot;机器人在物理世界里的下一步动作&quot;;它的数据不是从互联网爬来的,而是真机遥操作、仿真合成、人类视频多源混合出来的;它的基础设施不仅要支撑训练,还要支撑大规模并行仿真和真机数据回流这两个 LLM 时代从未存在过的环节。 如果你从 LLM Infra 背景切入这个领域,大约 60-70% 的工程经验可以直接平移,剩下 30-40% 需要新建心智模型。本文拆解其中三个最核心的新模块:仿真集群的算力形态、VLA 训练栈的真实结构、以及数据管线的工程全貌。  一、仿真集群:GPU 上的&quot;平行世界&quot; 1.1 它到底是什么 具身智能训...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-18-%E6%9E%81%E7%AE%80-Megatron-LM-%E6%A8%A1%E5%9E%8B%E5%B9%B6%E8%A1%8C%E5%88%87%E5%88%86%E4%BB%8B%E7%BB%8D/" title="极简 Megatron-LM 模型并行切分介绍"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Megatron.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">极简 Megatron-LM 模型并行切分介绍</div></div><div class="info-2"><div class="info-item-1">极简 Megatron-LM 模型并行切分介绍 转自：https://zhuanlan.zhihu.com/p/498422407 在大模型流行的年代，我经常需要给同事解释 Megatron-LM 是怎么做的模型并行，自己也经常记不清从头推。而现有大多数的文章都是算法向或者历史向的，信息浓度比较低。为了节省大家的时间，在这里记录一下 Megatron-LM 的切分方式。由于只考虑切分，所以本文忽略 transformer 模型中的各种 elementwise 运算和 layernorm。 下文中，我们规定 b 为 batch size，s 为 sequence length，h 为 hidden size，n 为 num head，p 为切分数，用中括号表示 tensor 形状，例如 [b, s, h] 为常规的 transformer encoder 输入。这种表示方法参考了尤洋老师的 An Efficient 2D Method for Training Super-Large Deep Learning Models。 transformer encoder 结构 tran...</div></div></div></a><a class="pagination-related" href="/2025/08/27/2025-08-27-Megatron-&-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/" title="Megatron &amp; Swift监督微调Qwen3-8B"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/megatron-lm.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-27</div><div class="info-item-2">Megatron &amp; Swift监督微调Qwen3-8B</div></div><div class="info-2"><div class="info-item-1">Megatron &amp; Swift监督微调Qwen3-8B 因为纯Megatron的example中没有对于Qwen的支持，且在社区中没有找到对应封装好的实现。这里Swift已经封装好了对于微调/预训练/强化学习/多种模型/dataloader的各种支持，同时也包含训练结果的图像绘制，可以自主选择Megatron的后端路径（如果要进行修改，就对开源的core_r0.13.0分支的代码进行修改就行，运行时指定该路径）。 平台是选用的无问芯穹的开发机进行实验 注：也可以用llama-factory去做，后续可以试一试 参考 Megatron-SWIFT训练：https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html 千问3最佳实践：https://swift.readthedocs.io/zh-cn/latest/BestPractices/Qwen3最佳实践.html#megatron-swift 注意参数：https://swift.readthedo...</div></div></div></a><a class="pagination-related" href="/2025/12/10/2025-12-10-%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3Megatron-LM/" title="深入理解Megatron-LM"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Megatron.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-12-10</div><div class="info-item-2">深入理解Megatron-LM</div></div><div class="info-2"><div class="info-item-1">深入理解Megatron-LM 基础知识：https://zhuanlan.zhihu.com/p/650234985 原理介绍：https://zhuanlan.zhihu.com/p/650383289 megatron中的pipeline并行https://zhuanlan.zhihu.com/p/432969288 代码结构：https://zhuanlan.zhihu.com/p/650237820 并行设置：https://zhuanlan.zhihu.com/p/650500590 张量并行：https://zhuanlan.zhihu.com/p/650237833 流水线刷新机制：https://zhuanlan.zhihu.com/p/651341660 1F1B流水线并行负载不均衡：https://zhuanlan.zhihu.com/p/693425934  进程模型： 当你使用 torch.distributed.launch 或 torchrun 启动训练时，会启动 N 个独立的 Python 进程（N = GPU 数量），每个进程绑定到一个 GPU，...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E7%9C%8B-VLA-%E8%AE%AD%E7%BB%83%E7%9A%84%E7%9C%9F%E5%AE%9E%E8%A7%84%E6%A8%A1%E5%92%8C%E5%9C%BA%E6%99%AF"><span class="toc-number">1.1.</span> <span class="toc-text">一、先看 VLA 训练的真实规模和场景</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E6%98%AF-Megatron-%E4%B8%89%E4%B8%AA%E7%A1%AC%E6%80%A7%E9%9A%9C%E7%A2%8D"><span class="toc-number">1.2.</span> <span class="toc-text">二、为什么不是 Megatron:三个硬性障碍</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%9A%9C%E7%A2%8D-1-VLA-%E6%98%AF%E5%BC%82%E6%9E%84%E5%A4%9A%E6%A8%A1%E6%80%81%E6%A8%A1%E5%9E%8B-Megatron-%E7%9A%84%E7%BB%9F%E4%B8%80%E5%B9%B6%E8%A1%8C%E6%8B%93%E6%89%91%E9%9A%BE%E4%BB%A5%E9%80%82%E9%85%8D"><span class="toc-number">1.2.1.</span> <span class="toc-text">障碍 1:VLA 是异构多模态模型,Megatron 的统一并行拓扑难以适配</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%9A%9C%E7%A2%8D-2-VLA-%E7%94%A8%E4%B8%8D%E4%B8%8A%E6%B5%81%E6%B0%B4%E7%BA%BF%E5%B9%B6%E8%A1%8C"><span class="toc-number">1.2.2.</span> <span class="toc-text">障碍 2:VLA 用不上流水线并行</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%9A%9C%E7%A2%8D-3-Megatron-%E7%9A%84%E4%BB%A3%E7%A0%81%E4%BE%B5%E5%85%A5%E6%80%A7%E5%A4%AA%E5%BC%BA"><span class="toc-number">1.2.3.</span> <span class="toc-text">障碍 3:Megatron 的代码侵入性太强</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E6%98%AF-FSDP-%E5%9B%9B%E4%B8%AA%E5%8C%B9%E9%85%8D%E7%82%B9"><span class="toc-number">1.3.</span> <span class="toc-text">三、为什么是 FSDP:四个匹配点</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8C%B9%E9%85%8D-1-%E5%8F%82%E6%95%B0%E8%A7%84%E6%A8%A1%E5%88%9A%E5%A5%BD%E5%8D%A1%E5%9C%A8-FSDP-%E7%9A%84%E6%95%88%E7%8E%87%E7%94%9C%E7%82%B9%E5%8C%BA"><span class="toc-number">1.3.1.</span> <span class="toc-text">匹配 1:参数规模刚好卡在 FSDP 的效率甜点区</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8C%B9%E9%85%8D-2-HuggingFace-%E7%94%9F%E6%80%81%E7%9A%84%E6%97%A0%E7%BC%9D%E9%9B%86%E6%88%90"><span class="toc-number">1.3.2.</span> <span class="toc-text">匹配 2:HuggingFace 生态的无缝集成</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8C%B9%E9%85%8D-3-%E5%BE%AE%E8%B0%83%E5%9C%BA%E6%99%AF%E7%9A%84%E7%81%B5%E6%B4%BB%E6%80%A7%E5%92%8C%E6%98%93%E7%94%A8%E6%80%A7%E5%AE%8C%E8%83%9C"><span class="toc-number">1.3.3.</span> <span class="toc-text">匹配 3:微调场景的灵活性和易用性完胜</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8C%B9%E9%85%8D-4-%E7%A7%91%E7%A0%94%E5%BC%80%E6%BA%90%E7%A4%BE%E5%8C%BA%E7%9A%84%E4%B8%BB%E6%B5%81%E9%80%89%E6%8B%A9%E5%BD%A2%E6%88%90%E6%AD%A3%E5%BE%AA%E7%8E%AF"><span class="toc-number">1.3.4.</span> <span class="toc-text">匹配 4:科研开源社区的主流选择形成正循环</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%8A%8A%E8%BF%99%E5%BC%A0%E9%80%89%E5%9E%8B%E9%80%BB%E8%BE%91%E8%AF%B4%E9%80%8F"><span class="toc-number">1.4.</span> <span class="toc-text">四、把这张选型逻辑说透</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%AF%B9-Megatron-%E8%83%8C%E6%99%AF%E7%9A%84%E4%BA%BA%E6%84%8F%E5%91%B3%E7%9D%80%E4%BB%80%E4%B9%88"><span class="toc-number">1.5.</span> <span class="toc-text">五、对 Megatron 背景的人意味着什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E9%99%84-%E6%A8%A1%E5%9E%8B%E6%A0%BC%E5%BC%8F%E6%AD%A3%E4%BA%A4%E2%80%94%E2%80%94%E6%9D%83%E9%87%8D%E5%AD%98%E5%82%A8-vs-%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.6.</span> <span class="toc-text">六、附:模型格式正交——权重存储 vs 架构设计</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E4%B8%89%E4%B8%AA%E6%A6%82%E5%BF%B5%E5%88%B0%E5%BA%95%E5%9C%A8%E6%AF%94%E4%BB%80%E4%B9%88"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 三个概念到底在比什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-Megatron-%E6%A0%BC%E5%BC%8F-%E4%B8%BA-%E5%88%86%E5%B8%83%E5%BC%8F%E5%B9%B6%E8%A1%8C%E8%AE%AD%E7%BB%83-%E8%80%8C%E7%94%9F"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 Megatron 格式:为&quot;分布式并行训练&quot;而生</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-HF-%E6%A0%BC%E5%BC%8F-%E4%B8%BA-%E9%80%9A%E7%94%A8%E6%80%A7-%E8%80%8C%E7%94%9F"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 HF 格式:为&quot;通用性&quot;而生</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-%E5%85%B7%E8%BA%AB%E6%A8%A1%E5%9E%8B%E6%A0%BC%E5%BC%8F-%E6%9E%B6%E6%9E%84%E5%B1%82%E9%9D%A2%E7%9A%84-%E5%A4%9A%E6%A8%A1%E6%80%81-Action"><span class="toc-number">1.6.4.</span> <span class="toc-text">6.4 具身模型格式:架构层面的&quot;多模态 + Action&quot;</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#LeRobot-%E7%9A%84-policy-%E7%9B%AE%E5%BD%95%E7%BB%93%E6%9E%84-%E5%85%B7%E8%BA%AB%E6%A8%A1%E5%9E%8B%E6%A0%BC%E5%BC%8F%E7%9A%84%E4%BB%A3%E8%A1%A8"><span class="toc-number">1.6.4.1.</span> <span class="toc-text">LeRobot 的 policy 目录结构:具身模型格式的代表</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E7%8E%B0%E5%AE%9E%E7%97%9B%E7%82%B9-%E5%85%B7%E8%BA%AB%E6%A8%A1%E5%9E%8B%E6%A0%BC%E5%BC%8F%E5%B0%9A%E6%9C%AA%E7%BB%9F%E4%B8%80"><span class="toc-number">1.6.4.2.</span> <span class="toc-text">一个现实痛点:具身模型格式尚未统一</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-5-%E4%B8%89%E8%80%85%E7%9A%84%E8%BD%AC%E6%8D%A2%E5%85%B3%E7%B3%BB%E4%B8%8E%E9%80%89%E5%9E%8B%E9%80%BB%E8%BE%91"><span class="toc-number">1.6.5.</span> <span class="toc-text">6.5 三者的转换关系与选型逻辑</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.6.6.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

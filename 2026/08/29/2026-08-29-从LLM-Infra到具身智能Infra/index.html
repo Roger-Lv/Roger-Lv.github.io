@@ -1,0 +1,671 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="写给从大模型 Infra 转向具身智能 Infra 的工程师——拆解三个最核心的新模块:仿真集群的 GPU 并行算力形态、VLA 训练栈(连续动作生成 vs 离散 token)、五段式数据管线与数据飞轮闭环,以及能力可复用度与转型路径。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">
+<meta property="og:url" content="http://example.com/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="写给从大模型 Infra 转向具身智能 Infra 的工程师——拆解三个最核心的新模块:仿真集群的 GPU 并行算力形态、VLA 训练栈(连续动作生成 vs 离散 token)、五段式数据管线与数据飞轮闭环,以及能力可复用度与转型路径。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-28T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-29T14:38:25.903Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="具身智能">
+<meta property="article:tag" content="VLA">
+<meta property="article:tag" content="仿真集群">
+<meta property="article:tag" content="数据管线">
+<meta property="article:tag" content="Infra">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析",
+  "url": "http://example.com/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-28T16:00:00.000Z",
+  "dateModified": "2026-08-29T14:38:25.903Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-29T14:38:25.903Z" title="更新于 2026-08-29 22:38:25">2026-08-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" data-flag-title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</h1>
+<p>写给一位即将从大模型 Infra 转向具身智能 Infra 的工程师,也写给所有关注这个方向的人。</p>
+<hr>
+<h2 id="引言-一次心智模型的切换">引言:一次心智模型的切换</h2>
+<p>过去三年做大模型 Infra 的人,心智模型基本是稳定的:海量文本 token 进、GPU 集群算、ckpt 出、推理服务化。但具身智能完全不同——它训练的不是&quot;下一个 token&quot;,而是&quot;机器人在物理世界里的下一步动作&quot;;它的数据不是从互联网爬来的,而是真机遥操作、仿真合成、人类视频多源混合出来的;它的基础设施不仅要支撑训练,还要支撑<strong>大规模并行仿真</strong>和<strong>真机数据回流</strong>这两个 LLM 时代从未存在过的环节。</p>
+<p>如果你从 LLM Infra 背景切入这个领域,大约 <strong>60-70% 的工程经验可以直接平移</strong>,剩下 30-40% 需要新建心智模型。本文拆解其中三个最核心的新模块:<strong>仿真集群的算力形态、VLA 训练栈的真实结构、以及数据管线的工程全貌</strong>。</p>
+<hr>
+<h2 id="一、仿真集群-GPU-上的-平行世界">一、仿真集群:GPU 上的&quot;平行世界&quot;</h2>
+<h3 id="1-1-它到底是什么">1.1 它到底是什么</h3>
+<p>具身智能训练有一个大语言模型没有的根本性需求:机器人要在物理世界里&quot;试错&quot;才能学到东西。但真机试错成本极高——一台人形机器人几十万、摔一次就坏、数据采集速度受物理时间限制。行业的解法是<strong>把试错过程搬进仿真</strong>:在 GPU 上同时跑成百上千个虚拟场景,让虚拟机器人高频试错。</p>
+<p>技术核心是 <strong>GPU 并行物理仿真</strong>。以 Isaac Lab 为例,它基于 Isaac Sim 构建,提供 GPU 向量化环境和 RL 接口(observation/action/reward),用于大规模并行策略优化。对运动控制类任务,<strong>单卡 L4 就能并行运行约 4096 个仿真环境</strong>,整体吞吐可达每秒数万步。所谓&quot;一大群机器人在同一个世界里走路训练&quot;的画面,本质是 GPU 把几千个独立环境的状态同时算出来,而不是一个个顺序模拟。</p>
+<p>GPU 并行仿真把原本需要数天的 RL 策略搜索任务压缩到 GPU-hours 量级,这是仿真从&quot;调试工具&quot;升级为&quot;训练基础设施&quot;的关键原因。</p>
+<h3 id="1-2-主流仿真引擎对比">1.2 主流仿真引擎对比</h3>
+<table>
+<thead>
+<tr>
+<th>引擎</th>
+<th>背景</th>
+<th>并行能力</th>
+<th>物理精度</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Isaac Lab</strong></td>
+<td>NVIDIA</td>
+<td>单卡 4096 并行环境,GPU 物理+渲染一体化</td>
+<td>中</td>
+<td>大规模 RL、合成数据</td>
+</tr>
+<tr>
+<td><strong>MuJoCo MJX</strong></td>
+<td>Google</td>
+<td>TPU 上百万级步/秒</td>
+<td>高(接触动力学)</td>
+<td>操作类任务</td>
+</tr>
+<tr>
+<td><strong>Genesis</strong></td>
+<td>社区</td>
+<td>RTX 4090 上 43M FPS(刚体)</td>
+<td>中</td>
+<td>刚体/软体/流体</td>
+</tr>
+<tr>
+<td><strong>Newton</strong></td>
+<td>NVIDIA+DeepMind+Disney</td>
+<td>GPU 加速、基于 Warp</td>
+<td>高</td>
+<td>Isaac Lab 下一代后端</td>
+</tr>
+</tbody>
+</table>
+<p>值得关注的是 <strong>Newton 和 Isaac Lab 正在解耦 RTX 渲染依赖</strong>,让仿真可以跑在 L40s/H100/H200/B200 这类纯计算卡上,不再强制要求带光追的 RTX 卡。这会显著改变仿真集群的 GPU 选型策略。</p>
+<h3 id="1-3-在-K8s-中的形态">1.3 在 K8s 中的形态</h3>
+<p>仿真集群完全跑在 K8s 上,但作为一类特殊的工作负载,它和训练任务的资源画像差异显著。一个典型形态如下:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│                    K8s 控制面(同一个集群)                  │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│                                                             │</span><br><span class="line">│  ① 训练区(Megatron / FSDP)                               │</span><br><span class="line">│  ┌──────────┐ ┌──────────┐ ┌──────────┐                    │</span><br><span class="line">│  │ Worker×8 │←─────────→│ Worker×8 │  ← InfiniBand/RDMA │</span><br><span class="line">│  │  VLA训练  │ │  VLA训练  │                    │</span><br><span class="line">│  └──────────┘ └──────────┘                    │</span><br><span class="line">│        ↓ ckpt/checkpoint 仓库(对象存储+元数据)           │</span><br><span class="line">│                                                             │</span><br><span class="line">│  ② 仿真 Rollout 区(具身特有形态)                          │</span><br><span class="line">│  ┌──────────────────────────────────────┐                  │</span><br><span class="line">│  │  Isaac Lab Pod (1×H100)              │                  │</span><br><span class="line">│  │   ├─ env_0   ├─ env_1   ├─ ...       │                  │</span><br><span class="line">│  │   └─ env_4095  ← 单容器内并行         │                  │</span><br><span class="line">│  └──────────────────────────────────────┘                  │</span><br><span class="line">│  ┌──────────────────────────────────────┐                  │</span><br><span class="line">│  │  Isaac Lab Pod (1×H100)  ×  N pods   │ ← 水平扩展      │</span><br><span class="line">│  └──────────────────────────────────────┘                  │</span><br><span class="line">│        ↓ 策略加载(每轮 rollout 从 ckpt 仓库拉)           │</span><br><span class="line">│        ↑ 轨迹数据(episode 回报给数据湖)                  │</span><br><span class="line">│                                                             │</span><br><span class="line">│  ③ 真机回传网关                                             │</span><br><span class="line">│  ┌──────────┐    gRPC/MQTT    ┌──────────┐                │</span><br><span class="line">│  │ 机器人×N │ ───────────────→│ Ingest   │                │</span><br><span class="line">│  │ (边缘侧) │                 │ Service  │                │</span><br><span class="line">│  └──────────┘                 └──────────┘                │</span><br><span class="line">│                                                             │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="1-4-和训练负载的调度差异">1.4 和训练负载的调度差异</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>LLM 训练任务</th>
+<th>仿真 Rollout 任务</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU 利用模式</td>
+<td>长期占满、跨机通信</td>
+<td>单 Pod 占 1 卡、容器内并行、短周期</td>
+</tr>
+<tr>
+<td>Job 生命周期</td>
+<td>数天到数周</td>
+<td>分钟到小时级,海量并发提交</td>
+</tr>
+<tr>
+<td>资源竞争</td>
+<td>优先级+公平共享</td>
+<td>与训练抢卡,需配额隔离</td>
+</tr>
+<tr>
+<td>I/O 特征</td>
+<td>大批量顺序读 ckpt</td>
+<td>小批量高频随机读(策略权重+场景资产)</td>
+</tr>
+<tr>
+<td>渲染依赖</td>
+<td>无</td>
+<td>部分场景需 RTX,正在解耦</td>
+</tr>
+</tbody>
+</table>
+<p>对 LLM Infra 工程师而言,K8s、CNI、GPU 调度、资源超卖这些能力都可以直接复用,真正的新问题是:<strong>如何把仿真 GPU 和训练 GPU 做潮汐互补调度</strong>(训练晚上跑满、仿真白天做 rollout),以及<strong>如何在统一集群里隔离两类负载的 QoS</strong>。社区已有 Isaac Automator 这类工具支持把 Isaac Sim/Lab 一键部署到主流云平台,可以作为起点参考。</p>
+<hr>
+<h2 id="二、VLA-训练栈-模型怎么训、在哪训">二、VLA 训练栈:模型怎么训、在哪训</h2>
+<h3 id="2-1-先澄清一个常见误解">2.1 先澄清一个常见误解</h3>
+<p><strong>VLA 训练 100% 发生在云端 GPU 集群上,机器人本体不参与训练过程。</strong> 机器人在整个生命周期里只做两件事:</p>
+<ul>
+<li><strong>采集阶段</strong>:通过遥操作/动捕产生训练数据,回传云端</li>
+<li><strong>部署阶段</strong>:加载训好的模型权重做推理,产生新的部署数据</li>
+</ul>
+<p>原因很朴素:一个 7B 的 VLA 模型全量训练需要几十张 H100,而机器人本体上的算力通常只有 200 TOPS 左右,连推理一个 7B 模型都吃力,更不可能做训练。谷歌最新发布的 Gemini Robotics On-Device 也是云端训练、端侧只做推理的分工。</p>
+<p>所谓&quot;机器人在训练&quot;,更准确的理解是:<strong>真机部署本身是训练飞轮的一环</strong>——机器人上线干活,产生失败数据,数据回流云端训练下一版,再部署下去。循环存在,但每一步的&quot;训练&quot;都发生在云端。</p>
+<h3 id="2-2-VLA-模型结构">2.2 VLA 模型结构</h3>
+<p>VLA(Vision-Language-Action)本质是把一个 VLM 改造成能输出机器人动作的模型。以 π0 和 OpenVLA 为代表:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────┐</span><br><span class="line">│  VLA 模型结构(π0 / OpenVLA 为代表)                 │</span><br><span class="line">├─────────────────────────────────────────────────────┤</span><br><span class="line">│  输入                                                │</span><br><span class="line">│   ├─ 图像(多视角相机,SigLIP/DINOv2 编码)         │</span><br><span class="line">│   ├─ 语言指令(&quot;把杯子放到盘子里&quot;)                 │</span><br><span class="line">│   └─ 本体感觉(关节角度、夹爪状态、IMU)            │</span><br><span class="line">│         ↓                                           │</span><br><span class="line">│  ┌────────────────────────────────────┐             │</span><br><span class="line">│  │  VLM 主干(7B-70B)                │             │</span><br><span class="line">│  │  PaliGemma / Llama / Qwen 底座     │             │</span><br><span class="line">│  └────────────────────────────────────┘             │</span><br><span class="line">│         ↓                                           │</span><br><span class="line">│  ┌────────────────────────────────────┐             │</span><br><span class="line">│  │  Action Head(三种范式选一)       │             │</span><br><span class="line">│  │   ① 离散 token 自回归(RT-2/OpenVLA)│            │</span><br><span class="line">│  │   ② Diffusion Policy               │             │</span><br><span class="line">│  │   ③ Flow Matching + Action Chunking│             │</span><br><span class="line">│  │      (π0 主流)                    │             │</span><br><span class="line">│  └────────────────────────────────────┘             │</span><br><span class="line">│         ↓                                           │</span><br><span class="line">│  输出:未来 N 步连续动作序列(如 1 秒内的关节轨迹) │</span><br><span class="line">└─────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>以 OpenVLA-7B 为例:它基于 Llama-2 底座,视觉侧用 DINOv2 + SigLIP 双流融合,在 Open X-Embodiment 的 970K 条真实机器人操作轨迹上训练,用 64 张 A100 训练 15 天。相比闭源的 RT-2-X(55B),OpenVLA 以 7 倍少的参数在 29 个任务上取得 16.5% 的绝对成功率提升。</p>
+<h3 id="2-3-三种动作生成范式">2.3 三种动作生成范式</h3>
+<p>这是 VLA 和 LLM 最本质的差异:<strong>动作是连续值,不是离散 token</strong>。</p>
+<ul>
+<li><strong>离散 token 自回归(RT-2、OpenVLA)</strong>:把连续动作离散化成 token,按 LLM 的方式自回归生成。优点是复用 LLM 训练栈,缺点是精度损失。</li>
+<li><strong>Diffusion Policy</strong>:用扩散模型生成动作块,表达能力强但推理慢。</li>
+<li><strong>Flow Matching + Action Chunking(π0 主流)</strong>:π0 通过独立的 action expert 用 flow matching 生成连续动作,一次输出未来多步动作。π0 系列的 chunk size 是 50 个动作对应约 1 秒真实时间。π0.5 引入 Knowledge Insulation 技术,解决加入 action expert 后损害 VLM 主干语义知识的问题。</li>
+</ul>
+<p>Action chunking 的另一个价值在于<strong>掩盖推理延迟</strong>:机器人在执行上一个 chunk 的同时,模型在后台推理下一个 chunk,避免&quot;执行-等待-执行&quot;的停顿。</p>
+<h3 id="2-4-主流开源训练框架">2.4 主流开源训练框架</h3>
+<table>
+<thead>
+<tr>
+<th>框架</th>
+<th>背景</th>
+<th>特点</th>
+<th>适合场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>openpi</strong></td>
+<td>Physical Intelligence</td>
+<td>π0/π0-FAST/π0.5 全开源,base 模型在 10k+ 小时真机数据上预训练</td>
+<td>工业界 SOTA 起点</td>
+</tr>
+<tr>
+<td><strong>openvla</strong></td>
+<td>伯克利</td>
+<td>原生 PyTorch FSDP + Flash-Attention,支持 1B-34B,LoRA 和全量微调内置</td>
+<td>学术+工程参考</td>
+</tr>
+<tr>
+<td><strong>LeRobot</strong></td>
+<td>HuggingFace</td>
+<td>数据格式+训练+部署一条龙,π0 有官方实现</td>
+<td>快速上手</td>
+</tr>
+</tbody>
+</table>
+<p><strong>上手路径</strong>:租一张 A100/H100,用 openpi 在 BridgeData V2 上微调一个 π0-small,跑通全流程。这一步做完,对&quot;具身训练到底需要 infra 提供什么&quot;就有了体感。</p>
+<h3 id="2-5-和-LLM-训练栈的对照">2.5 和 LLM 训练栈的对照</h3>
+<table>
+<thead>
+<tr>
+<th>LLM 训练栈</th>
+<th>VLA 训练栈</th>
+<th>关键差异</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tokenizer</td>
+<td>动作编码器(离散化或 flow matching)</td>
+<td>动作是连续值</td>
+</tr>
+<tr>
+<td>文本数据集</td>
+<td>机器人轨迹 episode(多模态)</td>
+<td>数据结构完全不同</td>
+</tr>
+<tr>
+<td>Autoregressive loss</td>
+<td>Flow matching / Diffusion loss</td>
+<td>生成目标变成连续动作块</td>
+</tr>
+<tr>
+<td>Dataloader 读 JSON/Parquet</td>
+<td>Dataloader 读 RLDS/LeRobot/HDF5</td>
+<td>格式生态不同</td>
+</tr>
+<tr>
+<td>Megatron 3D 并行</td>
+<td>PyTorch FSDP + Flash-Attention</td>
+<td>通信抽象不同</td>
+</tr>
+<tr>
+<td>ckpt 管理</td>
+<td>ckpt 管理(几乎一样)</td>
+<td>经验可平移</td>
+</tr>
+<tr>
+<td>SFT/RLHF</td>
+<td>预训练 + 微调 + 后训练</td>
+<td>流程类似</td>
+</tr>
+</tbody>
+</table>
+<p>对有 Megatron 经验的工程师:通信优化、并行策略、ckpt 管理这些心智可以平移,但代码要重写。openpi 和 openvla 都用 PyTorch FSDP 而不是 Megatron,两套在分布式通信抽象上完全不同。<strong>建议把 FSDP 当作第一优先上手</strong>。</p>
+<hr>
+<h2 id="三、数据管线-具身-Infra-的主战场">三、数据管线:具身 Infra 的主战场</h2>
+<h3 id="3-1-数据是最大瓶颈">3.1 数据是最大瓶颈</h3>
+<p>具身智能的残酷事实是:<strong>全球高质量真机交互数据目前只有约 50 万小时,而训练一个可用的通用具身模型需要千万小时量级,缺口达 4-5 个数量级</strong>。这意味着:</p>
+<ul>
+<li>每一小时真机数据都有真实成本(遥操作员+机器人+场景搭建)</li>
+<li>数据管线不是&quot;辅助工具&quot;,而是<strong>燃料系统</strong></li>
+<li>谁能把多源数据高效变成可训练格式,谁就掌握了飞轮咽喉</li>
+</ul>
+<h3 id="3-2-四种数据来源">3.2 四种数据来源</h3>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>数据特点</th>
+<th>成本</th>
+<th>主要缺陷</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>真机遥操作</strong></td>
+<td>最高质量、最接近部署</td>
+<td>极高</td>
+<td>数量少、场景受限</td>
+</tr>
+<tr>
+<td><strong>人类视频</strong></td>
+<td>海量、易获取</td>
+<td>低</td>
+<td>缺精确动作标注</td>
+</tr>
+<tr>
+<td><strong>动捕/穿戴设备</strong></td>
+<td>精确人体动作轨迹</td>
+<td>中</td>
+<td>人-机重定向 gap</td>
+</tr>
+<tr>
+<td><strong>仿真合成</strong></td>
+<td>无限、自动标注</td>
+<td>低</td>
+<td>Sim-to-Real 鸿沟</td>
+</tr>
+</tbody>
+</table>
+<p>四种来源在传感器配置、坐标系、采样频率、时间同步上完全不同,且真实采集还会受时间同步误差、设备老化、发热、环境变化影响。infra 要做的就是把四种泥沙俱下的数据,洗成训练能直接消费的统一格式。</p>
+<h3 id="3-3-五段式管线设计">3.3 五段式管线设计</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────────────────────────────────────────────────────┐</span><br><span class="line">│  阶段1:采集接入(Ingestion)                                │</span><br><span class="line">│   ├─ 真机遥操作:力反馈手柄→机器人→录制(30-60Hz)           │</span><br><span class="line">│   ├─ 真机部署回流:失败样本、人工接管、边界case自动捕获      │</span><br><span class="line">│   ├─ 仿真rollout轨迹:Isaac Lab 批量产生                     │</span><br><span class="line">│   └─ 原始格式:MCAP/ROS bag                                  │</span><br><span class="line">│                          ↓                                   │</span><br><span class="line">│  阶段2:时间同步与对齐                                       │</span><br><span class="line">│   ├─ 多传感器时间戳对齐(相机/IMU/关节/力觉)                │</span><br><span class="line">│   ├─ 插值到统一频率(典型 30Hz)                             │</span><br><span class="line">│   └─ 剔除时间戳漂移的坏样本                                  │</span><br><span class="line">│                          ↓                                   │</span><br><span class="line">│  阶段3:清洗与质量控制                                       │</span><br><span class="line">│   ├─ 轨迹完整性校验(episode 是否被截断)                    │</span><br><span class="line">│   ├─ 成功率过滤(遥操作失败的 episode 打标)                 │</span><br><span class="line">│   ├─ 视觉质量检查(遮挡、模糊、标定漂移)                    │</span><br><span class="line">│   └─ 跨来源去重                                             │</span><br><span class="line">│                          ↓                                   │</span><br><span class="line">│  阶段4:格式标准化(核心)                                   │</span><br><span class="line">│   ├─ 转成 RLDS / LeRobot / HDF5 之一                        │</span><br><span class="line">│   ├─ 多本体动作空间归一(不同机器人自由度不同)              │</span><br><span class="line">│   ├─ 语言指令标注(人工 / LLM 自动生成)                     │</span><br><span class="line">│   └─ 元数据登记(本体型号、场景、操作员、日期)              │</span><br><span class="line">│                          ↓                                   │</span><br><span class="line">│  阶段5:训练消费                                             │</span><br><span class="line">│   ├─ Dataloader 流式加载(支持随机访问 episode)             │</span><br><span class="line">│   ├─ 多模态解码 pipeline(视频 GPU 解码)                    │</span><br><span class="line">│   ├─ 数据混合策略(按来源/本体/任务配比)                  │</span><br><span class="line">│   └─ 训练侧反馈(哪些数据有效,回流到采集计划)              │</span><br><span class="line">└──────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="3-4-四种主流存储格式">3.4 四种主流存储格式</h3>
+<p>社区共识是:<strong>录制用 MCAP,训练用 LeRobot/HDF5/RLDS 之一</strong>,多数团队组合使用。</p>
+<table>
+<thead>
+<tr>
+<th>格式</th>
+<th>存储结构</th>
+<th>随机访问</th>
+<th>生态</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RLDS</strong></td>
+<td>TFRecord 分片</td>
+<td>中</td>
+<td>Open X-Embodiment 标准、Google DeepMind 推</td>
+<td>读开源数据集</td>
+</tr>
+<tr>
+<td><strong>LeRobot</strong></td>
+<td>Parquet 元数据+每路相机独立 MP4+safetensors</td>
+<td>好</td>
+<td>HF 生态原生、openpi 默认</td>
+<td>训练主力格式</td>
+</tr>
+<tr>
+<td><strong>HDF5</strong></td>
+<td>单文件层级结构</td>
+<td>强</td>
+<td>DROID 等学术框架</td>
+<td>稠密数值轨迹</td>
+</tr>
+<tr>
+<td><strong>Robo-DM</strong></td>
+<td>EBML 二进制</td>
+<td>极强</td>
+<td>伯克利新出,顺序解码速度显著优于 LeRobot</td>
+<td>大规模数据湖</td>
+</tr>
+<tr>
+<td><strong>MCAP</strong></td>
+<td>容器格式</td>
+<td>好</td>
+<td>ROS 生态、实时录制</td>
+<td>采集侧标准</td>
+</tr>
+</tbody>
+</table>
+<p><strong>动手建议</strong>:写一个 Python 工具,把一个 HDF5 数据集(比如 ALOHA 的公开数据)转换成 RLDS 和 LeRobot 两种格式,跑通三个下游:OpenVLA 训练加载、LeRobot 可视化、Robo-DM 风格的随机访问查询。做完这个,对&quot;具身数据到底长什么样&quot;的理解就超过多数纯 infra 背景的工程师。</p>
+<h3 id="3-5-数据飞轮-管线是闭环-不是单向">3.5 数据飞轮:管线是闭环,不是单向</h3>
+<p>评价一家具身 infra 成熟度的关键指标——<strong>真机部署产生的数据能不能自动回流到训练集</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">     ┌─────────────────────────────────────┐</span><br><span class="line">     ↓                                     │</span><br><span class="line">[云端GPU训练]                          [新一轮训练]</span><br><span class="line">     ↓                                     ↑</span><br><span class="line">[ckpt发布]                                 │</span><br><span class="line">     ↓                                     │</span><br><span class="line">[真机/仿真部署]                            │</span><br><span class="line">     ↓                                     │</span><br><span class="line">[机器人实际作业]                           │</span><br><span class="line">     ↓                                     │</span><br><span class="line">[失败/接管/新场景捕获] ──→ [标注/清洗] ───┘</span><br></pre></td></tr></table></figure>
+<p>真机部署中的失败样本、人工接管、边界 case 是最有价值的训练数据——它们精确暴露模型的盲区。如何自动捕获、回流、标注、入训练集,是当前行业公认的飞轮瓶颈。斯坦福在图书馆部署的 Scanford 移动机器人就是这个范式的代表:机器人在实际运行中自主采集&quot;多语言标签、视觉杂乱、标签退化&quot;这类真机才能遇到的边缘 case,反哺模型迭代。</p>
+<p>对 LLM Infra 工程师,这一块是最可能做出标杆项目的位置——MiniMax 时期做过的&quot;模型管理 &amp; 评测链路重构&quot;和这套飞轮高度同构(都是全链路数据+自动化+元数据管理),把那套经验平移到具身场景,从零到一搭一个真机数据回流的 Ingestion + 清洗 + 标准化流水线,价值相当于无问芯穹时期做一个 EgressGateway。</p>
+<hr>
+<h2 id="四、三个模块如何串成一个闭环">四、三个模块如何串成一个闭环</h2>
+<p>这三块不是孤立的,而是一个完整的训练闭环:</p>
+<ul>
+<li><strong>仿真集群</strong>负责&quot;规模化试错&quot;——用 GPU 算力代替真机成本,同时产生合成数据和评测结果</li>
+<li><strong>VLA 训练栈</strong>负责&quot;从数据到模型&quot;——在 GPU 集群上用 FSDP 把数据变成可部署的权重</li>
+<li><strong>数据管线</strong>负责&quot;飞轮传动&quot;——把真机/仿真/遥操作的所有数据源变成训练能消化的格式,再把部署反馈流回来</li>
+</ul>
+<p>已有的 K8s、GPU 调度、ckpt 管理、评测链路经验在这三个模块里都是基础设施层的复用,真正需要新建心智模型的只有两件事:</p>
+<ol>
+<li><strong>仿真是 GPU 上跑的特殊工作负载</strong>,和训练任务调度特征不同</li>
+<li><strong>动作是连续值而非离散 token</strong>,生成范式和 LLM 完全不同</li>
+</ol>
+<p>把这两个转变完成,就能在具身 Infra 的战场上快速进入能打的状态。</p>
+<hr>
+<h2 id="五、LLM-Infra-工程师转型路径">五、LLM Infra 工程师转型路径</h2>
+<table>
+<thead>
+<tr>
+<th>能力模块</th>
+<th>LLM Infra 可复用度</th>
+<th>需要新建</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>K8s 集群管理 / CNI / 网络流量</td>
+<td>✅ 100%</td>
+<td>具身场景下的混合负载调度策略</td>
+</tr>
+<tr>
+<td>GPU 资源管理与超卖</td>
+<td>✅ 90%</td>
+<td>仿真 GPU + 训练 GPU 的潮汐调度</td>
+</tr>
+<tr>
+<td>ckpt 全周期管理</td>
+<td>✅ 90%</td>
+<td>多模态 ckpt 分片差异</td>
+</tr>
+<tr>
+<td>训练观测 / 全链路通知</td>
+<td>✅ 100%</td>
+<td>具身 metric 体系(成功率、轨迹平滑度)</td>
+</tr>
+<tr>
+<td>评测链路重构</td>
+<td>✅ 90%</td>
+<td>真机+仿真评测结果相关性分析</td>
+</tr>
+<tr>
+<td>分布式训练</td>
+<td>⚠️ 心智平移,代码重写</td>
+<td>PyTorch FSDP(替代 Megatron)</td>
+</tr>
+<tr>
+<td>数据管道</td>
+<td>⚠️ 部分平移</td>
+<td>RLDS/LeRobot/HDF5 三格式</td>
+</tr>
+<tr>
+<td>多模态解码 / 视频处理</td>
+<td>❌ 新建</td>
+<td>GPU 视频解码 pipeline</td>
+</tr>
+<tr>
+<td>仿真系统</td>
+<td>❌ 新建</td>
+<td>Isaac Lab / MuJoCo MJX 概念</td>
+</tr>
+<tr>
+<td>机器人学 / 控制理论</td>
+<td>❌ 不必深入</td>
+<td>概念级即可</td>
+</tr>
+</tbody>
+</table>
+<p><strong>避免踩的坑</strong>:</p>
+<ul>
+<li>不要陷入机器人学教材(《机器人学导论》之类)——Infra 视角不需要控制理论</li>
+<li>不要死磕 Megatron 在 VLA 场景的适配——FSDP 是新主力</li>
+<li>不要再造数据格式——LeRobot + MCAP 已经是事实标准,参与生态比另起炉灶更有价值</li>
+</ul>
+<hr>
+<h2 id="结语">结语</h2>
+<p>具身智能 infra 和 LLM infra 的关系,不是&quot;推翻重来&quot;,而是&quot;在熟悉的底座上,盖一层全新的楼&quot;。仿真集群、VLA 训练栈、数据管线——这三块对应着物理世界的三个基本约束:<strong>试错需要代价、算力需要集中、数据需要闭环</strong>。</p>
+<p>对从 LLM Infra 转过来的工程师,真正稀缺的不是 K8s 经验,而是<strong>理解具身场景特殊性、并把通用 Infra 能力针对性重构的能力</strong>。谁先把这两个转变完成,谁就能在这个赛道定型前占住身位。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li>Physical Intelligence: <a target="_blank" rel="noopener" href="https://github.com/Physical-Intelligence/openpi">openpi(π0 / π0-FAST / π0.5)开源仓库</a></li>
+<li><a target="_blank" rel="noopener" href="https://openvla.github.io/">OpenVLA: An Open-Source Vision-Language-Action Model</a></li>
+<li><a target="_blank" rel="noopener" href="https://www.physicalintelligence.company/blog/pi0">π0: A Vision-Language-Action Flow Model for General Robot Control</a></li>
+<li><a target="_blank" rel="noopener" href="https://www.physicalintelligence.company/blog/actc">Real-Time Action Chunking with Large Models (Physical Intelligence)</a></li>
+<li><a target="_blank" rel="noopener" href="https://developer.nvidia.com/isaac-sim">NVIDIA Isaac Sim: Enabling Scalable, GPU-Accelerated Simulation</a></li>
+<li><a target="_blank" rel="noopener" href="https://github.com/isaac-sim/IsaacLab">Isaac Lab 2.3 GA Release Notes</a></li>
+<li><a target="_blank" rel="noopener" href="https://github.com/huggingface/lerobot">LeRobot Documentation: π0 Policy</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/">http://example.com/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a><a class="post-meta__tags" href="/tags/VLA/">VLA</a><a class="post-meta__tags" href="/tags/%E4%BB%BF%E7%9C%9F%E9%9B%86%E7%BE%A4/">仿真集群</a><a class="post-meta__tags" href="/tags/%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BF/">数据管线</a><a class="post-meta__tags" href="/tags/Infra/">Infra</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</div></div><div class="info-2"><div class="info-item-1">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立  本文是 从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 的姊妹篇——那篇给出了&quot;VLA 训练用 FSDP 而非 Megatron&quot;的结论,这篇把背后的逻辑彻底拆透。  核心原因一句话:VLA 模型的参数规模(1B-34B)刚好落在 FSDP 的&quot;甜点区&quot;,加上它基于 HuggingFace 生态的异构多模态结构让 Megatron 类框架难以适配,而科研社区主导的开源生态天然偏向 PyTorch 原生方案。下面把逻辑拆开讲。  一、先看 VLA 训练的真实规模和场景 VLA 训练的参数量和你熟悉的 LLM 预训练完全不是一个量级:    场景 参数规模 典型硬件 训练方式     VLA 预训练 7B(OpenVLA)/ 3B(π0) 64 张 A100 × 15 天 全量   VLA 微调(主流场景) 7B 单节点 8 张 A100 LoRA 或全量   VLA-RL 后训练 7B 单节点到多节点 FSDP 管理  ...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/" title="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</div></div><div class="info-2"><div class="info-item-1">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解 LLM Agent 正在把一个老问题重新推到台前:当代码由模型生成、且不可信时,你把它放在哪里执行? 容器的隔离撑不住对抗性负载;传统虚拟机又太重,扛不住每秒几十次的沙箱创建。于是一批沉寂多年的技术突然变得炙手可热——Firecracker、gVisor、Kata Containers、microVM。这些名词经常混在一起出现,但它们分处不同层次、解决不同问题。要真正理解它们的取舍,需要从最底层讲起:从冯·诺依曼架构的&quot;核心与外围&quot;,一路讲到 Agent infra 的选型决策。 本文分四部分:先梳理虚拟化技术栈的分层关系,再深入 QEMU 的设备模型理解&quot;外围设备&quot;的本质,然后分析性能差异的根源,最后落到 Agent 沙箱的实战选型。  一、技术栈全景:谁在谁的上面 先用一句话给所有主角定位:  KVM 是 Linux 内核提供的硬件虚拟化基础设施;QEMU 是基于 KVM 的传统全功能虚拟机监视器;Firecracker 是基于 KVM、专为 Serverless 设计的...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</div></div><div class="info-2"><div class="info-item-1">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立  本文是 从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 的姊妹篇——那篇给出了&quot;VLA 训练用 FSDP 而非 Megatron&quot;的结论,这篇把背后的逻辑彻底拆透。  核心原因一句话:VLA 模型的参数规模(1B-34B)刚好落在 FSDP 的&quot;甜点区&quot;,加上它基于 HuggingFace 生态的异构多模态结构让 Megatron 类框架难以适配,而科研社区主导的开源生态天然偏向 PyTorch 原生方案。下面把逻辑拆开讲。  一、先看 VLA 训练的真实规模和场景 VLA 训练的参数量和你熟悉的 LLM 预训练完全不是一个量级:    场景 参数规模 典型硬件 训练方式     VLA 预训练 7B(OpenVLA)/ 3B(π0) 64 张 A100 × 15 天 全量   VLA 微调(主流场景) 7B 单节点 8 张 A100 LoRA 或全量   VLA-RL 后训练 7B 单节点到多节点 FSDP 管理  ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BC%95%E8%A8%80-%E4%B8%80%E6%AC%A1%E5%BF%83%E6%99%BA%E6%A8%A1%E5%9E%8B%E7%9A%84%E5%88%87%E6%8D%A2"><span class="toc-number">1.1.</span> <span class="toc-text">引言:一次心智模型的切换</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%BB%BF%E7%9C%9F%E9%9B%86%E7%BE%A4-GPU-%E4%B8%8A%E7%9A%84-%E5%B9%B3%E8%A1%8C%E4%B8%96%E7%95%8C"><span class="toc-number">1.2.</span> <span class="toc-text">一、仿真集群:GPU 上的&quot;平行世界&quot;</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E5%AE%83%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 它到底是什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E4%B8%BB%E6%B5%81%E4%BB%BF%E7%9C%9F%E5%BC%95%E6%93%8E%E5%AF%B9%E6%AF%94"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 主流仿真引擎对比</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-%E5%9C%A8-K8s-%E4%B8%AD%E7%9A%84%E5%BD%A2%E6%80%81"><span class="toc-number">1.2.3.</span> <span class="toc-text">1.3 在 K8s 中的形态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-4-%E5%92%8C%E8%AE%AD%E7%BB%83%E8%B4%9F%E8%BD%BD%E7%9A%84%E8%B0%83%E5%BA%A6%E5%B7%AE%E5%BC%82"><span class="toc-number">1.2.4.</span> <span class="toc-text">1.4 和训练负载的调度差异</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81VLA-%E8%AE%AD%E7%BB%83%E6%A0%88-%E6%A8%A1%E5%9E%8B%E6%80%8E%E4%B9%88%E8%AE%AD%E3%80%81%E5%9C%A8%E5%93%AA%E8%AE%AD"><span class="toc-number">1.3.</span> <span class="toc-text">二、VLA 训练栈:模型怎么训、在哪训</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E5%85%88%E6%BE%84%E6%B8%85%E4%B8%80%E4%B8%AA%E5%B8%B8%E8%A7%81%E8%AF%AF%E8%A7%A3"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 先澄清一个常见误解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-VLA-%E6%A8%A1%E5%9E%8B%E7%BB%93%E6%9E%84"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 VLA 模型结构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E4%B8%89%E7%A7%8D%E5%8A%A8%E4%BD%9C%E7%94%9F%E6%88%90%E8%8C%83%E5%BC%8F"><span class="toc-number">1.3.3.</span> <span class="toc-text">2.3 三种动作生成范式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E4%B8%BB%E6%B5%81%E5%BC%80%E6%BA%90%E8%AE%AD%E7%BB%83%E6%A1%86%E6%9E%B6"><span class="toc-number">1.3.4.</span> <span class="toc-text">2.4 主流开源训练框架</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E5%92%8C-LLM-%E8%AE%AD%E7%BB%83%E6%A0%88%E7%9A%84%E5%AF%B9%E7%85%A7"><span class="toc-number">1.3.5.</span> <span class="toc-text">2.5 和 LLM 训练栈的对照</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BF-%E5%85%B7%E8%BA%AB-Infra-%E7%9A%84%E4%B8%BB%E6%88%98%E5%9C%BA"><span class="toc-number">1.4.</span> <span class="toc-text">三、数据管线:具身 Infra 的主战场</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E6%95%B0%E6%8D%AE%E6%98%AF%E6%9C%80%E5%A4%A7%E7%93%B6%E9%A2%88"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 数据是最大瓶颈</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E5%9B%9B%E7%A7%8D%E6%95%B0%E6%8D%AE%E6%9D%A5%E6%BA%90"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 四种数据来源</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E4%BA%94%E6%AE%B5%E5%BC%8F%E7%AE%A1%E7%BA%BF%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 五段式管线设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E5%9B%9B%E7%A7%8D%E4%B8%BB%E6%B5%81%E5%AD%98%E5%82%A8%E6%A0%BC%E5%BC%8F"><span class="toc-number">1.4.4.</span> <span class="toc-text">3.4 四种主流存储格式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E6%95%B0%E6%8D%AE%E9%A3%9E%E8%BD%AE-%E7%AE%A1%E7%BA%BF%E6%98%AF%E9%97%AD%E7%8E%AF-%E4%B8%8D%E6%98%AF%E5%8D%95%E5%90%91"><span class="toc-number">1.4.5.</span> <span class="toc-text">3.5 数据飞轮:管线是闭环,不是单向</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%89%E4%B8%AA%E6%A8%A1%E5%9D%97%E5%A6%82%E4%BD%95%E4%B8%B2%E6%88%90%E4%B8%80%E4%B8%AA%E9%97%AD%E7%8E%AF"><span class="toc-number">1.5.</span> <span class="toc-text">四、三个模块如何串成一个闭环</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81LLM-Infra-%E5%B7%A5%E7%A8%8B%E5%B8%88%E8%BD%AC%E5%9E%8B%E8%B7%AF%E5%BE%84"><span class="toc-number">1.6.</span> <span class="toc-text">五、LLM Infra 工程师转型路径</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BB%93%E8%AF%AD"><span class="toc-number">1.7.</span> <span class="toc-text">结语</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.7.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,796 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Sky-Scheduler 是一个 Volcano 衍生的 K8s 调度器,面向 AI 训练负载。本文用图解和类比讲清它的 Quota 两级调度、RDMA 拓扑发现与 Zone 感知、Spot 调度、存储感知、多规格资源等设计,以及这些设计为什么能提升 AI 训练的调度质量。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器">
+<meta property="og:url" content="http://example.com/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="Sky-Scheduler 是一个 Volcano 衍生的 K8s 调度器,面向 AI 训练负载。本文用图解和类比讲清它的 Quota 两级调度、RDMA 拓扑发现与 Zone 感知、Spot 调度、存储感知、多规格资源等设计,以及这些设计为什么能提升 AI 训练的调度质量。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-22T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-23T06:42:10.019Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Volcano">
+<meta property="article:tag" content="云原生">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="调度器">
+<meta property="article:tag" content="RDMA拓扑">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器",
+  "url": "http://example.com/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-22T16:00:00.000Z",
+  "dateModified": "2026-08-23T06:42:10.019Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-22T16:00:00.000Z" title="发表于 2026-08-23 00:00:00">2026-08-23</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-23T06:42:10.019Z" title="更新于 2026-08-23 14:42:10">2026-08-23</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/" data-flag-title="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</h1>
+<p>把一个千卡训练任务调度好,比把一百个 Web 服务调度好难得多。难点不在&quot;算力够不够&quot;,而在三件 Web 服务从不操心的事:</p>
+<ul>
+<li><strong>通信拓扑要聚拢</strong>:TP/PP 切出来的通信组,必须落在同一片 RDMA 交换机域里,跨机架一跳,AllReduce 延迟能差好几倍。</li>
+<li><strong>资源要&quot;留得住&quot;</strong>:训练任务动辄跑几小时几天,中途被别的任务抢占、重启就要从头来;但集群又要混部在线/离线,不能不让抢。</li>
+<li><strong>同卡型才好比</strong>:A100 节点和 H100 节点不能混进同一个通信组,不然快的等慢的,贵的卡当便宜的用。</li>
+</ul>
+<p>通用调度器(kube-scheduler)对这三件事基本无解,Volcano 解决了 Gang 但也没碰拓扑。<strong>Sky-Scheduler</strong> 就是冲着这三件事来的——一个 Volcano 衍生的 Kubernetes 调度器,在 Volcano 的 session 框架上做了几处关键改造:把&quot;Pod→Node 一跳&quot;改成 <strong>“Task→Quota→Node 两跳”</strong>,引入 <strong>RDMA 拓扑发现与 Zone 感知</strong>、<strong>Spot GPU 调度</strong>、<strong>存储感知</strong>、<strong>多规格资源池</strong>。</p>
+<blockquote>
+<p>前置阅读:Sky-Scheduler 通过 <code>schedulerName</code> 路由接管任务,与 kube-scheduler 共存。多调度器共存的机制、模式与坑见 <a href="2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97.md#%E5%9B%9B%E3%80%81%E4%B8%89%E4%B8%AA%E5%BF%85%E9%A1%BB%E8%AD%A6%E6%83%95%E7%9A%84%E5%9D%91">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</a>;Volcano Queue 的全流程见 <a href="2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3.md">Volcano Queue 全流程拆解</a>。</p>
+</blockquote>
+<hr>
+<h2 id="一、先看全貌-三个二进制怎么协作">一、先看全貌:三个二进制怎么协作</h2>
+<p>Sky-Scheduler 不是一个进程,是三个:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">           ┌──────────────────────────────┐</span><br><span class="line">           │   scheduler(主调度进程)      │</span><br><span class="line">           │                              │</span><br><span class="line">           │  每 1 秒一个调度周期:         │</span><br><span class="line">           │   快照 cache → OpenSession    │</span><br><span class="line">           │   → 跑 actions 流水           │</span><br><span class="line">           │   → Statement 事务 Commit     │</span><br><span class="line">           └──────────────┬───────────────┘</span><br><span class="line">                          │ watch CRD + Pod(NodeName 过滤)</span><br><span class="line">           ┌──────────────▼───────────────┐</span><br><span class="line">           │        K8s API Server        │</span><br><span class="line">           │  PodGroup/Queue/Quota/JobQueue│</span><br><span class="line">           │  NodeTopology(CRD)/Node/Pod  │</span><br><span class="line">           └──▲─────────────────────▲─────┘</span><br><span class="line">              │                     │ 写 NodeTopology CRD</span><br><span class="line">┌─────────────┴──────┐  ┌───────────┴────────────┐</span><br><span class="line">│ topology-discovery │  │ controller-manager     │</span><br><span class="line">│  RoCE: DaemonSet   │  │ (CRD 控制器)           │</span><br><span class="line">│  IB:   Deployment  │  │                        │</span><br><span class="line">└────────────────────┘  └────────────────────────┘</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>scheduler</strong>:大脑。每秒一个周期,从 cache 快照开一个 session,顺序跑 actions,事务提交。</li>
+<li><strong>topology-discovery</strong>:眼睛。专门探测&quot;每张 RDMA 网卡插在哪个交换机上&quot;,写进 <code>NodeTopology</code> CRD。</li>
+<li><strong>controller-manager</strong>:手。管 CRD 的生命周期。</li>
+</ul>
+<p>scheduler 和 topology-discovery 解耦——拓扑发现是个慢活(要读 LLDP/ibnetdiscover),不该挡调度周期;发现完写 CRD,scheduler watch 来用。这是个很干净的&quot;感知-决策&quot;分离。</p>
+<hr>
+<h2 id="二、Quota-两级调度-为什么不一跳直接绑节点">二、Quota 两级调度:为什么不一跳直接绑节点?</h2>
+<p>这是 Sky-Scheduler 相对 Volcano 最根本的结构差异,值得先讲透。</p>
+<h3 id="2-1-Volcano-的痛-一跳调度的局限">2.1 Volcano 的痛:一跳调度的局限</h3>
+<p>Volcano 是 Pod→Node 一跳:调度器看到一个 Pod,直接挑一个节点绑上去。听起来直接,但在 AI 训练场景会撞上几堵墙:</p>
+<ul>
+<li><strong>资源&quot;留不住&quot;</strong>:训练任务被抢占后重启,想优先用回原来的位置(数据本地性、拓扑已对齐),但一跳调度里 Pod 一旦没了,调度器对&quot;它原来在哪&quot;毫无记忆,重新乱放。</li>
+<li><strong>亲和难表达</strong>:你想说&quot;这个 Pod 要和那个 Pod 在同节点(或同拓扑域)&quot;,在一跳模型里只能靠 K8s 的 podAffinity,但 podAffinity 是 Pod 级的、刚性的、且对&quot;quota/资源池&quot;这种逻辑分组无感。</li>
+<li><strong>资源池抽象缺失</strong>:实际集群里,资源常常是按&quot;逻辑配额&quot;切的(团队 A 占多少、项目 B 占多少),不是按节点切的。一跳调度把 Pod 直接砸到物理节点,跳过了&quot;该用哪份配额&quot;这一层决策。</li>
+</ul>
+<h3 id="2-2-Sky-Scheduler-的解-中间加一层-Quota">2.2 Sky-Scheduler 的解:中间加一层 Quota</h3>
+<p>Sky-Scheduler 在 Pod 和 Node 之间塞了一个 <strong>Quota</strong> 对象,调度变成两跳:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Volcano:     Task  ───────────────────►  Node        (一跳)</span><br><span class="line">                                      </span><br><span class="line">Sky-Scheduler:  Task  ──►  Quota  ──►  Node          (两跳)</span><br><span class="line">                       (逻辑资源池)   </span><br><span class="line">                 ① 选哪份配额      ② 配额绑到哪个物理节点</span><br></pre></td></tr></table></figure>
+<p>Quota 是什么?你可以理解成一个**“资源容器”**:它声明了一份资源额度(多少 CPU/GPU/内存),最终会被绑定到一个具体的物理节点上。一个节点上可以有多个 Quota。调度分两步:</p>
+<ol>
+<li><strong>Task→Quota</strong>(allocateJob):决定这个 task 用哪份配额——按 required(任务声明的) &gt; reserved(预留的) &gt; bound/static-bound(已绑/静态绑的) &gt; free(空闲) 四档挑。</li>
+<li><strong>Quota→Node</strong>(allocateZone/allocateQuota):决定这份配额落到哪个物理节点——这一步才考虑拓扑、存储、节点亲和。</li>
+</ol>
+<h3 id="2-3-Quota-从哪来-和-DevicePlugin-是什么关系">2.3 Quota 从哪来?和 DevicePlugin 是什么关系?</h3>
+<p>这是读者最容易问的问题:<strong>Quota 是从节点的 device-plugin 来的吗?</strong> 不是。两者是正交的,一个逻辑、一个物理。</p>
+<p><strong>Quota 是个独立的集群级 CRD</strong>(<code>scheduling.infini-ai.com/v1alpha1</code>,scope=Cluster,shortName <code>qo</code>),像 Pod/Deployment 一样声明式创建。它的 <code>QuotaSpec</code> 长这样:</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> QuotaSpec <span class="keyword">struct</span> &#123;</span><br><span class="line">    QueueName      <span class="type">string</span>              <span class="comment">// 归属哪个 Queue</span></span><br><span class="line">    Request        v1.ResourceList     <span class="comment">// 这份配额声明多少资源(CPU/GPU/内存)</span></span><br><span class="line">    NodeSelector   <span class="keyword">map</span>[<span class="type">string</span>]<span class="type">string</span>   <span class="comment">// 限制能绑到哪类节点(比如 spec=A100)</span></span><br><span class="line">    Tolerations    []v1.Toleration</span><br><span class="line">    Affinity       *Affinity           <span class="comment">// 节点/quota 亲和</span></span><br><span class="line">    SharedQueues   []<span class="type">string</span>            <span class="comment">// 共享给哪些 queue</span></span><br><span class="line">    StaticBindNode <span class="type">string</span>              <span class="comment">// 静态绑定到指定节点</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>QuotaStatus</code> 记录运行时:<code>Phase</code>(Empty→Bound 生命周期)、<code>NodeName</code>(最终绑到哪个节点)、<code>Allocated</code>、<code>ShadowResource</code>(超售池)、<code>StaticBindStatus</code>。所以 <strong>Quota 是个人造的中间资源对象</strong>——你(或上层编排系统)显式 <code>kubectl apply quota.yaml</code> 创建它,声明&quot;我要一份 8 卡 A100 的配额,限定 spec=A100 节点,归属 research 队列&quot;。</p>
+<p><strong>DevicePlugin 是 K8s 原生机制</strong>,把硬件设备 advertise 成 extended resource(<code>nvidia.com/gpu</code>、<code>rdma/hca</code>、<code>rdma/roce</code> 等)——这是<strong>节点物理事实</strong>,由设备厂商 daemonset 跑在节点上向 kubelet 上报。</p>
+<p>两者<strong>配合而非替代</strong>,在 Quota→Node 这一跳相遇:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">物理层(事实):  Node ──DevicePlugin──► nvidia.com/gpu: 8, rdma/hca: 8</span><br><span class="line">                     ▲</span><br><span class="line">                     │ 绑定时校验(node.QuotaIdle 够不够)</span><br><span class="line">逻辑层(抽象):  Quota(Request: 8 GPU)──Sky-Scheduler 绑定──► Node</span><br><span class="line">                     ▲</span><br><span class="line">                     │ AllocateTaskToQuota</span><br><span class="line">任务层:          Task ──► 选哪份 Quota</span><br></pre></td></tr></table></figure>
+<p>具体交集点:</p>
+<ol>
+<li><strong><code>rdma/roce</code>、<code>rdma/hca</code></strong>:由 RDMA device-plugin 上报到节点,Pod request 它<strong>触发拓扑调度开启</strong>(<code>NeedRDMA()</code>)。这是&quot;读&quot;设备资源决定调度行为,不是&quot;Quota 由它生成&quot;。</li>
+<li><strong><code>spot-gpu</code></strong>:Spot GPU 的 extended resource,device-plugin 上报,sylas 插件读它做 spot 池拆分。</li>
+<li><strong>节点 GPU 计数</strong>:<code>NodeInfo.QuotaIdle</code> = 节点 allocatable(含 device-plugin 上报的 extended resource)减去已绑 quota 占用。Quota→Node 绑定时 predicate 校验这个——“这节点真有这么多设备吗”。</li>
+</ol>
+<p><strong>一句话:Quota 是独立 CRD,由人/编排声明式创建;DevicePlugin 上报的 extended resource 是节点物理事实,Quota 绑节点时被用来校验。</strong> Quota 创建时 <code>status.nodeName</code> 是空的(纯逻辑份额),调度器在 <code>allocateQuota</code>/<code>allocateZone</code> 里经 <code>QNFns</code> predicate + 评分调 <code>BindQuotaToNode</code> 写上 <code>nodeName</code>,Quota 才&quot;落&quot;到具体节点;<code>fixQuotaBinding</code> 每周期从该 quota 下 live pod 反推 <code>nodeName</code> 自愈防漂移。</p>
+<h3 id="2-4-这层-Quota-带来的四个超能力">2.4 这层 Quota 带来的四个超能力</h3>
+<p>加这一层不是炫技,它解锁了 Volcano 做不到的四件事:</p>
+<p><strong>① 静态绑定</strong>:任务的 quota 可以<strong>预先钉死某个节点</strong>(<code>Quota.Status.StaticBindStatus</code>)。allocateJob 优先选静态绑定的 quota。这等价于&quot;这个任务指定要这台机器&quot;——但又不是 Pod 级的 nodeSelector(那种是硬约束、没法被 quota 层的亲和/预留微调),而是&quot;偏好+可调度性校验&quot;的中间态。对应 commit “优先选择静态绑定的 Quota”。</p>
+<p><strong>② 资源预留(Reservation)</strong>:训练任务被抢占时,它的 quota 不立刻释放,而是留一个 <code>ReservedTask</code> + TTL 在 quota 里。任务重启后,新 Pod 可以 <code>AllocateReservedResource</code>(经 <code>AnnoInheritResourceFrom</code> 继承)直接吃回这份预留——<strong>保住原来的位置</strong>。这对长时间训练的容错体验是质的提升:重启不是从零开始乱放,而是&quot;回到原位&quot;。</p>
+<p><strong>③ Quota 间亲和/反亲和</strong>:可以声明&quot;quota A 和 quota B 必须同节点&quot;(inter-quota affinity)或&quot;不能同节点&quot;(anti-affinity),以及 pod→quota 亲和。这比 K8s 的 podAffinity 表达力更强,因为 Quota 是个稳定的逻辑对象,Pod 来来去去,Quota 的亲和关系不动。</p>
+<p><strong>④ 多规格资源池</strong>:Quota 能感知 spec code(节点 label 算出来的&quot;卡型标识&quot;),A100 的 quota 和 H100 的 quota 天然分开管,不会混。</p>
+<h3 id="2-5-新状态-AllocatedToQuota">2.5 新状态:AllocatedToQuota</h3>
+<p>两跳意味着 task 多了一个中间态。Sky-Scheduler 的 task 状态机:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Pending ──► AllocatedToQuota ──► Allocated ──► Binding ──► Bound ──► Running</span><br><span class="line">            (新增!选好了quota,    (绑到节点)   (写Binding)  (节点上跑)</span><br><span class="line">             还没绑节点)</span><br></pre></td></tr></table></figure>
+<p><code>AllocatedToQuota</code> 是 Sky-Scheduler 的发明:task 已经认领了 quota,但 quota 还没绑到物理节点。这给&quot;先占逻辑资源、再选物理位置&quot;留出了空间——也带来了状态机复杂度,所以有 <code>fixQuotaBinding</code> 自愈机制:每周期从 live pod 位置重建 <code>quota.Status.NodeName</code>,防止状态漂移。</p>
+<h3 id="2-6-Quota→Node-这一跳具体怎么做">2.6 Quota→Node 这一跳具体怎么做?</h3>
+<p>讲清两跳模型后,最自然的追问是:第二跳 Quota→Node 到底怎么挑节点、怎么绑?这是 Sky-Scheduler 调度的核心环节,值得展开。</p>
+<h4 id="谁来做-allocateZone-和-allocateQuota-两个-action">谁来做:<code>allocateZone</code> 和 <code>allocateQuota</code> 两个 action</h4>
+<p>每周期 actions 流水里,<code>allocateJob</code>(第一跳 task→quota)跑完后,紧接两个做 Quota→Node 的 action,顺序执行:</p>
+<ul>
+<li><strong><code>allocateZone</code></strong>:专管<strong>拓扑 job</strong>。门槛是 job 开了拓扑调度且 task 已全部分到 quota(<code>canAllocateZone</code>)。它先调 <code>ssn.PredicateZone(job)</code>——拓扑插件按权重取第一个返回结果的算法(namedzone/continuity),把&quot;已绑兄弟 task 所在 zone&quot;的节点集合圈出来,<strong>候选节点预先限定在 zone 内</strong>,再走打分挑节点。</li>
+<li><strong><code>allocateQuota</code></strong>:通用兜底。对剩下所有未绑 quota,在全集群 <code>ssn.NodeList</code> 上挑节点。</li>
+</ul>
+<p>两者挑节点的打分机制相同(都用 <code>QNFns</code>),区别只在候选节点集合:allocateZone 限定在 zone 内,allocateQuota 全集群。</p>
+<h4 id="怎么挑-QNFns-五阶段流水">怎么挑:QNFns 五阶段流水</h4>
+<p><code>QNFns</code>(Quota→Node 的 plugin 函数包)对每个 (quota, node) 跑五阶段,各阶段由不同 plugin 注册、用表达式语言组合:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">PrePredicate(一次) → Select(每节点) → Predicate(每节点) → NOrder+BatchNOrder(打分) → BestN(选最优)</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>默认组合算子</th>
+<th>语义</th>
+<th>注册的 plugin(QNFns)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PrePredicate</strong></td>
+<td><code>or(...)</code></td>
+<td>一次性预计算(算 nodeAffinity 的 CycleState、预测 zone 候选节点进 <code>quotaCache</code>)</td>
+<td>predicates、quotaaffinity、topology</td>
+</tr>
+<tr>
+<td><strong>Select</strong></td>
+<td><code>joint(...)</code></td>
+<td>初筛:quota 的 <code>NodeSelector</code> vs 节点 label</td>
+<td>quotapredicates</td>
+</tr>
+<tr>
+<td><strong>Predicate</strong></td>
+<td><code>joint(...)</code></td>
+<td>否决式过滤:节点 Ready、<code>quota.Resource ≤ node.QuotaIdle</code>、taint/toleration、inter-quota 亲和/反亲和、存储挂载点就绪</td>
+<td>predicates、quotapredicates、quotaaffinity、storage</td>
+</tr>
+<tr>
+<td><strong>NOrder + BatchNOrder</strong></td>
+<td><code>sum(...)</code></td>
+<td>打分:topology(zone 亲和)、binpack(节点已绑 quota 的紧凑度)、sylas(spot 驱逐代价)、nodeorder(K8s 标准评分:nodeAffinity/interPodAffinity/taintToleration/podTopologySpread)</td>
+<td>topology、binpack、sylas、nodeorder</td>
+</tr>
+<tr>
+<td><strong>BestN</strong></td>
+<td><code>or(...)</code></td>
+<td>选最优:topology 的 <code>selectBestNodeForQuota</code> 按<strong>节点 index</strong> 在 <code>[preNode, lastNode]</code> 选最小,保持 rank 升序</td>
+<td>topology</td>
+</tr>
+</tbody>
+</table>
+<p>注意组合算子的含义:<code>joint</code>/<code>or</code> 是&quot;任一非 Success 即否决&quot;(用于过滤),<code>sum</code> 是&quot;分数相加&quot;(用于打分)。表达式语言让&quot;哪个插件参与哪个阶段、怎么组合&quot;可配置,不用改代码。</p>
+<h4 id="关键过滤-QuotaIdle-——-device-plugin-资源在这里被校验">关键过滤:QuotaIdle —— device-plugin 资源在这里被校验</h4>
+<p>Predicate 阶段最核心的检查是 <code>quota.Resource.LessEqualWithResourcesName(node.QuotaIdle)</code>。<code>QuotaIdle</code> 怎么算?</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">node.QuotaIdle = node.Allocatable − Σ(已绑到该节点的 quota.Request)</span><br></pre></td></tr></table></figure>
+<p><code>node.Allocatable</code> 就是 K8s 标准字段——<strong>device-plugin 上报的 extended resource(<code>nvidia.com/gpu</code>、<code>rdma/hca</code> 等)就在这里</strong>。所以 quota 请求 8 卡 GPU 时,Predicate 校验的是&quot;这节点 device-plugin 上报的 GPU 减去已被其它 quota 占用的,还够不够 8 卡&quot;——<strong>逻辑配额与物理设备在这一跳相遇</strong>。<code>LessEqualWithResourcesName</code> 按资源名逐项比较(标量资源精度到 0.01 GPU),quota 请求的 GPU 名若不在 <code>QuotaIdle</code> 里直接判失败。</p>
+<p>一个细节:<code>QuotaIdle</code> 只用作<strong>过滤</strong>(predicate + 两梯度分流 + 绑前复核),<strong>不参与打分</strong>。打分靠 binpack 的 <code>Allocated = node.QuotaAllocated.Resource</code>(节点已绑多少 quota)——即&quot;挑已经塞得比较满的节点&quot;,走 binpack 策略。</p>
+<h4 id="两梯度分流-绑前复核">两梯度分流 + 绑前复核</h4>
+<p><code>allocateQuota</code> 把 Predicate 通过的节点分两档:</p>
+<ul>
+<li><strong>第一梯度</strong>:当前 <code>QuotaIdle</code> 就够放下 quota 的节点 —— 进打分。</li>
+<li><strong>第二梯度</strong>:当前不够、但加上 <code>Releasing</code>/<code>Pipelined</code> 未来释放的会够 —— 代码里实际是过滤掉、不打分(注释&quot;两梯度&quot;略乐观,第二梯度目前没真正打分)。</li>
+</ul>
+<p>打分挑出 <code>bestNode</code> 后,绑之前再复核一次 <code>quota.Resource.LessEqual(bestNode.QuotaIdle)</code>——双重保险,防打分期间状态变了。</p>
+<h4 id="怎么绑-Statement-事务-BindQuotaToNode">怎么绑:Statement 事务 + BindQuotaToNode</h4>
+<p>挑出 bestNode 后,调 <code>stmt.AllocateQuotaToNode(quota, bestNode)</code>——但这步<strong>只在 session 内存里干活</strong>:<code>node.AddQuota</code>(预占 <code>QuotaIdle</code>、记 <code>QuotaAllocated</code>、写 <code>quota.NodeName</code>)、追加 <code>AllocateQuota</code> 操作到 Statement、触发事件 handler。真正落盘在 <code>Commit</code> 之后。</p>
+<p>Commit 前还有一道门:<code>ssn.QuotaAllocate(job)</code>——<code>and(...)</code> 表达式,要 gang 插件确认 <code>QuotaReady</code>(够 minAvailable 个 task 的 quota 已绑)且 topology 插件确认 <code>forceNodeOrderWhenAllocateQuota</code>(强制拓扑 job 的节点 index 单调递增)。门通过才 <code>Commit</code>,否则 <code>Discard</code> 回滚整个 job 这一轮的所有 quota 绑定。</p>
+<p><code>Commit</code> 时重放 <code>AllocateQuota</code> 操作 → <code>cache.BindQuotaToNode(quota, nodeName)</code>,这才真正:</p>
+<ol>
+<li><code>node.AddQuota</code>:<code>QuotaIdle -= quota.Request</code>、<code>QuotaAllocated</code> 记账、<code>quota.Status.NodeName = nodeName</code>;</li>
+<li><strong>调 K8s API</strong> <code>Quotas().UpdateStatus()</code> 把 <code>Status.NodeName</code>/<code>Status.Allocated</code> 写回 apiserver(标准 status subresource 更新);</li>
+<li>API 失败则 <code>node.RemoveQuota</code> 回滚记账。</li>
+</ol>
+<p>所以 <code>BindQuotaToNode</code> 做两件事:<strong>改内存记账(QuotaIdle/QuotaAllocated)+ patch Quota CRD 的 status 到 apiserver</strong>。注意它只动 quota 维度的记账,不碰 <code>node.Idle</code>/<code>node.Used</code>(普通 pod 资源不算),因为 pod 还没真绑(那是 <code>bind</code> action 的事)。</p>
+<h4 id="静态绑定-跳过整个-QN-流水">静态绑定:跳过整个 QN 流水</h4>
+<p><code>Spec.StaticBindNode</code> + <code>Status.StaticBindStatus</code> 可把 quota 预钉到某节点。若 <code>Status.NodeName</code> 已被外部 controller 写上,<code>allocateQuota</code>/<code>allocateZone</code> 顶层 <code>if quota.NodeName != &quot;&quot; &#123; continue &#125;</code> 直接跳过——<strong>整个 Select/Predicate/打分/BindQuotaToNode 都不跑</strong>,当已绑处理。若只设了 <code>StaticBindStatus</code> 还没写 <code>NodeName</code>,则在第一跳 task→quota 用 <code>NodeToBeScheduled()</code> 影响选 quota(校验该静态节点 Ready),QN 跳本身不限制候选——真正的 <code>Status.NodeName</code> 赋值由外部 controller 完成。</p>
+<h4 id="自愈-fixQuotaBinding">自愈:fixQuotaBinding</h4>
+<p>万一状态漂移(quota.Status.NodeName 和 pod 实际位置对不上)怎么办?每周期快照时 <code>fixQuotaBinding</code> 兜底(节流 <code>MinFixQuotaInterval</code>):从 <strong>live pod 的实际节点</strong>反推每个 quota 应绑哪(<code>QuotaBindingFixPlan</code>:遍历所有 <code>QuotaName != &quot;&quot; &amp;&amp; NodeName != &quot;&quot;</code> 的 running pod,聚合 quota→node),若与 <code>quota.NodeName</code> 不一致就 patch status 修正,并跨节点迁移 QuotaInfo 的记账(老节点 <code>RemoveQuota</code> 退回 QuotaIdle、新节点 <code>UpdateQuota</code> 扣减)。pod 位置不一致(一个 quota 的 pod 散在多节点)则记错不修。<strong>真相来源是 pod,不是 quota 对象</strong>——这很合理,pod 是物理事实,quota 是逻辑抽象。</p>
+<h4 id="一图总览">一图总览</h4>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line">allocateJob(task→quota)跑完,task 进 AllocatedToQuota,quota.NodeName 还空</span><br><span class="line">                  │</span><br><span class="line">      ┌───────────▼───────────┐</span><br><span class="line">      │ allocateZone(拓扑job) │  allocateQuota(通用兜底)</span><br><span class="line">      │ 候选=zone内节点        │  候选=全集群</span><br><span class="line">      └───────────┬───────────┘</span><br><span class="line">                  │ 对每个未绑 quota:</span><br><span class="line">                  ▼</span><br><span class="line"> PrePredicate → [每节点] Select → Predicate(quota.Resource ≤ node.QuotaIdle)</span><br><span class="line">                  │                  ↑ device-plugin GPU 在 QuotaIdle 里被校验</span><br><span class="line">                  ▼</span><br><span class="line"> NOrder+BatchNOrder 打分(topology/binpack/sylas/nodeorder)</span><br><span class="line">                  │</span><br><span class="line">                  ▼</span><br><span class="line"> BestN(topology 按 node index 选最小,保 rank 升序)</span><br><span class="line">                  │</span><br><span class="line">                  ▼</span><br><span class="line"> stmt.AllocateQuotaToNode(内存:node.AddQuota 预占 QuotaIdle)</span><br><span class="line">                  │</span><br><span class="line">                  ▼</span><br><span class="line"> QuotaAllocate 门(gang QuotaReady + topology forceNodeOrder)</span><br><span class="line">                  │ 通过</span><br><span class="line">                  ▼</span><br><span class="line"> stmt.Commit() → cache.BindQuotaToNode</span><br><span class="line">                  │</span><br><span class="line">                  ├─► node.AddQuota: QuotaIdle -= Request, QuotaAllocated 记账</span><br><span class="line">                  └─► Quotas().UpdateStatus(): patch Status.NodeName 到 apiserver</span><br><span class="line">                  │</span><br><span class="line">                  ▼</span><br><span class="line"> 下周期 fixQuotaBinding 从 live pod 反推自愈</span><br></pre></td></tr></table></figure>
+<h4 id="一个完整例子-8-节点集群跑-4-卡训练-job">一个完整例子:8 节点集群跑 4 卡训练 job</h4>
+<p>设定一个 8 节点小集群,两个 leaf 交换机各挂 4 节点:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">         ┌──── Spine ────┐</span><br><span class="line">         │               │</span><br><span class="line">┌─── Leaf-S1 ───┐  ┌── Leaf-S2 ───┐</span><br><span class="line">│ N0  N1  N2  N3│  │ N4 N5 N6 N7  │</span><br><span class="line">│ 每节点8卡A100 │  │ 每节点8卡A100 │</span><br><span class="line">└───────────────┘  └──────────────┘</span><br><span class="line">(zone = roce#S1)    (zone = roce#S2)</span><br></pre></td></tr></table></figure>
+<p>每节点装了 NVIDIA device-plugin,上报 <code>nvidia.com/gpu: 8</code>、<code>rdma/hca: 8</code>;topology-discovery(RoCE DaemonSet)探出 N0-N3 接 S1、N4-N7 接 S2,写进 NodeTopology CRD,scheduler 据此算出 zone。</p>
+<p>用户要跑一个训练 job:4 个 worker,每个 1 卡 GPU + 1 个 hca,Gang minAvailable=4(4 个必须全起),请求 <code>rdma/hca</code> 所以<strong>自动开启拓扑调度</strong>。事先 apply 了 4 个 Quota(q-train-0/1/2/3),每个声明 <code>request: &#123;nvidia.com/gpu: 1, rdma/hca: 1&#125;</code>,此刻 <code>status.nodeName</code> 都空——4 份逻辑份额,还没落节点。</p>
+<p><strong>第①跳 allocateJob(task→quota)</strong>:4 个 task 各选一个 quota,task 进 <code>AllocatedToQuota</code> 状态,gang 检查 QuotaReady(4 个 task 都有 quota,minAvailable=4 满足),Commit。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">task-0 ──► q-train-0 (NodeName=&quot;&quot;)   ┐</span><br><span class="line">task-1 ──► q-train-1 (NodeName=&quot;&quot;)   │ 4份配额都认了主,</span><br><span class="line">task-2 ──► q-train-2 (NodeName=&quot;&quot;)   │ 但都不知道放哪台机器</span><br><span class="line">task-3 ──► q-train-3 (NodeName=&quot;&quot;)   ┘</span><br></pre></td></tr></table></figure>
+<p><strong>第②跳 allocateZone(quota→node,zone 内)</strong>:job 开了拓扑调度,<code>PredicateZone</code> 圈出候选节点。第一个 quota 没兄弟可跟,选起始 zone <code>roce#S1</code>,返回 <code>&#123;N0,N1,N2,N3&#125;</code>。对 q-train-0 跑 QNFns:</p>
+<ul>
+<li>Select:quota 无 NodeSelector,全过。</li>
+<li>Predicate:<code>quota.Resource(1gpu+1hca) ≤ node.QuotaIdle</code>?N0.QuotaIdle = Allocatable(8gpu,8hca) − Σ已绑(0) = 8,8 ≥ 1 ✓(device-plugin 上报的 GPU 就在 QuotaIdle 里被校验)。</li>
+<li>打分:topology 给同 zone 高分;BestN 按 node index 选最小 → N0。</li>
+<li><code>AllocateQuotaToNode(q-train-0, N0)</code>:内存里 N0.QuotaIdle -= 1gpu,1hca → 7,7。</li>
+</ul>
+<p>第二个 quota <code>q-train-1</code>:namedzone 发现兄弟 task-0 已绑 N0(在 zone S1),<code>PredicateZone</code> 返回 N0 所在 zone <code>&#123;N0,N1,N2,N3&#125;</code>——“和兄弟待同一交换机域”。zone 内打分,BestN 按 index 选最小可用 → N1。同理 q-train-2→N2、q-train-3→N3。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">q-train-0 → N0  (index 0, zone S1)</span><br><span class="line">q-train-1 → N1  (index 1, 跟兄弟同 zone S1)</span><br><span class="line">q-train-2 → N2  (index 2, 同 zone S1)</span><br><span class="line">q-train-3 → N3  (index 3, 同 zone S1)</span><br></pre></td></tr></table></figure>
+<p><strong>关键</strong>:4 个 quota 全落在 <code>roce#S1</code> 这一个交换机域,没散到 S2——4 个 worker 的 RDMA 通信全在 S1 内一跳直达,不跨 Spine;且按 index 0→1→2→3 升序落位,保持物理 rank 顺序。<code>QuotaAllocate</code> 门(topology index 单调递增 + gang QuotaReady)通过,Commit。Commit 时对每个 quota <code>BindQuotaToNode</code>:<code>node.AddQuota</code>(QuotaIdle 扣减、QuotaAllocated 记账、<code>Status.NodeName</code> 写上)+ <code>Quotas().UpdateStatus()</code> patch 到 apiserver。</p>
+<p><strong>第③跳 bind(pod→node)</strong>:每个 task 的 quota 已绑节点,在那一节点重验 TNFns,通过则 <code>Allocate</code> → <code>cache.Bind</code> → 真正给 pod 写 <code>spec.nodeName</code>,kubelet 拉起容器。4 个 pod 分别绑到 N0/N1/N2/N3。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">N0: pod worker-0 跑起来(1 gpu + 1 hca)</span><br><span class="line">N1: pod worker-1 跑起来</span><br><span class="line">N2: pod worker-2 跑起来</span><br><span class="line">N3: pod worker-3 跑起来</span><br><span class="line">   └─ 4 个 worker 全在 Leaf-S1 域,AllReduce 全本地一跳</span><br></pre></td></tr></table></figure>
+<p><strong>事后漂移自愈</strong>:若 N1 宕机、worker-1 被重调度到 N4,下周期 <code>fixQuotaBinding</code> 发现 <code>q-train-1</code> 的 live pod 在 N4 但 <code>Status.NodeName</code> 还是 N1,patch 修正 <code>Status.NodeName=N4</code> 并把记账从 N1 迁到 N4(N1 退回 1 卡到 QuotaIdle、N4 扣减)——<strong>真相来源是 pod 实际位置,不是 quota 对象</strong>。</p>
+<p>三跳对比:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">① allocateJob    task ──► quota    &quot;用哪份配额&quot;      (逻辑分配,不碰节点)</span><br><span class="line">② allocateZone   quota ──► node    &quot;放哪个交换机域&quot;  (拓扑感知,zone内选+index升序)</span><br><span class="line">③ bind           pod   ──► node    &quot;真的绑到机器&quot;    (K8s pod binding)</span><br></pre></td></tr></table></figure>
+<p>核心是中间多了一层 quota:第①跳管逻辑配额分配,第②跳管物理拓扑放置,第③跳才是传统 pod 绑节点。第②跳是精华——把&quot;放哪&quot;拆成&quot;放哪个交换机域(zone)&quot;+“域内选哪个节点(index)”,device-plugin 上报的 GPU 在 <code>node.QuotaIdle</code> 这一步被校验(逻辑配额撞上物理设备)。</p>
+<h3 id="2-7-怎么观测调度过程-kubectl-看哪里">2.7 怎么观测调度过程?kubectl 看哪里</h3>
+<p>讲完机制和例子,实操时最常问的是:调度进行中,<code>kubectl</code> 能看到什么?关键认知:<strong>Sky-Scheduler 不改 Node 对象,改的是 Quota 和 Pod</strong>——所以盯 <code>kubectl get node</code> 基本看不到调度动静,要盯 Quota。</p>
+<p><strong><code>kubectl get node</code> 看不到调度变化</strong>。Node 的 <code>allocatable</code>/<code>capacity</code> 由 device-plugin 上报(<code>nvidia.com/gpu: 8</code>),调度过程不动它;Sky-Scheduler 也不通过加 taint/label 来标记&quot;节点被占&quot;,占用记账全在内存(<code>node.QuotaIdle</code>)。所以:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">$ kubectl get node N0 -o json | jq <span class="string">&#x27;.status.allocatable&#x27;</span></span><br><span class="line">&#123; <span class="string">&quot;nvidia.com/gpu&quot;</span>: <span class="string">&quot;8&quot;</span>, <span class="string">&quot;rdma/hca&quot;</span>: <span class="string">&quot;8&quot;</span>, ... &#125;   <span class="comment"># 调度前后都是 8,不变</span></span><br></pre></td></tr></table></figure>
+<p><strong>真正能看到变化的三处</strong>:</p>
+<ol>
+<li><strong>Quota CRD(最直观,主战场)</strong></li>
+</ol>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 调度前:</span></span><br><span class="line">$ kubectl get quota q-train-0 -o yaml | jq .status</span><br><span class="line">&#123; <span class="string">&quot;phase&quot;</span>: <span class="string">&quot;QuotaEmpty&quot;</span>, <span class="string">&quot;nodeName&quot;</span>: <span class="string">&quot;&quot;</span> &#125;</span><br><span class="line"></span><br><span class="line"><span class="comment"># allocateZone 绑定后:</span></span><br><span class="line">$ kubectl get quota q-train-0 -o yaml | jq .status</span><br><span class="line">&#123; <span class="string">&quot;phase&quot;</span>: <span class="string">&quot;QuotaBound&quot;</span>, <span class="string">&quot;nodeName&quot;</span>: <span class="string">&quot;N0&quot;</span>,</span><br><span class="line">  <span class="string">&quot;allocated&quot;</span>: &#123; <span class="string">&quot;nvidia.com/gpu&quot;</span>: <span class="string">&quot;1&quot;</span>, <span class="string">&quot;rdma/hca&quot;</span>: <span class="string">&quot;1&quot;</span> &#125; &#125;</span><br></pre></td></tr></table></figure>
+<p><code>kubectl get quota</code> 默认列含 <code>node</code> 列,从空变 N0——<strong>这是观测调度进展最直接的窗口</strong>。<code>kubectl get quota -w</code> watch 它能看到 quota 一个个落节点。</p>
+<ol start="2">
+<li><strong>Pod(标准 K8s 行为)</strong></li>
+</ol>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">$ kubectl get pod worker-0 -o wide</span><br><span class="line">NAME       NODE   STATUS</span><br><span class="line">worker-0   N0     Running          <span class="comment"># bind 后 spec.nodeName=N0</span></span><br><span class="line"></span><br><span class="line">$ kubectl get pod worker-0 -o json | jq <span class="string">&#x27;.metadata.annotations&#x27;</span></span><br><span class="line">&#123; <span class="string">&quot;scheduling.infini-ai.com/quota-name&quot;</span>: <span class="string">&quot;q-train-0&quot;</span> &#125;  <span class="comment"># 标记用了哪个 quota</span></span><br></pre></td></tr></table></figure>
+<ol start="3">
+<li><strong>Node condition(仅存储感知场景)</strong></li>
+</ol>
+<p>若 job 开了存储感知 + 声明 <code>RequiredMountPoints</code>,节点的 node condition 会被存储 daemon 写入(注意:scheduler 只读不写):</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">$ kubectl get node N0 -o json | jq <span class="string">&#x27;.status.conditions[]|select(.type|startswith(&quot;infiniai-fs-&quot;))&#x27;</span></span><br><span class="line">&#123; <span class="string">&quot;type&quot;</span>: <span class="string">&quot;infiniai-fs-mp001&quot;</span>, <span class="string">&quot;status&quot;</span>: <span class="string">&quot;True&quot;</span>, <span class="string">&quot;lastHeartbeatTime&quot;</span>: <span class="string">&quot;...&quot;</span> &#125;</span><br></pre></td></tr></table></figure>
+<p><strong>用前面 4 卡例子串起来</strong>,各时刻可观测状态:</p>
+<table>
+<thead>
+<tr>
+<th>时刻</th>
+<th><code>get node</code></th>
+<th><code>get quota</code></th>
+<th><code>get pod</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>①跳完(task→quota)</td>
+<td>无变化</td>
+<td><code>q-train-0..3</code> node 列空、phase=Empty</td>
+<td>worker-0…3 Pending,NODE 空</td>
+</tr>
+<tr>
+<td>②跳完(quota→node)</td>
+<td>无变化</td>
+<td><code>q-train-0</code> node=N0 phase=Bound;其余 N1/N2/N3</td>
+<td>仍 Pending(quota 绑了 pod 还没绑)</td>
+</tr>
+<tr>
+<td>③跳完(bind)</td>
+<td>无变化</td>
+<td>同上(已 Bound)</td>
+<td>worker-0 NODE=N0 Running;… worker-3 NODE=N3</td>
+</tr>
+</tbody>
+</table>
+<p><strong>盯调度的正确姿势是 <code>kubectl get quota -w</code>(watch quota 的 node 列变化),不是 <code>get node</code></strong>。这跟原生 K8s 一样——kube-scheduler 也不改 Node,只改 Pod;Sky-Scheduler 多了 Quota 这层,所以多一个可观测对象。除了 kubectl,还有 <code>/diagnose</code> HTTP API 能查&quot;为什么卡住&quot;(见第七节)。</p>
+<h3 id="2-8-中间的状态值-QuotaIdle、Idle-这些都是什么">2.8 中间的状态值:QuotaIdle、Idle 这些都是什么?</h3>
+<p>前面反复出现 <code>QuotaIdle</code>、<code>Idle</code>、<code>QuotaAllocated</code> 这些值,它们是调度决策的依据,值得专门讲清。分两套:NodeInfo 上的资源记账(节点视角)+ QuotaInfo 上的生命周期(quota 视角)。</p>
+<h4 id="第一套-NodeInfo-的两本账">第一套:NodeInfo 的两本账</h4>
+<p>一个节点<strong>同时维护两套资源账</strong>,因为有两类&quot;占用&quot;——走 quota 路径的(task→quota→node)和走直绑路径的(task→node,如 spot/backfill):</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+<th>何时变</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Allocatable</code></td>
+<td>节点可分配总量(device-plugin 上报的 <code>nvidia.com/gpu:8</code> 等),只读</td>
+<td>device-plugin 改才变</td>
+</tr>
+<tr>
+<td><code>Idle</code></td>
+<td>= Allocatable − Used,<strong>普通 pod 视角的空闲</strong></td>
+<td>pod 绑/解时变(Used 增减)</td>
+</tr>
+<tr>
+<td><code>Used</code></td>
+<td>普通 pod 已占(非 quota 路径)</td>
+<td>pod 绑/解时变</td>
+</tr>
+<tr>
+<td><strong><code>QuotaIdle</code></strong></td>
+<td>= Allocatable − Σ(已绑 quota 的 Request),<strong>quota 视角的空闲</strong></td>
+<td>quota 绑/解时变</td>
+</tr>
+<tr>
+<td><strong><code>QuotaAllocated</code></strong></td>
+<td>按 quota 名记录的占用明细(map[quota名]Resource)</td>
+<td>quota 绑/解时变</td>
+</tr>
+<tr>
+<td><code>FutureIdle</code></td>
+<td>= Idle + Releasing − Pipelined,未来会空闲的(抢占用)</td>
+<td>Releasing/Pipelined 变时变</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键区分:<code>Idle</code> 和 <code>QuotaIdle</code> 是两本账</strong>。一个 pod 走 quota 路径,占 <code>QuotaIdle</code> 不占 <code>Idle</code>;走 spot 直绑,占 <code>Idle</code> 不占 <code>QuotaIdle</code>。两套调度路径互不干扰、不重复计数——这就是两跳调度能并存的根。</p>
+<p>用前面 N0 的例子看两本账怎么同步:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">N0 初始:   Allocatable = 8gpu,8hca</span><br><span class="line">           Idle = 8,8          QuotaIdle = 8,8       (都满,Used=0)</span><br><span class="line"></span><br><span class="line">绑 q-train-0(1gpu,1hca) → AddQuota:</span><br><span class="line">           QuotaIdle = 7,7     ← 扣减(quota 视角)</span><br><span class="line">           QuotaAllocated[q-train-0] = 1,1</span><br><span class="line">           Idle 还是 8,8        ← 没动(pod 还没真绑)</span><br><span class="line"></span><br><span class="line">bind worker-0 到 N0 → AddTask:</span><br><span class="line">           Used = 1,1          ← 扣减(普通 pod 视角)</span><br><span class="line">           Idle = 7,7          ← 现在 pod 真占上了</span><br><span class="line">           QuotaIdle 还是 7,7   ← 不再动</span><br></pre></td></tr></table></figure>
+<p>所以同一台 N0,在 quota 绑定后、pod 绑定前,<code>QuotaIdle=7,7</code> 但 <code>Idle=8,8</code>——<strong>节点对&quot;下一份 quota&quot;显示只剩 7 卡,但对&quot;直绑 pod&quot;还显示 8 卡</strong>。两本账分开,quota 层和 pod 层不会把同一份资源重复分配。</p>
+<h4 id="第二套-QuotaInfo-的生命周期">第二套:QuotaInfo 的生命周期</h4>
+<p>quoa 自己的状态(<code>QuotaStatus</code>):</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Phase</code></td>
+<td>生命周期:<code>QuotaEmpty</code> → <code>QuotaBound</code>(NodeName 写上)→ 释放回 Empty</td>
+</tr>
+<tr>
+<td><code>NodeName</code></td>
+<td>绑到哪个节点(空=未绑)</td>
+</tr>
+<tr>
+<td><code>Allocated</code></td>
+<td>这份 quota 实际被 task 用了多少</td>
+</tr>
+<tr>
+<td><code>Request</code></td>
+<td>声明的资源额度(Spec.Request + shadow)</td>
+</tr>
+<tr>
+<td><code>ShadowResource</code></td>
+<td>超售池(可超 Request 借)</td>
+</tr>
+<tr>
+<td><code>StaticBindStatus</code></td>
+<td>静态绑定状态(NodeName + Bound 标记)</td>
+</tr>
+<tr>
+<td><code>Tasks</code> / <code>ReservedTasks</code></td>
+<td>认领的 task / 预留的 task(重调度用)</td>
+</tr>
+</tbody>
+</table>
+<p><code>Phase</code> 的流转就是 quota 的生命:创建时 Empty → <code>allocateQuota</code>/<code>allocateZone</code> 绑节点后 Bound(<code>Status.NodeName</code> 写上)→ 任务结束释放回 Empty。<code>ReservedTasks</code> 是为重调度保位:TTL 内重启的 task 可继承这份预留,优先回原位。</p>
+<h4 id="一句话">一句话</h4>
+<p><strong>NodeInfo 维护&quot;节点还剩多少资源&quot;的两本账(Idle 给 pod 直绑、QuotaIdle 给 quota 绑定);QuotaInfo 维护&quot;这份配额到哪一步了&quot;的生命周期。</strong> QuotaIdle 在 quota→node 绑定时扣减(AddQuota),Idle 在 pod→node 绑定时扣减(AddTask)——两本账分开记账,是两跳调度不重复计数的根。</p>
+<h3 id="2-9-一句话-Quota-把-资源分配-和-节点选择-解耦">2.9 一句话:Quota 把&quot;资源分配&quot;和&quot;节点选择&quot;解耦</h3>
+<p>Volcano 把&quot;用哪份资源&quot;和&quot;放哪个机器&quot;混在一跳里;Sky-Scheduler 拆开:quota 层管逻辑分配(亲和/预留/静态绑定/多规格),节点层只管物理放置。<strong>复杂度被分层吸收,每层只解决一类问题</strong>——这是软件设计里最朴素也最有效的原则。</p>
+<hr>
+<h2 id="三、RDMA-拓扑-发现-感知">三、RDMA 拓扑:发现 + 感知</h2>
+<p>讲完 Quota,再看拓扑。这是 Sky-Scheduler 为 AI 训练最量身定制的部分。</p>
+<h3 id="3-1-为什么拓扑这么重要">3.1 为什么拓扑这么重要?</h3>
+<p>AI 训练的集合通信(AllReduce/AllGather)对网络延迟极敏感。一个千卡训练任务的通信组,如果打散在多个机架的多台 leaf 交换机上,每次通信都要跨交换机,延迟翻几倍;如果聚拢在同一台 leaf 交换机域内,全是本地一跳,快得多。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">慢的摆法(跨交换机):              快的摆法(同交换机域):</span><br><span class="line">                                           </span><br><span class="line">┌─Leaf-A─┐  ┌─Leaf-B─┐              ┌────Leaf-A────┐</span><br><span class="line">│ N1 N2  │  │ N3 N4  │              │ N1 N2 N3 N4  │</span><br><span class="line">└────┬───┘  └───┬───┘              └──────────────┘</span><br><span class="line">     └──Spine──┘                    全部一跳直达</span><br><span class="line">     通信组&#123;N1,N2,N3,N4&#125;             通信组&#123;N1,N2,N3,N4&#125;</span><br><span class="line">     每次AllReduce跨Spine            每次AllReduce本地</span><br></pre></td></tr></table></figure>
+<p>调度器得知道&quot;哪个节点在哪个交换机域&quot;,才能把通信组聚拢——这就是拓扑调度的使命。</p>
+<h3 id="3-2-发现侧-只看-NIC→交换机一跳">3.2 发现侧:只看 NIC→交换机一跳</h3>
+<p>Sky-Scheduler 的拓扑发现<strong>不碰</strong> NUMA/PCIe/NVLink/节点内 GPU 摆放,只回答一个问题:<strong>每张 RDMA 网卡插在哪个 leaf 交换机上</strong>。这个&quot;NIC→交换机&quot;的映射,就是调度用的 <code>zone</code> 的来源。</p>
+<p>两种网络,两种发现姿势(根因是发现机制本身不同):</p>
+<p><strong>RoCE(RDMA over Converged Ethernet)——DaemonSet,每节点本地探:</strong></p>
+<p>RoCE 走以太网,发现是<strong>纯本地</strong>操作:读自己节点的 Multus CNI 配置(哪些网卡是 macvlan master)、读 <code>/sys/class/net/*/bonding/slaves</code>(bond 展开成物理从卡)、读本节点 lldpd 的 LLDP 邻居表(网卡对端是哪个交换机)。这些信息每节点只有自己知道,所以<strong>必须 DaemonSet 跑在每个节点上</strong>:<code>hostNetwork: true</code> + lldpd sidecar + 挂 CNI 配置目录,10 秒一轮。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">节点 N1 上跑的 RoCE discovery:</span><br><span class="line">┌─────────────────────────────────────┐</span><br><span class="line">│ Multus CNI 配置 → 候选网卡 enp24s0  │</span><br><span class="line">│ /sys/.../bonding/slaves → 展开bond  │</span><br><span class="line">│ lldpcli → enp24s0 对端是 Switch-S1  │</span><br><span class="line">│ rdma link → mlx5_1 = enp24s0        │</span><br><span class="line">│ ───────────────────────────────────│</span><br><span class="line">│ 结论: N1 的 enp24s0 在 S1 域       │</span><br><span class="line">└─────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>IB(InfiniBand)——单 Deployment,一个点看全网:</strong></p>
+<p>IB fabric 是个&quot;全局可枚举&quot;的总线:一台有 HCA 的主机跑 <code>ibnetdiscover</code>,能列出整个子网的所有交换机和所有 HCA 端口。所以<strong>单 Deployment <code>replicas:1</code> + Lease 选主</strong>就够,请求 <code>rdma/hca:1</code> 经 nodeSelector 落到 IB 节点,10 分钟一轮,一个 collector 写所有节点的拓扑。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">IB discovery(单点):</span><br><span class="line">┌───────────────────────────────────────┐</span><br><span class="line">│ ibnetdiscover -C mlx5_0               │</span><br><span class="line">│  → 枚举全网: Switch-S1, Switch-S2... │</span><br><span class="line">│  → 每个 HCA: switchName hostname nic  │</span><br><span class="line">│  → Go 侧 hostname→K8s Node 映射       │</span><br><span class="line">│ ─────────────────────────────────────│</span><br><span class="line">│ 结论: 一次性写所有节点的 IB 拓扑     │</span><br><span class="line">└───────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>发现结果写进 cluster-scoped 的 <code>NodeTopology</code> CRD:<code>spec.net.&#123;roce,ib&#125;</code> 是 NIC 列表,每个 NIC 带 <code>Name</code>(ifname)+ <code>SwitchName</code>(交换机名)。scheduler 用 informer watch 它进 <code>cache.NodeTopos</code>。</p>
+<h3 id="3-3-Zone-怎么派生-同交换机-同-zone">3.3 Zone 怎么派生:同交换机 = 同 zone</h3>
+<p>每个节点算一个 <code>RDMATopologyKey</code>,优先级:<strong>注解覆盖 &gt; <code>zone</code> label &gt; 自动生成</strong>。自动生成就是&quot;把该节点所有 NIC 的交换机名排序后拼起来&quot;,比如 <code>ib#sw1,sw2</code> 或 <code>roce#sw1,sw2</code>;发现侧也会写一个 <code>labels[&quot;zone&quot;] = md5(sorted switch names)</code>——<strong>交换机集合相同的节点,hash 到同一个 zone</strong>。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">zone 派生:</span><br><span class="line">N1: NIC→&#123;S1&#125;        → zone = &quot;roce#S1&quot;</span><br><span class="line">N2: NIC→&#123;S1&#125;        → zone = &quot;roce#S1&quot;   ← 和 N1 同 zone</span><br><span class="line">N3: NIC→&#123;S2&#125;        → zone = &quot;roce#S2&quot;</span><br><span class="line">N4: NIC→&#123;S1, S2&#125;    → zone = &quot;roce#S1,S2&quot; ← 跨两台交换机的节点</span><br></pre></td></tr></table></figure>
+<p>Zone 就是&quot;一组在同一个 RDMA 交换机域内的物理节点&quot;,当成<strong>一个放置单元</strong>(类似把几台物理机当一个&quot;超节点&quot;)来调度。</p>
+<h3 id="3-4-调度侧-请求-RDMA-即开启-按-spec-分池-升序-index-落位">3.4 调度侧:请求 RDMA 即开启,按 spec 分池,升序 index 落位</h3>
+<p>拓扑调度的启用门槛极低:<strong>job 请求 <code>rdma/roce</code> 或 <code>rdma/hca</code> 资源,拓扑调度自动开启</strong>(<code>NeedRDMA() == EnableTopologyScheduling()</code>),零配置。也支持注解 <code>enable-topology-scheduling</code>(强制严格 index 顺序)、<code>topology-affinity-key</code>(job 间 zone 亲和)覆盖。</p>
+<p>两种算法按权重组合(默认 continuity=0、rdma=100):</p>
+<ul>
+<li><strong>namedzone(rdma)</strong>:按 <code>RDMATopologyKey</code> 分 zone。<code>PredicateForTask</code> 找已绑定兄弟 task 的 zone,返回该 zone 内所有节点——“和兄弟待在同一交换机域”。反亲和分 = 1/zoneSize(zone 越大越不聚拢,分越低)。</li>
+<li><strong>continuity</strong>:按节点 index 把空闲节点组成连续块,适合要紧凑物理放置的 job,反亲和分按空闲邻居数 1/0.5/0 避免碎片。</li>
+</ul>
+<p>两种都包在 <code>IdenticalSpecTopologyAlgo</code> 里——<strong>按 resource-spec(卡型)分别算 zone</strong>。A100 节点和 H100 节点即使物理上同交换机,也不会被算进同一个 zone,因为它们 spec code 不同。这从机制上杜绝&quot;快卡等慢卡&quot;。</p>
+<p>放置流程:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">① 每个节点有整数 index(注解或节点名数字后缀)→ 物理顺序</span><br><span class="line">② allocateZone: PredicateZone(job) → 拓扑插件返回 zone 内候选节点</span><br><span class="line">③ quota 在 zone 内绑节点: selectBestNodeForQuota</span><br><span class="line">   在 [preTaskNode, lastTaskNode] 范围选最小 index 节点</span><br><span class="line">④ task 按升序 index 落位 → 保持跨节点物理 RDMA rank 顺序</span><br></pre></td></tr></table></figure>
+<p>为什么要&quot;升序 index&quot;?因为训练通信组对 rank 顺序敏感——GPU 0…7 在物理节点上从左到右排列,跨节点也要保持这个顺序,NCCL 才能高效建环。乱序落位会让通信模式错乱,性能塌方。</p>
+<h3 id="3-5-多-job-的-zone-亲和">3.5 多 job 的 zone 亲和</h3>
+<p>多个 job 之间若想&quot;挤在同一片 zone&quot;(比如共享同一份预取数据),用 <code>topology-affinity-key</code> 注解。<code>ZoneAffinityTracker</code> 统计每个 zone 里同 key 的 task 数,<code>ZoneScore</code> 优先亲和 task 多的 zone——把相关 job 往同一个交换机域里赶。</p>
+<hr>
+<h2 id="四、调度框架-Volcano-的骨架-三处升级">四、调度框架:Volcano 的骨架 + 三处升级</h2>
+<p>骨架照搬 Volcano:Action / Plugin / Session。</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> Action <span class="keyword">interface</span> &#123; Execute(ssn *Session) &#125;       <span class="comment">// 每周期跑的调度动作</span></span><br><span class="line"><span class="keyword">type</span> Plugin <span class="keyword">interface</span>  &#123; OnSessionOpen(ssn *Session)  <span class="comment">// 注册回调</span></span><br><span class="line">                         OnSessionClose(ssn *Session) &#125;</span><br></pre></td></tr></table></figure>
+<p>每秒一个周期:<code>OpenSession</code> 快照 cache + 实例化所有 plugin → 顺序跑配置的 actions → <code>CloseSession</code>。变更经 <code>Statement</code> 事务 <code>Commit</code>(写回 cache)/<code>Discard</code>(回滚)。<strong>一个周期一个 session,一个事务</strong>。</p>
+<p>三处升级:</p>
+<p><strong>① 三对泛型 PluginFunction</strong>——这是两跳调度的根。Session 持有三个 handler 包:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">TQFns: Task   → Quota   (第一跳:task 选 quota)</span><br><span class="line">QNFns: Quota  → Node    (第二跳:quota 选节点)</span><br><span class="line">TNFns: Task   → Node    (spot 旁路:task 直接选节点)</span><br></pre></td></tr></table></figure>
+<p>每个包有 <code>selectFns/prePredicateFns/predicateFns/bestNFns/nOrderFns</code>。Volcano 只有 task→node 一对,这里三对——每一跳都能独立挂 predicate/order/bestN。</p>
+<p><strong>② 表达式语言</strong>——plugin 回调怎么组合(AND? INTERSECT? SUM?)可配置。<code>expr/expr.go</code> 实现了 <code>OpAnd/OpOr/OpIntersect/OpSum/OpMin/OpFirstNotPass</code> 等,默认组合如 <code>Preemptable = OpIntersect(所有插件的 preemptable)</code>、<code>JobReady = and(...)</code>、<code>NOrder = sum(...)</code>,可用配置覆盖。<strong>不用改代码就能调&quot;哪个插件参与哪个决策&quot;</strong>,这是 Volcano 没有的灵活度。</p>
+<p><strong>③ ReconcilablePlugin</strong>——插件可以自带 controller(<code>GetController(...)</code>)。Volcano 的插件只在 session 周期内活,Sky-Scheduler 的插件(如 jobqueue)能跑长生命周期 controller,跨 session 维护状态。</p>
+<hr>
+<h2 id="五、Actions-七步流水">五、Actions:七步流水</h2>
+<p>默认配置的 action 序列:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">allocateJob → allocateZone → allocateQuota → bind → reclaim → backfill → releaseQuota</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>干什么</th>
+<th>形象类比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>allocateJob</strong></td>
+<td>排序队列/job,task 选 quota(四档优先级),<code>AllocateTaskToQuota</code></td>
+<td>餐厅:给客人<strong>分配桌号</strong>(quota),还不指定坐哪把椅子</td>
+</tr>
+<tr>
+<td><strong>allocateZone</strong></td>
+<td>job 全到 quota 后,拓扑插件圈 zone,quota 在 zone 内绑节点</td>
+<td>再决定<strong>坐哪个区</strong>(靠窗/包间=zone)</td>
+</tr>
+<tr>
+<td><strong>allocateQuota</strong></td>
+<td>通用 quota→node 绑定(无拓扑时),按 <code>node.QuotaIdle</code> 评分</td>
+<td>给桌号<strong>指定具体位置</strong></td>
+</tr>
+<tr>
+<td><strong>bind</strong></td>
+<td>quota 已绑节点,task 重验后 <code>Allocate</code>→pod 绑节点</td>
+<td>客人<strong>真的坐下</strong></td>
+</tr>
+<tr>
+<td><strong>reclaim</strong></td>
+<td>抢占:在抢占者节点找 spot victim 驱逐</td>
+<td>让<strong>临时占座的人让位</strong></td>
+</tr>
+<tr>
+<td><strong>backfill</strong></td>
+<td>spot 专用:直接 task→node 填空隙</td>
+<td>把<strong>碎片时间</strong>塞满 spot 任务</td>
+</tr>
+<tr>
+<td><strong>releaseQuota</strong></td>
+<td>不可调度的 job 回收 quota + 退避</td>
+<td>取消订座,让位给下一拨</td>
+</tr>
+</tbody>
+</table>
+<p>注意:<strong>没有独立 preempt action</strong>——Volcano 的抢占折进 <code>reclaim</code>,且 victim 只在抢占者自己的绑定节点上找 spot task(比 Volcano 的节点级启发式范围小、更可控)。<code>proportion</code> 逻辑被移除,由 quota 层替代。</p>
+<hr>
+<h2 id="六、Plugins-Volcano-继承八个-自研六个">六、Plugins:Volcano 继承八个 + 自研六个</h2>
+<p>继承自 Volcano:<code>priority</code> / <code>gang</code>(minAvailable + jobReady/jobPipelined/jobStarving)/ <code>conformance</code> / <code>drf</code> / <code>predicates</code>(封装 K8s 原生 NodeAffinity/Taints/PodAffinity)/ <code>nodeorder</code> / <code>binpack</code> / <code>backoff</code> / <code>rescheduling</code>。</p>
+<p>六个自研 plugin 是核心,前面已展开 Quota 和拓扑,这里补另外四个:</p>
+<h3 id="6-1-sylas-Spot-GPU-调度">6.1 sylas:Spot GPU 调度</h3>
+<p>spot-gpu 是&quot;可被抢占的便宜 GPU&quot;。每个节点按注解把它拆两个池:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">节点的 spot-gpu 资源:</span><br><span class="line">┌─────────────────────────────────┐</span><br><span class="line">│ shared(lowpower)  │ exclusive(idle) │</span><br><span class="line">│ 多个低优 task 共享 │ 独占,要腾就得驱逐 │</span><br><span class="line">└─────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>评分时<strong>预测</strong>要腾出空间需驱逐哪些 exclusive-spot pod(<code>PredictEvictedPod</code>),按 PodGroup 分组,再按四策略加权:<strong>优先级类</strong>(低/中/高)、<strong>驱逐 task 数</strong>、<strong>驱逐资源量</strong>、<strong>运行时长</strong>(shortest/longest)。抢占由 <code>reclaim</code> 执行,<code>backfill</code> 填空隙。Spot RDMA job 还兼容拓扑调度(走同 zone 旁路)。</p>
+<h3 id="6-2-storage-存储感知">6.2 storage:存储感知</h3>
+<p>训练任务常要挂载大模型权重/数据集到特定路径。Pod 声明 <code>RequiredMountPoints</code>,节点以 <strong>node condition <code>infiniai-fs-&lt;mpID&gt;</code></strong> 上报挂载就绪。<code>checkMountPointsReady</code>:condition 必须 True 且心跳时间晚于节点 Ready 时间(兼容旧 daemon 90s 容忍)。挂三阶段 predicate,失败原因 <code>StorageNotReady</code>。</p>
+<h3 id="6-3-SpecResourcePool-多规格资源">6.3 SpecResourcePool:多规格资源</h3>
+<p>节点 label 如 <code>spec-prefix: a100</code> / <code>spec-prefix: h100</code> 经 <code>GetResourceSpecFromNodeSelector</code>(最长 key 优先)转成 spec code。<code>SpecResourcePool</code> 按 spec 维度追踪 queue 的 allocatable/allocated/shadow,反映到 <code>queue.Status.SpecAllocated</code>。<strong>拓扑算法也按 spec code 实例化</strong>——A100 的 zone 和 H100 的 zone 各算各的,从机制上杜绝混卡。</p>
+<h3 id="6-4-jobqueue-诊断">6.4 jobqueue + 诊断</h3>
+<p><code>JobQueue</code> CRD(用 <code>Spec.JobSelector</code> 选 job)是优先级子队列;job 的 <code>JobEnqueueable</code> 仅当匹配 JobQueue <code>Enqueueable()</code> 才放行,否则原因 <code>JobBlockedByJobQueue</code>。配合丰富的不可调度原因词表(<code>BlockedByJobQueue</code>/<code>InsufficientQuota</code>/<code>StorageNotReady</code>/<code>PodQuotaAffinityNotMatch</code>…)+ <code>FitAction</code> 阶梯,经 <code>/diagnose/job/:ns/:name</code> HTTP 接口暴露——<strong>运维不用翻日志猜,直接查 API 知道为什么卡住</strong>。</p>
+<hr>
+<h2 id="七、典型链路-一个-RDMA-训练-job-怎么被调度">七、典型链路:一个 RDMA 训练 job 怎么被调度</h2>
+<p>把上面串起来,一个请求 <code>rdma/roce</code>+<code>rdma/hca</code> 的训练 job:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">1. 提交 → PodGroup 创建 → cache(schedulerName 过滤)收 pod → job 进 Jobs</span><br><span class="line"></span><br><span class="line">2. allocateJob:</span><br><span class="line">   quota 四档排序 → TQFns 选 quota → AllocateTaskToQuota</span><br><span class="line">   (task 进 AllocatedToQuota,还没绑节点)</span><br><span class="line">   gang + quotapredicates 把关 → commit</span><br><span class="line"></span><br><span class="line">3. allocateZone(全到 quota 后):</span><br><span class="line">   PredicateZone(job) → 拓扑插件按 spec code 算 zone</span><br><span class="line">   namedzone: 已绑兄弟 task 的交换机域</span><br><span class="line">   → QNFns 在 zone 内选最小 index 节点绑 quota</span><br><span class="line"></span><br><span class="line">4. bind:</span><br><span class="line">   quota 已绑节点 → TNFns 重验 → Allocate → cache.Bind</span><br><span class="line">   pod 落节点,按升序 index 保持物理 rank 顺序</span><br><span class="line"></span><br><span class="line">5. 资源不足时:</span><br><span class="line">   reclaim 在抢占者节点找 spot victim 驱逐</span><br><span class="line">   backfill 填 spot 队列</span><br><span class="line"></span><br><span class="line">6. 不可调度:</span><br><span class="line">   /diagnose 返回 BlockedByJobQueue / InsufficientQuota / StorageNotReady ...</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="八、与-Volcano-差异一表">八、与 Volcano 差异一表</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Volcano</th>
+<th>Sky-Scheduler</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>调度模型</td>
+<td>Pod→Node 一跳</td>
+<td><strong>Task→Quota→Node 两跳</strong>(新增 <code>AllocatedToQuota</code>)</td>
+</tr>
+<tr>
+<td>抢占</td>
+<td>独立 preempt(节点级)</td>
+<td>折进 reclaim,只在自己节点找 spot victim</td>
+</tr>
+<tr>
+<td>比例分配</td>
+<td>proportion 插件</td>
+<td>移除,quota 层替代</td>
+</tr>
+<tr>
+<td>拓扑</td>
+<td>无原生</td>
+<td><strong>RDMA Zone</strong>(RoCE/IB 发现 + namedzone/continuity)</td>
+</tr>
+<tr>
+<td>Spot</td>
+<td>无</td>
+<td><strong>sylas</strong>(shared/exclusive 池 + 四策略驱逐评分)</td>
+</tr>
+<tr>
+<td>存储</td>
+<td>无原生</td>
+<td><strong>storage</strong>(node condition 挂载点就绪)</td>
+</tr>
+<tr>
+<td>多规格</td>
+<td>无</td>
+<td><strong>SpecResourcePool</strong>(按 spec 分池,拓扑也按 spec)</td>
+</tr>
+<tr>
+<td>资源预留</td>
+<td>无</td>
+<td><strong>ReservedTask + TTL</strong>(重启回原位)</td>
+</tr>
+<tr>
+<td>准入</td>
+<td>queue 层</td>
+<td><strong>JobQueue CRD</strong> + 优先级子队列</td>
+</tr>
+<tr>
+<td>诊断</td>
+<td>简单</td>
+<td><strong>FitAction 阶梯 + /diagnose API</strong></td>
+</tr>
+<tr>
+<td>框架</td>
+<td>session + plugin</td>
+<td>同 + <strong>三对泛型 PluginFunction</strong> + <strong>表达式语言</strong> + <strong>Statement 事务</strong> + <strong>ReconcilablePlugin</strong></td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="九、读后感">九、读后感</h2>
+<p>写完这篇,几个设计让我反复回味:</p>
+<ol>
+<li>
+<p><strong>Quota 两跳 = 解耦</strong>。最朴素的设计原则——&quot;资源分配&quot;和&quot;节点选择&quot;是两类问题,不该挤在一跳里。拆开后,quota 层管逻辑(亲和/预留/静态绑定/多规格),节点层管物理(拓扑/存储/亲和),每层复杂度可控。代价是状态机多了 <code>AllocatedToQuota</code> 中间态,但 <code>fixQuotaBinding</code> 自愈兜底,值得。</p>
+</li>
+<li>
+<p><strong>拓扑 = Zone + 升序 index</strong>。发现侧只做&quot;NIC→交换机&quot;一跳映射,简单到一眼看穿;调度侧用 namedzone 把同交换机域当一个放置单元,再按节点 index 升序落 task 保持物理 rank。没有花哨的算法,但精准命中&quot;训练通信组要聚拢&quot;的核心需求。</p>
+</li>
+<li>
+<p><strong>请求即开启</strong>。<code>NeedRDMA() == EnableTopologyScheduling()</code>——请求 RDMA 资源自动开拓扑调度,零配置。好的抽象应该让对的事自动发生,而不是逼用户记一堆开关。</p>
+</li>
+<li>
+<p><strong>表达式语言</strong>。plugin 回调组合可配置,这是 Volcano 没有的灵活度。生产调度器的需求千变万化,硬编码组合等于把策略焊死在代码里,可配置才是正道。</p>
+</li>
+<li>
+<p><strong>诊断 API</strong>。<code>/diagnose</code> 把&quot;为什么不可调度&quot;做成结构化输出——运维不用翻日志猜,直接查 API。这是把&quot;可观测性&quot;当一等公民的设计,很多调度器没做到。</p>
+</li>
+</ol>
+<p>它跟同日几篇形成完整图景:<a href="2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97.md">多调度器共存</a>讲&quot;能不能并存&quot;,<a href="2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3.md">Volcano Queue 全流程</a>讲&quot;Volcano 内部怎么分资源&quot;,本篇讲&quot;在 Volcano 框架上怎么为 AI 训练做深度定制&quot;——这是 Volcano 衍生调度器走向垂直纵深的一个实例。</p>
+<hr>
+<h3 id="参考">参考</h3>
+<ul>
+<li>调度框架与 Gang 语义:Volcano 设计文档</li>
+<li>多调度器共存机制:<a href="2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97.md">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</a></li>
+<li>Volcano Queue 全流程:<a href="2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3.md">Volcano Queue 全流程拆解</a></li>
+<li>RDMA/RoCE/IB:InfiniBand Architecture、RoCE 规范、<code>ibnetdiscover</code>/<code>lldpcli</code> 文档</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/">http://example.com/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Volcano/">Volcano</a><a class="post-meta__tags" href="/tags/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E8%B0%83%E5%BA%A6%E5%99%A8/">调度器</a><a class="post-meta__tags" href="/tags/RDMA%E6%8B%93%E6%89%91/">RDMA拓扑</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐</div></div><div class="info-2"><div class="info-item-1">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐 DRA(Dynamic Resource Allocation)已经原生支持拓扑感知调度,而且这是它的核心设计目标之一——通过 ResourceSlice 暴露设备拓扑信息,配合 ResourceClaim 中的约束(constraint)让调度器在 Pod 绑定前就完成 NUMA / PCIe 级别的拓扑对齐。本文从实现机制、版本演进、使用示例和当前局限几个维度展开说明。  本文是 深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 的深入篇——那篇讲 HAMi 怎么用 DRA 做异构 GPU 分配,这篇专讲 DRA 本身的拓扑感知能力。   一、实现机制:拓扑如何参与调度决策 DRA 的拓扑感知能力建立在 KEP-4381(DRA Structured Parameters) 引入的结构化参数模型之上,核心链路分三层: 123456789101112131415161718192021222324              ┌─────────────────────────...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-%E4%BB%8EKServe%E5%88%B0Kthena%E4%BA%91%E5%8E%9F%E7%94%9F%E6%A8%A1%E5%9E%8B%E6%9C%8D%E5%8A%A1%E5%B9%B3%E5%8F%B0%E6%BC%94%E8%BF%9B/" title="从 KServe 到 Kthena:云原生模型服务平台的技术演进"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">从 KServe 到 Kthena:云原生模型服务平台的技术演进</div></div><div class="info-2"><div class="info-item-1">从 KServe 到 Kthena:云原生模型服务平台的技术演进 在 Kubernetes 上部署一个模型服务,为什么需要专门的平台?本文从 Serverless 的本质出发,深入拆解 KServe 的拓扑架构与技术细节,并对比 2026 年新晋的 LLM 推理专用平台 Kthena,梳理云原生推理领域的技术选型思路。  一、为什么需要模型服务平台 在 KServe 出现之前,在 Kubernetes 上部署一个推理服务,意味着手动拼装 Deployment、Service、HPA、Ingress、ConfigMap 等一堆资源。而模型服务还有其独特的痛点:  框架异构:PyTorch、TensorFlow、XGBoost、ONNX、vLLM、TGI……每个引擎的部署方式各不相同; 成本压力:GPU 极其昂贵,闲置时的空转是巨大的浪费; 运维复杂:版本灰度、流量切分、可解释性、日志审计,每一项都需要额外的工程投入。  KServe(前身是 Kubeflow 下的 KFServing,2022 年独立,2025 年 9 月进入 CNCF 孵化)给出的答案是:用一个 Inferenc...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E7%9C%8B%E5%85%A8%E8%B2%8C-%E4%B8%89%E4%B8%AA%E4%BA%8C%E8%BF%9B%E5%88%B6%E6%80%8E%E4%B9%88%E5%8D%8F%E4%BD%9C"><span class="toc-number">1.1.</span> <span class="toc-text">一、先看全貌:三个二进制怎么协作</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Quota-%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E4%B8%80%E8%B7%B3%E7%9B%B4%E6%8E%A5%E7%BB%91%E8%8A%82%E7%82%B9"><span class="toc-number">1.2.</span> <span class="toc-text">二、Quota 两级调度:为什么不一跳直接绑节点?</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-Volcano-%E7%9A%84%E7%97%9B-%E4%B8%80%E8%B7%B3%E8%B0%83%E5%BA%A6%E7%9A%84%E5%B1%80%E9%99%90"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 Volcano 的痛:一跳调度的局限</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-Sky-Scheduler-%E7%9A%84%E8%A7%A3-%E4%B8%AD%E9%97%B4%E5%8A%A0%E4%B8%80%E5%B1%82-Quota"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 Sky-Scheduler 的解:中间加一层 Quota</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-Quota-%E4%BB%8E%E5%93%AA%E6%9D%A5-%E5%92%8C-DevicePlugin-%E6%98%AF%E4%BB%80%E4%B9%88%E5%85%B3%E7%B3%BB"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 Quota 从哪来?和 DevicePlugin 是什么关系?</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E8%BF%99%E5%B1%82-Quota-%E5%B8%A6%E6%9D%A5%E7%9A%84%E5%9B%9B%E4%B8%AA%E8%B6%85%E8%83%BD%E5%8A%9B"><span class="toc-number">1.2.4.</span> <span class="toc-text">2.4 这层 Quota 带来的四个超能力</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E6%96%B0%E7%8A%B6%E6%80%81-AllocatedToQuota"><span class="toc-number">1.2.5.</span> <span class="toc-text">2.5 新状态:AllocatedToQuota</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-6-Quota%E2%86%92Node-%E8%BF%99%E4%B8%80%E8%B7%B3%E5%85%B7%E4%BD%93%E6%80%8E%E4%B9%88%E5%81%9A"><span class="toc-number">1.2.6.</span> <span class="toc-text">2.6 Quota→Node 这一跳具体怎么做?</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%B0%81%E6%9D%A5%E5%81%9A-allocateZone-%E5%92%8C-allocateQuota-%E4%B8%A4%E4%B8%AA-action"><span class="toc-number">1.2.6.1.</span> <span class="toc-text">谁来做:allocateZone 和 allocateQuota 两个 action</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%80%8E%E4%B9%88%E6%8C%91-QNFns-%E4%BA%94%E9%98%B6%E6%AE%B5%E6%B5%81%E6%B0%B4"><span class="toc-number">1.2.6.2.</span> <span class="toc-text">怎么挑:QNFns 五阶段流水</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E8%BF%87%E6%BB%A4-QuotaIdle-%E2%80%94%E2%80%94-device-plugin-%E8%B5%84%E6%BA%90%E5%9C%A8%E8%BF%99%E9%87%8C%E8%A2%AB%E6%A0%A1%E9%AA%8C"><span class="toc-number">1.2.6.3.</span> <span class="toc-text">关键过滤:QuotaIdle —— device-plugin 资源在这里被校验</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%A4%E6%A2%AF%E5%BA%A6%E5%88%86%E6%B5%81-%E7%BB%91%E5%89%8D%E5%A4%8D%E6%A0%B8"><span class="toc-number">1.2.6.4.</span> <span class="toc-text">两梯度分流 + 绑前复核</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%80%8E%E4%B9%88%E7%BB%91-Statement-%E4%BA%8B%E5%8A%A1-BindQuotaToNode"><span class="toc-number">1.2.6.5.</span> <span class="toc-text">怎么绑:Statement 事务 + BindQuotaToNode</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%9D%99%E6%80%81%E7%BB%91%E5%AE%9A-%E8%B7%B3%E8%BF%87%E6%95%B4%E4%B8%AA-QN-%E6%B5%81%E6%B0%B4"><span class="toc-number">1.2.6.6.</span> <span class="toc-text">静态绑定:跳过整个 QN 流水</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%87%AA%E6%84%88-fixQuotaBinding"><span class="toc-number">1.2.6.7.</span> <span class="toc-text">自愈:fixQuotaBinding</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%80%E5%9B%BE%E6%80%BB%E8%A7%88"><span class="toc-number">1.2.6.8.</span> <span class="toc-text">一图总览</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E5%AE%8C%E6%95%B4%E4%BE%8B%E5%AD%90-8-%E8%8A%82%E7%82%B9%E9%9B%86%E7%BE%A4%E8%B7%91-4-%E5%8D%A1%E8%AE%AD%E7%BB%83-job"><span class="toc-number">1.2.6.9.</span> <span class="toc-text">一个完整例子:8 节点集群跑 4 卡训练 job</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-7-%E6%80%8E%E4%B9%88%E8%A7%82%E6%B5%8B%E8%B0%83%E5%BA%A6%E8%BF%87%E7%A8%8B-kubectl-%E7%9C%8B%E5%93%AA%E9%87%8C"><span class="toc-number">1.2.7.</span> <span class="toc-text">2.7 怎么观测调度过程?kubectl 看哪里</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-8-%E4%B8%AD%E9%97%B4%E7%9A%84%E7%8A%B6%E6%80%81%E5%80%BC-QuotaIdle%E3%80%81Idle-%E8%BF%99%E4%BA%9B%E9%83%BD%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.8.</span> <span class="toc-text">2.8 中间的状态值:QuotaIdle、Idle 这些都是什么?</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E5%A5%97-NodeInfo-%E7%9A%84%E4%B8%A4%E6%9C%AC%E8%B4%A6"><span class="toc-number">1.2.8.1.</span> <span class="toc-text">第一套:NodeInfo 的两本账</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%AC%AC%E4%BA%8C%E5%A5%97-QuotaInfo-%E7%9A%84%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="toc-number">1.2.8.2.</span> <span class="toc-text">第二套:QuotaInfo 的生命周期</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%80%E5%8F%A5%E8%AF%9D"><span class="toc-number">1.2.8.3.</span> <span class="toc-text">一句话</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-9-%E4%B8%80%E5%8F%A5%E8%AF%9D-Quota-%E6%8A%8A-%E8%B5%84%E6%BA%90%E5%88%86%E9%85%8D-%E5%92%8C-%E8%8A%82%E7%82%B9%E9%80%89%E6%8B%A9-%E8%A7%A3%E8%80%A6"><span class="toc-number">1.2.9.</span> <span class="toc-text">2.9 一句话:Quota 把&quot;资源分配&quot;和&quot;节点选择&quot;解耦</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81RDMA-%E6%8B%93%E6%89%91-%E5%8F%91%E7%8E%B0-%E6%84%9F%E7%9F%A5"><span class="toc-number">1.3.</span> <span class="toc-text">三、RDMA 拓扑:发现 + 感知</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%8B%93%E6%89%91%E8%BF%99%E4%B9%88%E9%87%8D%E8%A6%81"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 为什么拓扑这么重要?</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E5%8F%91%E7%8E%B0%E4%BE%A7-%E5%8F%AA%E7%9C%8B-NIC%E2%86%92%E4%BA%A4%E6%8D%A2%E6%9C%BA%E4%B8%80%E8%B7%B3"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 发现侧:只看 NIC→交换机一跳</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-Zone-%E6%80%8E%E4%B9%88%E6%B4%BE%E7%94%9F-%E5%90%8C%E4%BA%A4%E6%8D%A2%E6%9C%BA-%E5%90%8C-zone"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 Zone 怎么派生:同交换机 &#x3D; 同 zone</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E8%B0%83%E5%BA%A6%E4%BE%A7-%E8%AF%B7%E6%B1%82-RDMA-%E5%8D%B3%E5%BC%80%E5%90%AF-%E6%8C%89-spec-%E5%88%86%E6%B1%A0-%E5%8D%87%E5%BA%8F-index-%E8%90%BD%E4%BD%8D"><span class="toc-number">1.3.4.</span> <span class="toc-text">3.4 调度侧:请求 RDMA 即开启,按 spec 分池,升序 index 落位</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E5%A4%9A-job-%E7%9A%84-zone-%E4%BA%B2%E5%92%8C"><span class="toc-number">1.3.5.</span> <span class="toc-text">3.5 多 job 的 zone 亲和</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E8%B0%83%E5%BA%A6%E6%A1%86%E6%9E%B6-Volcano-%E7%9A%84%E9%AA%A8%E6%9E%B6-%E4%B8%89%E5%A4%84%E5%8D%87%E7%BA%A7"><span class="toc-number">1.4.</span> <span class="toc-text">四、调度框架:Volcano 的骨架 + 三处升级</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81Actions-%E4%B8%83%E6%AD%A5%E6%B5%81%E6%B0%B4"><span class="toc-number">1.5.</span> <span class="toc-text">五、Actions:七步流水</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81Plugins-Volcano-%E7%BB%A7%E6%89%BF%E5%85%AB%E4%B8%AA-%E8%87%AA%E7%A0%94%E5%85%AD%E4%B8%AA"><span class="toc-number">1.6.</span> <span class="toc-text">六、Plugins:Volcano 继承八个 + 自研六个</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-sylas-Spot-GPU-%E8%B0%83%E5%BA%A6"><span class="toc-number">1.6.1.</span> <span class="toc-text">6.1 sylas:Spot GPU 调度</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-storage-%E5%AD%98%E5%82%A8%E6%84%9F%E7%9F%A5"><span class="toc-number">1.6.2.</span> <span class="toc-text">6.2 storage:存储感知</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-SpecResourcePool-%E5%A4%9A%E8%A7%84%E6%A0%BC%E8%B5%84%E6%BA%90"><span class="toc-number">1.6.3.</span> <span class="toc-text">6.3 SpecResourcePool:多规格资源</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-jobqueue-%E8%AF%8A%E6%96%AD"><span class="toc-number">1.6.4.</span> <span class="toc-text">6.4 jobqueue + 诊断</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%85%B8%E5%9E%8B%E9%93%BE%E8%B7%AF-%E4%B8%80%E4%B8%AA-RDMA-%E8%AE%AD%E7%BB%83-job-%E6%80%8E%E4%B9%88%E8%A2%AB%E8%B0%83%E5%BA%A6"><span class="toc-number">1.7.</span> <span class="toc-text">七、典型链路:一个 RDMA 训练 job 怎么被调度</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E4%B8%8E-Volcano-%E5%B7%AE%E5%BC%82%E4%B8%80%E8%A1%A8"><span class="toc-number">1.8.</span> <span class="toc-text">八、与 Volcano 差异一表</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E8%AF%BB%E5%90%8E%E6%84%9F"><span class="toc-number">1.9.</span> <span class="toc-text">九、读后感</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.9.1.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

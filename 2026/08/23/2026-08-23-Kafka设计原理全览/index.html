@@ -1,0 +1,491 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Kafka 设计原理全览:从分布式日志到高吞吐高可用 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="以&quot;分布式日志&quot;为内核,系统梳理 Kafka 的架构与设计原理:Topic&#x2F;Partition&#x2F;Replica、Leader-Follower 与 ISR、HW&#x2F;LEO、生产消费流程、ACK 语义、高吞吐与高可用机制,一篇搞懂 Kafka 的底层逻辑。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Kafka 设计原理全览:从分布式日志到高吞吐高可用">
+<meta property="og:url" content="http://example.com/2026/08/23/2026-08-23-Kafka%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86%E5%85%A8%E8%A7%88/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="以&quot;分布式日志&quot;为内核,系统梳理 Kafka 的架构与设计原理:Topic&#x2F;Partition&#x2F;Replica、Leader-Follower 与 ISR、HW&#x2F;LEO、生产消费流程、ACK 语义、高吞吐与高可用机制,一篇搞懂 Kafka 的底层逻辑。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-22T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-23T05:51:05.653Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Kafka">
+<meta property="article:tag" content="消息队列">
+<meta property="article:tag" content="分布式">
+<meta property="article:tag" content="高可用">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Kafka 设计原理全览:从分布式日志到高吞吐高可用",
+  "url": "http://example.com/2026/08/23/2026-08-23-Kafka%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86%E5%85%A8%E8%A7%88/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-22T16:00:00.000Z",
+  "dateModified": "2026-08-23T05:51:05.653Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/23/2026-08-23-Kafka%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86%E5%85%A8%E8%A7%88/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Kafka 设计原理全览:从分布式日志到高吞吐高可用',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Kafka 设计原理全览:从分布式日志到高吞吐高可用</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Kafka 设计原理全览:从分布式日志到高吞吐高可用</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-22T16:00:00.000Z" title="发表于 2026-08-23 00:00:00">2026-08-23</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-23T05:51:05.653Z" title="更新于 2026-08-23 13:51:05">2026-08-23</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%88%86%E5%B8%83%E5%BC%8F%E4%B8%AD%E9%97%B4%E4%BB%B6/">分布式中间件</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/23/2026-08-23-Kafka%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86%E5%85%A8%E8%A7%88/" data-flag-title="Kafka 设计原理全览:从分布式日志到高吞吐高可用"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>Kafka 设计原理全览:从分布式日志到高可用</h1>
+<h2 id="引言">引言</h2>
+<p>Kafka 最初由 LinkedIn 开发,后捐给 Apache 基金会,如今已是流式数据事实标准。它能在一台普通服务器上跑到 10 万级消息/秒的吞吐,同时保证消息的持久化与高可用——这背后不是玄学,而是一套围绕&quot;分布式日志&quot;的精巧设计。</p>
+<p>本文以&quot;分布式日志&quot;为内核,系统梳理 Kafka 的架构与核心原理,目标是读完一篇就建立完整的心智模型。参考了腾讯云开发者社区《Kafka 设计原理全览》及若干资料,综合整理。</p>
+<hr>
+<h2 id="一、Kafka-是什么-不止是消息队列">一、Kafka 是什么:不止是消息队列</h2>
+<p>Kafka 是一个<strong>分布式流处理平台</strong>,有三重身份:</p>
+<ol>
+<li><strong>消息系统</strong>:生产者发消息、消费者收消息,提供解耦、削峰、异步、系统恢复等能力,还支持顺序保证和回溯消费。</li>
+<li><strong>存储系统</strong>:消息以日志形式持久化到磁盘,配合多副本实现高可靠的冗余存储。</li>
+<li><strong>流处理平台</strong>:提供完整的流处理类库(Kafka Streams),可在消息之上做转换、聚合、连接。</li>
+</ol>
+<p>为什么用它做消息队列?核心价值:解耦(上下游不直接耦合)、削峰(峰值流量暂存管道、下游按自己速度消费)、可扩展(横向加 broker/分区)、高吞吐低延迟、容灾(副本 + Leader/Follower)。</p>
+<hr>
+<h2 id="二、整体架构与核心概念">二、整体架构与核心概念</h2>
+<h3 id="2-1-架构全景">2.1 架构全景</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">Producer ─┐                                  ┌─ Consumer Group</span><br><span class="line">          │                                  │   (Consumer1, Consumer2, ...)</span><br><span class="line">          ▼                                  ▲</span><br><span class="line">     ┌─────────── Broker 集群 ──────────┐    │</span><br><span class="line">     │  Broker1   Broker2   Broker3      │    │</span><br><span class="line">     │   ┌─Topic A──────────────┐        │    │</span><br><span class="line">     │   │ P0(leader) P1 P2 P3   │ ◄──────┘</span><br><span class="line">     │   └───────────────────────┘        │</span><br><span class="line">     └────────────────────────────────────┘</span><br><span class="line">               ▲                ▲</span><br><span class="line">               │  元数据/控制器选举</span><br><span class="line">         ┌─────┴─────┐    ┌─────┴─────┐</span><br><span class="line">         │ ZooKeeper │ 或 │ KRaft     │  (KIP-500,去 ZK)</span><br><span class="line">         └───────────┘    └───────────┘</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>Producer</strong>:消息生产者,把消息发到指定 Topic 的指定 Partition。</li>
+<li><strong>Broker</strong>:一个 Kafka 服务节点;多个 Broker 组成集群。</li>
+<li><strong>Consumer / Consumer Group</strong>:消费者,以组为单位;一条消息在同一组内只被一个消费者消费(队列模型),跨组则都能收到(发布订阅模型)。</li>
+<li><strong>ZooKeeper / KRaft</strong>:管理集群元数据、控制器(Controller)选举、broker 注册。新版 Kafka 3.x+ 用 KRaft 移除 ZK 依赖,把故障恢复从 30-60 分钟降到分钟级。</li>
+</ul>
+<h3 id="2-2-核心概念">2.2 核心概念</h3>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Topic</strong></td>
+<td>消息以主题为单位归类,生产者发到 Topic,消费者订阅 Topic。逻辑容器。</td>
+</tr>
+<tr>
+<td><strong>Partition</strong></td>
+<td>Topic 的物理分片,一个 Topic 可有多个 Partition。存储层看就是一个<strong>可追加的日志文件</strong>。消息追加时分配 <strong>offset</strong>(分区内的唯一递增编号,保证分区内有序)。加分区即可水平扩展。</td>
+</tr>
+<tr>
+<td><strong>Replica</strong></td>
+<td>每个 Partition 有多个副本,一主多从:<strong>Leader 负责读写,Follower 同步</strong>。Leader 挂了从 Follower 选举新 Leader。</td>
+</tr>
+<tr>
+<td><strong>Offset</strong></td>
+<td>消息在 Partition 内的位置编号,消费者通过它实现&quot;消费到哪&quot;的记录与回溯。</td>
+</tr>
+<tr>
+<td><strong>Consumer Group</strong></td>
+<td>消费者组。组内分区独占消费(队列),组间广播(发布订阅)。</td>
+</tr>
+</tbody>
+</table>
+<p>消息组织方式自上而下:<strong>Topic → Partition → Message</strong>,每条消息只存于一个分区,不跨分区存多份。</p>
+<h3 id="2-3-副本与-ISR-可靠性的命脉">2.3 副本与 ISR:可靠性的命脉</h3>
+<p>一个 Partition 的所有副本叫 <strong>AR(Assigned Replicas)</strong>,按同步状态分:</p>
+<ul>
+<li><strong>ISR(In-Sync Replicas)</strong>:与 Leader 保持&quot;一定程度同步&quot;的副本(含 Leader 本身),由 Leader <strong>动态维护</strong>。Follower 落后太多或超时未 fetch,就被踢出 ISR。</li>
+<li><strong>OSR(Out-of-Sync Replicas)</strong>:落后过多的副本(不含 Leader)。</li>
+<li><strong>AR = ISR + OSR</strong>,正常情况下 AR = ISR。</li>
+</ul>
+<p><strong>关键语义</strong>:一条消息只有被 ISR 中<strong>所有副本</strong>都收到,才算&quot;已同步(committed)&quot;;只有 committed 的消息消费者才能读到,Producer 也才能认为发送成功。这跟 ZooKeeper 的&quot;过半写入即成功&quot;不同——Kafka 用 ISR 灵活权衡一致性与可用性(<code>min.insync.replicas</code> 控制下限)。</p>
+<h3 id="2-4-HW-与-LEO-消费者能读到哪">2.4 HW 与 LEO:消费者能读到哪</h3>
+<ul>
+<li><strong>LEO(Log End Offset)</strong>:每个副本日志下一条待写入消息的 offset,即&quot;日志末端&quot;。每个副本(含 follower)都有自己的 LEO。</li>
+<li><strong>HW(High Watermark,高水位)</strong>:所有 ISR 副本中最小的 LEO。<strong>消费者只能拉取到 HW 之前的消息</strong>。HW 随 ISR 同步推进,保证&quot;已读即已同步&quot;。</li>
+</ul>
+<p>LEO 是写入进度,HW 是&quot;可读进度上限&quot;;HW ≤ LEO。Leader 收到消息 → 自己 LEO 推进 → follower fetch 同步 → 各 follower LEO 推进 → Leader 据各 follower LEO 更新 HW → 消费者能看到新消息。</p>
+<hr>
+<h2 id="三、生产与消费流程">三、生产与消费流程</h2>
+<h3 id="3-1-生产端">3.1 生产端</h3>
+<p>Producer 发消息流程:</p>
+<ol>
+<li>序列化 key/value;</li>
+<li>按<strong>分区策略</strong>决定发到哪个 Partition;</li>
+<li>消息进入<strong>缓冲区(batch)</strong>,批量发送提升吞吐;</li>
+<li>(可选)压缩;</li>
+<li>发送到该 Partition 的 Leader Broker;</li>
+<li>Leader 写入本地日志,Follower 拉取同步;</li>
+<li>据 <code>acks</code> 决定何时回复 Producer。</li>
+</ol>
+<p><strong>分区策略</strong>(决定消息去哪个 Partition):</p>
+<ul>
+<li><strong>轮询(Round-robin)</strong>:无 key 时默认,消息依次分配到各分区,均匀分布。</li>
+<li><strong>按 key 哈希</strong>:有 key 时默认,<code>hash(key) % partitionCount</code>,保证同 key 进同分区(有序性)。</li>
+<li><strong>黏性(Sticky)</strong>:尽量把同一批消息塞同一分区,减少请求。</li>
+<li><strong>自定义</strong>:实现 <code>org.apache.kafka.clients.producer.Partitioner</code> 接口的 <code>partition(...)</code> 方法,生产者配 <code>partitioner.class</code>。</li>
+</ul>
+<p><strong>ACK 语义</strong>(<code>acks</code> 参数):</p>
+<table>
+<thead>
+<tr>
+<th>acks</th>
+<th>含义</th>
+<th>可靠性 / 性能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>发出去就完事,不等响应</td>
+<td>最高吞吐,可能丢消息</td>
+</tr>
+<tr>
+<td><code>1</code>(默认)</td>
+<td>Leader 写入本地即回复</td>
+<td>折中,Leader 挂且未同步会丢</td>
+</tr>
+<tr>
+<td><code>all</code> / <code>-1</code></td>
+<td>等 ISR 所有副本都写入才回复</td>
+<td>最可靠,性能最低;配 <code>min.insync.replicas≥2</code> 才真正安全</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-2-消费端">3.2 消费端</h3>
+<p>Consumer 以**拉(pull)**方式从 Leader 拉取消息,offset 由消费者自己维护(提交到 <code>__consumer_offsets</code> topic),支持:</p>
+<ul>
+<li><strong>消费位置</strong>:earliest(从头)/ latest(只消费新消息)/ 指定 offset。</li>
+<li><strong>offset 提交</strong>:自动(<code>enable.auto.commit</code>)或手动(处理完业务再 commit,避免消息丢失/重复)。</li>
+<li><strong>回溯消费</strong>:offset 可重置,重新消费历史消息(区别于传统队列&quot;消费即删除&quot;)。</li>
+<li><strong>Consumer Group 再平衡(Rebalance)</strong>:组内消费者加入/退出/挂掉时,分区重新分配。是高可用基础,但会引发&quot;消费暂停&quot;抖动,需调优 <code>session.timeout</code>/<code>max.poll.interval</code>。</li>
+</ul>
+<h3 id="3-3-一条命令的例子">3.3 一条命令的例子</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 创建 4 分区、3 副本的 topic</span></span><br><span class="line">bin/kafka-topics.sh --bootstrap-server localhost:9092 --create \</span><br><span class="line">  --topic topic-demo --replication-factor 3 --partitions 4</span><br><span class="line"></span><br><span class="line"><span class="comment"># 生产</span></span><br><span class="line">bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic topic-demo</span><br><span class="line"></span><br><span class="line"><span class="comment"># 消费</span></span><br><span class="line">bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic topic-demo</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="四、高吞吐的底层原理">四、高吞吐的底层原理</h2>
+<p>Kafka 能跑到 10 万级 msg/s,靠的是一整套&quot;榨取硬件&quot;的组合拳:</p>
+<h3 id="1-顺序写磁盘">1. 顺序写磁盘</h3>
+<p>消息<strong>追加</strong>到分区日志末尾,而非随机写。磁盘顺序写远快于随机写(机械盘 79MB/s 顺序写 vs 0.083MB/s 随机写;SSD 77MB/s vs 10MB/s),甚至逼近内存随机写。</p>
+<h3 id="2-PageCache-页缓存">2. PageCache(页缓存)</h3>
+<p>Kafka 不自己管内存,把&quot;尽可能多读缓存、写缓冲&quot;交给 OS 的 PageCache:写先到 PageCache 再刷盘,读命中 PageCache 直接走内存。重启后缓存仍在(进程不持有它),冷启动快。</p>
+<h3 id="3-零拷贝-Zero-Copy">3. 零拷贝(Zero-Copy)</h3>
+<p>传统读文件再发网络要 4 次拷贝 + 4 次上下文切换;Kafka 用 <code>sendfile</code>(Java 的 <code>FileChannel.transferTo</code>)让数据直接从 PageCache 到网卡,只有 2 次拷贝、2 次切换,大幅降 CPU。</p>
+<h3 id="4-批量与压缩">4. 批量与压缩</h3>
+<p>生产者攒批 + 支持压缩(snappy/lz4/gzip/zstd),broker 端不解压直接存,消费者端解压。减少网络往返与存储占用。</p>
+<h3 id="5-分区并行">5. 分区并行</h3>
+<p>一个 Topic 多 Partition → 多 Leader 分布在多 Broker → 读写天然并行,水平扩展。吞吐随分区/broker 近线性增长。</p>
+<h3 id="6-网络层-reactor">6. 网络层 reactor</h3>
+<p>Kafka broker 用多线程 reactor 模型:acceptor 接连接、processor 处理 IO、worker 线程池处理请求,高并发下稳定。</p>
+<hr>
+<h2 id="五、高可用-副本、选举与故障转移">五、高可用:副本、选举与故障转移</h2>
+<h3 id="5-1-Leader-Follower-模型">5.1 Leader-Follower 模型</h3>
+<ul>
+<li>每个 Partition 一个 Leader、若干 Follower。<strong>所有读写都走 Leader</strong>(Kafka 不从 Follower 读,简化一致性,牺牲一点读扩展性换吞吐)。</li>
+<li>Follower 主动**拉取(fetch)**Leader 日志同步(非推),LEO 追赶 Leader。</li>
+</ul>
+<h3 id="5-2-Controller-与选举">5.2 Controller 与选举</h3>
+<ul>
+<li>集群选出一个 Broker 当 <strong>Controller</strong>(ZK 协调或 KRaft 内部仲裁)。</li>
+<li>Controller 监听 broker 上下线;某 broker 挂了,Controller 从该 Partition 的 <strong>ISR</strong> 里选第一个存活副本当新 Leader。</li>
+<li><strong>只有 ISR 内的副本有资格当 Leader</strong>,保证新 Leader 的数据完整。若 ISR 全挂、<code>unclean.leader.election.enable=true</code>,可从 OSR 选(可能丢数据,默认关闭)。</li>
+</ul>
+<h3 id="5-3-故障转移示例">5.3 故障转移示例</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Partition P0: Leader=B1, ISR=[B1,B2,B3]</span><br><span class="line">  B1 宕机 → Controller 感知 → 从 ISR=[B2,B3] 选 B2 为新 Leader</span><br><span class="line">  → ISR=[B2,B3],HW 可能回退到 B2/B3 的最小 LEO(已 committed 数据不丢)</span><br><span class="line">  → B1 恢复后 catch-up,重新进 ISR</span><br></pre></td></tr></table></figure>
+<h3 id="5-4-ISR-维护的演进-避坑">5.4 ISR 维护的演进(避坑)</h3>
+<p>旧版(0.9 前)用 <code>replica.lag.max.messages</code>(落后消息数)判同步,但生产难给合理值:设小 follower 频繁被踢、设大 leader 切换时可能日志截断丢消息。<strong>新版改用 <code>replica.lag.time.max.ms</code>(落后时间)</strong>——只要 follower 在规定时间内有 fetch 进度就认为同步,与吞吐波动解耦,更稳。</p>
+<hr>
+<h2 id="六、消息语义与可靠性">六、消息语义与可靠性</h2>
+<table>
+<thead>
+<tr>
+<th>语义</th>
+<th>含义</th>
+<th>实现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>At Most Once</td>
+<td>至多一次,可能丢</td>
+<td>acks=0,offset 自动提交(先提交再处理)</td>
+</tr>
+<tr>
+<td>At Least Once</td>
+<td>至少一次,可能重复</td>
+<td>acks=all,offset 手动提交(处理完再提交)— Kafka 默认</td>
+</tr>
+<tr>
+<td>Exactly Once</td>
+<td>恰好一次</td>
+<td>幂等生产(<code>enable.idempotence</code>)+ 事务(跨分区原子写)+ 消费端事务</td>
+</tr>
+</tbody>
+</table>
+<p><strong>幂等生产</strong>:Producer 带 PID + 序列号,broker 去重,保证单分区不重复。<br>
+<strong>事务</strong>:跨多分区原子&quot;写消息 + 提交 offset&quot;,配合隔离级别 <code>read_committed</code> 让消费者只读 committed 事务消息。</p>
+<p><strong>可靠性实践</strong>:</p>
+<ul>
+<li><code>acks=all</code> + <code>min.insync.replicas≥2</code> + 副本因子 3 → 挂一个 broker 不丢数据;</li>
+<li>消费手动提交 offset、业务幂等 → 至少一次 + 无副作用重复;</li>
+<li>关闭 unclean leader 选举 → 宁可不可用也不丢数据。</li>
+</ul>
+<hr>
+<h2 id="七、典型使用场景">七、典型使用场景</h2>
+<ol>
+<li><strong>异步解耦/削峰</strong>:上游峰值流量暂存,下游按自己速度消费。</li>
+<li><strong>日志/事件收集</strong>:海量日志/埋点汇聚(经典场景)。</li>
+<li><strong>流处理</strong>:Kafka Streams / Flink 读 Kafka 做实时 ETL、聚合。</li>
+<li><strong>系统间数据同步</strong>:DB CDC → Kafka → 下游(搜索索引、数仓、缓存)。</li>
+<li><strong>事件驱动微服务</strong>:服务间用事件解耦。</li>
+</ol>
+<hr>
+<h2 id="八、总结">八、总结</h2>
+<p>Kafka 的设计可以浓缩成一句话:<strong>把&quot;分布式日志&quot;这件事做到极致</strong>。</p>
+<ul>
+<li><strong>日志即存储</strong>:分区是可追加的日志,顺序写 + PageCache + 零拷贝榨干磁盘与网络。</li>
+<li><strong>副本即高可用</strong>:Leader-Follower + ISR 动态同步,HW 保证已读即已同步,Controller 选举快速故障转移。</li>
+<li><strong>分区即扩展</strong>:Topic → Partition → Replica 三层,水平扩展靠加分区加 broker。</li>
+<li><strong>语义可调</strong>:acks / 幂等 / 事务,在性能与可靠性间灵活权衡。</li>
+</ul>
+<p>它没有花哨的算法,每个机制都直击&quot;分布式日志&quot;的核心矛盾——顺序、持久、可扩展、可用。这套设计让 Kafka 既快又稳,成为现代数据基础设施的骨干。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li><a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/2515323">Kafka设计原理全览：一篇文章让你搞懂 — 腾讯云开发者社区</a></li>
+<li><a target="_blank" rel="noopener" href="https://objcoding.com/2019/11/05/kafka-isr">Kafka ISR 副本同步机制 — objcoding</a></li>
+<li><a target="_blank" rel="noopener" href="https://monchickey.com/post/2024/04/15/kafka-partition-replication">Kafka 的分片和副本机制 — monchickey</a></li>
+<li><a target="_blank" rel="noopener" href="https://developer.jdcloud.com/article/3479">扫盲Kafka？看这一篇就够了！ — 京东云开发者社区</a></li>
+<li>Apache Kafka 官方文档</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/23/2026-08-23-Kafka%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86%E5%85%A8%E8%A7%88/">http://example.com/2026/08/23/2026-08-23-Kafka%E8%AE%BE%E8%AE%A1%E5%8E%9F%E7%90%86%E5%85%A8%E8%A7%88/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Kafka/">Kafka</a><a class="post-meta__tags" href="/tags/%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97/">消息队列</a><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式</a><a class="post-meta__tags" href="/tags/%E9%AB%98%E5%8F%AF%E7%94%A8/">高可用</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a></nav><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">Kafka 设计原理全览:从分布式日志到高可用</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BC%95%E8%A8%80"><span class="toc-number">1.1.</span> <span class="toc-text">引言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81Kafka-%E6%98%AF%E4%BB%80%E4%B9%88-%E4%B8%8D%E6%AD%A2%E6%98%AF%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97"><span class="toc-number">1.2.</span> <span class="toc-text">一、Kafka 是什么:不止是消息队列</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84%E4%B8%8E%E6%A0%B8%E5%BF%83%E6%A6%82%E5%BF%B5"><span class="toc-number">1.3.</span> <span class="toc-text">二、整体架构与核心概念</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 架构全景</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E6%A0%B8%E5%BF%83%E6%A6%82%E5%BF%B5"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 核心概念</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E5%89%AF%E6%9C%AC%E4%B8%8E-ISR-%E5%8F%AF%E9%9D%A0%E6%80%A7%E7%9A%84%E5%91%BD%E8%84%89"><span class="toc-number">1.3.3.</span> <span class="toc-text">2.3 副本与 ISR:可靠性的命脉</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-HW-%E4%B8%8E-LEO-%E6%B6%88%E8%B4%B9%E8%80%85%E8%83%BD%E8%AF%BB%E5%88%B0%E5%93%AA"><span class="toc-number">1.3.4.</span> <span class="toc-text">2.4 HW 与 LEO:消费者能读到哪</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E7%94%9F%E4%BA%A7%E4%B8%8E%E6%B6%88%E8%B4%B9%E6%B5%81%E7%A8%8B"><span class="toc-number">1.4.</span> <span class="toc-text">三、生产与消费流程</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E7%94%9F%E4%BA%A7%E7%AB%AF"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 生产端</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E6%B6%88%E8%B4%B9%E7%AB%AF"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 消费端</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E4%B8%80%E6%9D%A1%E5%91%BD%E4%BB%A4%E7%9A%84%E4%BE%8B%E5%AD%90"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 一条命令的例子</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E9%AB%98%E5%90%9E%E5%90%90%E7%9A%84%E5%BA%95%E5%B1%82%E5%8E%9F%E7%90%86"><span class="toc-number">1.5.</span> <span class="toc-text">四、高吞吐的底层原理</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E9%A1%BA%E5%BA%8F%E5%86%99%E7%A3%81%E7%9B%98"><span class="toc-number">1.5.1.</span> <span class="toc-text">1. 顺序写磁盘</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-PageCache-%E9%A1%B5%E7%BC%93%E5%AD%98"><span class="toc-number">1.5.2.</span> <span class="toc-text">2. PageCache(页缓存)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E9%9B%B6%E6%8B%B7%E8%B4%9D-Zero-Copy"><span class="toc-number">1.5.3.</span> <span class="toc-text">3. 零拷贝(Zero-Copy)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E6%89%B9%E9%87%8F%E4%B8%8E%E5%8E%8B%E7%BC%A9"><span class="toc-number">1.5.4.</span> <span class="toc-text">4. 批量与压缩</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E5%88%86%E5%8C%BA%E5%B9%B6%E8%A1%8C"><span class="toc-number">1.5.5.</span> <span class="toc-text">5. 分区并行</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-%E7%BD%91%E7%BB%9C%E5%B1%82-reactor"><span class="toc-number">1.5.6.</span> <span class="toc-text">6. 网络层 reactor</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E9%AB%98%E5%8F%AF%E7%94%A8-%E5%89%AF%E6%9C%AC%E3%80%81%E9%80%89%E4%B8%BE%E4%B8%8E%E6%95%85%E9%9A%9C%E8%BD%AC%E7%A7%BB"><span class="toc-number">1.6.</span> <span class="toc-text">五、高可用:副本、选举与故障转移</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-Leader-Follower-%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 Leader-Follower 模型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-Controller-%E4%B8%8E%E9%80%89%E4%B8%BE"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 Controller 与选举</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E6%95%85%E9%9A%9C%E8%BD%AC%E7%A7%BB%E7%A4%BA%E4%BE%8B"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 故障转移示例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-ISR-%E7%BB%B4%E6%8A%A4%E7%9A%84%E6%BC%94%E8%BF%9B-%E9%81%BF%E5%9D%91"><span class="toc-number">1.6.4.</span> <span class="toc-text">5.4 ISR 维护的演进(避坑)</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E6%B6%88%E6%81%AF%E8%AF%AD%E4%B9%89%E4%B8%8E%E5%8F%AF%E9%9D%A0%E6%80%A7"><span class="toc-number">1.7.</span> <span class="toc-text">六、消息语义与可靠性</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%85%B8%E5%9E%8B%E4%BD%BF%E7%94%A8%E5%9C%BA%E6%99%AF"><span class="toc-number">1.8.</span> <span class="toc-text">七、典型使用场景</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%80%BB%E7%BB%93"><span class="toc-number">1.9.</span> <span class="toc-text">八、总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.9.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

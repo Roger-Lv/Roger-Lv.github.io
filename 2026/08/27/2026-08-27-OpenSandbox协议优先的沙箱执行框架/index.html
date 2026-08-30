@@ -1,0 +1,447 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>协议优先的沙箱执行框架:OpenSandbox 架构拆解 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="OpenSandbox 是&quot;协议优先&quot;的开源沙箱执行框架——隔离委托给 Docker&#x2F;Kata&#x2F;gVisor&#x2F;Firecracker,用双 OpenAPI 规范统一生命周期与执行两层接口,execd 注入完成有状态代码执行,Pool&#x2F;BatchSandbox 两级 CRD 在 K8s 上把批量创建做到 O(1)。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="协议优先的沙箱执行框架:OpenSandbox 架构拆解">
+<meta property="og:url" content="http://example.com/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="OpenSandbox 是&quot;协议优先&quot;的开源沙箱执行框架——隔离委托给 Docker&#x2F;Kata&#x2F;gVisor&#x2F;Firecracker,用双 OpenAPI 规范统一生命周期与执行两层接口,execd 注入完成有状态代码执行,Pool&#x2F;BatchSandbox 两级 CRD 在 K8s 上把批量创建做到 O(1)。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-26T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-29T11:46:11.407Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Agent">
+<meta property="article:tag" content="Sandbox">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="OpenSandbox">
+<meta property="article:tag" content="执行层">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "协议优先的沙箱执行框架:OpenSandbox 架构拆解",
+  "url": "http://example.com/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-26T16:00:00.000Z",
+  "dateModified": "2026-08-29T11:46:11.407Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '协议优先的沙箱执行框架:OpenSandbox 架构拆解',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">协议优先的沙箱执行框架:OpenSandbox 架构拆解</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">协议优先的沙箱执行框架:OpenSandbox 架构拆解</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-29T11:46:11.407Z" title="更新于 2026-08-29 19:46:11">2026-08-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" data-flag-title="协议优先的沙箱执行框架:OpenSandbox 架构拆解"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>协议优先的沙箱执行框架:OpenSandbox 架构拆解</h1>
+<p>先给一句话定位:<strong>阿里 OpenSandbox 是一个&quot;协议优先&quot;的开源沙箱执行框架</strong>——它自己不做隔离(隔离委托给 Docker/Kata/gVisor/Firecracker),而是用一套 OpenAPI 规范统一了&quot;沙箱生命周期&quot;和&quot;沙箱内执行&quot;两层接口,用注入到每个容器里的 Go 守护进程完成有状态的代码执行,再用 Pool/BatchSandbox 两级 CRD 在 Kubernetes 上把批量创建做到了 O(1) 复杂度。</p>
+<p>需要先澄清一个容易混淆的点:市面上叫&quot;OpenSandbox&quot;的有两个东西——<strong>开源项目 OpenSandbox</strong>(GitHub opensandbox-group/OpenSandbox,Apache 2.0,2026 年初发布,两天破 3800 星)和<strong>阿里云上的托管服务 Agent Sandbox</strong>(商业产品,MicroVM 隔离 + 每分钟 15K 沙箱弹性)。本文以前者为主线,后者在结尾对比。</p>
+<blockquote>
+<p>关联阅读:本文讲 OpenSandbox 这个&quot;执行层框架&quot;的设计;沙箱<strong>底层隔离技术</strong>(Firecracker/gVisor/Kata 的取舍)见 <a href="2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3.md#%E5%9B%9B%E3%80%81Agent-Infra-%E5%AE%9E%E6%88%98-%E4%B8%89%E7%A7%8D%E6%B2%99%E7%AE%B1%E7%9A%84%E9%80%89%E5%9E%8B%E9%80%BB%E8%BE%91">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</a>;沙箱<strong>怎么被 agent 领养、命令怎么寻址</strong>见 <a href="2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3.md#%E4%BA%8C%E3%80%81%E5%85%A8%E6%99%AF%E6%97%B6%E5%BA%8F%E5%9B%BE">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a>。</p>
+</blockquote>
+<hr>
+<h2 id="一、设计哲学-协议优先-两层解耦">一、设计哲学:协议优先,两层解耦</h2>
+<p>OpenSandbox 把自己定位在 AI Agent 技术栈的**“执行层”**——它解决的是&quot;如何标准化地把代码安全地跑起来&quot;,而不是&quot;如何隔离&quot;(那是 gVisor/Kata/Firecracker 的事)也不是&quot;如何编排业务&quot;(那是 LangGraph/ADK 的事)。</p>
+<p>架构上采用经典的<strong>控制面/数据面解耦</strong>:</p>
+<ul>
+<li><strong>控制面</strong>:一个基于 FastAPI 的服务端,管理沙箱的完整生命周期(创建、暂停、恢复、销毁、TTL),维护严格的状态机(<code>Pending → Running → Paused → Stopping → Terminated/Failed</code>),并引入<strong>异步配置机制</strong>把镜像拉取推到后台,避免高并发下阻塞 API。</li>
+<li><strong>数据面</strong>:每个沙箱容器内被注入一个 Go 编写的执行守护进程 <strong>execd</strong>——静态二进制、零依赖、不改基础镜像,它在容器内拉起 Jupyter Server,支撑有状态的多语言代码执行,所有 stdout/stderr/文件变更通过 <strong>SSE 流式回传</strong>。</li>
+</ul>
+<p>接口契约被固化成两份 OpenAPI 规范:<strong>Sandbox Lifecycle Spec</strong>(生命周期,控制面)和 <strong>Sandbox Execution Spec</strong>(执行,数据面,用 <code>X-EXECD-ACCESS-TOKEN</code> 独立鉴权)。这份&quot;规范即契约&quot;正是多语言 SDK(Python/TS/Java/C#)能保持行为一致的基础。</p>
+<hr>
+<h2 id="二、四层架构与整体数据流">二、四层架构与整体数据流</h2>
+<p>官方的四层划分是 <code>SDKs → Specs → Runtime → Sandbox Instances</code>。落到一次典型的&quot;agent 执行生成代码&quot;请求,完整链路是:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">Agent 进程</span><br><span class="line">   │  sandbox = client.create(...)           ← 控制面:FastAPI server(Docker 或 K8s runtime)</span><br><span class="line">   ▼                                             Pool CRD 从预热池认领 / 现场创建</span><br><span class="line">沙箱 Pod 就绪(execd 已注入,Jupyter kernel 已起)</span><br><span class="line">   │  sandbox.commands.run(&quot;python run.py&quot;)  ← 数据面:SDK → execd</span><br><span class="line">   ▼</span><br><span class="line">execd 在容器内执行,SSE 流式回传</span><br><span class="line">   │  events: init / status / stdout / stderr / result</span><br><span class="line">   ▼</span><br><span class="line">SDK 解析事件流 → agent 拿到结构化结果(可中途 DELETE /command 主动中断)</span><br></pre></td></tr></table></figure>
+<p>这里有个值得注意的细节:SDK 把 SSE 事件流拆成 <code>init/status/stderr/result</code> 等结构化回调,意味着 agent 能<strong>在代码执行早期发现 stderr 报错就立刻中断</strong>,省掉无意义的推理等待——这是把&quot;流式执行&quot;做进协议层的直接收益。</p>
+<hr>
+<h2 id="三、Kubernetes-运行时-两个-CRD-撬动吞吐">三、Kubernetes 运行时:两个 CRD 撬动吞吐</h2>
+<p>这是 OpenSandbox 相对 K8s SIG agent-sandbox 最有差异化的部分。</p>
+<h3 id="Pool-CRD——池化预热">Pool CRD——池化预热</h3>
+<p>与 SIG agent-sandbox 的 WarmPool 思路同源但更工程化:管理员配置 <code>poolMin/poolMax</code>(总量)加 <code>bufferMin/bufferMax</code>(弹性缓冲),请求到来时控制器从池中认领一个待命实例、注入隔离策略与网络规则,毫秒级交付,抹平镜像拉取和 OS 初始化的时间。</p>
+<h3 id="BatchSandbox-CRD——O-1-批量创建">BatchSandbox CRD——O(1) 批量创建</h3>
+<p>这是针对 SIG agent-sandbox 架构的一处根本性批评与改进:后者批量创建 N 个沙箱要向 API Server 提交 N 次 Claim、N 次 Pod 更新和大量状态回调,<strong>大规模下会打爆 etcd</strong>;BatchSandbox 则无论创建 10 个还是 10000 个,<strong>只对单一 BatchSandbox 对象的 Annotations/Status 做一次写入</strong>,算力分配下沉到控制器内部批量消化。官方测试数据:</p>
+<table>
+<thead>
+<tr>
+<th>批量创建 100 个沙箱</th>
+<th>传统架构</th>
+<th>BatchSandbox</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>耗时</td>
+<td>~76.35 秒</td>
+<td><strong>~0.92 秒</strong></td>
+</tr>
+</tbody>
+</table>
+<p>它还提供 <strong>sidecar 模式的任务编排</strong>——给每个 Pod 注入带 <code>SYS_PTRACE</code>、共享进程命名空间的 task-executor,支持 <code>shardTaskPatches</code> 让同一批次的不同沙箱收到异构参数,为多智能体对抗、大规模评测场景打底。此外,K8s runtime 明确声明<strong>兼容 SIG agent-sandbox 项目</strong>,Kata/gVisor 作为可选的 secure runtime。</p>
+<hr>
+<h2 id="四、隔离与网络-纵深防御-但隔离层可插拔">四、隔离与网络:纵深防御,但隔离层可插拔</h2>
+<p>OpenSandbox 本身不实现隔离,而是<strong>分级委托</strong>:</p>
+<ul>
+<li><strong>Docker 模式(本地/单机)</strong>:容器层加固——默认剥夺 <code>SYS_ADMIN/NET_ADMIN/MKNOD</code> 等 capabilities,<code>pids_limit</code> 默认 512 防 fork bomb;</li>
+<li><strong>K8s 多租户模式</strong>:可切换到 <strong>gVisor</strong>(syscall 拦截,防护强于原生容器)或 <strong>Kata/Firecracker</strong>(KVM MicroVM,硬件级隔离),文档明确建议高敏数据场景用后者。</li>
+</ul>
+<p>网络管控的设计比较讲究:</p>
+<ul>
+<li><strong>出站</strong>:桥接模式下主容器被移除 <code>NET_ADMIN</code> 权限(丧失改路由表的能力),由一个 <code>opensandbox/egress</code> sidecar <strong>独占 iptables 规则下发权</strong>,实现域名级白名单/黑名单的出站审计,并<strong>强制禁用 IPv6</strong> 堵住绕过 iptables 的暗门;</li>
+<li><strong>入站</strong>:支持路径前缀、泛域名和 Header-based(<code>OpenSandbox-Ingress-To</code>)三种路由。</li>
+</ul>
+<hr>
+<h2 id="五、Snapshot-and-Fork-为树搜索式推理而生">五、Snapshot-and-Fork:为树搜索式推理而生</h2>
+<p>这是 OpenSandbox 在 MicroVM 层(Firecracker/Cloud Hypervisor)深度集成的独门能力,针对的是 CoT/MCTS/Tree-of-Thoughts 这类&quot;同时探索多条路径&quot;的推理范式:</p>
+<ul>
+<li><strong>Snapshot(快照)</strong>:agent 在执行高风险操作前可触发快照,VMM 在毫秒级捕获内存、CPU 寄存器、文件系统差异并序列化保存;一旦后续代码搞坏环境,立即基于快照恢复——agent 获得&quot;时间回溯&quot;能力,不再需要重装依赖、重放全部操作;</li>
+<li><strong>Fork(分叉)</strong>:基于同一个快照节点同时克隆出多个沙箱副本,每个副本应用不同的补丁/算法并行调试——这正是 MCTS 风格探索在基础设施层的直接映射。</li>
+</ul>
+<p>对照前文的讨论:<strong>E2B、SIG agent-sandbox 的暖池解决的是&quot;快速拿到一个新沙箱&quot;,Snapshot-and-Fork 解决的是&quot;廉价地回到某个历史状态并展开多个平行宇宙&quot;</strong>——两者解决的问题不同,后者对 RL 训练和 agent 自我修正场景的价值大得多。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">暖池(WarmPool/Pool):    [新沙箱] ──快速拿到──► agent</span><br><span class="line">                           解决&quot;从无到有&quot;</span><br><span class="line"></span><br><span class="line">Snapshot-and-Fork:       [历史状态] ──快照──► ┌─ Fork A(补丁1)</span><br><span class="line">                          解决&quot;回溯+并行&quot;   ├─ Fork B(补丁2)</span><br><span class="line">                                            └─ Fork C(补丁3)</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="六、与-K8s-SIG-agent-sandbox-的对比">六、与 K8s SIG agent-sandbox 的对比</h2>
+<p>把两者放在同一张表里,差异点很清晰:</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>K8s SIG Agent Sandbox</th>
+<th>阿里 OpenSandbox</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>定位</td>
+<td>K8s 原生沙箱编排(CRD 体系)</td>
+<td>通用沙箱执行框架(协议优先)</td>
+</tr>
+<tr>
+<td>接口契约</td>
+<td>Sandbox CR + SDK</td>
+<td>双 OpenAPI Spec(Lifecycle + Execution)+ 多语言 SDK</td>
+</tr>
+<tr>
+<td>批量创建</td>
+<td>逐个 Claim,O(N)</td>
+<td>BatchSandbox,O(1),100 个约 0.92s</td>
+</tr>
+<tr>
+<td>池化</td>
+<td>WarmPool CRD</td>
+<td>Pool CRD(min/max + buffer 分层)</td>
+</tr>
+<tr>
+<td>数据面</td>
+<td>Pod 内 runtime server(模板可换)</td>
+<td>统一注入 execd(Go,含 Jupyter + SSE)</td>
+</tr>
+<tr>
+<td>隔离</td>
+<td>RuntimeClass 可选 gVisor/Kata</td>
+<td>Docker 加固 → gVisor → Kata/Firecracker 分级</td>
+</tr>
+<tr>
+<td>状态管理</td>
+<td>生命周期 FSM</td>
+<td>FSM + Snapshot/Restore/Fork</td>
+</tr>
+<tr>
+<td>关系</td>
+<td>OpenSandbox 兼容其生态</td>
+<td>明确声明兼容 SIG agent-sandbox</td>
+</tr>
+</tbody>
+</table>
+<p>一句话概括:<strong>SIG agent-sandbox 是&quot;K8s 视角的沙箱编排标准&quot;,OpenSandbox 是&quot;协议视角的沙箱执行标准&quot;</strong>——前者把沙箱做成 K8s 一等公民,后者把沙箱做成跨基础设施(本地 Docker 到云上 K8s)都行为一致的 API 层。两者不是替代关系,OpenSandbox 的 K8s runtime 反而声明了对 SIG 项目的兼容。</p>
+<hr>
+<h2 id="七、场景矩阵与托管版补充">七、场景矩阵与托管版补充</h2>
+<p>OpenSandbox 内置四类环境模板,对应四类 agent 工作负载:</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>环境能力</th>
+<th>典型集成</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Coding Agents</strong></td>
+<td>代码编写/测试/调试环境</td>
+<td>Claude Code、Gemini CLI、Codex、Kimi CLI</td>
+</tr>
+<tr>
+<td><strong>GUI Agents</strong></td>
+<td>完整 VNC 桌面</td>
+<td>Chrome(headless)、Playwright</td>
+</tr>
+<tr>
+<td><strong>Code Execution</strong></td>
+<td>多语言有状态解释器</td>
+<td>类 ChatGPT 高级数据分析</td>
+</tr>
+<tr>
+<td><strong>RL Training</strong></td>
+<td>大规模并发隔离环境</td>
+<td>评测集群、RLHF 采样</td>
+</tr>
+</tbody>
+</table>
+<p>至于<strong>阿里云上的托管服务 Agent Sandbox</strong>,可以理解为同一套思路的产品化上云:MicroVM 隔离、每分钟最高 15K 沙箱、镜像缓存加速(拉取耗时缩短 90%+)、暖池百毫秒级创建、内存态休眠唤醒(1~10s)、Checkpoint/Restore 状态迁移,并兼容 E2B SDK(降低迁移成本)与 Sandbox CR 声明式接入。开源版与托管版的关系类似 <strong>Kubernetes 与 GKE/EKS</strong>——前者是可自建的底座(适合金融、医药等不愿把代码放上公有云的行业),后者是免运维的产品。</p>
+<hr>
+<h2 id="八、局限与路线图">八、局限与路线图</h2>
+<p>Northflank 的评估指出了 OpenSandbox 作为执行层框架的边界:它管&quot;如何安全执行&quot;,但生产化所需的生命周期编排、多租户、扩缩容、持久存储目前仍需自担——<strong>持久卷还在路线图(OSEP 0003),治理、审计日志、意图审查等更高维能力完全留白</strong>。已披露的演进方向包括 SDK 连接池(把握手开销压到亚毫秒级)、持久化存储、Go SDK 和本地轻量版。</p>
+<hr>
+<h2 id="收束-给这个领域补的拼图">收束:给这个领域补的拼图</h2>
+<p>沿着前面几篇文章的脉络看,OpenSandbox 给这个领域补上的一块拼图很明确:</p>
+<ul>
+<li>当 <strong>SIG agent-sandbox</strong> 把沙箱做成 K8s 的原生对象;</li>
+<li><strong>E2B</strong> 把沙箱做成 SaaS 之后;</li>
+<li><strong>OpenSandbox</strong> 试图把沙箱做成<strong>一份开放的协议</strong>——两层 OpenAPI 规范定义契约,execd 保证任何镜像无需改造即可被托管,Pool/BatchSandbox 用 CRD 在 K8s 上把吞吐拉到产品级,Snapshot-and-Fork 则把树搜索式推理的成本降到基础设施层。</li>
+</ul>
+<p>它是否最终成为&quot;沙箱界的 OCI&quot;尚待观察,但&quot;<strong>协议优先 + 执行层专注</strong>&quot;这条路线,至少给自建 agent 平台的团队提供了一个不锁定于任何云厂商的起点。</p>
+<hr>
+<h3 id="参考来源">参考来源</h3>
+<ul>
+<li><a target="_blank" rel="noopener" href="https://github.com/opensandbox-group/OpenSandbox">OpenSandbox GitHub 仓库</a></li>
+<li><a target="_blank" rel="noopener" href="https://open-sandbox.ai">OpenSandbox 官网</a></li>
+<li><a target="_blank" rel="noopener" href="https://northflank.com/blog/alibaba-opensandbox-architecture-use-cases">Northflank《What is Alibaba OpenSandbox? Architecture, use cases》</a></li>
+<li><a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/2639065">腾讯云开发者社区《基于 Kubernetes 与多语言 SDK 的 OpenSandbox AI 代理沙箱编排》</a></li>
+<li><a target="_blank" rel="noopener" href="https://help.aliyun.com/zh/cs/user-guide/agent-sandbox/">阿里云 Agent Sandbox 产品文档</a></li>
+<li><a target="_blank" rel="noopener" href="https://www.marktechpost.com/2026/03/03/alibaba-releases-opensandbox-to-provide-software-developers-with-a-unified-secure-and-scalable-api-for-autonomous-ai-agent-execution">MarkTechPost《Alibaba Releases OpenSandbox》</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/">http://example.com/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Agent/">Agent</a><a class="post-meta__tags" href="/tags/Sandbox/">Sandbox</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/OpenSandbox/">OpenSandbox</a><a class="post-meta__tags" href="/tags/%E6%89%A7%E8%A1%8C%E5%B1%82/">执行层</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/" title="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</div></div><div class="info-2"><div class="info-item-1">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解 LLM Agent 正在把一个老问题重新推到台前:当代码由模型生成、且不可信时,你把它放在哪里执行? 容器的隔离撑不住对抗性负载;传统虚拟机又太重,扛不住每秒几十次的沙箱创建。于是一批沉寂多年的技术突然变得炙手可热——Firecracker、gVisor、Kata Containers、microVM。这些名词经常混在一起出现,但它们分处不同层次、解决不同问题。要真正理解它们的取舍,需要从最底层讲起:从冯·诺依曼架构的&quot;核心与外围&quot;,一路讲到 Agent infra 的选型决策。 本文分四部分:先梳理虚拟化技术栈的分层关系,再深入 QEMU 的设备模型理解&quot;外围设备&quot;的本质,然后分析性能差异的根源,最后落到 Agent 沙箱的实战选型。  一、技术栈全景:谁在谁的上面 先用一句话给所有主角定位:  KVM 是 Linux 内核提供的硬件虚拟化基础设施;QEMU 是基于 KVM 的传统全功能虚拟机监视器;Firecracker 是基于 KVM、专为 Serverless 设计的...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</div></div><div class="info-2"><div class="info-item-1">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐 DRA(Dynamic Resource Allocation)已经原生支持拓扑感知调度,而且这是它的核心设计目标之一——通过 ResourceSlice 暴露设备拓扑信息,配合 ResourceClaim 中的约束(constraint)让调度器在 Pod 绑定前就完成 NUMA / PCIe 级别的拓扑对齐。本文从实现机制、版本演进、使用示例和当前局限几个维度展开说明。  本文是 深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 的深入篇——那篇讲 HAMi 怎么用 DRA 做异构 GPU 分配,这篇专讲 DRA 本身的拓扑感知能力。   一、实现机制:拓扑如何参与调度决策 DRA 的拓扑感知能力建立在 KEP-4381(DRA Structured Parameters) 引入的结构化参数模型之上,核心链路分三层: 123456789101112131415161718192021222324              ┌─────────────────────────...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-10</div><div class="info-item-2">OpenSandbox 项目学习</div></div><div class="info-2"><div class="info-item-1">OpenSandbox 项目学习 项目地址：https://github.com/opensandbox-group/OpenSandbox 官方文档：https://open-sandbox.ai 一、它是什么 一句话：OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform），提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。 为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：  隔离：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。 可编程：统一的...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</div></div><div class="info-2"><div class="info-item-1">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解 当 LLM Agent 需要执行一段自己生成的代码时,它会向隔离沙箱平台发起一个请求:“给我一个沙箱”。这个请求背后发生了什么?沙箱是怎么被分配的?后续的命令又是如何找到正确的沙箱的? 这是 Agent 基础设施中最容易被一笔带过、却最值得拆解的一环。本文以 Kubernetes SIG 的 Agent Sandbox 项目(kubernetes-sigs/agent-sandbox)为样本,把一次完整的沙箱生命周期——从 create_sandbox 到 terminate——拆到协议层面。 核心结论先行:领养沙箱和操作沙箱走的是两条完全不同的通道。 create_sandbox 触发的是控制面流程(K8s API 上的 Claim/adopt,一次性的);后续 commands.run()、files.write() 走的是数据面流程(HTTP 请求经网关/Router 打到具体的沙箱 Pod,每次操作都走一遍)。而把这两条通道缝在一起的,是 SDK 返回的那个&quot...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">一个 MCP 沙箱路由调度框架的架构分析</div></div><div class="info-2"><div class="info-item-1">一个 MCP 沙箱路由调度框架的架构分析 本文分析一个用 Go 实现、面向 MCP(Model Context Protocol)的沙箱路由与调度框架。它把&quot;给 agent 起一个隔离环境跑工具&quot;这件事标准化、规模化、多引擎化。 一、它是什么 一句话:一个面向 MCP 的沙箱路由与调度框架,用 Go 写成,直接基于官方 modelcontextprotocol/go-sdk,把沙箱的创建、路由、调度、生命周期、计量都做成了一套基础设施。 它跟&quot;控制面 Python + 数据面 Go、协议优先的通用沙箱平台&quot;是两种不同路线:本框架全 Go、MCP 原生(直接用官方 SDK),更强调调度(快照+Epoch 的确定性调度)和路由(二层网络高可用网格)。它的&quot;沙箱&quot;抽象本质是一个 http.RoundTripper——工具调用就是 HTTP,没有单独的执行协议。 核心能力:  沙箱路由:按沙箱类型分发、MCP 会话生命周期管理、按下游负载动态调整、二层网络高可用。 沙箱引擎:Echo / FileServer / Git / P...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-15-Camel%E6%A1%86%E6%9E%B6/" title="Camel框架"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/camel.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">Camel框架</div></div><div class="info-2"><div class="info-item-1">NeurIPS 2023｜AI Agents先行者CAMEL:第一个基于大模型的多智能体框架 转自：https://zhuanlan.zhihu.com/p/671093582 AI Agents是当下大模型领域备受关注的话题，用户可以引入多个扮演不同角色的LLM Agents参与到实际的任务中，Agents之间会进行竞争和协作等多种形式的动态交互，进而产生惊人的群体智能效果。本文介绍了来自KAUST研究团队的大模型心智交互CAMEL框架（“骆驼”），CAMEL框架是最早基于ChatGPT的autonomous agents知名项目，目前已被顶级人工智能会议NeurIPS 2023录用。  1777dbe9073c4bcd8ab59365481bcafc.png  论文题目： CAMEL: Communicative Agents for “Mind” Exploration of Large Scale Language Model Society 论文链接： https://ghli.org/camel.pdf 代码链接： https://github.com/camel-a...</div></div></div></a><a class="pagination-related" href="/2025/08/13/2025-08-13-MCP-Zero%EF%BC%9ALLM%E6%99%BA%E8%83%BD%E4%BD%93%E4%B8%BB%E5%8A%A8%E5%B7%A5%E5%85%B7%E5%8F%91%E7%8E%B0%E7%9A%84%E6%96%B0%E8%8C%83%E5%BC%8F/" title="MCP-Zero：LLM智能体主动工具发现的新范式"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/LLM.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-13</div><div class="info-item-2">MCP-Zero：LLM智能体主动工具发现的新范式</div></div><div class="info-2"><div class="info-item-1">MCP-Zero：LLM智能体主动工具发现的新范式 转自：https://zhuanlan.zhihu.com/p/1928760473630798292 引言 大语言模型（LLMs）在处理复杂任务时，通常需要借助外部工具来扩展其能力范围。然而，当前 LLM 智能体与工具集成的主流范式存在显著局限性：它们往往将预定义的工具模式注入到系统提示中，导致模型扮演被动选择者的角色，而非主动发现所需能力。这种方法不仅造成了巨大的上下文开销，也限制了模型的决策自主性。 为了解决这些问题，本文引入了 MCP-Zero，一个旨在恢复 LLM 智能体工具发现自主性的主动框架。MCP-Zero 的核心思想是，智能体能够主动识别自身能力差距，并按需请求特定工具，从而将自身从大规模检索器转变为真正的自主智能体。该框架通过三大核心机制运行：主动工具请求、分层语义路由和迭代能力扩展。这些机制共同作用，使得 MCP-Zero 能够在最小化上下文开销和保持高准确性的前提下，动态构建多步工具链。   图：LLM 智能体的工具选择范例比较。(a) 基于系统提示的方法将所有 MCP 工具模式注入上下文，导致提示过长，...</div></div></div></a><a class="pagination-related" href="/2025/08/21/2025-08-21-Agentic-RL/" title="Agentic RL"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/AgenticRL.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-21</div><div class="info-item-2">Agentic RL</div></div><div class="info-2"><div class="info-item-1">转自：https://zhuanlan.zhihu.com/p/1913905349284591240 通过蒙特卡洛树搜索、过程监督与结果监督、强化学习来提高 LLM 的推理能力，从本质上来说，都是尽可能榨取 LLM 本身的能力，区别可能在于多次尝试、反馈信号、训练方法而已，这类方法可称之为“求诸内”。而由 scaling law 可知，模型的能力是有限的，那么该如何进一步提高LLM在具体问题上的表现呢？近期的答案是，类似 RAG，Multi-Agent 系统，让 LLM 学会使用工具，毕竟人与动物的关键区别也只是“能制造并使用工具”，这种方式则是“求诸外”。那么本篇就以此为中心，重点讨论以下问题：  Agentic LLM 的算法逻辑、具体方法与实际表现？ RL 如何训练 Agentic LLM，其与 tool using 的 SFT 的差异在哪？ Agentic RL 的工程化问题  一、Agentic RL 的算法设计 Agent 和 RL 都并非新鲜事物，而使用 RL 训练基于 LLM 的 agent 则是近期的研究的热点，那么，从算法角度来说，如何理解二者结合的动机、场...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">协议优先的沙箱执行框架:OpenSandbox 架构拆解</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%AE%BE%E8%AE%A1%E5%93%B2%E5%AD%A6-%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88-%E4%B8%A4%E5%B1%82%E8%A7%A3%E8%80%A6"><span class="toc-number">1.1.</span> <span class="toc-text">一、设计哲学:协议优先,两层解耦</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%9B%9B%E5%B1%82%E6%9E%B6%E6%9E%84%E4%B8%8E%E6%95%B4%E4%BD%93%E6%95%B0%E6%8D%AE%E6%B5%81"><span class="toc-number">1.2.</span> <span class="toc-text">二、四层架构与整体数据流</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Kubernetes-%E8%BF%90%E8%A1%8C%E6%97%B6-%E4%B8%A4%E4%B8%AA-CRD-%E6%92%AC%E5%8A%A8%E5%90%9E%E5%90%90"><span class="toc-number">1.3.</span> <span class="toc-text">三、Kubernetes 运行时:两个 CRD 撬动吞吐</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Pool-CRD%E2%80%94%E2%80%94%E6%B1%A0%E5%8C%96%E9%A2%84%E7%83%AD"><span class="toc-number">1.3.1.</span> <span class="toc-text">Pool CRD——池化预热</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#BatchSandbox-CRD%E2%80%94%E2%80%94O-1-%E6%89%B9%E9%87%8F%E5%88%9B%E5%BB%BA"><span class="toc-number">1.3.2.</span> <span class="toc-text">BatchSandbox CRD——O(1) 批量创建</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E9%9A%94%E7%A6%BB%E4%B8%8E%E7%BD%91%E7%BB%9C-%E7%BA%B5%E6%B7%B1%E9%98%B2%E5%BE%A1-%E4%BD%86%E9%9A%94%E7%A6%BB%E5%B1%82%E5%8F%AF%E6%8F%92%E6%8B%94"><span class="toc-number">1.4.</span> <span class="toc-text">四、隔离与网络:纵深防御,但隔离层可插拔</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81Snapshot-and-Fork-%E4%B8%BA%E6%A0%91%E6%90%9C%E7%B4%A2%E5%BC%8F%E6%8E%A8%E7%90%86%E8%80%8C%E7%94%9F"><span class="toc-number">1.5.</span> <span class="toc-text">五、Snapshot-and-Fork:为树搜索式推理而生</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E4%B8%8E-K8s-SIG-agent-sandbox-%E7%9A%84%E5%AF%B9%E6%AF%94"><span class="toc-number">1.6.</span> <span class="toc-text">六、与 K8s SIG agent-sandbox 的对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%9C%BA%E6%99%AF%E7%9F%A9%E9%98%B5%E4%B8%8E%E6%89%98%E7%AE%A1%E7%89%88%E8%A1%A5%E5%85%85"><span class="toc-number">1.7.</span> <span class="toc-text">七、场景矩阵与托管版补充</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E5%B1%80%E9%99%90%E4%B8%8E%E8%B7%AF%E7%BA%BF%E5%9B%BE"><span class="toc-number">1.8.</span> <span class="toc-text">八、局限与路线图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%94%B6%E6%9D%9F-%E7%BB%99%E8%BF%99%E4%B8%AA%E9%A2%86%E5%9F%9F%E8%A1%A5%E7%9A%84%E6%8B%BC%E5%9B%BE"><span class="toc-number">1.9.</span> <span class="toc-text">收束:给这个领域补的拼图</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E6%9D%A5%E6%BA%90"><span class="toc-number">1.9.1.</span> <span class="toc-text">参考来源</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

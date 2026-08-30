@@ -1,0 +1,517 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从冯·诺依曼架构的&quot;核心与外围&quot;出发,梳理 KVM&#x2F;QEMU&#x2F;Firecracker&#x2F;runc&#x2F;microVM 的分层关系,深入 QEMU 设备模型,分析 gVisor&#x2F;Firecracker&#x2F;Kata 的 syscall 路径差异,落到 Agent 沙箱的实战选型。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解">
+<meta property="og:url" content="http://example.com/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从冯·诺依曼架构的&quot;核心与外围&quot;出发,梳理 KVM&#x2F;QEMU&#x2F;Firecracker&#x2F;runc&#x2F;microVM 的分层关系,深入 QEMU 设备模型,分析 gVisor&#x2F;Firecracker&#x2F;Kata 的 syscall 路径差异,落到 Agent 沙箱的实战选型。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-26T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-29T10:31:45.497Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="虚拟化">
+<meta property="article:tag" content="Agent">
+<meta property="article:tag" content="KVM">
+<meta property="article:tag" content="Firecracker">
+<meta property="article:tag" content="gVisor">
+<meta property="article:tag" content="Kata">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解",
+  "url": "http://example.com/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-26T16:00:00.000Z",
+  "dateModified": "2026-08-29T10:31:45.497Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-29T10:31:45.497Z" title="更新于 2026-08-29 18:31:45">2026-08-29</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%AE%B9%E5%99%A8%E4%B8%8E%E8%99%9A%E6%8B%9F%E5%8C%96/">容器与虚拟化</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/" data-flag-title="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</h1>
+<p>LLM Agent 正在把一个老问题重新推到台前:<strong>当代码由模型生成、且不可信时,你把它放在哪里执行?</strong></p>
+<p>容器的隔离撑不住对抗性负载;传统虚拟机又太重,扛不住每秒几十次的沙箱创建。于是一批沉寂多年的技术突然变得炙手可热——Firecracker、gVisor、Kata Containers、microVM。这些名词经常混在一起出现,但它们分处不同层次、解决不同问题。要真正理解它们的取舍,需要从最底层讲起:从冯·诺依曼架构的&quot;核心与外围&quot;,一路讲到 Agent infra 的选型决策。</p>
+<p>本文分四部分:先梳理虚拟化技术栈的分层关系,再深入 QEMU 的设备模型理解&quot;外围设备&quot;的本质,然后分析性能差异的根源,最后落到 Agent 沙箱的实战选型。</p>
+<hr>
+<h2 id="一、技术栈全景-谁在谁的上面">一、技术栈全景:谁在谁的上面</h2>
+<p>先用一句话给所有主角定位:</p>
+<blockquote>
+<p><strong>KVM</strong> 是 Linux 内核提供的硬件虚拟化基础设施;<strong>QEMU</strong> 是基于 KVM 的传统全功能虚拟机监视器;<strong>Firecracker</strong> 是基于 KVM、专为 Serverless 设计的轻量级 VMM;<strong>runc</strong> 是符合 OCI 规范的容器运行时,与前三者没有直接依赖关系;<strong>microVM</strong> 则是 Firecracker 这类 VMM 所实现的&quot;轻量级虚拟机&quot;产品形态。</p>
+</blockquote>
+<p>分层关系一图看清:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│  产品形态层        microVM(Firecracker 等提供的轻量 VM)    │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  运行时层    runc(OCI 容器运行时,不依赖 KVM,共享宿主内核) │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  VMM 层     QEMU(全功能)     Firecracker(极简)           │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  硬件虚拟化层   KVM(内核 Hypervisor,CPU/内存虚拟化)      │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│  硬件层     Intel VT-x / AMD-V                               │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br><span class="line"></span><br><span class="line">交汇点:Kata Containers(容器接口 + 任选 VMM 的 microVM 隔离)</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>层次</th>
+<th>组件</th>
+<th>角色</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>硬件虚拟化层</td>
+<td>KVM</td>
+<td>内核 Hypervisor,CPU/内存虚拟化</td>
+</tr>
+<tr>
+<td>VMM 层</td>
+<td>QEMU</td>
+<td>传统全功能 VMM</td>
+</tr>
+<tr>
+<td>VMM 层</td>
+<td>Firecracker</td>
+<td>极简 microVM VMM</td>
+</tr>
+<tr>
+<td>运行时层</td>
+<td>runc</td>
+<td>OCI 容器运行时(不依赖 KVM)</td>
+</tr>
+<tr>
+<td>产品形态</td>
+<td>microVM</td>
+<td>Firecracker 等所提供的轻量 VM</td>
+</tr>
+</tbody>
+</table>
+<p>逐个拆解:</p>
+<ul>
+<li><strong>KVM(Kernel-based Virtual Machine)</strong> 是 Linux 内核中的虚拟化模块,负责 CPU 与内存的硬件级虚拟化(依赖 Intel VT-x / AMD-V),把 Linux 内核本身变成一个 Hypervisor。它是整个虚拟化栈的最底层——关键在于,<strong>它本身不提供任何设备模拟</strong>。</li>
+<li><strong>QEMU</strong> 是运行在用户态的虚拟机监视器(VMM),通常与 KVM 配合:KVM 负责 CPU/内存虚拟化,QEMU 负责模拟各种设备。功能全面,但体积大、启动慢。</li>
+<li><strong>Firecracker</strong> 是 AWS 用 Rust 编写的 VMM,同样基于 KVM,但只模拟极少数设备,追求极小内存占用(&lt;5 MiB/VM)、超快启动(约 125ms)和高部署密度。它是 AWS Lambda 和 Fargate 的底层技术。</li>
+<li><strong>runc</strong> 是标准容器运行时,负责设置 namespace、cgroup。它完全不涉及虚拟化——容器内的进程与宿主机共享同一个内核。<strong>这也是容器隔离的天花板所在</strong>。</li>
+<li><strong>microVM</strong> 不是软件,而是一类产品概念:只保留必要设备的轻量虚拟机,目标是&quot;接近容器的开销 + 保留虚拟机的硬件级隔离&quot;。</li>
+</ul>
+<p><strong>三条典型的调用链</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">QEMU + KVM:        QEMU ──/dev/kvm──► KVM(CPU/内存) + QEMU 模拟外设   传统虚拟机</span><br><span class="line">Firecracker + KVM: Firecracker ──/dev/kvm──► KVM + 极简 virtio 设备   Serverless microVM</span><br><span class="line">runc:              containerd/Docker ──► runc(namespace+cgroup)       普通容器,与 KVM 无关</span><br></pre></td></tr></table></figure>
+<p>三者真正的交汇点是 <strong>Kata Containers</strong>——一个符合 OCI/CRI 规范的&quot;容器运行时&quot;,但在底层为每个 Pod 启动一个轻量虚拟机,VMM 可以选用 QEMU、Cloud Hypervisor 或 Firecracker。这实现了&quot;<strong>容器接口 + microVM 隔离</strong>&quot;的混合形态。</p>
+<hr>
+<h2 id="二、深入-QEMU-它模拟的-外围设备-到底是什么">二、深入 QEMU:它模拟的&quot;外围设备&quot;到底是什么?</h2>
+<p>上面反复出现一个词:<strong>设备模拟</strong>。这正是 QEMU 与 Firecracker 的核心差异——QEMU 模拟的设备越完整就越通用,但也越重;Firecracker 砍掉几乎所有设备,于是变得极轻。要理解这个取舍,得先回答:在 QEMU 的语境下,&quot;外围设备&quot;究竟指什么?</p>
+<blockquote>
+<p><strong>定义</strong>:在 QEMU 的语境下,&quot;外围设备&quot;指虚拟机中除 vCPU 与客户机内存之外、通过模拟总线挂载的所有设备模型——包括磁盘、网卡、显卡、USB、串口等。</p>
+</blockquote>
+<h3 id="外围-相对什么而言">&quot;外围&quot;相对什么而言?</h3>
+<p>“外围&quot;的参照系是<strong>冯·诺依曼架构中以 CPU 和主存为中心的计算核心</strong>。CPU 负责取指、译码、执行,主存存放运行中的程序与数据,二者构成系统的&quot;核心”;其余用于输入、输出、外存扩展和通信的设备,统统被称为外围设备。</p>
+<p>这个划分的根源在于冯·诺依曼架构本身:CPU 与主存通过高速存储总线直连、紧密耦合;而外设功能各异、速度差异巨大,无法直接挂在处理器总线上,需要经过适配的控制器&quot;外围式&quot;地接入系统总线。CPU 访问外设必须通过统一的 I/O 机制(端口 I/O 或内存映射 I/O)。久而久之,&quot;位于计算核心之外、通过总线挂载、经由 I/O 接口访问&quot;就成了外围设备的结构性特征。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">┌─────────── 冯·诺依曼架构 ───────────┐</span><br><span class="line">│                                     │</span><br><span class="line">│     ┌─────────┐    ┌─────────┐     │</span><br><span class="line">│     │  CPU    │═══&gt;│  主存   │     │  ← &quot;核心&quot;(紧密耦合)</span><br><span class="line">│     └────┬────┘    └─────────┘     │</span><br><span class="line">│          │ 高速存储总线             │</span><br><span class="line">│          ▼                         │</span><br><span class="line">│   ┌──────────────┐                  │</span><br><span class="line">│   │ 系统总线/桥  │                  │</span><br><span class="line">│   └──┬───┬───┬───┘                  │</span><br><span class="line">│      │   │   │   I/O 控制器         │</span><br><span class="line">│   ┌──┴┐┌──┴┐┌──┴┐                 │</span><br><span class="line">│   │磁盘││网卡││显卡│ ...           │  ← &quot;外围&quot;(经总线挂载)</span><br><span class="line">│   └───┘└───┘└───┘                 │</span><br><span class="line">└─────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>QEMU 模拟一台完整的虚拟计算机时,完全复刻了这一结构:vCPU 是计算核心,<code>-m</code> 分配的客户机内存是主存,二者构成虚拟机的&quot;核心&quot;;所有通过 <code>-device</code> 添加的设备模型,无论前端是 virtio 还是仿真硬件,都像真实外设一样挂载在模拟的 PCI/ISA/virtio-mmio 总线上,客户机操作系统通过常规 I/O 途径(PIO/MMIO/DMA)访问它们。</p>
+<h3 id="QEMU-模拟了哪些设备">QEMU 模拟了哪些设备?</h3>
+<p>设备模型分两大类:</p>
+<ul>
+<li><strong>真实硬件仿真</strong>(e1000 网卡、IDE/SATA 磁盘、VGA 显卡):让客户机无需安装特殊驱动即可运行;</li>
+<li><strong>virtio 半虚拟化设备</strong>(virtio-blk、virtio-net):专为虚拟化设计的标准化设备族,客户机运行知晓自身处于虚拟机的 virtio 驱动,与 QEMU 高效协作,性能远优于纯仿真。</li>
+</ul>
+<p>每个设备由<strong>前端</strong>(呈现给客户机的形态,如 <code>-device virtio-net-pci</code>)和<strong>后端</strong>(宿主机资源如何被使用,如 <code>-blockdev</code> 指定镜像文件)组成,挂载在模拟的总线上。</p>
+<p>按功能划分的常见类别:</p>
+<table>
+<thead>
+<tr>
+<th>外设类别</th>
+<th>典型 QEMU 设备模型</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>块存储</td>
+<td>virtio-blk、IDE/SATA、NVMe、SCSI</td>
+<td>后端接 qcow2/raw 镜像或 LVM</td>
+</tr>
+<tr>
+<td>网络</td>
+<td>virtio-net、e1000、rtl8139</td>
+<td>后端接 tap/bridge/user 网络栈</td>
+</tr>
+<tr>
+<td>显示</td>
+<td>virtio-gpu、VGA</td>
+<td>显卡/显示控制器</td>
+</tr>
+<tr>
+<td>输入</td>
+<td>USB tablet、PS/2 键盘鼠标</td>
+<td>键盘、鼠标、数位板</td>
+</tr>
+<tr>
+<td>串口/控制台</td>
+<td>16550A UART、virtconsole</td>
+<td>后端重定向到文件/socket</td>
+</tr>
+<tr>
+<td>USB</td>
+<td>usb-host、usb-storage</td>
+<td>USB 控制器及外设</td>
+</tr>
+<tr>
+<td>声卡</td>
+<td>virtio-snd、intel-hda</td>
+<td>音频设备</td>
+</tr>
+<tr>
+<td>主机总线适配器</td>
+<td>LSI SCSI、AHCI、PCIe 根桥</td>
+<td>为其他设备提供额外总线</td>
+</tr>
+</tbody>
+</table>
+<p>此外每块虚拟主板还固定模拟一些平台级设备——如 RISC-V virt 开发板包含中断控制器(CLINT、PLIC)、RTC、fw_cfg 等。严格说这些属于&quot;平台/系统设备&quot;而非纯外设,但它们同样处于&quot;CPU 与内存之外、经总线挂载&quot;的位置。</p>
+<h3 id="小结">小结</h3>
+<p>QEMU 模拟的外围设备,本质上是宿主机用户态进程中运行的一组<strong>软件设备模型</strong>,它们在虚拟机内以真实外设的面貌出现,让客户机操作系统能用标准驱动程序驱动它们。理解了这一点,Firecracker 的设计就一目了然——<strong>它是对这套设备模型的激进裁剪</strong>。</p>
+<hr>
+<h2 id="三、性能差异的根源-syscall-走了什么路径">三、性能差异的根源:syscall 走了什么路径</h2>
+<p>现在把 gVisor 拉进来,看三种主流沙箱方案的性能本质。先上总表:</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>gVisor (runsc)</th>
+<th>Firecracker</th>
+<th>Kata Containers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>隔离机制</td>
+<td>用户态内核拦截 syscall</td>
+<td>KVM microVM</td>
+<td>编排层,底层 VMM 可选 CLH/Firecracker/QEMU</td>
+</tr>
+<tr>
+<td>硬件虚拟化要求</td>
+<td>不需要</td>
+<td>必须有 KVM</td>
+<td>必须有(含嵌套虚拟化)</td>
+</tr>
+<tr>
+<td>启动时间</td>
+<td>毫秒级</td>
+<td>~125ms(单机可 150 VM/秒)</td>
+<td>~150–300ms</td>
+</tr>
+<tr>
+<td>内存开销</td>
+<td>每 sandbox 一个 Sentry,较低</td>
+<td>&lt;5 MiB/VM</td>
+<td>VMM + 客户机内核,中等</td>
+</tr>
+<tr>
+<td>CPU 密集型</td>
+<td>开销极小</td>
+<td>接近原生</td>
+<td>接近原生</td>
+</tr>
+<tr>
+<td>I/O 密集型</td>
+<td>慢 10–30%,极端 syscall 场景可达 2–11 倍</td>
+<td>良好</td>
+<td>接近原生</td>
+</tr>
+<tr>
+<td>GPU 直通</td>
+<td>不支持</td>
+<td>不支持(PCIe 工作已暂停)</td>
+<td>可(QEMU+VFIO 路径)</td>
+</tr>
+<tr>
+<td>K8s 集成</td>
+<td>RuntimeClass runsc</td>
+<td>无原生,需自建编排</td>
+<td>原生 CRI</td>
+</tr>
+</tbody>
+</table>
+<p>三者性能差异的根源,在于 <strong>syscall 走的路径不一样</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">gVisor:        app syscall ──► Sentry(Go 用户态内核)──► 白名单 syscall ──► 宿主内核</span><br><span class="line">                            (多一跳 + 重新实现 Linux ABI + Gofer 处理文件 I/O)</span><br><span class="line"></span><br><span class="line">Firecracker:   app syscall ──► VM 内真实 Linux 内核(VMM 只 ~5 万行 Rust + virtio 设备)</span><br><span class="line"></span><br><span class="line">Kata:          app syscall ──► VM 内真实 Linux 内核(后端 VMM 可换,走标准 CRI)</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>gVisor</strong>:应用 syscall → Sentry(Go 实现的用户态内核)→ 有限的白名单 syscall 到宿主内核。每条 syscall都多了一跳,且 Sentry 重新实现 Linux ABI,文件 I/O 还要经过 Gofer 进程——I/O 慢的部分全在这里。学术 benchmark 曾测出极端 syscall 密集场景下综合性能仅为 Docker 的 ~10%,但这是最坏情况;生产环境的经验值是 I/O 密集任务慢 10–30%,CPU 密集任务几乎无感。</li>
+<li><strong>Firecracker</strong>:syscall 由 VM 里的真实 Linux 内核处理,VMM 本身只有约 5 万行 Rust、只模拟 virtio 设备,路径极短、攻击面极小。代价是设备模型太精简——不支持 PCIe/GPU 直通,这一工作已暂停。</li>
+<li><strong>Kata</strong>:性能特性取决于所选的 VMM 后端。它的差异化价值不在性能,而在于把 microVM 塞进了标准 K8s CRI 工作流——客户机内核直接处理 syscall,所以 I/O 接近原生;需要 GPU 时切到支持 VFIO 的后端即可。</li>
+</ul>
+<blockquote>
+<p><strong>数字需要校准的地方</strong>:这些 benchmark 受内核版本、VMM 配置、guest 镜像裁剪程度影响很大。公开数据只能定方向,真正决定选型的是拿自己的工作负载(pip install、浏览器渲染、代码执行)实测。</p>
+</blockquote>
+<hr>
+<h2 id="四、Agent-Infra-实战-三种沙箱的选型逻辑">四、Agent Infra 实战:三种沙箱的选型逻辑</h2>
+<p>Agent 沙箱的典型工作负载是:LLM 生成代码后,在隔离环境里执行 Python/Shell/浏览器操作、安装依赖、访问网络、读写文件,且按次计费、生命周期短、并发密度高。这决定了选型的三个核心指标:<strong>冷启动、隔离强度、GPU/工具链支持</strong>。</p>
+<h3 id="Firecracker-高密度短任务的默认答案">Firecracker:高密度短任务的默认答案</h3>
+<p>最适合执行不可信生成代码的短生命周期沙箱——代码解释器、临时 shell、FaaS 化的 agent 工具调用。~125ms 冷启动 + &lt;5MiB 内存开销意味着单机可以堆很高的并发密度,硬件级隔离又能扛住对抗性负载。</p>
+<p>行业典型是 <strong>E2B</strong>(Firecracker microVM,~150ms 冷启动,专注 ephemeral 代码执行),以及 AWS Lambda/Fargate、<a target="_blank" rel="noopener" href="http://Fly.io">Fly.io</a>。</p>
+<p>两个明确的坑:<strong>不支持 GPU 直通</strong>,推理/训练型工作负载走不通;<strong>没有现成编排</strong>,自建生产系统要搞定 jailer、guest 内核、rootfs、snapshot 生命周期,工程量不小。</p>
+<h3 id="gVisor-轻量高密度、无-KVM-环境的首选">gVisor:轻量高密度、无 KVM 环境的首选</h3>
+<p>最适合算力密集、I/O 不重的 agent 工作负载,以及嵌套虚拟化不可用的宿主机——很多云 VM 默认不开 KVM,gVisor 的 Systrap 平台零依赖就能跑。毫秒级启动对高频短任务更友好。行业典型是 <strong>Modal Sandboxes</strong>(gVisor 底座)、Daytona,以及 Google 自家的 Cloud Run / App Engine。</p>
+<p>坑在 I/O:agent 场景常见的 <code>pip install</code>(海量小文件)、频繁 fork 的测试框架都是 syscall 密集操作,在 gVisor 上会明显变慢;部分冷门 syscall 可能有兼容性缺口,上线前务必用真实工作负载压测。</p>
+<h3 id="Kata-Containers-K8s-原生-长驻工作区-需要-GPU">Kata Containers:K8s 原生 + 长驻工作区 + 需要 GPU</h3>
+<p>最适合需要标准 Kubernetes 工作流的 agent 平台——多租户 K8s、合规要求高的行业、&quot;每个 agent 一个长驻工作区&quot;的形态。它原生走 CRI,Pod 视角下就是普通容器,底层却是真 VM。</p>
+<p>官方的 <strong>Agent Sandbox</strong> 项目专门针对 agent 运行时做了抽象:WarmPools(预热 Pod 池,消掉冷启动延迟)、Python SDK、自动清理调度。代价是运维复杂度——要维护 VMM、要宿主机支持嵌套虚拟化,比 gVisor 的&quot;drop-in RuntimeClass&quot;重得多。</p>
+<h3 id="决策清单">决策清单</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">每次执行一段不可信代码、用完即弃(代码解释器、工具调用)</span><br><span class="line">   └─► Firecracker(自建)或 E2B(托管)</span><br><span class="line"></span><br><span class="line">算力密集、I/O 少、宿主机无 KVM(模型预处理、批量计算)</span><br><span class="line">   └─► gVisor(自建)或 Modal(托管)</span><br><span class="line"></span><br><span class="line">长驻 agent 工作区、要 K8s 编排、可能要 GPU(browser-use agent、深度研究 agent)</span><br><span class="line">   └─► Kata Containers(冷启动敏感就开 WarmPools)</span><br><span class="line"></span><br><span class="line">多租户平台、负载异构</span><br><span class="line">   └─► 混合方案是行业常态——按 workload 在 Kata+CLH / Firecracker / gVisor 之间路由</span><br><span class="line">       (Northflank 的做法)</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>关联阅读:选好隔离技术后,沙箱是怎么被 agent 领养、后续命令又是怎么找到正确沙箱的?见同日 <a href="2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3.md#%E4%BA%8C%E3%80%81%E5%85%A8%E6%99%AF%E6%97%B6%E5%BA%8F%E5%9B%BE">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a>——讲清 WarmPool 预热→Claim 领养→Router header 寻址的完整链路。本文讲&quot;用什么隔离&quot;,那篇讲&quot;怎么调度路由&quot;,两者共同构成 Agent 沙箱的隔离层与调度层。</p>
+</blockquote>
+<hr>
+<h2 id="结语-留多少-外围-的艺术">结语:留多少&quot;外围&quot;的艺术</h2>
+<p>把全文串起来,可以看到一幅连贯的图景:</p>
+<ul>
+<li>冯·诺依曼架构把计算机划分为&quot;<strong>核心</strong>&quot;(CPU + 主存)与&quot;<strong>外围</strong>&quot;(经总线挂载的一切设备);</li>
+<li><strong>KVM</strong> 只虚拟化了&quot;核心&quot;——vCPU 与客户机内存,对外设一无所知;</li>
+<li><strong>QEMU</strong> 完整复刻了一台真实计算机:用一整套软件设备模型撑起&quot;外围&quot;,从磁盘、网卡到 USB、声卡,让客户机能用标准驱动驱动它们——这正是它&quot;全功能&quot;的代价与价值;</li>
+<li><strong>Firecracker</strong> 做减法:保留 KVM 提供的核心,外围只留最小集合,于是得到启动快、内存省、攻击面小的 microVM;</li>
+<li><strong>gVisor</strong> 走了另一条路:不造机器,造一个用户态内核,在 syscall 层面拦截一切;</li>
+<li><strong>Kata</strong> 则是编排的艺术:把上面这些 VMM 包进标准容器接口,让 K8s 用户无感地获得硬件级隔离。</li>
+</ul>
+<p>从冯·诺依曼的&quot;核心/外围&quot;二元划分,到 QEMU 对一台完整计算机的软件复刻,再到 Firecracker 对外围设备的激进裁剪、gVisor 对内核本身的重新实现——<strong>整部虚拟化技术演进史,某种意义上就是在&quot;核心&quot;之外,&quot;外围&quot;留多少、留什么的艺术</strong>。</p>
+<p>而在 Agent 时代,这道选择题有了新的评分标准:冷启动毫秒数、单机并发密度、能否扛住一段由 LLM 生成的、可能出错的、甚至恶意对抗的代码。答案依然是那句老话——<strong>没有最好的隔离技术,只有最匹配工作负载的隔离技术</strong>。在拿真实负载实测之前,任何 benchmark 都只是方向,不是结论。</p>
+<hr>
+<h3 id="参考资料">参考资料</h3>
+<ul>
+<li><a target="_blank" rel="noopener" href="https://firecracker-microvm.github.io/">Firecracker 官方文档</a></li>
+<li><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/">QEMU 官方文档(设备模拟)</a></li>
+<li><a target="_blank" rel="noopener" href="https://katacontainers.io/">Kata Containers / Agent Sandbox</a></li>
+<li><a target="_blank" rel="noopener" href="https://gvisor.dev/docs/">gVisor 官方文档</a></li>
+<li><a target="_blank" rel="noopener" href="https://github.com/opencontainers/runtime-spec">OCI Runtime Specification</a></li>
+<li><a target="_blank" rel="noopener" href="https://www.kernel.org/doc/html/latest/virt/kvm/">KVM 内核文档</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/">http://example.com/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E8%99%9A%E6%8B%9F%E5%8C%96/">虚拟化</a><a class="post-meta__tags" href="/tags/Agent/">Agent</a><a class="post-meta__tags" href="/tags/KVM/">KVM</a><a class="post-meta__tags" href="/tags/Firecracker/">Firecracker</a><a class="post-meta__tags" href="/tags/gVisor/">gVisor</a><a class="post-meta__tags" href="/tags/Kata/">Kata</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</div></div><div class="info-2"><div class="info-item-1">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 写给一位即将从大模型 Infra 转向具身智能 Infra 的工程师,也写给所有关注这个方向的人。  引言:一次心智模型的切换 过去三年做大模型 Infra 的人,心智模型基本是稳定的:海量文本 token 进、GPU 集群算、ckpt 出、推理服务化。但具身智能完全不同——它训练的不是&quot;下一个 token&quot;,而是&quot;机器人在物理世界里的下一步动作&quot;;它的数据不是从互联网爬来的,而是真机遥操作、仿真合成、人类视频多源混合出来的;它的基础设施不仅要支撑训练,还要支撑大规模并行仿真和真机数据回流这两个 LLM 时代从未存在过的环节。 如果你从 LLM Infra 背景切入这个领域,大约 60-70% 的工程经验可以直接平移,剩下 30-40% 需要新建心智模型。本文拆解其中三个最核心的新模块:仿真集群的算力形态、VLA 训练栈的真实结构、以及数据管线的工程全貌。  一、仿真集群:GPU 上的&quot;平行世界&quot; 1.1 它到底是什么 具身智能训...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">协议优先的沙箱执行框架:OpenSandbox 架构拆解</div></div><div class="info-2"><div class="info-item-1">协议优先的沙箱执行框架:OpenSandbox 架构拆解 先给一句话定位:阿里 OpenSandbox 是一个&quot;协议优先&quot;的开源沙箱执行框架——它自己不做隔离(隔离委托给 Docker/Kata/gVisor/Firecracker),而是用一套 OpenAPI 规范统一了&quot;沙箱生命周期&quot;和&quot;沙箱内执行&quot;两层接口,用注入到每个容器里的 Go 守护进程完成有状态的代码执行,再用 Pool/BatchSandbox 两级 CRD 在 Kubernetes 上把批量创建做到了 O(1) 复杂度。 需要先澄清一个容易混淆的点:市面上叫&quot;OpenSandbox&quot;的有两个东西——开源项目 OpenSandbox(GitHub opensandbox-group/OpenSandbox,Apache 2.0,2026 年初发布,两天破 3800 星)和阿里云上的托管服务 Agent Sandbox(商业产品,MicroVM 隔离 + 每分钟 15K 沙箱弹性)。本文以前者为主线,后者在结尾对比。  关联阅读:本文讲...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/" title="CPU 虚拟化——从 trap-and-emulate 到 VT-x"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-18</div><div class="info-item-2">CPU 虚拟化——从 trap-and-emulate 到 VT-x</div></div><div class="info-2"><div class="info-item-1">CPU 虚拟化——从 trap-and-emulate 到 VT-x  本文目标：把 CPU 虚拟化的完整脉络讲透——从 Popek-Goldberg 理论、软件 trap-and-emulate、到硬件辅助 VT-x，再到 KVM 的工程实现。读完你能回答&quot;为什么 x86 早期不能做高效虚拟化&quot;“VT-x 的 root/non-root 是什么”“VMCS 存什么”“一次 VM-Exit 的开销和优化”“嵌套虚拟化怎么实现”。   一、要解决的问题：一个物理 CPU 怎么变成多个虚拟 CPU CPU 虚拟化的本质是：让多个 Guest OS 以为自己在独占一个物理 CPU，实际由 hypervisor（VMM）时分复用一个或多个物理核。 核心难点在于&quot;特权指令&quot;。Guest OS 内核要执行 hlt（停 CPU）、cli（关中断）、改 CR3（切页表）、lgdt（加载 GDT）这些指令——这些指令一旦真在物理 CPU 上执行，会真的关掉中断、真的换掉页表、真的停下 CPU，整机就乱了。所以必须让 Guest 不能直接执行这些指令，或执行后...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a><a class="pagination-related" href="/2024/09/20/2024-09-20-AI%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/" title="AI资源调度"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/aiinfra.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-20</div><div class="info-item-2">AI资源调度</div></div><div class="info-2"><div class="info-item-1">AI资源调度 100道k8s面试题：https://zhuanlan.zhihu.com/p/721588398 [云原生 AI 的资源调度和 AI 工作流引擎设计分享_paddleflow-CSDN博客](https://blog.csdn.net/lihui49/article/details/129260286?ops_request_misc={&quot;request_id&quot;%3A&quot;81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&quot;%2C&quot;scm&quot;%3A&quot;20140713.130102334..&quot;}&amp;request_id=81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-3-129260286-null-null.142^v100^pc_search_re...</div></div></div></a><a class="pagination-related" href="/2024/09/24/2024-09-24-%E4%B8%80%E7%A7%8D%E5%9F%BA%E4%BA%8E%E7%BB%8F%E9%AA%8C%E7%9A%84%E5%8A%A8%E6%80%81%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%EF%BC%9AStraightLine-An-End-to-End-Resource-Aware-Scheduler-for-Machine-Learning-Application-Requests/" title="一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/dynamic.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-24</div><div class="info-item-2">一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests</div></div><div class="info-2"><div class="info-item-1">StraightLine: An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests  摘要： 提出了一个端到端的资源感知调度器，用于在混合基础设施中调度机器学习应用请求的最优资源。 关键词： 机器学习部署、异构资源、资源放置、容器化、无服务器计算。 主要内容：  ML应用的生命周期包括模型开发和模型部署两个阶段。 传统ML系统通常只关注生命周期中的一个特定阶段或阶段。 StraightLine通过一个基于经验的动态放置算法，根据请求的独特特征（如请求频率、输入数据大小和数据分布）智能地放置请求。 包括三个层次：模型开发抽象、多种实现部署、实时资源调度。  模型容器化：   使用NVIDIA-Docker实现模型开发的容器化。   为模型训练构建了强大的NVIDIA-Docker，为模型验证构建了轻量级的NVIDIA-Docker。 深度学习docker环境配置之nvidia-docker安装使用_nvidia docker-CSDN博客   容器定制：  根据不同的压缩ML模...</div></div></div></a><a class="pagination-related" href="/2024/10/01/2024-10-01-CUDA%E5%AE%B9%E5%99%A8%E5%8C%96&Container-runtime%E7%9B%B8%E5%85%B3%E6%8A%80%E6%9C%AF%E6%A2%B3%E7%90%86/" title="CUDA容器化&amp;Container runtime相关技术梳理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-10-01</div><div class="info-item-2">CUDA容器化&amp;Container runtime相关技术梳理</div></div><div class="info-2"><div class="info-item-1">CUDA容器化&amp;Container runtime相关技术梳理 整体结构 CUDA API体系  CUDA Driver API：GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）； CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度； CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。 因此要实现 NVIDIA 容器化，也就是要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内应用程序内可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 NVIDIA CONTAINER TOOLKIT 具体结构  GPU 容器底层实现 GPU 容器相关概念 一些背景知识  什么是运行时？什么是高级运行时（high-level runtime）和低级运行时(low-level runtime):  参考：ht...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">虚拟化技术学习路线——从原理到云原生</div></div><div class="info-2"><div class="info-item-1">虚拟化技术学习路线——从原理到云原生  本文目标：给你一条从零到能独立设计/运维虚拟化平台的清晰路径。覆盖 CPU/内存/IO 虚拟化、QEMU/KVM、容器与 namesapce/cgroup、网络与存储虚拟化、云编排，最后落到大模型训练/推理场景下的 GPU 虚拟化与云原生调度。 学习哲学：先吃透&quot;一个虚拟机是怎么被造出来的&quot;，再学&quot;容器是怎么隔离的&quot;，最后学&quot;云平台怎么把它们编排起来&quot;。原理是地基，工程是楼层，地基不稳楼越高越晃。   学习路线总览（六个阶段） 12345678910111213阶段0  打地基：操作系统与硬件基础   │阶段1  虚拟化原理：CPU / 内存 / IO 三大虚拟化   │阶段2  Type-1 / Type-2 与 QEMU-KVM 全栈   │阶段3  容器虚拟化：namespace + cgroup + rootfs   │阶段4  网络与存储虚拟化：virtio / SDN / 分布式存储   │阶段5  云编排：OpenStack / Kubernetes / 调度   │...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">259</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">304</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF-%E8%B0%81%E5%9C%A8%E8%B0%81%E7%9A%84%E4%B8%8A%E9%9D%A2"><span class="toc-number">1.1.</span> <span class="toc-text">一、技术栈全景:谁在谁的上面</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%B7%B1%E5%85%A5-QEMU-%E5%AE%83%E6%A8%A1%E6%8B%9F%E7%9A%84-%E5%A4%96%E5%9B%B4%E8%AE%BE%E5%A4%87-%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.</span> <span class="toc-text">二、深入 QEMU:它模拟的&quot;外围设备&quot;到底是什么?</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%96%E5%9B%B4-%E7%9B%B8%E5%AF%B9%E4%BB%80%E4%B9%88%E8%80%8C%E8%A8%80"><span class="toc-number">1.2.1.</span> <span class="toc-text">&quot;外围&quot;相对什么而言?</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#QEMU-%E6%A8%A1%E6%8B%9F%E4%BA%86%E5%93%AA%E4%BA%9B%E8%AE%BE%E5%A4%87"><span class="toc-number">1.2.2.</span> <span class="toc-text">QEMU 模拟了哪些设备?</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B0%8F%E7%BB%93"><span class="toc-number">1.2.3.</span> <span class="toc-text">小结</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%80%A7%E8%83%BD%E5%B7%AE%E5%BC%82%E7%9A%84%E6%A0%B9%E6%BA%90-syscall-%E8%B5%B0%E4%BA%86%E4%BB%80%E4%B9%88%E8%B7%AF%E5%BE%84"><span class="toc-number">1.3.</span> <span class="toc-text">三、性能差异的根源:syscall 走了什么路径</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81Agent-Infra-%E5%AE%9E%E6%88%98-%E4%B8%89%E7%A7%8D%E6%B2%99%E7%AE%B1%E7%9A%84%E9%80%89%E5%9E%8B%E9%80%BB%E8%BE%91"><span class="toc-number">1.4.</span> <span class="toc-text">四、Agent Infra 实战:三种沙箱的选型逻辑</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Firecracker-%E9%AB%98%E5%AF%86%E5%BA%A6%E7%9F%AD%E4%BB%BB%E5%8A%A1%E7%9A%84%E9%BB%98%E8%AE%A4%E7%AD%94%E6%A1%88"><span class="toc-number">1.4.1.</span> <span class="toc-text">Firecracker:高密度短任务的默认答案</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#gVisor-%E8%BD%BB%E9%87%8F%E9%AB%98%E5%AF%86%E5%BA%A6%E3%80%81%E6%97%A0-KVM-%E7%8E%AF%E5%A2%83%E7%9A%84%E9%A6%96%E9%80%89"><span class="toc-number">1.4.2.</span> <span class="toc-text">gVisor:轻量高密度、无 KVM 环境的首选</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Kata-Containers-K8s-%E5%8E%9F%E7%94%9F-%E9%95%BF%E9%A9%BB%E5%B7%A5%E4%BD%9C%E5%8C%BA-%E9%9C%80%E8%A6%81-GPU"><span class="toc-number">1.4.3.</span> <span class="toc-text">Kata Containers:K8s 原生 + 长驻工作区 + 需要 GPU</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%86%B3%E7%AD%96%E6%B8%85%E5%8D%95"><span class="toc-number">1.4.4.</span> <span class="toc-text">决策清单</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BB%93%E8%AF%AD-%E7%95%99%E5%A4%9A%E5%B0%91-%E5%A4%96%E5%9B%B4-%E7%9A%84%E8%89%BA%E6%9C%AF"><span class="toc-number">1.5.</span> <span class="toc-text">结语:留多少&quot;外围&quot;的艺术</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">1.5.1.</span> <span class="toc-text">参考资料</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</a><time datetime="2026-08-28T16:00:00.000Z" title="发表于 2026-08-29 00:00:00">2026-08-29</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/08/27/2026-08-27-OpenSandbox%E5%8D%8F%E8%AE%AE%E4%BC%98%E5%85%88%E7%9A%84%E6%B2%99%E7%AE%B1%E6%89%A7%E8%A1%8C%E6%A1%86%E6%9E%B6/" title="协议优先的沙箱执行框架:OpenSandbox 架构拆解">协议优先的沙箱执行框架:OpenSandbox 架构拆解</a><time datetime="2026-08-26T16:00:00.000Z" title="发表于 2026-08-27 00:00:00">2026-08-27</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
