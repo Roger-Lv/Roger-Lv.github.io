@@ -1,0 +1,481 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="基于真实实验数据拆解 Kthena 如何用 ModelServing&#x2F;ModelServer&#x2F;ModelRoute&#x2F;AutoscalingPolicy 四个 CRD 把 LLM 推理的 Gang 调度、拓扑感知、P&#x2F;D 分离、KV Cache 感知路由、Token 负载扩缩容带进 Kubernetes,含 vGPU 实验全过程与证据链。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache">
+<meta property="og:url" content="http://example.com/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="基于真实实验数据拆解 Kthena 如何用 ModelServing&#x2F;ModelServer&#x2F;ModelRoute&#x2F;AutoscalingPolicy 四个 CRD 把 LLM 推理的 Gang 调度、拓扑感知、P&#x2F;D 分离、KV Cache 感知路由、Token 负载扩缩容带进 Kubernetes,含 vGPU 实验全过程与证据链。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-09-09T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-09-11T04:30:48.810Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Volcano">
+<meta property="article:tag" content="vLLM">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="Kthena">
+<meta property="article:tag" content="LLM推理">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache",
+  "url": "http://example.com/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-09-09T16:00:00.000Z",
+  "dateModified": "2026-09-11T04:30:48.810Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-09-09T16:00:00.000Z" title="发表于 2026-09-10 00:00:00">2026-09-10</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-11T04:30:48.810Z" title="更新于 2026-09-11 12:30:48">2026-09-11</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" data-flag-title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</h1>
+<p>如果想在 Kubernetes 中运行一个 Qwen 模型,只需准备好模型文件和 vLLM 镜像,写一个 vLLM 的 Deployment,申请 GPU,再配一个 Service,很快就能拿到 OpenAI 的 <code>/v1/chat/completions</code> 接口。</p>
+<p>但当模型从一个变成一组、GPU 从一张变成多机多卡,问题就不再是&quot;Pod 能否启动&quot;了。Kthena 可以在 Kubernetes 上解决这些问题:vLLM 继续负责把模型跑快,Kubernetes 继续管理 Pod 和 Service,Kthena 则将 <strong>LLM 的角色、组、GPU 位置、KV Cache 和 Token 负载</strong>带进调度、路由与扩缩容过程。</p>
+<blockquote>
+<p>本文基于微信公众号文章《Kthena:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache》整理,保留了全部实验数据与 YAML 配置。</p>
+</blockquote>
+<hr>
+<h2 id="一、为什么要有-Kthena-模型在-K8s-部署的痛点">一、为什么要有 Kthena:模型在 K8s 部署的痛点</h2>
+<p>Deployment 对于普通 Web/API 非常合适:每个 Pod 建立副本,少一个副本只是容量下降,Service 用 Round Robin 把请求分散出去即可。</p>
+<p>LLM 推理的资源形态更复杂。一个模型可能用张量并行(TP)分布到多张 GPU,也可能将处理 Prompt 和生成 Token 拆成 Prefill、Decode 两类实例。每个 HTTP 请求也不再等价:<strong>一条 100 Token 的问答与一条 8,000 Token 的长文档摘要,即使都记为一次 HTTP 请求,对 GPU 的压力也完全不同</strong>。传统 QPS、CPU 和 GPU 利用率不能体现 LLM 的性能指标。</p>
+<p>所以 Kthena 解决的是模型在 K8s 集群启动后的几个关键问题:多卡模型怎么一起调度、长上下文怎么感知拓扑、Prefill/Decode 怎么分池、KV Cache 怎么被路由感知、扩缩容怎么按 Token 负载而不是 GPU 利用率。</p>
+<hr>
+<h2 id="二、Kthena-是什么">二、Kthena 是什么</h2>
+<p>Kthena 是 <strong>Volcano 社区面向 LLM 推理的 Kubernetes 原生子项目</strong>。它并不自己完成模型计算,而是站在 vLLM、SGLang 等推理引擎之上,管理三件事:模型工作负载的声明与放置、请求级智能路由、基于 Token 负载的扩缩容。核心 CRD 是 <code>ModelServing</code>/<code>ModelBooster</code>/<code>ModelRoute</code>/<code>ModelServer</code>/<code>AutoscalingPolicy</code>。</p>
+<p>Kthena v1.0.0 还将 P/D 角色扩缩容、路由观测、多轮会话的 Cache 亲和性、Gateway API 与 CLI 改进纳入统一版本。从定位上看,它更像&quot;<strong>LLM 推理工作负载和请求的调度层</strong>&quot;。</p>
+<hr>
+<h2 id="三、Kubernetes-原生调度为什么不适合复杂-LLM-推理">三、Kubernetes 原生调度为什么不适合复杂 LLM 推理</h2>
+<p>Kubernetes Scheduler 通过 Device Plugin 将 <code>nvidia.com/gpu</code> 发布到 Node 后,Scheduler 会过滤资源不足的节点,再为 Pod 选择位置。对一个独立推理 Pod,这是一个默认的调度链路。</p>
+<p>难点在于,原生 Scheduler 看到的基本单位仍是一个 <strong>Pod</strong>:它不知道这几个 Pod 属于同一个模型的 TP 组、不知道哪些请求该发给已缓存前缀的 Pod、不知道 Prefill 和 Decode 的资源画像完全不同。这不是 Kubernetes 调度器&quot;不行&quot;,而是它的边界原本就是通用 Pod 调度。<strong>Kthena 与 Volcano 在上层增加了 LLM 工作负载才需要的语义</strong>。</p>
+<hr>
+<h2 id="四、Kthena-与-Volcano-的关系">四、Kthena 与 Volcano 的关系</h2>
+<p>Kthena 是 Volcano 的子项目。两者的关系可以概括为:<strong>Kthena 理解模型,Volcano 完成资源放置</strong>。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">请求 → ModelServing(模型、组与角色) ──► Kthena Controller ──► 生成 PodGroup 和 Pod</span><br><span class="line">                                                                   │</span><br><span class="line">                              Volcano PodGroup(Gang/Topology) ◄──┘</span><br><span class="line">                                   │</span><br><span class="line">                              Volcano Scheduler ──► 选节点与 GPU</span><br><span class="line">                                   │</span><br><span class="line">                              vLLM Pods 执行推理 ◄── Kthena Router 选后端</span><br></pre></td></tr></table></figure>
+<p>当 <code>ModelServing</code> 中有一个 ServingGroup、两个 server 角色副本时,Kthena Controller 会创建 PodGroup,把 <code>minMember</code> 和网络拓扑要求写进去。Volcano Scheduler 读取 PodGroup,确认整组资源都能满足后才绑定 Pod。模型运行后,Kthena Router 在请求链路上选择后端——它不会把 HTTP 请求送回 Volcano Scheduler,Volcano 也不会检查 Prompt 和 KV Cache。</p>
+<hr>
+<h2 id="五、Kthena-整体架构">五、Kthena 整体架构</h2>
+<p>核心组件可以按&quot;模型、请求、指标&quot;来区分:</p>
+<p><strong>Controller Manager:把声明变成运行资源。</strong> 监听 <code>ModelBooster</code>、<code>ModelServing</code>、<code>ModelServer</code>、<code>ModelRoute</code> 和 <code>AutoscalingPolicy</code> 等资源,将声明中的 ServingGroup、Role、Pod 模板和策略转换为 PodGroup、Pod 与路由关系,并持续对比期望状态与实际状态。Controller 不加载模型,也不在每次 Token 生成的数据路径上。</p>
+<p><strong>Router:将一次请求发给更合适的副本。</strong> 接收 OpenAI 兼容请求,先通过 <code>ModelRoute</code> 匹配模型,再从 <code>ModelServer</code> 管理的 Pod 中过滤不健康实例。后续的 Score Plugin 可按 least-request、least-latency、prefix-cache、kvcache-aware 等信号打分。</p>
+<p><strong>Runtime Sidecar:将推理引擎状态交给路由层。</strong> 与 vLLM Pod 一起运行,不执行模型计算,而是适配不同引擎的指标和 KV Cache 事件,将哪些 Token Block 位于哪个 Pod 写入 Redis。没有这一层,Router 就只能看到 Pod 存活,看不到引擎内部的 Cache 状态。</p>
+<p><strong>Autoscaler:将 Prometheus 指标转换为副本数。</strong> 读取 <code>AutoscalingPolicy</code> 中的查询、目标值、最小/最大副本与稳定窗口。它可以对普通 ServingGroup 扩缩容,也可以对 Prefill、Decode 角色分别计算,再用比例约束避免一侧增长、另一侧仍然堵塞。</p>
+<hr>
+<h2 id="六、从一个模型声明到-vLLM-提供服务">六、从一个模型声明到 vLLM 提供服务</h2>
+<p>Kthena 提供两种常用声明方式:<code>ModelBooster</code> 是高层 API,适合平台将模型、引擎、路由和扩缩容用一个对象交付;<code>ModelServing + ModelServer + ModelRoute</code> 更细,适合自定义 vLLM 参数、GPU 资源和路由策略。本次实验使用后一种方式(模型 <code>Qwen/Qwen3-0.6B</code>)。</p>
+<p>三者不是三个并列的 Deployment:<code>ModelServing</code> 先生成 PodGroup 和 vLLM Pod,<code>ModelServer</code> 再把这组 Pod 登记为可选的模型后端,<code>ModelRoute</code> 最后把 Router 收到的模型名连到这个后端。少了任何一个对象,模型要么没有运行实例,要么 Router 不知道应该把请求发给谁。</p>
+<h3 id="1-ModelServing-把-Qwen-和-vLLM-交给-Volcano-调度">1. ModelServing:把 Qwen 和 vLLM 交给 Volcano 调度</h3>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">workload.serving.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ModelServing</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">qwen-baseline</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">kthena-vllm-demo</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">schedulerName:</span> <span class="string">volcano</span></span><br><span class="line">  <span class="attr">replicas:</span> <span class="number">1</span></span><br><span class="line">  <span class="attr">recoveryPolicy:</span> <span class="string">ServingGroupRecreate</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">roles:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">server</span></span><br><span class="line">        <span class="attr">replicas:</span> <span class="number">1</span></span><br><span class="line">        <span class="attr">workerReplicas:</span> <span class="number">0</span></span><br><span class="line">        <span class="attr">entryTemplate:</span></span><br><span class="line">          <span class="attr">metadata:</span></span><br><span class="line">            <span class="attr">annotations:</span></span><br><span class="line">              <span class="attr">volcano.sh/vgpu-mode:</span> <span class="string">hami-core</span></span><br><span class="line">          <span class="attr">spec:</span></span><br><span class="line">            <span class="attr">runtimeClassName:</span> <span class="string">nvidia-legacy</span></span><br><span class="line">            <span class="attr">containers:</span></span><br><span class="line">              <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">server</span></span><br><span class="line">                <span class="attr">image:</span> <span class="string">&lt;实际</span> <span class="string">vLLM</span> <span class="string">镜像&gt;</span></span><br><span class="line">                <span class="attr">command:</span> [<span class="string">&quot;python3&quot;</span>, <span class="string">&quot;-m&quot;</span>, <span class="string">&quot;vllm.entrypoints.openai.api_server&quot;</span>]</span><br><span class="line">                <span class="attr">args:</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">--host</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="number">0.0</span><span class="number">.0</span><span class="number">.0</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">--model</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">/models/Qwen3-0.6B</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">--served-model-name</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">Qwen/Qwen3-0.6B</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">--port</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">&quot;8000&quot;</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">--enable-prefix-caching</span></span><br><span class="line">                <span class="attr">readinessProbe:</span></span><br><span class="line">                  <span class="attr">httpGet:</span> &#123;<span class="attr">path:</span> <span class="string">/health</span>, <span class="attr">port:</span> <span class="number">8000</span>&#125;</span><br><span class="line">                <span class="attr">resources:</span></span><br><span class="line">                  <span class="attr">requests:</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-number:</span> <span class="string">&quot;1&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-memory:</span> <span class="string">&quot;6144&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-cores:</span> <span class="string">&quot;60&quot;</span></span><br><span class="line">                  <span class="attr">limits:</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-number:</span> <span class="string">&quot;1&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-memory:</span> <span class="string">&quot;6144&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-cores:</span> <span class="string">&quot;60&quot;</span></span><br></pre></td></tr></table></figure>
+<p><code>schedulerName: volcano</code> 让这组 Pod 进入 Volcano。<code>roles.server</code> 表示这是一个聚合式推理角色;后面的 Gang、P/D 分离会在这里增加多个角色和副本。三项 <code>volcano.sh/vgpu-*</code> 约束的是这次 vGPU 份额:一张逻辑 GPU、<strong>6144MiB</strong> 显存和 <strong>60%</strong> Core。</p>
+<h3 id="2-ModelServer-把生成的-Pod-登记为一个模型后端">2. ModelServer:把生成的 Pod 登记为一个模型后端</h3>
+<p><code>ModelServing</code> 负责创建 Pod,却没有声明 Router 如何识别它们。<code>ModelServer.workloadSelector</code> 按 Kthena 自动带上的 <code>modelserving.volcano.sh/name</code> 标签选择工作负载;<code>workloadPort</code> 与 vLLM 的监听端口对应,<code>model</code> 则是 Router 后续匹配的真实模型名:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">networking.serving.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ModelServer</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">qwen-baseline</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">kthena-vllm-demo</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">workloadSelector:</span></span><br><span class="line">    <span class="attr">matchLabels:</span></span><br><span class="line">      <span class="attr">modelserving.volcano.sh/name:</span> <span class="string">qwen-baseline</span></span><br><span class="line">  <span class="attr">workloadPort:</span></span><br><span class="line">    <span class="attr">port:</span> <span class="number">8000</span></span><br><span class="line">  <span class="attr">model:</span> <span class="string">Qwen/Qwen3-0.6B</span></span><br><span class="line">  <span class="attr">inferenceEngine:</span> <span class="string">vLLM</span></span><br><span class="line">  <span class="attr">trafficPolicy:</span></span><br><span class="line">    <span class="attr">timeout:</span> <span class="string">60s</span></span><br></pre></td></tr></table></figure>
+<p>这里的 <code>ModelServer</code> 不是再启动一个 vLLM。它更像一份后端登记:哪些 Pod 可以处理 <code>Qwen/Qwen3-0.6B</code>、要访问哪个端口、它们使用什么推理引擎。Pod 被重建、扩缩容或被 Gang 调度时,Router 依据 Selector 更新候选实例,不需要应用重新发现 Pod IP。</p>
+<h3 id="3-ModelRoute-让请求中的模型名落到正确后端">3. ModelRoute:让请求中的模型名落到正确后端</h3>
+<p>最后一层是 <code>ModelRoute</code>。Router 收到 OpenAI 兼容请求后读取请求体的 <code>model</code>,用 <code>modelName</code> 找到路由,再把请求发给 <code>targetModels</code> 中登记的 ModelServer:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">networking.serving.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ModelRoute</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">qwen-baseline</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">kthena-vllm-demo</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">modelName:</span> <span class="string">Qwen/Qwen3-0.6B</span></span><br><span class="line">  <span class="attr">rules:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">default</span></span><br><span class="line">      <span class="attr">targetModels:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="attr">modelServerName:</span> <span class="string">qwen-baseline</span></span><br></pre></td></tr></table></figure>
+<p>因此,应用请求 <code>model: Qwen/Qwen3-0.6B</code> 时,不是直接请求某个 Service 或 Pod,而是先命中 <code>ModelRoute</code>,再由 <code>ModelServer</code> 找到由 <code>ModelServing</code> 创建的就绪实例。后续接入多个副本、P/D 角色或 KV Cache-aware 路由时,应用请求格式不变,变化留在这三类 Kthena 对象及其策略中。</p>
+<p>创建资源后,Kthena 很快就生成了 PodGroup 与 vLLM Pod:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">$ kubectl -n kthena-vllm-demo get modelserving,podgroup,pod -o wide</span><br><span class="line">NAME                                          AGE</span><br><span class="line">modelserving.workload.serving.volcano.sh/qwen-baseline   51s</span><br><span class="line"></span><br><span class="line">NAME                                        STATUS    MINMEMBER   RUNNINGS   AGE   QUEUE</span><br><span class="line">podgroup.scheduling.volcano.sh/qwen-baseline-0   Running   1         1          51s   default</span><br><span class="line"></span><br><span class="line">NAME                          READY   STATUS    RESTARTS   AGE   IP            NODE</span><br><span class="line">pod/qwen-baseline-0-server-0-0   1/1     Running   0          50s   10.244.0.84   gpu</span><br></pre></td></tr></table></figure>
+<p>请求经 Kthena Router 到达 vLLM,返回了真实的 OpenAI 兼容结果:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">$ curl http://127.0.0.1:18080/v1/chat/completions \</span><br><span class="line">  -H &#x27;Content-Type: application/json&#x27; \</span><br><span class="line">  -d &#x27;&#123;&quot;model&quot;:&quot;Qwen/Qwen3-0.6B&quot;,&quot;messages&quot;:[&#123;&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;用一句话介绍 Kubernetes。&quot;&#125;],&quot;max_tokens&quot;:64&#125;&#x27;</span><br><span class="line"></span><br><span class="line">&#123;</span><br><span class="line">  &quot;id&quot;: &quot;chatcmpl-d02d0820-bf9e-4f67-b599-4078328ab5e2&quot;,</span><br><span class="line">  &quot;model&quot;: &quot;Qwen/Qwen3-0.6B&quot;,</span><br><span class="line">  &quot;choices&quot;: [&#123;&quot;finish_reason&quot;: &quot;length&quot;&#125;],</span><br><span class="line">  &quot;usage&quot;: &#123;&quot;prompt_tokens&quot;: 13, &quot;completion_tokens&quot;: 64, &quot;total_tokens&quot;: 77&#125;,</span><br><span class="line">  &quot;system_fingerprint&quot;: &quot;vllm-0.24.0-2cba5a37&quot;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>这条结果同时证明了三层关系:<strong>Kthena 生成并管理模型工作负载,Volcano 将 Pod 放到 GPU,vLLM 才是真正返回 Token 的进程</strong>。</p>
+<hr>
+<h2 id="七、Topology-aware-掌控-GPU-拓扑">七、Topology-aware:掌控 GPU 拓扑</h2>
+<p>一张 GPU 不是孤立存在的。GPU 先通过 PCIe 连接 CPU,一台服务器可能有多个 NUMA 节点,GPU 之间可能有 NVLink,多台服务器之间还要经过机架 ToR 交换机。</p>
+<p>对单卡模型,这些差异并不明显。对 TP=8 的模型,每一层计算都可能需要 GPU 之间 AllReduce。如果 8 张卡分散在两个机架,数据要穿过更多网络设备,延迟和带宽就会进入每一轮 Token 生成。此时&quot;所有 GPU 都已分配&quot;并不等于&quot;分配是高效的&quot;。</p>
+<p>Volcano 使用 <code>HyperNode</code> 描述节点之间的网络层级(同一个交换机下的节点、同一机架等拓扑域)。Kthena 在 <code>ModelServing</code> 中提供两层策略:<code>groupPolicy</code> 和 <code>rolePolicy</code>。<code>mode: hard</code> 表示拓扑不满足就不调度,适合没有目标网络性能就无法工作的多卡模型;<code>soft</code> 则尽量靠近,资源紧张时允许退化放置。</p>
+<p>本次单节点实验中,创建了一个 tier 1 HyperNode,并在 <code>ModelServing</code> 中写入:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">networkTopology:</span></span><br><span class="line">  <span class="attr">rolePolicy:</span></span><br><span class="line">    <span class="attr">mode:</span> <span class="string">hard</span></span><br><span class="line">    <span class="attr">highestTierAllowed:</span> <span class="number">1</span></span><br><span class="line">  <span class="attr">groupPolicy:</span></span><br><span class="line">    <span class="attr">mode:</span> <span class="string">hard</span></span><br><span class="line">    <span class="attr">highestTierAllowed:</span> <span class="number">1</span></span><br></pre></td></tr></table></figure>
+<p>Kthena 会将这组字段同步到 PodGroup,Volcano 再用 HyperNode 检查候选节点。实验中 Qwen Pod 最终落在 <code>gpu</code> 节点。</p>
+<blockquote>
+<p><strong>注意</strong>:单节点只能证明 Kthena 已将拓扑声明转换为 Volcano 约束,不能证明跨节点通信性能有所提升。真正验证时,应在多节点、多交换机环境分别运行 NCCL Test 和模型压测,对比跨节点带宽、P95 ITL 和总吞吐。</p>
+</blockquote>
+<hr>
+<h2 id="八、Gang-Scheduling-为什么多卡模型必须-一起上车">八、Gang Scheduling:为什么多卡模型必须&quot;一起上车&quot;</h2>
+<p>假设一个模型需要 4 个 Pod,每个 Pod 申请 1 张 GPU。集群只剩 2 张卡时,普通逐 Pod 调度可能先启动 2 个 Pod——它们无法完成模型并行,却已占住 2 张 GPU,另一个原本可以完整运行的任务也可能被堵住。</p>
+<p>Gang Scheduling 的核心是 <strong>All-or-Nothing</strong>:必须成员都能获得资源才一起调度;如果整组不满足,就一个都不提前占用。</p>
+<p>本次实验只有一张 RTX 3060 12GiB,Volcano vGPU Device Plugin 将它发布为 <code>VGPU=10, MEM=12288, CORE=100</code>:</p>
+<p><strong>第一轮</strong>,两个 server 副本放入同一个 ServingGroup,每个副本要 7168MiB + 60% Core(合计 14GiB + 120% Core,超过物理卡容量):</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">gangPolicy:</span></span><br><span class="line">  <span class="attr">minRoleReplicas:</span></span><br><span class="line">    <span class="attr">server:</span> <span class="number">2</span></span><br><span class="line"><span class="attr">roles:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">server</span></span><br><span class="line">    <span class="attr">replicas:</span> <span class="number">2</span></span><br><span class="line">    <span class="attr">entryTemplate:</span></span><br><span class="line">      <span class="attr">spec:</span></span><br><span class="line">        <span class="attr">containers:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">resource-holder</span></span><br><span class="line">            <span class="attr">resources:</span></span><br><span class="line">              <span class="attr">limits:</span></span><br><span class="line">                <span class="attr">volcano.sh/vgpu-number:</span> <span class="string">&quot;1&quot;</span></span><br><span class="line">                <span class="attr">volcano.sh/vgpu-memory:</span> <span class="string">&quot;7168&quot;</span></span><br><span class="line">                <span class="attr">volcano.sh/vgpu-cores:</span> <span class="string">&quot;60&quot;</span></span><br></pre></td></tr></table></figure>
+<p>结果:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">podgroup.scheduling.volcano.sh/qwen-gang-0   Pending   2         0</span><br><span class="line">pod/qwen-gang-0-server-0-0   0/1   Pending   &lt;none&gt;   &lt;none&gt;</span><br><span class="line">pod/qwen-gang-0-server-1-0   0/1   Pending   &lt;none&gt;   &lt;none&gt;</span><br></pre></td></tr></table></figure>
+<p>Event 记得很直接:<code>FailedScheduling: pod group is not ready, 2 Pending, 2 minAvailable</code>,<code>Unschedulable: queue resource quota insufficient: insufficient volcano.sh/vgpu-memory, insufficient volcano.sh/vgpu-cores</code>——<strong>PodGroup 要求两个成员,Volcano 没有先启动其中一个</strong>。</p>
+<p><strong>第二轮</strong>,每个副本改为 5GiB 显存 + 50% Core(合计 10GiB/100% Core),两个 vLLM 副本都达到 Ready 后,PodGroup 才成为 Running:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">podgroup.scheduling.volcano.sh/qwen-gang-0   Running   2         2</span><br><span class="line">pod/qwen-gang-0-server-0-0   1/1   Running   10.244.0.96   gpu</span><br><span class="line">pod/qwen-gang-0-server-1-0   1/1   Running   10.244.0.57   gpu</span><br></pre></td></tr></table></figure>
+<p>这个实验验证的是 <strong>Kthena 将 ServingGroup 转换为 PodGroup,Volcano 执行整组调度</strong>。两个 vGPU Pod 仍然共享同一张 RTX 3060,不能将它写成真正的两卡 TP 模型。生产中的 Gang 验证还应检查 NCCL 通信、模型分片和整组失败后的重建时间。</p>
+<hr>
+<h2 id="九、Prefill-Decode-分离-为什么要把一次推理拆成两个资源池">九、Prefill / Decode 分离:为什么要把一次推理拆成两个资源池</h2>
+<p>一次 LLM 推理通常可以分为两个计算特征明显不同的阶段。</p>
+<p><strong>Prefill</strong> 会一次性处理完整 Prompt,对全部输入 Token 进行并行计算,并生成后续推理所需的 KV Cache。Prompt 越长,Prefill 的计算量越大,因此这一阶段更依赖 GPU 的矩阵计算能力,并直接影响 <strong>TTFT(Time To First Token)</strong>——用户等待第一个 Token 出现的时间。</p>
+<p><strong>Decode</strong> 则是在已有 KV Cache 的基础上逐 Token 生成结果。每生成一个新 Token,都需要持续读取不断增长的 KV Cache,因此相比 Prefill,它通常更容易受到显存带宽和内存访问效率的影响,并直接决定 <strong>ITL(Inter-Token Latency)</strong>——连续两个 Token 之间的输出间隔。</p>
+<p>传统部署通常让 Prefill 和 Decode 共用同一组 GPU 实例,架构简单,但两类负载会相互争抢资源。尤其在长 Prompt 集中到达时,大量 Prefill 计算可能占用 GPU 算力和显存带宽,使已经进入 Decode 阶段的请求出现 Token 输出变慢、ITL 抖动甚至尾延迟升高。</p>
+<p><strong>P/D 分离的核心,就是把 Prefill 和 Decode 拆成两个独立资源池</strong>。Prefill Pool 可以面向长 Prompt 和高计算吞吐进行配置,Decode Pool 则面向持续 Token 生成和低 ITL 进行优化;两者可以分别选型、独立扩缩容,避免 Prefill 高峰直接干扰 Decode。</p>
+<p>代价也很明确:Prefill 和 Decode 不再运行在同一个实例上,因此 Prefill 生成的 <strong>KV Cache 必须高效传递给 Decode</strong>。所以真正的 P/D 分离不仅是&quot;把两个 Pod 分开&quot;,更关键的是解决 <strong>KV Cache 跨实例传输、路由配对和传输开销</strong>。</p>
+<p>Kthena 通过 <code>ModelServing.roles</code> 定义 <code>prefill</code> 和 <code>decode</code> 两类推理实例,再通过 <code>ModelServer.pdGroup</code> 告诉 Router 哪些 Prefill、Decode Pod 属于同一个 P/D 组。请求进入后,Router 负责完成 Prefill → Decode 的配对与转发,而 Prefill 生成的 KV Cache 则由 NIXL、LMCache、Mooncake 等 Connector 负责在两端之间传递。</p>
+<h3 id="实验环境与方案选择">实验环境与方案选择</h3>
+<p>本次实验环境只有一张 RTX 3060 12GiB,因此使用 Volcano vGPU 将其切分为两个逻辑 GPU 实例,分别运行 Prefill 和 Decode。由于 NIXL 更适合在<strong>独立 GPU 实例</strong>之间通过 UCX、RDMA 或高速网络完成低延迟 KV Cache 传输;本次实验使用 <strong>LMCache + Redis</strong> 方案验证 PD 分离效果:Prefill 将可复用的 KV Cache(KVCache Chunk Hash 索引)写入共享缓存后端,Decode 再从共享后端读取对应 KV,从而不再依赖 Prefill 与 Decode 之间建立 GPU P2P 传输。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">请求链路:客户端 → Router → Prefill → LMCache/Redis → Decode → Router → 客户端</span><br><span class="line">          (ModelServing 创建 Prefill/Decode,ModelServer.pdGroup 组成 P/D 链路,</span><br><span class="line">           控制器不承载推理流量)</span><br></pre></td></tr></table></figure>
+<h3 id="一份-ModelServing-创建-P-D-两个角色">一份 ModelServing,创建 P/D 两个角色</h3>
+<p>Prefill 和 Decode 使用同一个 Qwen3-0.6B 模型,但 <code>kv_role</code> 不同。两边必须设置相同的 <code>PYTHONHASHSEED</code>,否则相同 Token 计算出的 Cache Key 可能不同;<code>LMCACHE_REMOTE_URL</code> 让两个实例连接同一个 Redis:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">workload.serving.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ModelServing</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">qwen-pd-lmcache</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">kthena-vllm-demo</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">schedulerName:</span> <span class="string">volcano</span></span><br><span class="line">  <span class="attr">replicas:</span> <span class="number">1</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">gangPolicy:</span></span><br><span class="line">      <span class="attr">minRoleReplicas:</span></span><br><span class="line">        <span class="attr">prefill:</span> <span class="number">1</span></span><br><span class="line">        <span class="attr">decode:</span> <span class="number">1</span></span><br><span class="line">    <span class="attr">roles:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">prefill</span></span><br><span class="line">        <span class="attr">replicas:</span> <span class="number">1</span></span><br><span class="line">        <span class="attr">entryTemplate:</span></span><br><span class="line">          <span class="attr">spec:</span></span><br><span class="line">            <span class="attr">containers:</span></span><br><span class="line">              <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">prefill</span></span><br><span class="line">                <span class="attr">args:</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">--kv-transfer-config</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">&#x27;&#123;&quot;kv_connector&quot;:&quot;LMCacheConnectorV1&quot;,&quot;kv_role&quot;:&quot;kv_producer&quot;&#125;&#x27;</span></span><br><span class="line">                <span class="attr">env:</span></span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">PYTHONHASHSEED</span>, <span class="attr">value:</span> <span class="string">&quot;1047&quot;</span>&#125;</span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">LMCACHE_REMOTE_URL</span>, <span class="attr">value:</span> <span class="string">&quot;redis://redis-server.kthena-system.svc.cluster.local:6379&quot;</span>&#125;</span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">LMCACHE_LOCAL_CPU</span>, <span class="attr">value:</span> <span class="string">&quot;True&quot;</span>&#125;</span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">LMCACHE_MAX_LOCAL_CPU_SIZE</span>, <span class="attr">value:</span> <span class="string">&quot;1&quot;</span>&#125;</span><br><span class="line">                <span class="attr">resources:</span></span><br><span class="line">                  <span class="attr">limits:</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-number:</span> <span class="string">&quot;1&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-memory:</span> <span class="string">&quot;5120&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-cores:</span> <span class="string">&quot;50&quot;</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">decode</span></span><br><span class="line">        <span class="attr">replicas:</span> <span class="number">1</span></span><br><span class="line">        <span class="attr">entryTemplate:</span></span><br><span class="line">          <span class="attr">spec:</span></span><br><span class="line">            <span class="attr">containers:</span></span><br><span class="line">              <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">decode</span></span><br><span class="line">                <span class="attr">args:</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">--kv-transfer-config</span></span><br><span class="line">                  <span class="bullet">-</span> <span class="string">&#x27;&#123;&quot;kv_connector&quot;:&quot;LMCacheConnectorV1&quot;,&quot;kv_role&quot;:&quot;kv_consumer&quot;&#125;&#x27;</span></span><br><span class="line">                <span class="attr">env:</span></span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">PYTHONHASHSEED</span>, <span class="attr">value:</span> <span class="string">&quot;1047&quot;</span>&#125;</span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">LMCACHE_REMOTE_URL</span>, <span class="attr">value:</span> <span class="string">&quot;redis://redis-server.kthena-system.svc.cluster.local:6379&quot;</span>&#125;</span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">LMCACHE_LOCAL_CPU</span>, <span class="attr">value:</span> <span class="string">&quot;True&quot;</span>&#125;</span><br><span class="line">                  <span class="bullet">-</span> &#123;<span class="attr">name:</span> <span class="string">LMCACHE_MAX_LOCAL_CPU_SIZE</span>, <span class="attr">value:</span> <span class="string">&quot;1&quot;</span>&#125;</span><br><span class="line">                <span class="attr">resources:</span></span><br><span class="line">                  <span class="attr">limits:</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-number:</span> <span class="string">&quot;1&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-memory:</span> <span class="string">&quot;5120&quot;</span></span><br><span class="line">                    <span class="attr">volcano.sh/vgpu-cores:</span> <span class="string">&quot;50&quot;</span></span><br></pre></td></tr></table></figure>
+<p><code>GangPolicy</code> 要求 Prefill 和 Decode 同时获得资源——即使只缺少其中一个角色,Volcano 也不会让另一个 Pod 单独占住 GPU。</p>
+<h3 id="ModelServer-负责把两个角色组成一条请求链路">ModelServer 负责把两个角色组成一条请求链路</h3>
+<p><code>ModelServing</code> 只负责创建工作负载。Router 如何识别两个角色、使用哪种 Connector,需要由 <code>ModelServer</code> 描述;<code>ModelRoute</code> 再根据请求中的模型名找到这个 ModelServer:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">networking.serving.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ModelServer</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">qwen-pd-lmcache</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">kthena-vllm-demo</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">workloadSelector:</span></span><br><span class="line">    <span class="attr">matchLabels:</span></span><br><span class="line">      <span class="attr">modelserving.volcano.sh/name:</span> <span class="string">qwen-pd-lmcache</span></span><br><span class="line">    <span class="attr">pdGroup:</span></span><br><span class="line">      <span class="attr">groupKey:</span> <span class="string">modelserving.volcano.sh/group-name</span></span><br><span class="line">      <span class="attr">prefillLabels:</span></span><br><span class="line">        <span class="attr">modelserving.volcano.sh/role:</span> <span class="string">prefill</span></span><br><span class="line">      <span class="attr">decodeLabels:</span></span><br><span class="line">        <span class="attr">modelserving.volcano.sh/role:</span> <span class="string">decode</span></span><br><span class="line">  <span class="attr">workloadPort:</span></span><br><span class="line">    <span class="attr">port:</span> <span class="number">8000</span></span><br><span class="line">  <span class="attr">model:</span> <span class="string">Qwen/Qwen3-0.6B</span></span><br><span class="line">  <span class="attr">inferenceEngine:</span> <span class="string">vLLM</span></span><br><span class="line">  <span class="attr">kvConnector:</span></span><br><span class="line">    <span class="attr">type:</span> <span class="string">lmcache</span></span><br></pre></td></tr></table></figure>
+<h3 id="测试-P-D-分离-构造可复用的长前缀">测试 P/D 分离:构造可复用的长前缀</h3>
+<p>为验证 KV Cache 是否真的从 Prefill 传到了 Decode,实验构造了一组具有大量共享前缀的请求:固定内容重复 18 次,约 1199 个输入 Token(绝大部分来自三次请求完全相同的长 System Prompt)。这模拟的正是企业 Agent、智能客服和知识库问答中的典型模式:<strong>长且稳定的 System Prompt / Tool Definition / 企业上下文 + 少量变化的用户问题</strong>。</p>
+<h3 id="证据链-KV-Cache-确实从-Prefill-到了-Decode">证据链:KV Cache 确实从 Prefill 到了 Decode</h3>
+<p>第一次请求,Prefill 日志显示 1199 个输入 Token,本地无命中,<strong>1024 Token</strong> 的 KV Cache 写入共享后端:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Reqid: chatcmpl-lmcache-pd-1-875dfe93</span><br><span class="line">Total tokens 1199, LMCache hit tokens: 0</span><br><span class="line">Stored 1024 out of total 1024 tokens. size: 0.1094 GB, cost 6.9528 ms, throughput: 15.7311 GB/s</span><br></pre></td></tr></table></figure>
+<p>随后 Decode 没有重新计算整个 Prompt,而是从共享 Redis 命中并读取了 <strong>512 Token</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Reqid: chatcmpl-lmcache-pd-1-91de0ef4</span><br><span class="line">Total tokens 1199, LMCache hit tokens: 512, need to load: 512</span><br><span class="line">Retrieved 512 out of 512 required tokens. size: 0.0547 GB, cost 62.6841 ms, throughput: 0.8724 GB/s</span><br></pre></td></tr></table></figure>
+<p>Redis 中出现了实际的 KV 数据和 metadata:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">$ kubectl exec deployment/redis-server -- redis-cli --scan | head</span><br><span class="line">/models/Qwen3-0.6B@1@0@85d735ccda9ed2e@bfloat16kv_bytes</span><br><span class="line">/models/Qwen3-0.6B@1@0@85d735ccda9ed2e@bfloat16metadata</span><br></pre></td></tr></table></figure>
+<p>三次请求全部 HTTP 200,端到端耗时从第一次的 <strong>0.515s</strong> 降到后续约 <strong>0.276s</strong>。综合成一条完整证据链:<strong>请求经过 Kthena Router → Prefill 完成 Prompt 计算 → LMCache 将 KV Cache 写入 Redis → Decode 从 Redis 非零读取 KV Cache → 请求正常完成</strong>。</p>
+<h3 id="TTFT-和-ITL-的变化">TTFT 和 ITL 的变化</h3>
+<table>
+<thead>
+<tr>
+<th>部署方式</th>
+<th>TTFT</th>
+<th>ITL</th>
+<th>最大停顿</th>
+<th>前台输出 Token/s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>非 P/D:单实例 100% GPU</td>
+<td><strong>79.7 ms</strong></td>
+<td><strong>10.5 ms</strong></td>
+<td><strong>698.1 ms</strong></td>
+<td><strong>170.55</strong></td>
+</tr>
+<tr>
+<td>非 P/D:双实例 50% / 50%</td>
+<td>85.7 ms</td>
+<td>20.9 ms</td>
+<td>1398.4 ms</td>
+<td>130.05</td>
+</tr>
+<tr>
+<td>P/D:50P / 50D</td>
+<td>2387.3 ms</td>
+<td>11.9 ms</td>
+<td>997.3 ms</td>
+<td>135.18</td>
+</tr>
+</tbody>
+</table>
+<p>先看两组资源相同的双 vGPU 拓扑。P/D 的 <strong>ITL 从 20.9ms 降到 11.9ms</strong>,多数 Token 的输出间隔更短;前台吞吐从 130.05 提高到 135.18 Token/s(约 +3.9%)。但 TTFT 变差了——长 Prompt 流量集中到一个 50% Prefill 实例、Prefill 与 Decode 争用同一张物理 GPU、请求增加了 KV 交接路径。</p>
+<blockquote>
+<p><strong>实验瓶颈</strong>:单张 RTX 3060 上的两个 vGPU 仍共享同一组 SM、显存带宽和 PCIe 路径。P/D 拆分了角色,却没有获得两组可并行执行的物理算力,还新增了 Router 转发和 Redis KV 搬运。<strong>这组实验证明的是 Kthena 能完成 P/D 角色编排和真实 KV Cache 传递,但单卡 vGPU 只适合验证链路,不适合证明 P/D 的性能收益。</strong> 真正的生产级 P/D 需要把 Prefill 和 Decode 部署在独立 GPU 池中,再通过 NIXL、Mooncake、RDMA 等高速机制传输 KV Cache。验收时不能只看总 Token/s,必须同时检查 TTFT P50/P95、ITL P50/P95、最大 Token 停顿和 SLO Goodput。</p>
+</blockquote>
+<hr>
+<h2 id="十、KV-Cache-aware-Routing-为什么-Round-Robin-已经过时">十、KV Cache-aware Routing:为什么 Round Robin 已经过时</h2>
+<p>企业知识库、智能客服和 Agent 场景通常存在<strong>大量重复的长前缀</strong>(系统 Prompt、工具定义、企业制度、知识库上下文、历史会话)。vLLM 完成 Prefill 后会将这些前缀对应的中间计算结果保存在 KV Cache 中。后续请求如果能继续落到已经缓存相同前缀的实例,就可以直接复用已有 KV Cache,跳过大量重复的 Prefill 计算,降低 TTFT、减少 GPU 计算开销、提升整体吞吐。</p>
+<p>问题在于,传统 K8s Service 的负载均衡并不了解 KV Cache——无论 Round Robin 还是按连接数/请求数均衡,它们关注的都是&quot;哪个 Pod 更空闲&quot;,而不是&quot;哪个 Pod 已经拥有这个请求需要的 KV Cache&quot;。<strong>KV Cache 感知路由解决的正是这个问题</strong>:Router 选择推理实例时,不只考虑 Pod 实时负载,还结合请求前缀与各实例 KV Cache 的分布,优先把请求发给已缓存相关前缀的实例。</p>
+<h3 id="Router-如何同时考虑-Cache-和实时负载">Router 如何同时考虑 Cache 和实时负载</h3>
+<p>Router 的调度策略保存在 <code>kthena-system</code> 命名空间的 <code>ConfigMap/kthena-router-config</code> 中:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ConfigMap</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">kthena-router-config</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">kthena-system</span></span><br><span class="line"><span class="attr">data:</span></span><br><span class="line">  <span class="attr">routerConfiguration:</span> <span class="string">|-</span></span><br><span class="line"><span class="string">    scheduler:</span></span><br><span class="line"><span class="string">      pluginConfig:</span></span><br><span class="line"><span class="string">        - name: least-request</span></span><br><span class="line"><span class="string">          args:</span></span><br><span class="line"><span class="string">            maxWaitingRequests: 10</span></span><br><span class="line"><span class="string">        - name: kvcache-aware</span></span><br><span class="line"><span class="string">          args:</span></span><br><span class="line"><span class="string">            blockSizeToHash: 16</span></span><br><span class="line"><span class="string">            maxBlocksToMatch: 128</span></span><br><span class="line"><span class="string">      plugins:</span></span><br><span class="line"><span class="string">        Filter:</span></span><br><span class="line"><span class="string">          enabled:</span></span><br><span class="line"><span class="string">            - least-request</span></span><br><span class="line"><span class="string">        Score:</span></span><br><span class="line"><span class="string">          enabled:</span></span><br><span class="line"><span class="string">            - name: least-request</span></span><br><span class="line"><span class="string">              weight: 1</span></span><br><span class="line"><span class="string">            - name: kvcache-aware</span></span><br><span class="line"><span class="string">              weight: 20</span></span><br></pre></td></tr></table></figure>
+<p>这份配置中,<code>Filter</code> 阶段先由 <code>least-request</code> 剔除等待请求已超过 10 的拥堵实例;<code>Score</code> 阶段再对剩余 Pod 同时计算实时负载和连续前缀缓存命中。实验将 <code>kvcache-aware</code> 权重设为 20,<code>least-request</code> 权重设为 1:健康范围内优先回到已有缓存的 Pod,但候选 Pod 已经拥堵时仍会被 Filter 拦下。</p>
+<h3 id="实验结果">实验结果</h3>
+<p>两个 vLLM 副本基于 Volcano vGPU 各使用 5120MiB 显存和 50% Core,每个前缀先预热一次,再改变末尾问题发起复用请求:</p>
+<table>
+<thead>
+<tr>
+<th>路由策略</th>
+<th>成功</th>
+<th>owner hit ratio</th>
+<th>TTFT P50</th>
+<th>TTFT P95</th>
+<th>平均 match ratio</th>
+<th>Redis lookup 平均耗时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>least-request</td>
+<td>40/40</td>
+<td><strong>57.5%</strong></td>
+<td><strong>71.7ms</strong></td>
+<td><strong>131.3ms</strong></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>kvcache-aware</td>
+<td>40/40</td>
+<td><strong>97.5%</strong></td>
+<td><strong>24.6ms</strong></td>
+<td><strong>95.2ms</strong></td>
+<td><strong>25.2%</strong></td>
+<td><strong>0.163ms</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>owner hit ratio</code> 表示复用请求是否回到预热该前缀的 Pod;<code>match ratio</code> 表示请求的连续 Token Block 中,有多少已存在于最佳候选 Pod。本次平均可复用 Block 为 25.2%,却已足以在 40 次中有 39 次识别出原 Owner。</p>
+<p>这组结果说明,在两个 vGPU 副本之间,KV Cache-aware 确实减少了重复 Prefill,<strong>TTFT P50 从 71.7ms 降到 24.6ms</strong>。它不能直接外推到更大模型和生产并发,但至少证明 Router、Runtime、Redis 和 vLLM KV Event 已经形成真实闭环。</p>
+<p>Kthena 官方基准使用 DeepSeek-R1-Distill-Qwen-7B、3 副本、4,096 Token 长系统 Prompt、最大并发 300:<code>KVCacheAware + Least Request</code> 相比 Random,<strong>吞吐从 11.81 Req/s 提高到 32.22 Req/s(约 2.73 倍),TTFT 从 2.15 秒降到 0.57 秒(下降 73.5%)</strong>。</p>
+<blockquote>
+<p><strong>注意</strong>:官方同一组测试中,256 Token 短前缀下 KVCacheAware 并没有明显优势,Tokenizer 和 Redis 查询还会带来额外成本。因此它<strong>适合长系统 Prompt、多轮对话、代码助手和共享 RAG 上下文</strong>,不是所有模型都应默认开启。</p>
+</blockquote>
+<hr>
+<h2 id="十一、LLM-Autoscaling-从-GPU-利用率走向-Token-负载">十一、LLM Autoscaling:从 GPU 利用率走向 Token 负载</h2>
+<p>GPU 利用率是 LLM 平台必须监控的硬件指标,但并不适合作为扩缩容的唯一依据。</p>
+<p>例如,vLLM 持续处理大量短 Prompt 时,GPU 利用率可能已经很高,但请求几乎无需排队;而当大量长 Prompt 同时进入时,Waiting Requests 和 TTFT 可能已经明显上升,GPU 利用率却与前一种场景相差不大。只看 GPU 是 70% 还是 80%,平台很难判断当前是&quot;资源利用充分&quot;还是&quot;服务已经开始拥堵&quot;。</p>
+<p>因此 LLM 扩缩容更适合观察与推理负载直接相关的指标。Kthena v1.0.0 将扩缩容目标、指标来源和副本边界统一定义在 <code>AutoscalingPolicy</code> 中。下面的实验策略使用 Prometheus 中的 <strong>Prompt Token/s + Generation Token/s</strong> 作为负载信号,在 1~2 个 ServingGroup 之间伸缩:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">workload.serving.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">AutoscalingPolicy</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">qwen-token-load</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">kthena-vllm-demo</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">homogeneousTarget:</span></span><br><span class="line">    <span class="attr">targetRef:</span></span><br><span class="line">      <span class="attr">apiVersion:</span> <span class="string">workload.serving.volcano.sh/v1alpha1</span></span><br><span class="line">      <span class="attr">kind:</span> <span class="string">ModelServing</span></span><br><span class="line">      <span class="attr">name:</span> <span class="string">qwen-autoscale</span></span><br><span class="line">    <span class="attr">minReplicas:</span> <span class="number">1</span></span><br><span class="line">    <span class="attr">maxReplicas:</span> <span class="number">2</span></span><br><span class="line">    <span class="attr">metrics:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">token_rate</span></span><br><span class="line">        <span class="attr">targetValue:</span> <span class="string">&quot;35&quot;</span></span><br><span class="line">    <span class="attr">metricSources:</span></span><br><span class="line">      <span class="attr">token_rate:</span></span><br><span class="line">        <span class="attr">prometheus:</span></span><br><span class="line">          <span class="attr">serverURL:</span> <span class="string">http://prometheus.kthena-vllm-demo:9090</span></span><br><span class="line">          <span class="attr">query:</span> <span class="string">|</span></span><br><span class="line"><span class="string">            sum(rate(vllm:prompt_tokens_total[1m]))</span></span><br><span class="line"><span class="string">            + sum(rate(vllm:generation_tokens_total[1m]))</span></span><br></pre></td></tr></table></figure>
+<p>LLM Autoscaling 的重点不是简单判断&quot;GPU 忙不忙&quot;,而是判断:<strong>当前推理容量是否还能在目标 SLO 下承接新的 Token 负载</strong>。</p>
+<hr>
+<h2 id="总结">总结</h2>
+<p>Kthena 的价值,并不是再提供一套启动 vLLM 的 YAML,而是把过去分散在调度器、Service、Router、监控系统和运维脚本中的 LLM Serving 能力,统一抽象成 Kubernetes 可以声明、调度和治理的资源。</p>
+<p>当推理服务开始进入<strong>多卡大模型、长 Prompt、高并发、多轮 Agent、KV Cache 复用、P/D 资源池以及明确 TTFT / ITL SLO</strong> 的阶段,仅仅&quot;把 vLLM 跑起来&quot;已经不够。</p>
+<p><strong>这时 Kthena 的价值才真正体现出来:它治理的不是一个 vLLM Pod,而是一套面向大模型推理的资源、调度、路由和弹性体系。</strong></p>
+<hr>
+<h3 id="参考">参考</h3>
+<ul>
+<li>原文:微信公众号《Kthena:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache》</li>
+<li><a target="_blank" rel="noopener" href="https://kthena.volcano.sh/">Kthena 官方文档与架构</a></li>
+<li>关联:<a href="2026-08-23-%E4%BB%8EKServe%E5%88%B0Kthena%E4%BA%91%E5%8E%9F%E7%94%9F%E6%A8%A1%E5%9E%8B%E6%9C%8D%E5%8A%A1%E5%B9%B3%E5%8F%B0%E6%BC%94%E8%BF%9B.md">从 KServe 到 Kthena:云原生模型服务平台的技术演进</a>、<a href="2026-08-23-%E6%8E%A8%E7%90%86%E8%B0%83%E5%BA%A6%E5%99%A8%E8%B0%83%E7%A0%94%E6%8A%A5%E5%91%8A.md">推理调度器调研报告</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/">http://example.com/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Volcano/">Volcano</a><a class="post-meta__tags" href="/tags/vLLM/">vLLM</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/Kthena/">Kthena</a><a class="post-meta__tags" href="/tags/LLM%E6%8E%A8%E7%90%86/">LLM推理</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</div></div><div class="info-2"><div class="info-item-1">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误 写完第一个 “Hello World” 内核模块之后,大多数人会卡在同一个地方:代码能跑,但不知道为什么能跑。module_init 是怎么让内核找到入口的?__init 到底省了什么?MODULE_LICENSE 不写会怎样? 这篇笔记做两件事:  把内核模块的程序结构拆成六个部分,每个部分讲清楚它是什么、内核拿它做什么; 往下钻一层——这些宏展开成什么代码、在 .ko 里落到哪个 ELF 段。  另外,我在整理过程中发现有几个说法在中文教程里流传很广但是错的,其中一个(init 失败会自动调用 exit)直接关系到资源泄漏。文末有一份订正清单,赶时间可以直接跳到第十节。  一、最小骨架:一个模块的五要素 先看一个能正常编译加载的最小模块: 12345678910111213141516171819#include &lt;linux/init.h&gt;     // __init / __exit,以及初始化相关宏#include &lt;linux/module.h&gt;   // module_i...</div></div></div></a><a class="pagination-related" href="/2026/09/03/2026-09-03-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AE%B9%E9%94%99%E8%AE%AD%E7%BB%83%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%BB%8E%E6%9E%B6%E6%9E%84%E5%88%B0%E5%BD%A2%E5%BC%8F%E5%8C%96%E9%AA%8C%E8%AF%81/" title="大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证</div></div><div class="info-2"><div class="info-item-1">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证  本文基于一个真实落地的容错训练系统(下称 Aegis)的设计文档与源码整理,隐去了公司与内部组件信息,聚焦技术方案本身。  大模型训练的稳定性问题,是所有大规模训练团队的共同痛点。本文拆解 Aegis 的完整设计:为什么在调度平台层做容错、gRPC+NATS 双通道怎么配合、Master-Worker 状态机怎么流转、容错计数怎么算、故障节点怎么隔离,以及最有意思的一环——用 TLA+ 形式化验证状态机的安全性。  关联阅读:训练侧并行与通信见 图解 Megatron 的 SP/CP/EP、分布式训练核心技术:从 FSDP 到 All-Reduce。容错是这些训练技术之下的&quot;稳定性底座&quot;。   一、为什么需要专门的容错系统:三大痛点 1.1 训练频繁中断是常态 大模型分布式训练几乎都是同步方式(DDP/MPI):所有进程共同构建一个通信拓扑,任何一个进程出错,其他进程都会相继退出。而训练任务动辄跨数百个 GPU 节点,数小时到数天内大概率出各种问题:  OPT 175B 训练的 LogBo...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/" title="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</div></div><div class="info-2"><div class="info-item-1">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器 把一个千卡训练任务调度好,比把一百个 Web 服务调度好难得多。难点不在&quot;算力够不够&quot;,而在三件 Web 服务从不操心的事:  通信拓扑要聚拢:TP/PP 切出来的通信组,必须落在同一片 RDMA 交换机域里,跨机架一跳,AllReduce 延迟能差好几倍。 资源要&quot;留得住&quot;:训练任务动辄跑几小时几天,中途被别的任务抢占、重启就要从头来;但集群又要混部在线/离线,不能不让抢。 同卡型才好比:A100 节点和 H100 节点不能混进同一个通信组,不然快的等慢的,贵的卡当便宜的用。  通用调度器(kube-scheduler)对这三件事基本无解,Volcano 解决了 Gang 但也没碰拓扑。Sky-Scheduler 就是冲着这三件事来的——一个 Volcano 衍生的 Kubernetes 调度器,在 Volcano 的 session 框架上做了几处关键改造:把&quot;Pod→Node 一跳&quot;改成 “Task→Quota→Node 两跳”,引入...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-%E6%8E%A8%E7%90%86%E8%B0%83%E5%BA%A6%E5%99%A8%E8%B0%83%E7%A0%94%E6%8A%A5%E5%91%8A/" title="推理调度器(Inference Scheduler)调研报告"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">推理调度器(Inference Scheduler)调研报告</div></div><div class="info-2"><div class="info-item-1">推理调度器(Inference Scheduler)调研报告 当前主流推理调度方案可分为三层:引擎层调度(vLLM continuous batching、TensorRT-LLM in-flight batching)、集群层调度(Kthena、AIBrix、llm-d、KServe 等 K8s 原生方案)、路由层调度(KV Cache/Prefix 感知的请求级路由),而云厂商普遍采取&quot;引擎层优化 + 集群层自研 + 路由层智能化&quot;的组合策略。推理调度的核心矛盾已从训练场景的&quot;资源凑齐&quot;(Gang 调度)转向推理场景的&quot;延迟-吞吐-SLO-成本四方权衡&quot;,KV Cache 感知路由和 PD 分离(Prefill-Decode disaggregation)成为当前最活跃的技术竞争点。  一、推理调度与训练调度的本质差异 训练调度的核心是资源分配问题:用 Gang 调度保证分布式作业的所有 Worker 同时启动,用拓扑感知减少通信开销,调度粒度是&quot;作业级&quot;,一次决策影响整个训练过程。 推理调度的核...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E6%9C%89-Kthena-%E6%A8%A1%E5%9E%8B%E5%9C%A8-K8s-%E9%83%A8%E7%BD%B2%E7%9A%84%E7%97%9B%E7%82%B9"><span class="toc-number">1.1.</span> <span class="toc-text">一、为什么要有 Kthena:模型在 K8s 部署的痛点</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Kthena-%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.</span> <span class="toc-text">二、Kthena 是什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Kubernetes-%E5%8E%9F%E7%94%9F%E8%B0%83%E5%BA%A6%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E9%80%82%E5%90%88%E5%A4%8D%E6%9D%82-LLM-%E6%8E%A8%E7%90%86"><span class="toc-number">1.3.</span> <span class="toc-text">三、Kubernetes 原生调度为什么不适合复杂 LLM 推理</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81Kthena-%E4%B8%8E-Volcano-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.4.</span> <span class="toc-text">四、Kthena 与 Volcano 的关系</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81Kthena-%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84"><span class="toc-number">1.5.</span> <span class="toc-text">五、Kthena 整体架构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E4%BB%8E%E4%B8%80%E4%B8%AA%E6%A8%A1%E5%9E%8B%E5%A3%B0%E6%98%8E%E5%88%B0-vLLM-%E6%8F%90%E4%BE%9B%E6%9C%8D%E5%8A%A1"><span class="toc-number">1.6.</span> <span class="toc-text">六、从一个模型声明到 vLLM 提供服务</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-ModelServing-%E6%8A%8A-Qwen-%E5%92%8C-vLLM-%E4%BA%A4%E7%BB%99-Volcano-%E8%B0%83%E5%BA%A6"><span class="toc-number">1.6.1.</span> <span class="toc-text">1. ModelServing:把 Qwen 和 vLLM 交给 Volcano 调度</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-ModelServer-%E6%8A%8A%E7%94%9F%E6%88%90%E7%9A%84-Pod-%E7%99%BB%E8%AE%B0%E4%B8%BA%E4%B8%80%E4%B8%AA%E6%A8%A1%E5%9E%8B%E5%90%8E%E7%AB%AF"><span class="toc-number">1.6.2.</span> <span class="toc-text">2. ModelServer:把生成的 Pod 登记为一个模型后端</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-ModelRoute-%E8%AE%A9%E8%AF%B7%E6%B1%82%E4%B8%AD%E7%9A%84%E6%A8%A1%E5%9E%8B%E5%90%8D%E8%90%BD%E5%88%B0%E6%AD%A3%E7%A1%AE%E5%90%8E%E7%AB%AF"><span class="toc-number">1.6.3.</span> <span class="toc-text">3. ModelRoute:让请求中的模型名落到正确后端</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81Topology-aware-%E6%8E%8C%E6%8E%A7-GPU-%E6%8B%93%E6%89%91"><span class="toc-number">1.7.</span> <span class="toc-text">七、Topology-aware:掌控 GPU 拓扑</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81Gang-Scheduling-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%A4%9A%E5%8D%A1%E6%A8%A1%E5%9E%8B%E5%BF%85%E9%A1%BB-%E4%B8%80%E8%B5%B7%E4%B8%8A%E8%BD%A6"><span class="toc-number">1.8.</span> <span class="toc-text">八、Gang Scheduling:为什么多卡模型必须&quot;一起上车&quot;</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81Prefill-Decode-%E5%88%86%E7%A6%BB-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E6%8A%8A%E4%B8%80%E6%AC%A1%E6%8E%A8%E7%90%86%E6%8B%86%E6%88%90%E4%B8%A4%E4%B8%AA%E8%B5%84%E6%BA%90%E6%B1%A0"><span class="toc-number">1.9.</span> <span class="toc-text">九、Prefill &#x2F; Decode 分离:为什么要把一次推理拆成两个资源池</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E9%AA%8C%E7%8E%AF%E5%A2%83%E4%B8%8E%E6%96%B9%E6%A1%88%E9%80%89%E6%8B%A9"><span class="toc-number">1.9.1.</span> <span class="toc-text">实验环境与方案选择</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E4%BB%BD-ModelServing-%E5%88%9B%E5%BB%BA-P-D-%E4%B8%A4%E4%B8%AA%E8%A7%92%E8%89%B2"><span class="toc-number">1.9.2.</span> <span class="toc-text">一份 ModelServing,创建 P&#x2F;D 两个角色</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#ModelServer-%E8%B4%9F%E8%B4%A3%E6%8A%8A%E4%B8%A4%E4%B8%AA%E8%A7%92%E8%89%B2%E7%BB%84%E6%88%90%E4%B8%80%E6%9D%A1%E8%AF%B7%E6%B1%82%E9%93%BE%E8%B7%AF"><span class="toc-number">1.9.3.</span> <span class="toc-text">ModelServer 负责把两个角色组成一条请求链路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%B5%8B%E8%AF%95-P-D-%E5%88%86%E7%A6%BB-%E6%9E%84%E9%80%A0%E5%8F%AF%E5%A4%8D%E7%94%A8%E7%9A%84%E9%95%BF%E5%89%8D%E7%BC%80"><span class="toc-number">1.9.4.</span> <span class="toc-text">测试 P&#x2F;D 分离:构造可复用的长前缀</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%81%E6%8D%AE%E9%93%BE-KV-Cache-%E7%A1%AE%E5%AE%9E%E4%BB%8E-Prefill-%E5%88%B0%E4%BA%86-Decode"><span class="toc-number">1.9.5.</span> <span class="toc-text">证据链:KV Cache 确实从 Prefill 到了 Decode</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#TTFT-%E5%92%8C-ITL-%E7%9A%84%E5%8F%98%E5%8C%96"><span class="toc-number">1.9.6.</span> <span class="toc-text">TTFT 和 ITL 的变化</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81KV-Cache-aware-Routing-%E4%B8%BA%E4%BB%80%E4%B9%88-Round-Robin-%E5%B7%B2%E7%BB%8F%E8%BF%87%E6%97%B6"><span class="toc-number">1.10.</span> <span class="toc-text">十、KV Cache-aware Routing:为什么 Round Robin 已经过时</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Router-%E5%A6%82%E4%BD%95%E5%90%8C%E6%97%B6%E8%80%83%E8%99%91-Cache-%E5%92%8C%E5%AE%9E%E6%97%B6%E8%B4%9F%E8%BD%BD"><span class="toc-number">1.10.1.</span> <span class="toc-text">Router 如何同时考虑 Cache 和实时负载</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%9E%E9%AA%8C%E7%BB%93%E6%9E%9C"><span class="toc-number">1.10.2.</span> <span class="toc-text">实验结果</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81LLM-Autoscaling-%E4%BB%8E-GPU-%E5%88%A9%E7%94%A8%E7%8E%87%E8%B5%B0%E5%90%91-Token-%E8%B4%9F%E8%BD%BD"><span class="toc-number">1.11.</span> <span class="toc-text">十一、LLM Autoscaling:从 GPU 利用率走向 Token 负载</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">1.12.</span> <span class="toc-text">总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.12.1.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</a><time datetime="2026-09-09T16:00:00.000Z" title="发表于 2026-09-10 00:00:00">2026-09-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</a><time datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

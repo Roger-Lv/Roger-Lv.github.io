@@ -1,0 +1,750 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="拆解 NAIC &#39;26 的 RDMATracer 论文:为什么 4-15% 的 AI 任务失败在所有现成监控里都看不见,探针集如何从 2000 个函数裁到 13 个,fexit 为什么赢过 kretprobe,73% 覆盖率为什么是一个诚实的取舍,以及它在四层观测栈里的坐标。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区">
+<meta property="og:url" content="http://example.com/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="拆解 NAIC &#39;26 的 RDMATracer 论文:为什么 4-15% 的 AI 任务失败在所有现成监控里都看不见,探针集如何从 2000 个函数裁到 13 个,fexit 为什么赢过 kretprobe,73% 覆盖率为什么是一个诚实的取舍,以及它在四层观测栈里的坐标。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-09-10T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-09-11T04:57:04.710Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="eBPF">
+<meta property="article:tag" content="可观测性">
+<meta property="article:tag" content="AI基础设施">
+<meta property="article:tag" content="Meta">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区",
+  "url": "http://example.com/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-09-10T16:00:00.000Z",
+  "dateModified": "2026-09-11T04:57:04.710Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-11T04:57:04.710Z" title="更新于 2026-09-11 12:57:04">2026-09-11</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" data-flag-title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</h1>
+<p>2026 年 8 月 17 日,SIGCOMM 2026 在丹佛开会的第一天,第三届 Networks for AI Computing workshop(NAIC '26)上出现了一篇只有 6 页的论文:《RDMATracer: A scalable eBPF-based framework for tracing RDMA syscalls》。作者名单几乎全是 Meta 的生产工程师与网络研究员——Prankur Gupta、Miao Xu、Maxim Samoylov、Prashanth Kannan、Rajiv Krishnamurthy,加上 CMU 的 Theophilus A. Benson。</p>
+<p>论文标题很平实,讲的是一个已经在线上连续运行多年的 eBPF 工具。但它要回答的问题一点都不平实:<strong>当十万卡规模的 AI 训练集群任务崩溃时,为什么有一类故障在所有现成的监控系统里都看不到?</strong></p>
+<p>这篇文章是我读完论文和配套的 LPC 2025、FOSDEM 2026 演讲材料之后的拆解笔记。我最感兴趣的不是&quot;又一个 eBPF 工具&quot;,而是三件事:<strong>一个观测系统如何通过决定&quot;不装哪些探针&quot;来获得生产资格;73% 的覆盖率为什么是比 100% 更诚实的工程陈述;以及它在整个 AI 集群可观测性版图里的坐标。</strong></p>
+<hr>
+<h2 id="零、先看数字-一类沉默的故障">零、先看数字:一类沉默的故障</h2>
+<p>在 Meta 的生产环境里:</p>
+<ul>
+<li><strong>5–20%</strong> 的 AI 任务失败源自 NIC 驱动层的内核 bug。</li>
+<li>在 2025 年 10 月到 2026 年 2 月的研究窗口内,syscall 相关失败占总失败的 <strong>4–15%</strong>,而且占比曲线在观察窗口内<strong>持续上升</strong>,同期其他失败类别都在趋平。</li>
+<li>这类失败在 12 个月窗口里有 <strong>96%</strong> 不伴随任何应用层或网络层信号:没有异步事件、没有端口闪断、没有传输超时。关联的 GPU 小时浪费同样有 96% 无伴随信号。</li>
+<li>仅 syscall 一类,12 个月归因浪费 <strong>7,065 个 GPU 小时</strong>。</li>
+</ul>
+<p>更麻烦的是,即使失败被应用层捕获,也会被<strong>分错类</strong>。Meta 内部的 NCCL 日志分类器 ALPS 把约 <strong>25%</strong> 携带 syscall 失败证据的尝试(按浪费 GPU 小时加权)误标为&quot;网络事件&quot;。后果是工单被路由到错误的 on-call 团队:框架、RDMA 栈、硬件三个团队十几个工程师卷入一场数周的诊断。论文引用的 HPCA 2025 大规模 ML 集群可靠性研究观察到同类现象——NCCL 超时经常被归到&quot;网络&quot;这类邻近原因头上,真正的元凶(比如死锁)反而被跳过。</p>
+<p>这里有个值得单独拎出来的认知:<strong>误归因的代价不是&quot;多花了时间&quot;,而是从第一分钟起就动员错了人。</strong> 一个被标成&quot;网络事件&quot;的工单,它的诊断路径在起点就已经偏离,后面投入的所有工程师小时都在错误的坐标系里。这比&quot;没有告警&quot;更贵。</p>
+<p>RDMATracer 做的事情,一句话概括:<strong>在 RDMA 控制路径的内核函数里挂 13 个 eBPF 探针,只在函数返回非零值的时刻写一条记录,用每 5 秒一次的批量快照把失败上下文送进观测数据库,与任务级元数据关联。</strong></p>
+<p>代价是:每主机 <strong>0.0000024% 颗 CPU</strong>,12 个月全集群约 <strong>41 GB</strong> 存储。收益是:常规问题的诊断从十多分钟压到秒级(LPC 演讲口径),需要数周多团队 triage 的事故诊断被显著加速(论文口径),部分案例里它的信号甚至<strong>提前数周</strong>预警了后续的正式故障。</p>
+<hr>
+<h2 id="一、kernel-bypass-之后-可观测性留在了原地">一、kernel bypass 之后,可观测性留在了原地</h2>
+<h3 id="1-1-RDMA-在训练集群里的位置">1.1 RDMA 在训练集群里的位置</h3>
+<p>RDMA 的价值主张很直接:绕过内核网络栈,网卡直接读写内存。要理解它在大规模训练里的位置,可以先看 Meta GPU 主机的网络结构(FOSDEM 演讲里讲得清楚):每台 GPU 主机通常配 8 张 GPU,挂在三类网络上。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">                  ┌─────────────────────────────────────┐</span><br><span class="line">front-end 网络 ───┤  控制面 + 数据加载                   │</span><br><span class="line">                  │                                     │</span><br><span class="line">scale-up  网络 ───┤  机内/超节点内 GPU 直连(NVLink 域)  │</span><br><span class="line">                  │                                     │</span><br><span class="line">scale-out 网络 ───┤  数千+ GPU 进入同一集合通信域        │</span><br><span class="line">                  │  ← RDMA/RoCE 走这里,与 GPU 配对     │</span><br><span class="line">                  └─────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>后端网口与 GPU 配对、带宽极高,常规内核网络栈追不上这个速率;而绕开 CPU 的数据搬运还能同时降低延迟、提高带宽。这就是数据面必须走 RDMA 的原因。Meta 的 RoCE 实践(SIGCOMM 2024 的《RDMA over Ethernet for Distributed AI Training at Meta》)已经把这条路线在生产上走通。</p>
+<h3 id="1-2-“绕过内核-经常被误解成-内核不再参与”">1.2 “绕过内核&quot;经常被误解成&quot;内核不再参与”</h3>
+<p>论文专门用一节纠正这个印象,这也是全文的逻辑起点。一个训练任务的 RDMA 生命周期分三步:</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>做什么</th>
+<th>内核参与度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>① server coordination</strong></td>
+<td>各节点通过前端网络交换队列对(QP)编号和全局标识符(GID)</td>
+<td>低</td>
+</tr>
+<tr>
+<td><strong>② server configuration</strong></td>
+<td>内核经 uverbs 接口和厂商驱动编程网卡、创建对象、分配并注册内存,把 QP 在状态机里逐步推进到可用状态,再把控制面映射进用户态</td>
+<td><strong>深度参与</strong></td>
+</tr>
+<tr>
+<td><strong>③ 数据交换</strong></td>
+<td>应用直接经用户态 verbs 接口收发</td>
+<td>内核不过问每笔数据</td>
+</tr>
+</tbody>
+</table>
+<p>与 TCP 世界&quot;连个 IP 就行&quot;不同,RDMA 建连要求两端事先知道对方的 QP 编号,拓扑信息要靠协调步骤显式交换。</p>
+<p>论文的关键观察是:<strong>绝大多数可靠性问题发生在第二步。</strong> 连接一旦建立并成功跑通一次数据,通常会稳定到任务结束,除非真的出现硬件或网络故障。FOSDEM 演讲对此有个经验性的总结:初始化阶段是故障聚集区,而这恰恰是内核深度参与的阶段。</p>
+<p>有一种故障形态尤其折磨人:主机进入某种<strong>持久的错误状态</strong>,任务启动即失败,反复重试反复浪费,进入崩溃循环。flagship 模型训练被这类循环拖住时,动员规模和关注度都会迅速升级。</p>
+<h3 id="1-3-三层断链-为什么现有工具看不见">1.3 三层断链:为什么现有工具看不见</h3>
+<p>第二步恰恰是观测工具最稀薄的地方。现状是一个三层断链。</p>
+<p><strong>断链一:入口塌缩成一个 ioctl。</strong> 所有 ibverbs 交互都收敛到 uverbs 的单一 ioctl 入口,一次调用在内核里穿过 <strong>20–30 个函数</strong>,途经设备无关的 verbs 层和厂商专有的驱动层。停在入口处,你只能看到一个模糊的错误码,而同一个错误码对应多种完全不同的底层状况。</p>
+<blockquote>
+<p>坏消息是只有一个入口,好消息也是同一个入口:只要在正确的<strong>深度</strong>上布点,全部流量都可见。这个&quot;坏消息即好消息&quot;的结构,是后面整个设计能成立的前提。</p>
+</blockquote>
+<p><strong>断链二:错误直达应用层,但已经面目全非。</strong> 用户态的 rdma-core(libibverbs 是其核心库,uverbs 是这套接口进入内核的对应入口)只做参数校验和传递,<strong>没有任何重试逻辑</strong>,内核侧任何错误立即上抛。NCCL 的重试逻辑同样有限:大多数底层 RDMA 错误触发通信立即中止、communicator 销毁,应用随即崩溃退出。于是应用日志里留下的是最顶层那句翻译过的报错,比如一句笼统的 <code>NVSHMEM initialization failure</code>——原始的层级信息在传播路径上已经丢失。</p>
+<p><strong>断链三:工具够不着。</strong> 传统诊断靠 ftrace 手工抓函数轨迹,但 <strong>ftrace 不暴露函数返回值</strong>。工程师只能对比一次成功调用和一次失败调用的轨迹,靠&quot;坏轨迹在哪一步变短&quot;来猜出错位置——这要求两次调用可比,而复现还看运气,故障常常换个节点才现身。更根本的是 ftrace 属于<strong>事后工具</strong>:任务得停下来,装上 tracer,重新触发故障。</p>
+<p>把三层断链合起来,就得到论文 §3 那张失败面画像:</p>
+<blockquote>
+<p>一类占总失败 <strong>4–15%</strong> 的故障,<strong>96%</strong> 的情况下无任何伴随遥测,被现有分类器以 <strong>1/4</strong> 概率标错类别,唯一可靠的观测位置在<strong>内核深处</strong>,而常规工具进不去也待不住。</p>
+</blockquote>
+<p>这是一个<strong>结构性盲区</strong>,多加几个 dashboard 解决不了。</p>
+<hr>
+<h2 id="二、13-个探针-观测系统的核心是决定不装哪些探针">二、13 个探针:观测系统的核心是决定不装哪些探针</h2>
+<p>论文 §4 从失败面的三个特性推出三条设计需求:</p>
+<ol>
+<li><strong>不可见性</strong> → 要求内核侧捕获;</li>
+<li><strong>误归因</strong> → 要求在失败点携带跨层上下文;</li>
+<li><strong>复现代价</strong> → 要求 <strong>always-on</strong>,故障必须在第一次出现时就被记录,不能等人工介入。</li>
+</ol>
+<p>剩下的核心问题是:<strong>钩哪里。</strong> 答案最能体现这篇论文的工程味道。</p>
+<h3 id="2-1-从-2-000-到-13">2.1 从 2,000 到 13</h3>
+<p>候选集由<strong>静态分析</strong>生成:对 RDMA 子系统做调用图分析,列出每个 ioctl 入口可达的内核函数,再按规则剪枝。为什么必须剪枝?</p>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>每主机开销</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>naive 追踪每个内核函数(典型内核调用率下)</td>
+<td>约 <strong>50% 颗 CPU</strong></td>
+</tr>
+<tr>
+<td>收窄到 <code>drivers/infiniband/</code> 下全部约 2,000 个函数</td>
+<td>约 <strong>5% 颗 CPU</strong></td>
+</tr>
+<tr>
+<td>RDMATracer 的 13 个函数</td>
+<td><strong>0.0000024% 颗 CPU</strong></td>
+</tr>
+</tbody>
+</table>
+<p>从 2,000 到 13,靠的是四条启发式规则,由静态分析和生产调试经验共同导出。</p>
+<p><strong>规则一:排除只读操作。</strong> 查询和枚举类函数只导出内核状态、不修改状态,极少直接导致任务失败。其中一类还会规律性返回 <code>ENOENT</code> 这类<strong>预期内</strong>的错误(比如查询一个未启用的功能),追踪它们只会制造噪声。</p>
+<p><strong>规则二:排除通用内核内部。</strong> 锁、分页、RB 树这类同步原语与数据结构操作出了问题,症状会出现在整个系统而不仅限于 RDMA,它们不提供 RDMA 特异的诊断信息。</p>
+<p><strong>规则三:排除清理和引用计数路径。</strong> 这是最有意思的一条。清理路径上的失败通常表现为 <strong>kernel panic</strong>,调用根本没有正常返回,return-value 追踪在<strong>原理上</strong>就捕不到。panic 有独立的诊断通道处理,硬要覆盖它们只会白付开销。</p>
+<p><strong>规则四:聚焦关键对象的创建与更新。</strong> 队列对(QP)、内存区域(MR)、保护域(PD)、完成队列(CQ)是 RDMA 的四个核心对象,再加上发起硬件通信的路径。同时要求 <strong>verbs 层和厂商驱动层双层布点</strong>,让每次调用从入口到驱动分发全程可见。</p>
+<h3 id="2-2-一条路径的实例-ib-modify-qp">2.2 一条路径的实例:ib_modify_qp</h3>
+<p>四条规则应用到单一调用图上,<code>ib_modify_qp</code> 从约 40 个可追踪函数缩到 <strong>7 个</strong>(论文口径)。LPC 演讲展示过这条路径的符号清单:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">modify_qp</span><br><span class="line">rdma_lookup_get_uobject</span><br><span class="line">_ib_modify_qp</span><br><span class="line">ib_resolve_eth_dmac.isra.0</span><br><span class="line">rdma_lag_get_ah_roce_slave</span><br><span class="line">rdma_get_gid_attr</span><br><span class="line">alloc_and_bind</span><br><span class="line">rdma_counter_bind_qp_auto</span><br></pre></td></tr></table></figure>
+<p>按符号名计 8 项,其中 <code>ib_resolve_eth_dmac.isra.0</code> 的后缀是编译器优化派生的标记,源码函数层面与论文的 7 个口径对应。清单里的函数一眼可见都在做<strong>状态转换或资源绑定</strong>,没有一个是纯粹的查询或清理——四条规则的效果在这份清单上是可验证的。</p>
+<p>13 个探针的最终构成:</p>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>数量</th>
+<th>示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>设备无关的上游 verbs 处理器</td>
+<td>5</td>
+<td><code>ib_uverbs_modify_qp</code></td>
+</tr>
+<tr>
+<td>Mellanox 驱动及核心助手</td>
+<td>6</td>
+<td><code>mlx5_ib_create_qp</code></td>
+</tr>
+<tr>
+<td>OFED 衍生的 peer-memory 助手</td>
+<td>2</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h3 id="2-3-藏在构成里的工程判断-探针怎么跨厂商存活">2.3 藏在构成里的工程判断:探针怎么跨厂商存活</h3>
+<p>这个构成里有一段值得展开的设计。5 个上游 verbs 钩子位于内核的 verbs 核心层,天然设备无关;厂商驱动侧实现的是同一套 <code>ib_device_ops</code> 内核接口,verbs 回调在每个厂商命名空间里都有等价物——Broadcom 的 <code>bnxt_re_</code> 前缀、Intel 的 <code>irdma_</code> 前缀,<strong>启发式的命名空间门能自动恢复这些等价物</strong>。</p>
+<p>真正不可移植的只有 2 个 OFED 衍生的 peer-memory 钩子,在 vanilla 上游内核上需要按路径替换。</p>
+<p>换句话说:<strong>13 个探针里 11 个具备跨厂商的结构性可移植性,而这份性质由选择标准本身保证</strong>——不是额外做的适配工作,是&quot;优先钩设备无关层&quot;这条规则的副产品。好的约束会顺手解决它没被要求解决的问题。</p>
+<hr>
+<h2 id="三、机制三件套-fexit、失败才发射、双平面">三、机制三件套:fexit、失败才发射、双平面</h2>
+<p>选好钩子之后,论文对 eBPF 机制的选择同样值得逐条看。</p>
+<h3 id="3-1-为什么选-eBPF-放弃-ftrace-与-perf">3.1 为什么选 eBPF,放弃 ftrace 与 perf</h3>
+<p>论文的论证落在<strong>成本结构</strong>上:ftrace 和 perf 缺少内核内的过滤与聚合,每个事件都要搬运到用户态,成本按<strong>调用率</strong>线性放大——而 RDMA 热路径的调用率比失败率高 <strong>3 到 4 个数量级</strong>。</p>
+<p>eBPF 把判断放进内核态:BTF(BPF Type Format)提供类型化的参数访问,maps 承载内核内状态,verifier 保证探针与同主机的其他 BPF 程序互不干扰。</p>
+<p>论文对&quot;安全&quot;给出了脚注级别的严格定义:<strong>独立程序之间不因共享系统资源而产生意外干扰</strong>。这个定义看似学究气,实际关系到探针能不能铺到数万台主机而不出事故——毕竟同一台主机上还跑着网络栈等其他 BPF 程序。</p>
+<h3 id="3-2-为什么选-fentry-fexit-放弃-kretprobe">3.2 为什么选 fentry/fexit,放弃 kretprobe</h3>
+<p>两者都能取函数入参和返回值,差异在<strong>挂钩机制</strong>:kprobe 家族靠运行时打断点,每次命中走陷入处理;fentry/fexit 基于 BTF 与内核版本校验,经 trampoline 直连函数边界。</p>
+<p>差多少?论文给了两组实测:</p>
+<table>
+<thead>
+<tr>
+<th>测量场景</th>
+<th>kretprobe</th>
+<th>fexit</th>
+<th>差距</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>in-tree kernelbench <code>rename()</code> 微基准吞吐</td>
+<td>2.5M ops/s</td>
+<td><strong>3.2M ops/s</strong></td>
+<td>约 28%</td>
+</tr>
+<tr>
+<td>真实 RDMA 钩子跑 nccl-tests,每次 BPF 运行时间<br>(<code>ib_uverbs_modify_qp</code>、<code>rdma_fill_sgid_attr</code>)</td>
+<td>78–81 ns</td>
+<td><strong>46–69 ns</strong></td>
+<td>低 11–43%</td>
+</tr>
+</tbody>
+</table>
+<p>对单个探针这是几十纳秒的差距,但<strong>乘以每秒数万次的调用率、再乘以数万台主机,就是 always-on 可行与不可行的分界</strong>。</p>
+<p>论文的测试层部署(20 台后端主机,跑 AI 训练负载与 nccl-tests)给出了同场对比:RDMATracer 探针的单次调用成本 <strong>P50 56 ns、P99 79 ns</strong>,比同一主机上其他追踪类 BPF 程序低 <strong>18 倍(P50)到 46 倍(P99)</strong>。LPC 演讲的自评是它&quot;大概是全集群最轻的 BPF 程序&quot;。</p>
+<h3 id="3-3-失败才发射">3.3 失败才发射</h3>
+<p>探针逻辑一句话讲完:<strong>返回值非零才写记录,成功路径一个字节都不产生。</strong></p>
+<p>RDMA 控制面的失败事件率本身就低,论文测得平均每主机每秒约 <strong>3 次</strong>,数据量天然受控。</p>
+<p>这是整个设计里最体现&quot;观测哲学&quot;的一条:<strong>always-on 的前提是让常态零成本</strong>,否则任何常驻观测都会在生产评审里活不下来。反过来说,如果一个观测方案的成本与正常流量成正比,它就注定只能做成&quot;按需开启&quot;——而按需开启又注定抓不到不可复现的故障。这是个闭环,破局点只能在&quot;常态零成本&quot;上。</p>
+<h3 id="3-4-数据通路是双平面的">3.4 数据通路是双平面的</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">  内核态                              用户态                       存储</span><br><span class="line">┌──────────┐   ring buffer(~256KB/~8K 条)   ┌──────────┐</span><br><span class="line">│ 13 探针   ├──► 每条失败记录的完整上下文 ──►│ 采集线程  │</span><br><span class="line">│ ret != 0 │                                  │ 每 5s 轮询├──► Scuba</span><br><span class="line">│          ├──► per-CPU 计数器 map ──────────►│ 打包快照  │    (+ 任务元数据)</span><br><span class="line">└──────────┘    · 每 syscall 调用次数         └──────────┘</span><br><span class="line">                · 失败次数                          │</span><br><span class="line">                · 失败 errno 分布          ────────►└──► 时序数据库(告警/统计)</span><br></pre></td></tr></table></figure>
+<p>三类计数导出到时序数据库后承担告警与统计,成为比逐条记录更轻的常态信号。</p>
+<p><strong>双平面的意义在爆发场景:</strong> fleet 级事故时事件洪峰会冲爆 ring buffer,但计数器不丢,聚合计数始终精确,事后再从快照中还原细节。这是一个很干净的降级语义——<strong>洪峰下丢细节不丢总量</strong>。</p>
+<h3 id="3-5-控制面同样在做减法">3.5 控制面同样在做减法</h3>
+<p>用户态采集线程每 <strong>5 秒</strong>轮询一次 ring buffer,把这一批记录打包成 per-host 快照,作为<strong>单条样本</strong>写进观测数据库(Meta 的 Scuba 体系),再与任务级元数据关联。生产上平均每个快照约 <strong>200 条</strong>记录,fleet 事故峰值数千条。</p>
+<p>内核只做逐事件的 ring buffer 写,<strong>传输与存储成本随快照数扩展,与事件数脱钩</strong>;5 秒的间隔同时约束了下游写入率和从检测到导出的延迟上限。典型的摊销设计。</p>
+<p>上线前的部署验证也做得到位:LPC 演讲的回归数据显示,功能开启前后主机 CPU 利用率无可见变化,工作负载 QPS 不受影响——这才有了铺满 fleet 的资格。</p>
+<hr>
+<h2 id="四、73-覆盖率-一个把取舍摆在明面上的验证">四、73% 覆盖率:一个把取舍摆在明面上的验证</h2>
+<p>任何&quot;精选 13 个&quot;的方案都绕不开一个问题:<strong>剩下的呢?</strong> 论文用一组回验回答,这是全文我最欣赏的部分。</p>
+<h3 id="4-1-用一个独立分类器做交叉验证">4.1 用一个独立分类器做交叉验证</h3>
+<p>Meta 内部有一个独立的应用层分类器 <strong>ALPS</strong>,基于 NCCL 日志的正则解析构建,与 RDMATracer <strong>无共享代码、无共享设计</strong>,是一个天然的交叉验证源。对 12 个月窗口回验的结果:</p>
+<ul>
+<li>ALPS 标记的 syscall 失败中,约 <strong>73%</strong> 落在 RDMATracer 所钩系统调用的内核对应面上;</li>
+<li>其余约 <strong>27%</strong> 是启发式<strong>有意排除</strong>的部分:清理路径约 <strong>21%</strong>(由 <code>ibv_dealloc_pd</code> 主导),只读路径约 <strong>3%</strong>(由 <code>ibv_query_gid</code> 主导)。各分项均为论文近似口径。</li>
+</ul>
+<h3 id="4-2-论文没有停在这里">4.2 论文没有停在这里</h3>
+<p>接着它论证那 21% 为什么比看起来无害:</p>
+<ol>
+<li><strong>相关不等于因果。</strong> ALPS 会把一次尝试浪费的<strong>全部</strong> GPU 小时记到任何拆除期出现的 syscall 错误头上,所以清理路径的错误与浪费只是相关关系,够不上因果——数字本身<strong>高估</strong>了这类失败的影响。</li>
+<li><strong>真实出口在别处。</strong> 清理失败的真实出口是 kernel panic,走独立诊断流,return-value 追踪本来就无能为力。</li>
+</ol>
+<p>按 GPU 小时重新归因(论文 Table 2):</p>
+<table>
+<thead>
+<tr>
+<th>口径</th>
+<th>GPU 小时</th>
+<th>占比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>12 个月 syscall 归因浪费总计</td>
+<td>7,065</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>13 个探针覆盖</td>
+<td>约 5,227</td>
+<td>73%</td>
+</tr>
+<tr>
+<td>有意排除</td>
+<td>约 1,959</td>
+<td>约 27%</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>注:总行与分项之和 7,186 存在约 120 GPU 小时的出入,百分比与分项口径一致,此处按论文原表引用。</p>
+</blockquote>
+<h3 id="4-3-为什么这套验证值得学">4.3 为什么这套验证值得学</h3>
+<p>这套验证的可贵之处在于它把&quot;<strong>没覆盖什么</strong>&quot;变成了设计陈述的一部分,取舍被明确写进论文。73% 这个数字无需辩解——它是&quot;清理类失败另有出口、只读类失败几乎无害&quot;两条领域判断的<strong>直接后果</strong>。</p>
+<p>我愿意把这句话单独记下来:</p>
+<blockquote>
+<p><strong>观测系统的覆盖边界,本质上是维护者对故障分类的理解边界。</strong></p>
+</blockquote>
+<p>一个声称&quot;全覆盖&quot;的观测系统,往往只是没想清楚自己在覆盖什么。</p>
+<h3 id="4-4-部署侧的数字">4.4 部署侧的数字</h3>
+<ul>
+<li>连续生产运行<strong>多年</strong>;</li>
+<li>近期多月窗口捕获超过 <strong>10 亿条</strong> syscall 失败记录;</li>
+<li>覆盖<strong>数万台</strong>后端主机;</li>
+<li>整个 12 个月窗口全集群存储成本约 <strong>41 GB</strong>。</li>
+</ul>
+<p>效果层面论文的表述克制但有分量:诊断在&quot;过去需要数周多团队 triage&quot;的事故上被显著加速,<strong>部分案例里 RDMATracer 的信号提前数周预警了后续的正式故障</strong>——早期信号本身成了故障预测的数据源。</p>
+<hr>
+<h2 id="五、四个案例-层级证据如何定位根因">五、四个案例:层级证据如何定位根因</h2>
+<p>论文的案例把方法论讲透了一个要点:<strong>错误在哪一层出现、在哪一层消失,本身就是定位信息。</strong></p>
+<h3 id="5-1-配置类问题-论文-§5-1">5.1 配置类问题(论文 §5.1)</h3>
+<p>一次面向 GB200 系统(Linux 内核 6.16)的 NVIDIA 软件包 rollout 中,NVSHMEM 启用 dmabuf 支持所需的<strong>编译标志被漏掉</strong>,推理负载随即进入崩溃循环。</p>
+<p>应用层只看得到一句笼统的 NVSHMEM 初始化失败,没有任何指向。RDMATracer 的系统调用轨迹显示:NVSHMEM 的设备发现路径<strong>回退到了私有的 <code>nv_peer_mem</code> 机制</strong>,没有走预期的 dmabuf 路径,而 <code>nv_peer_mem</code> 在这批硬件上不支持 NVSHMEM 需要的 <strong>IBGDA</strong> 能力。内核侧的这一处分歧,把根因钉在那个缺失的编译标志上。</p>
+<p>这是一类应用层信号<strong>原理上</strong>无法分辨的失败:<strong>错误存在,方向不存在。</strong></p>
+<h3 id="5-2-fleet-级事故-论文-§5-2">5.2 fleet 级事故(论文 §5.2)</h3>
+<p>单日之内,数千台后端主机上的内存注册路径 <code>ibv_reg_mr</code> 高频返回 <code>EFAULT</code>(Bad address)。NCCL 只把最顶层那句 <code>ibv_reg_mr</code> 失败报给应用。</p>
+<p>RDMATracer 在注册级联的<strong>全部四层</strong>捕获到同一个 <code>EFAULT</code>,每一层约 <strong>1,900 万次</strong>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">ib_uverbs_reg_mr        ← verbs 层         EFAULT ×~19M</span><br><span class="line">  mlx5_ib_reg_user_mr   ← Mellanox 驱动    EFAULT ×~19M</span><br><span class="line">    __ib_umem_get       ← 核心内存管理     EFAULT ×~19M</span><br><span class="line">      ib_peer_umem_get  ← peer-memory      EFAULT ×~19M</span><br></pre></td></tr></table></figure>
+<p>四层同错说明错误发生在<strong>比 Mellanox 驱动更深的公共路径</strong>上,层级证据把根因定位到 <strong>GPU peer-memory 子系统</strong>,与一句含糊的&quot;NIC 驱动故障&quot;完成了决定性的区分。</p>
+<h3 id="5-3-演讲补充的两个案例">5.3 演讲补充的两个案例</h3>
+<p>同一团队在 LPC 2025 与 FOSDEM 2026 的演讲里还补了论文未收的两个案例(以下细节以演讲幻灯片为准):</p>
+<ul>
+<li>新部署厂商 NIC 驱动后,NCCL 报 <code>ibv_reg_dmabuf_mr</code> 返回 <code>EPERM</code>(Operation not permitted)。RDMATracer 导出的 syscall 链与返回值错位把问题定位为一个<strong>溢出缺陷</strong>。</li>
+<li>整个项目的<strong>起源案例</strong>:<code>ibv_reg_mr</code> 返回 <code>ENOMEM</code>,表象完全像内存压力,实际是厂商闭源代码里 <strong>64 位到 32 位整型转换</strong>的缺陷。而后来一次<strong>同样症状</strong>的事故根因又完全不同,出在 <strong>GPU 驱动与大页配置的交互</strong>上。</li>
+</ul>
+<p>同一句报错、不同根因,恰好标出了<strong>没有内核侧证据时应用层日志的信息量上限</strong>。<code>ENOMEM</code> 这个错误码在应用视角下携带的信息接近于零,它只说明&quot;某处失败了&quot;。</p>
+<h3 id="5-4-一个论文没展开的机制-用-好轨迹-做基线">5.4 一个论文没展开的机制:用&quot;好轨迹&quot;做基线</h3>
+<p>演讲还披露了一个论文篇幅所限没有展开的机制:<strong>周期性审计</strong>。系统定时捕获<strong>返回成功且 50 毫秒内完成</strong>的调用轨迹存档,故障出现时对比好坏轨迹,找分叉点。</p>
+<p>挑战在于&quot;<strong>预期的错误</strong>&quot;:有些失败是正常的,比如查询未启用功能返回的 <code>ENOENT</code>,基线得学会不把它们当异常。这套基线目前<strong>还没能自动化</strong>,内核演进之后探针集的扩展仍靠人工审计——论文与演讲都把它列为明确的后续方向。</p>
+<hr>
+<h2 id="六、业界坐标-观测栈的四层图谱与两条收敛线">六、业界坐标:观测栈的四层图谱与两条收敛线</h2>
+<p>RDMATracer 不是孤例。把它放回业界观测版图,能看到一个正在成形的四层栈,和两条清晰的技术收敛线。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────────────────────┐</span><br><span class="line">│ 算法层   规则/正则 → 结构化对齐 → 执行重现/因果 → agent      │</span><br><span class="line">│          ALPS        fr_trace     Anduril/ExChain   LLM      │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│ 框架层   PyTorch Flight Recorder(黑匣子范式)               │</span><br><span class="line">│          ← 对齐 rank 维度                                    │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│ 内核层   retsnoop(通用)  |  RDMATracer(领域专精)          │</span><br><span class="line">│          ← 对齐调用深度维度                                  │</span><br><span class="line">│          Tetragon / Pixie / Parca / Pyroscope / OTel          │</span><br><span class="line">├─────────────────────────────────────────────────────────────┤</span><br><span class="line">│ 网/硬件层 NVIDIA Mission Control、UFM/NMX、交换机遥测        │</span><br><span class="line">└─────────────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="6-1-框架层-黑匣子范式确立">6.1 框架层:黑匣子范式确立</h3>
+<p><strong>PyTorch 的 Flight Recorder</strong> 是这一层的代表。它在 c10d 通信层内建每个 rank 一个 CPU 侧环形缓冲,跨进程组共享,记录每次集合通信与点对点操作的起止时间、CPU 入队时间、进程组、源与目标 rank、张量尺寸和调用栈;NCCL watchdog 超时触发自动落盘。采集能力自 <strong>PyTorch 2.4</strong> 起可用,Llama 3 的训练报告用过它;TorchTitan 论文(arXiv:2410.06511)把它列为生产级预训练的标配。</p>
+<p>它专门对付集合通信挂起:流水线并行的调度缺陷、某个 rank 没有进入集合通信这类问题,靠跨 rank 对齐记录就能定位。配套的 <code>fr_trace</code> 分析工具按序号对齐所有 rank 的记录、按进程组聚合、枚举不匹配项(缺失 rank、状态分歧、调用栈分叉),再把不匹配映射到根因类别:CPU 侧卡顿/变慢/跨 rank 分歧、GPU 计算核挂起、集合通信参数配错、网络或硬件故障。2026 年 3 月 PyTorch 官方博客给出了完整方法论;同年 6 月的 @Scale 演讲上,团队展示了把 <strong>LLM agent 接在 Flight Recorder 之上</strong>,把&quot;跨 rank 遥测分析&quot;自动化。</p>
+<p><strong>与 RDMATracer 对照能看出一条正交关系:</strong></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Flight Recorder</th>
+<th>RDMATracer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>回答的问题</td>
+<td>哪个 rank 在哪次集合通信上掉队</td>
+<td>内核里哪一层的 syscall 失败</td>
+</tr>
+<tr>
+<td>对齐维度</td>
+<td><strong>rank 维度</strong></td>
+<td><strong>调用深度维度</strong></td>
+</tr>
+</tbody>
+</table>
+<p>同一场 NCCL 崩溃,两条证据线合在一起,才够拼出完整的故障现场。</p>
+<h3 id="6-2-内核层-eBPF-生态的通用与专精">6.2 内核层:eBPF 生态的通用与专精</h3>
+<p>内核侧的同题工具是 <strong>retsnoop</strong>,作者 Andrii Nakryiko 是 Meta 杰出工程师、eBPF 指导委员会成员。它的设计初衷与 RDMATracer 一致:复杂 syscall 深处返回 <code>-EINVAL</code> 这类通用错误,难以猜出来源;默认只捕获以错误码或 NULL 收尾的调用栈,并尽力取最深栈帧(Kernel Recipes 2024 专门讲过)。</p>
+<blockquote>
+<p>retsnoop 证明这个问题形态有<strong>通用解</strong>;RDMATracer 证明通用解在数万台主机的生产 fleet 上<strong>要让位于领域专精</strong>:13 个精选探针、失败才发射、双平面导出,每一件都是 RDMA 领域知识换来的成本削减。两者的作者群同在 Meta,是同一问题的两条路线。</p>
+</blockquote>
+<p>更广的 eBPF 观测生态在横向铺开:<strong>Tetragon</strong> 与 <strong>Pixie</strong> 面向 Kubernetes 的安全观测与通用追踪;持续剖析线上,<strong>Parca</strong> 与 <strong>Grafana Pyroscope</strong> 用 eBPF 对主机全部进程采样,零应用改动,常态开销压在约 <strong>1%</strong> 的量级;<strong>OpenTelemetry</strong> 正把 eBPF profiler 纳入标准管道,剖析数据可经 OTLP 协议直接送入 Pyroscope。</p>
+<p>通用生态覆盖任何进程、任何容器、任何集群,<strong>但没有一个通用方案替你建模某个子系统的故障语义</strong>。RDMATracer 的四条启发式在通用平台上没有对应物,这正是专精层的生存空间。</p>
+<h3 id="6-3-网络与硬件层-厂商把观测做成了商品">6.3 网络与硬件层:厂商把观测做成了商品</h3>
+<p>NVIDIA 在 GTC 2025 起交付的 <strong>Mission Control</strong> 是代表:AI 工厂的集成软件栈,其中遥测与观测组件的采集并行铺到数千张 GPU、Spectrum-X 以太网与 Quantum InfiniBand 交换机、NVLink 交换机,底层由 <strong>UFM</strong> 与 <strong>NMX</strong> 驱动,官方口径是 always-on resilience,外加一个自主恢复引擎。Dynatrace 这类观测厂商把全栈监控写进 NVIDIA AI Factory 的交付方案,从 GPU 到 Kubernetes 再到推理服务一层不落——观测本身成了 AI 工厂的售卖项。</p>
+<p>但<strong>厂商栈的视野止于自家硬件边界</strong>,跨层的失败(内核驱动与 GPU 对等内存的交互,正是 §5.2 那个案例)仍需要 RDMATracer 这类系统级探针。</p>
+<h3 id="6-4-算法层-从正则到执行重现再到-agent">6.4 算法层:从正则到执行重现再到 agent</h3>
+<p>诊断算法的四代脉络清晰:</p>
+<table>
+<thead>
+<tr>
+<th>代</th>
+<th>方法</th>
+<th>代表</th>
+<th>代价/特征</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>一</td>
+<td>规则与正则</td>
+<td>ALPS</td>
+<td>快、可解释,约 25% 误标</td>
+</tr>
+<tr>
+<td>二</td>
+<td>结构化对齐与枚举</td>
+<td><code>fr_trace</code>、RDMATracer 层级证据</td>
+<td>不匹配即线索</td>
+</tr>
+<tr>
+<td>三</td>
+<td>执行重现与因果推断</td>
+<td>Anduril(SOSP 2024)、ExChain(NSDI 2024)、DejaVu(FSE 2022)</td>
+<td>从看数据走向重放因果</td>
+</tr>
+<tr>
+<td>四</td>
+<td>agent 化</td>
+<td>LLM agent 接入 Flight Recorder</td>
+<td>跨 rank 分析自动化</td>
+</tr>
+</tbody>
+</table>
+<p>其中 Anduril 用静态因果分析加反馈驱动的搜索在故障空间里定位根因并注入复现,对五个大规模分布式系统的 <strong>22 个真实故障全部复现</strong>。</p>
+<p>这条线有个前提值得强调:<strong>采集端必须先交出结构化证据。</strong> 没有环形缓冲里的序列号、没有失败记录里的返回值,任何算法都只能面对非结构化日志打转。<strong>观测栈的下半场竞争在证据格式。</strong></p>
+<h3 id="6-5-两条收敛线">6.5 两条收敛线</h3>
+<p>四层栈合成一句话:框架层有了黑匣子,内核层有了 eBPF,网络与硬件层有了商品化遥测,算法层正从规则走向 agent。两条收敛线也清晰可见:</p>
+<ul>
+<li><strong>采集端</strong> → always-on、零常态开销、结构化;</li>
+<li><strong>诊断端</strong> → 对齐、重现、自动化。</li>
+</ul>
+<p>RDMATracer 恰好落在两条线的交点上,用 0.0000024% 颗 CPU 的代价把内核驱动层接进了这条管道。</p>
+<hr>
+<h2 id="七、更大的图-AI-集群可观测性的地板在哪里">七、更大的图:AI 集群可观测性的地板在哪里</h2>
+<h3 id="7-1-地板被推到了内核驱动层">7.1 地板被推到了内核驱动层</h3>
+<p>过去两年,AI 集群的可观测性建设集中在两端:应用与框架侧有 Flight Recorder、NCCL 调试日志这类结构化记录;网络侧有交换机遥测与端口级计数;硬件侧有 DCGM 这类 GPU 监控。论文 Intro 的判断很准确:<strong>现有诊断工具要么面向高层框架、要么面向底层硬件遥测,内核里驱动执行路径恰好是中间的空白带。</strong></p>
+<p>RDMATracer 证明这条空白带可以用两位数个探针、约 0.0000024% 颗 CPU 补上。对任何一家万卡以上规模的集群运营方,这是一个可以直接复用的配方:</p>
+<blockquote>
+<p><strong>精选探针 → 失败才发射 → 批量导出 → 好轨迹基线</strong></p>
+</blockquote>
+<p>除 2 个 OFED 衍生钩子在 vanilla 内核需按路径替换外,其余件件都在 Linux 发行版自带的 eBPF 能力之内。</p>
+<h3 id="7-2-observability-first-是比工具本身更值得记住的词">7.2 &quot;observability-first&quot;是比工具本身更值得记住的词</h3>
+<p>论文摘要自述的贡献不只是一个 tracer,而是一条 <strong>observability-first 的管道</strong>,用额外的用户态上下文富化内核记录。翻译成操作语言:<strong>先保证故障现场的内核证据 always-on 地留下来,再谈怎么把它和任务、模型、团队工作流关联。</strong></p>
+<p>这与&quot;事后装 tracker 重新复现&quot;的旧范式是方向性的区别。6 页篇幅里没有展开的部分(富化管道的细节、Scuba 之上的分析层)反而说明了重点所在:<strong>证据采集是地基,地基决定上层一切分析的响应速度。</strong></p>
+<h3 id="7-3-通用与专精的分野会长期存在">7.3 通用与专精的分野会长期存在</h3>
+<p>论文相关工作一节把 Tetragon、Pixie 这类通用方案的位置标得很清楚:Tetragon 的 <code>TracingPolicy</code> 能在 kprobe/tracepoint/uprobe 上做内核内过滤,包括<strong>按返回值匹配</strong>,但它面向 Kubernetes 的安全观测与运行时执行,不为任何内核子系统做深度建模。</p>
+<p>RDMATracer 的价值恰恰在<strong>不可通用</strong>的那部分:四条启发式是 RDMA 领域知识,QP/MR/PD/CQ 的对象模型、清理路径与 panic 的关系、verbs 与厂商驱动的分层,73% 的覆盖验证和跨厂商命名空间门都建立在这套知识上。</p>
+<p>这个判断可以推广:<strong>每一个性能关键、故障语义复杂的内核子系统——存储栈、GPU 驱动、未来可能还有 CXL——都值得一条专精的观测路径,而通用平台的角色是把这类探针安全地编排起来。</strong></p>
+<h3 id="7-4-盲区清单仍然很长">7.4 盲区清单仍然很长</h3>
+<p>论文自己划出的边界值得敬重:</p>
+<ul>
+<li><strong>只覆盖控制路径。</strong> 数据面的失败有自己的盲区:QP 转入 error 态的通告可能只到达用户态,内核里无迹可寻。FOSDEM 演讲提到这类问题需要转向 <strong>uprobes</strong>,而用户态插桩面对大量函数内联还要另闯一关。</li>
+<li><strong>维护成本。</strong> 13 个探针面对内核版本演进需要持续维护,好轨迹基线与探针集扩展的自动化都还是未竟事项。</li>
+<li><strong>数字的外推风险。</strong> 论文的失败分类建立在 Meta 自家生产集群、5 个月窗口、正则分桶的遥测之上。数字的<strong>量级</strong>可信,但<strong>边界</strong>——比如那个 4–15% 区间的宽度——在不同集群形态与软件栈版本下会移动。把 Meta 的数字直接搬到自己的集群上做预算,需要谨慎。</li>
+</ul>
+<hr>
+<h2 id="八、总结与三个判断">八、总结与三个判断</h2>
+<p>这篇 6 页的 workshop 论文没有提出新算法,也没有新的系统范式。它做的事情是:<strong>把一类被整个工具生态错过的故障(RDMA syscall 失败)从不可见变成 always-on 可见,并用可核查的数字(73% 回验覆盖、0.0000024% CPU、10 亿条生产记录)把代价与收益一起摆在桌面上。</strong> 配套的 LPC 与 FOSDEM 演讲补齐了论文之外的工程细节,三个信源互相咬合,这本身就是工业系统论文一种健康的发表形态。</p>
+<p><strong>判断一:内核驱动层会成为 AI 集群可观测性的下一个竞争点。</strong> 应用层和网络层的观测已趋同质化,故障归因的瓶颈正在向中间层转移。96% 无伴随信号与 25% 误归因说明,谁先补上这一层,谁就能砍掉一类从起点就路由错误的动员。HPCA 2025 的集群可靠性研究从故障统计侧给出了同样的征兆,两条证据线正在合流。</p>
+<p><strong>判断二:&quot;精选探针 + 失败才发射&quot;会成为内核观测的默认形态。</strong> 在 fleet 规模下,全量追踪输给结构化裁剪是成本上的必然。RDMATracer 用 2,000 到 13 的缩减证明,<strong>领域知识才是观测系统的护城河</strong>。这个模式不依赖 Meta 的基础设施规模,中小集群的 SRE 团队可以直接落地。</p>
+<p><strong>判断三:跨厂商驱动观测需要一个上游标准。</strong> 现在 13 个探针里 11 个可移植,靠的是 verbs 核心层与 <code>ib_device_ops</code> 接口的分层统一性,但 2 个 OFED 衍生钩子的路径替换提醒我们,观测能力仍部分绑定在发行版内核之外的世界里。RDMA 核心社区若能把 verbs 层的观测点标准化为<strong>稳定的 tracepoint</strong>,这类系统的维护成本会再降一个台阶。</p>
+<p>后继值得盯住三件事:</p>
+<ol>
+<li>Min Si 等人的《Collective Communication for 100k+ GPUs》(arXiv:2510.20171)落地后,十万卡级别集合通信的故障语义会不会反过来驱动观测需求升级;</li>
+<li>eBPF 社区在 uprobes 与内联函数追踪上的进展,能否把 RDMA 数据面盲区也纳入 always-on;</li>
+<li>NAIC 这个 workshop 本身——网络研究的顶会体系正在把 AI 基础设施的<strong>可运维性</strong>当成一等公民议题,这类生产系统论文的持续出现,比任何基准测试都更能说明 AI 集群的工程重心已经转移到可靠性上。</li>
+</ol>
+<hr>
+<h2 id="附-关键数字速查">附:关键数字速查</h2>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>探针数量</td>
+<td>13(5 verbs + 6 mlx5 + 2 OFED peer-memory)</td>
+</tr>
+<tr>
+<td>跨厂商可移植探针</td>
+<td>11 / 13</td>
+</tr>
+<tr>
+<td>每主机 CPU 开销</td>
+<td>0.0000024% 颗</td>
+</tr>
+<tr>
+<td>单次探针成本</td>
+<td>P50 56 ns / P99 79 ns</td>
+</tr>
+<tr>
+<td>比同主机其他 BPF 程序</td>
+<td>低 18×(P50)~ 46×(P99)</td>
+</tr>
+<tr>
+<td>fexit vs kretprobe</td>
+<td>吞吐高约 28%,运行时间低 11–43%</td>
+</tr>
+<tr>
+<td>失败事件率</td>
+<td>约 3 次 / 主机 / 秒</td>
+</tr>
+<tr>
+<td>ring buffer</td>
+<td>约 256 KB / 约 8K 条</td>
+</tr>
+<tr>
+<td>采集间隔</td>
+<td>5 秒,平均约 200 条/快照</td>
+</tr>
+<tr>
+<td>12 个月全集群存储</td>
+<td>约 41 GB</td>
+</tr>
+<tr>
+<td>回验覆盖率</td>
+<td>73%(排除:清理 ~21%、只读 ~3%)</td>
+</tr>
+<tr>
+<td>12 个月 syscall 归因浪费</td>
+<td>7,065 GPU 小时(覆盖 ~5,227)</td>
+</tr>
+<tr>
+<td>syscall 失败占总失败</td>
+<td>4–15%(2025-10 ~ 2026-02)</td>
+</tr>
+<tr>
+<td>无伴随遥测比例</td>
+<td>96%</td>
+</tr>
+<tr>
+<td>ALPS 误标为&quot;网络事件&quot;</td>
+<td>约 25%</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="参考">参考</h2>
+<ul>
+<li><strong>RDMATracer: A scalable eBPF-based framework for tracing RDMA syscalls</strong>,NAIC '26 @ SIGCOMM 2026,DOI <code>10.1145/3789240.3828742</code></li>
+<li>同团队 <strong>LPC 2025</strong> 与 <strong>FOSDEM 2026</strong> 演讲材料(补充案例、好轨迹基线、部署回归数据)</li>
+<li><strong>RDMA over Ethernet for Distributed AI Training at Meta</strong>,SIGCOMM 2024</li>
+<li><strong>PyTorch Flight Recorder / fr_trace</strong> 官方博客(2026-03)、<strong>TorchTitan</strong>(arXiv:2410.06511)</li>
+<li><strong>retsnoop</strong>(Andrii Nakryiko,Kernel Recipes 2024)</li>
+<li><strong>Anduril</strong>(SOSP 2024)、<strong>ExChain</strong>(NSDI 2024)、<strong>DejaVu</strong>(FSE 2022)</li>
+<li>大规模 ML 集群可靠性研究,<strong>HPCA 2025</strong></li>
+<li><strong>Collective Communication for 100k+ GPUs</strong>(arXiv:2510.20171)</li>
+</ul>
+<blockquote>
+<p>本文数字均出自上述论文与演讲材料,口径在正文逐一标注;§六 业界坐标一节另据公开信源(PyTorch 官方博客、@Scale 2026 演讲、NVIDIA 开发者博客、SOSP/NSDI/FSE 论文)。原始资料数据整理截至 2026-09-08。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/">http://example.com/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/eBPF/">eBPF</a><a class="post-meta__tags" href="/tags/%E5%8F%AF%E8%A7%82%E6%B5%8B%E6%80%A7/">可观测性</a><a class="post-meta__tags" href="/tags/AI%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD/">AI基础设施</a><a class="post-meta__tags" href="/tags/Meta/">Meta</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</div></div><div class="info-2"><div class="info-item-1">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点 RDMA 这套东西之所以让人望而生畏,不是因为哪个概念特别难,而是因为它把三个本来独立的知识域压进了同一条调用链:Linux 内核系统调用机制、内存管理、网络硬件。单独看每个术语都不复杂,叠在一起才显得信息量爆炸。 这篇文章分三大块:  调用链——从 ibv_reg_mr 一路走到 HCA 硬件,每一层在做什么; 术语地图——把所有黑话按类别拆开,每个只给一句人话; 实战落点——AI 训练云平台上,这条链路到底体现在哪些日常工作里。   先正一个名。 中文社区里偶尔能看到 “ubverbs” 这个写法,它不是标准名称。内核里承接用户态 verbs 请求的模块叫 ib_uverbs(Userspace Verbs),源码在 drivers/infiniband/core/uverbs*.c。本文统一用 ib_uverbs。   关联阅读: 这条链路上的故障怎么观测,我在 《RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区》 里写过。那篇讲的是&quot;怎么看见...</div></div></div></a><a class="pagination-related" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</div></div><div class="info-2"><div class="info-item-1">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误 写完第一个 “Hello World” 内核模块之后,大多数人会卡在同一个地方:代码能跑,但不知道为什么能跑。module_init 是怎么让内核找到入口的?__init 到底省了什么?MODULE_LICENSE 不写会怎样? 这篇笔记做两件事:  把内核模块的程序结构拆成六个部分,每个部分讲清楚它是什么、内核拿它做什么; 往下钻一层——这些宏展开成什么代码、在 .ko 里落到哪个 ELF 段。  另外,我在整理过程中发现有几个说法在中文教程里流传很广但是错的,其中一个(init 失败会自动调用 exit)直接关系到资源泄漏。文末有一份订正清单,赶时间可以直接跳到第十节。  一、最小骨架:一个模块的五要素 先看一个能正常编译加载的最小模块: 12345678910111213141516171819#include &lt;linux/init.h&gt;     // __init / __exit,以及初始化相关宏#include &lt;linux/module.h&gt;   // module_i...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</div></div><div class="info-2"><div class="info-item-1">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点 RDMA 这套东西之所以让人望而生畏,不是因为哪个概念特别难,而是因为它把三个本来独立的知识域压进了同一条调用链:Linux 内核系统调用机制、内存管理、网络硬件。单独看每个术语都不复杂,叠在一起才显得信息量爆炸。 这篇文章分三大块:  调用链——从 ibv_reg_mr 一路走到 HCA 硬件,每一层在做什么; 术语地图——把所有黑话按类别拆开,每个只给一句人话; 实战落点——AI 训练云平台上,这条链路到底体现在哪些日常工作里。   先正一个名。 中文社区里偶尔能看到 “ubverbs” 这个写法,它不是标准名称。内核里承接用户态 verbs 请求的模块叫 ib_uverbs(Userspace Verbs),源码在 drivers/infiniband/core/uverbs*.c。本文统一用 ib_uverbs。   关联阅读: 这条链路上的故障怎么观测,我在 《RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区》 里写过。那篇讲的是&quot;怎么看见...</div></div></div></a><a class="pagination-related" href="/2025/11/10/2025-11-10-NCCL%E9%80%9A%E4%BF%A1%E5%8E%9F%E8%AF%AD/" title="NCCL通信原语"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-11-10</div><div class="info-item-2">NCCL通信原语</div></div><div class="info-2"><div class="info-item-1">NCCL通信原语 参考： https://blog.csdn.net/2401_84208172/article/details/142610913?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=142610913&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link 1. Broadcast 其实就是把自己卡上面的东西让所有卡都知道 2. Scatter 其实就是把自己的东西分成多块，按照顺序向其他GPU发送data block 3. Reduce 就是把所有卡的部分在自己卡上面作一个sum。注意这里只有自己的卡作sum 4. Gather 其实对应于Scatter，是把分布在其他卡上的data block在自己卡上面拼起来。注意，这里也是只有自己这一张卡 5. AllReduce 每张卡都对所有卡作一个sum=reduce scatter+all gather, 通信成本也等于这俩加起来 官方说法：将每个节点的数据规约并...</div></div></div></a><a class="pagination-related" href="/2026/08/14/2026-08-14-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E6%A0%B8%E5%BF%83%E6%8A%80%E6%9C%AF%E4%BB%8EFSDP%E5%88%B0AllReduce/" title="分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-14</div><div class="info-item-2">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析</div></div><div class="info-2"><div class="info-item-1">分布式训练核心技术:从 FSDP 到 All-Reduce 算法全景解析 引言 随着大语言模型(LLM)参数规模从亿级跃升至万亿级,单卡训练已成为历史。分布式训练技术成为每一位 AI 从业者的必修课。本文将带你系统性地梳理分布式训练的核心技术栈,从 FSDP 的显存优化,到 DDP 的完整链路,再到底层 Ring-AllReduce 与 ACCL 的算法对决,帮你建立完整的知识图谱。  一、FSDP:大模型训练的显存救星 1.1 什么是 FSDP? Fully Sharded Data Parallel (FSDP) 是 PyTorch 1.11 引入的分布式训练策略,其核心思想源于微软的 ZeRO(Zero Redundancy Optimizer)优化器。与传统 DDP 每个 GPU 保留完整模型副本不同,FSDP 将模型参数、梯度和优化器状态分片存储在所有 GPU 上。 1.2 核心适用场景    场景类型 推荐方案 说明     大模型训练(&gt;500M 参数) FSDP 可降低 4-6 倍峰值显存占用   超大模型(&gt;20B 参数) FSDP / DeepSp...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/" title="RDMA 技术栈全解——ML 系统研发面试通关"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">RDMA 技术栈全解——ML 系统研发面试通关</div></div><div class="info-2"><div class="info-item-1">RDMA 技术栈全解——ML 系统研发面试通关  本文目标：让你在面试官问&quot;你们大模型训练集群用的什么网络、为什么用 RDMA、RDMA 怎么做到零拷贝、RoCEv2 和 InfiniBand 区别、NCCL 里 RDMA 起什么作用&quot;时，能从原理到工程对答如流。 全文按&quot;为什么 → 是什么 → 怎么用 → 在 ML 系统里怎么用 → 面试问答&quot;组织。   一、为什么需要 RDMA：传统网络栈的瓶颈 先看传统 TCP/IP 协议栈一次发送数据的完整路径（以应用 A 发数据到应用 B 为例）：  A 应用调用 send()，数据从用户态缓冲区通过 copy_to_user-like 的拷贝进入内核态 socket buffer（第一次拷贝）。 协议栈（TCP/IP）逐层封装报文头，经过内核协议栈处理。 数据通过 DMA 从内核缓冲区拷到网卡（NIC）的发送环（第二次拷贝）。 网卡把数据发到网线上。 B 端网卡收到数据，DMA 拷到内核 socket buffer。 B 应用调用 recv()，数据从内核态拷回用户态（第三次拷贝）。  问题有三...</div></div></div></a><a class="pagination-related" href="/2026/08/05/2026-08-05-%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%8C%85%E5%A4%84%E7%90%86%E4%B8%89%E6%9D%BF%E6%96%A7-XDP-DPDK-AF_XDP/" title="高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-05</div><div class="info-item-2">高性能网络包处理三板斧：XDP、DPDK 与 AF_XDP</div></div><div class="info-2"><div class="info-item-1"> 做大模型 Infra 的人迟早会撞到「网络」这堵墙：千卡训练的 NCCL all-reduce、KV-cache 的 RDMA 直读、推理网关的百万 QPS……一旦标准内核协议栈不够用，就要在 XDP / DPDK / AF_XDP 这三条「绕过内核」的路径里做选择。本文把三者的原理、数据流、取舍一次性讲透。  一、为什么内核协议栈不够快 先建立基准：为什么需要绕过内核？ 标准 Linux 网络栈（sk_buff + TCP/IP 协议栈 + socket）每收一个包要走的路： 12网卡 RX → DMA 到内存 → 硬中断 → 软中断 NET_RX_SOFTIRQ → netif_receive_skb→ sk_buff 分配/拷贝 → IP/TCP 协议栈处理 → socket 接收队列 → 用户态 read() 这套路径有四个「慢点」：  上下文切换：硬中断 → 软中断 → 内核态 → 用户态，每个包多次跨越特权级。 sk_buff 分配/释放：每个包都 alloc_skb/kfree，这是热点里的内存分配抖动。 数据拷贝：内核缓冲区 → 用户态 buffer，至少一次 ...</div></div></div></a><a class="pagination-related" href="/2026/08/18/2026-08-18-%E8%AE%B0%E4%B8%80%E6%AC%A1Cilium-VXLAN%E5%85%A8%E9%9B%B6MAC%E4%B8%A2%E5%8C%85%E9%97%AE%E9%A2%98%E7%9A%84%E6%8E%92%E6%9F%A5%E4%B8%8E%E4%BF%AE%E5%A4%8D/" title="记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-18</div><div class="info-item-2">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复</div></div><div class="info-2"><div class="info-item-1">记一次 Cilium VXLAN 全零 MAC 丢包问题的排查与修复  本文所有 IP、MAC、节点名、网卡名均为脱敏后的示意值，仅用于说明网络结构与排查思路，不代表真实生产环境。  背景 某次接到反馈：从公有云上访问某边缘 K8s 集群的推理服务不通。 网络架构上有两条专线（WireGuard 隧道）链路，分别接到集群内两个不同节点：  公有云 VM-1 → WireGuard 隧道-1 → 集群的 edge-gw 节点（一个不在 K8s 集群内的网关节点） ✅ 公有云 VM-2 → WireGuard 隧道-2 → 集群的 master 节点（K8s 控制面节点） ❌  诡异的是：两条链路打到的后端其实是同一个推理服务 Pod，一条通、一条不通。这种&quot;对称中又不对称&quot;的现象，往往最耗时间——因为它会反复推翻你的假设。 整体拓扑 12345678910111213141516171819202122232425262728293031323334353637383940414243444546474849505152535455565758596061626...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9B%B6%E3%80%81%E5%85%88%E7%9C%8B%E6%95%B0%E5%AD%97-%E4%B8%80%E7%B1%BB%E6%B2%89%E9%BB%98%E7%9A%84%E6%95%85%E9%9A%9C"><span class="toc-number">1.1.</span> <span class="toc-text">零、先看数字:一类沉默的故障</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81kernel-bypass-%E4%B9%8B%E5%90%8E-%E5%8F%AF%E8%A7%82%E6%B5%8B%E6%80%A7%E7%95%99%E5%9C%A8%E4%BA%86%E5%8E%9F%E5%9C%B0"><span class="toc-number">1.2.</span> <span class="toc-text">一、kernel bypass 之后,可观测性留在了原地</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-RDMA-%E5%9C%A8%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E9%87%8C%E7%9A%84%E4%BD%8D%E7%BD%AE"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 RDMA 在训练集群里的位置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E2%80%9C%E7%BB%95%E8%BF%87%E5%86%85%E6%A0%B8-%E7%BB%8F%E5%B8%B8%E8%A2%AB%E8%AF%AF%E8%A7%A3%E6%88%90-%E5%86%85%E6%A0%B8%E4%B8%8D%E5%86%8D%E5%8F%82%E4%B8%8E%E2%80%9D"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 “绕过内核&quot;经常被误解成&quot;内核不再参与”</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-%E4%B8%89%E5%B1%82%E6%96%AD%E9%93%BE-%E4%B8%BA%E4%BB%80%E4%B9%88%E7%8E%B0%E6%9C%89%E5%B7%A5%E5%85%B7%E7%9C%8B%E4%B8%8D%E8%A7%81"><span class="toc-number">1.2.3.</span> <span class="toc-text">1.3 三层断链:为什么现有工具看不见</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%8113-%E4%B8%AA%E6%8E%A2%E9%92%88-%E8%A7%82%E6%B5%8B%E7%B3%BB%E7%BB%9F%E7%9A%84%E6%A0%B8%E5%BF%83%E6%98%AF%E5%86%B3%E5%AE%9A%E4%B8%8D%E8%A3%85%E5%93%AA%E4%BA%9B%E6%8E%A2%E9%92%88"><span class="toc-number">1.3.</span> <span class="toc-text">二、13 个探针:观测系统的核心是决定不装哪些探针</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E4%BB%8E-2-000-%E5%88%B0-13"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 从 2,000 到 13</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E4%B8%80%E6%9D%A1%E8%B7%AF%E5%BE%84%E7%9A%84%E5%AE%9E%E4%BE%8B-ib-modify-qp"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 一条路径的实例:ib_modify_qp</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E8%97%8F%E5%9C%A8%E6%9E%84%E6%88%90%E9%87%8C%E7%9A%84%E5%B7%A5%E7%A8%8B%E5%88%A4%E6%96%AD-%E6%8E%A2%E9%92%88%E6%80%8E%E4%B9%88%E8%B7%A8%E5%8E%82%E5%95%86%E5%AD%98%E6%B4%BB"><span class="toc-number">1.3.3.</span> <span class="toc-text">2.3 藏在构成里的工程判断:探针怎么跨厂商存活</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%9C%BA%E5%88%B6%E4%B8%89%E4%BB%B6%E5%A5%97-fexit%E3%80%81%E5%A4%B1%E8%B4%A5%E6%89%8D%E5%8F%91%E5%B0%84%E3%80%81%E5%8F%8C%E5%B9%B3%E9%9D%A2"><span class="toc-number">1.4.</span> <span class="toc-text">三、机制三件套:fexit、失败才发射、双平面</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%80%89-eBPF-%E6%94%BE%E5%BC%83-ftrace-%E4%B8%8E-perf"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 为什么选 eBPF,放弃 ftrace 与 perf</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%80%89-fentry-fexit-%E6%94%BE%E5%BC%83-kretprobe"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 为什么选 fentry&#x2F;fexit,放弃 kretprobe</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E5%A4%B1%E8%B4%A5%E6%89%8D%E5%8F%91%E5%B0%84"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 失败才发射</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E6%95%B0%E6%8D%AE%E9%80%9A%E8%B7%AF%E6%98%AF%E5%8F%8C%E5%B9%B3%E9%9D%A2%E7%9A%84"><span class="toc-number">1.4.4.</span> <span class="toc-text">3.4 数据通路是双平面的</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E6%8E%A7%E5%88%B6%E9%9D%A2%E5%90%8C%E6%A0%B7%E5%9C%A8%E5%81%9A%E5%87%8F%E6%B3%95"><span class="toc-number">1.4.5.</span> <span class="toc-text">3.5 控制面同样在做减法</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%8173-%E8%A6%86%E7%9B%96%E7%8E%87-%E4%B8%80%E4%B8%AA%E6%8A%8A%E5%8F%96%E8%88%8D%E6%91%86%E5%9C%A8%E6%98%8E%E9%9D%A2%E4%B8%8A%E7%9A%84%E9%AA%8C%E8%AF%81"><span class="toc-number">1.5.</span> <span class="toc-text">四、73% 覆盖率:一个把取舍摆在明面上的验证</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E7%94%A8%E4%B8%80%E4%B8%AA%E7%8B%AC%E7%AB%8B%E5%88%86%E7%B1%BB%E5%99%A8%E5%81%9A%E4%BA%A4%E5%8F%89%E9%AA%8C%E8%AF%81"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 用一个独立分类器做交叉验证</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E8%AE%BA%E6%96%87%E6%B2%A1%E6%9C%89%E5%81%9C%E5%9C%A8%E8%BF%99%E9%87%8C"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 论文没有停在这里</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%99%E5%A5%97%E9%AA%8C%E8%AF%81%E5%80%BC%E5%BE%97%E5%AD%A6"><span class="toc-number">1.5.3.</span> <span class="toc-text">4.3 为什么这套验证值得学</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E9%83%A8%E7%BD%B2%E4%BE%A7%E7%9A%84%E6%95%B0%E5%AD%97"><span class="toc-number">1.5.4.</span> <span class="toc-text">4.4 部署侧的数字</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%9B%9B%E4%B8%AA%E6%A1%88%E4%BE%8B-%E5%B1%82%E7%BA%A7%E8%AF%81%E6%8D%AE%E5%A6%82%E4%BD%95%E5%AE%9A%E4%BD%8D%E6%A0%B9%E5%9B%A0"><span class="toc-number">1.6.</span> <span class="toc-text">五、四个案例:层级证据如何定位根因</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E9%85%8D%E7%BD%AE%E7%B1%BB%E9%97%AE%E9%A2%98-%E8%AE%BA%E6%96%87-%C2%A75-1"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 配置类问题(论文 §5.1)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-fleet-%E7%BA%A7%E4%BA%8B%E6%95%85-%E8%AE%BA%E6%96%87-%C2%A75-2"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 fleet 级事故(论文 §5.2)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E6%BC%94%E8%AE%B2%E8%A1%A5%E5%85%85%E7%9A%84%E4%B8%A4%E4%B8%AA%E6%A1%88%E4%BE%8B"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 演讲补充的两个案例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E4%B8%80%E4%B8%AA%E8%AE%BA%E6%96%87%E6%B2%A1%E5%B1%95%E5%BC%80%E7%9A%84%E6%9C%BA%E5%88%B6-%E7%94%A8-%E5%A5%BD%E8%BD%A8%E8%BF%B9-%E5%81%9A%E5%9F%BA%E7%BA%BF"><span class="toc-number">1.6.4.</span> <span class="toc-text">5.4 一个论文没展开的机制:用&quot;好轨迹&quot;做基线</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E4%B8%9A%E7%95%8C%E5%9D%90%E6%A0%87-%E8%A7%82%E6%B5%8B%E6%A0%88%E7%9A%84%E5%9B%9B%E5%B1%82%E5%9B%BE%E8%B0%B1%E4%B8%8E%E4%B8%A4%E6%9D%A1%E6%94%B6%E6%95%9B%E7%BA%BF"><span class="toc-number">1.7.</span> <span class="toc-text">六、业界坐标:观测栈的四层图谱与两条收敛线</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E6%A1%86%E6%9E%B6%E5%B1%82-%E9%BB%91%E5%8C%A3%E5%AD%90%E8%8C%83%E5%BC%8F%E7%A1%AE%E7%AB%8B"><span class="toc-number">1.7.1.</span> <span class="toc-text">6.1 框架层:黑匣子范式确立</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E5%86%85%E6%A0%B8%E5%B1%82-eBPF-%E7%94%9F%E6%80%81%E7%9A%84%E9%80%9A%E7%94%A8%E4%B8%8E%E4%B8%93%E7%B2%BE"><span class="toc-number">1.7.2.</span> <span class="toc-text">6.2 内核层:eBPF 生态的通用与专精</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E7%BD%91%E7%BB%9C%E4%B8%8E%E7%A1%AC%E4%BB%B6%E5%B1%82-%E5%8E%82%E5%95%86%E6%8A%8A%E8%A7%82%E6%B5%8B%E5%81%9A%E6%88%90%E4%BA%86%E5%95%86%E5%93%81"><span class="toc-number">1.7.3.</span> <span class="toc-text">6.3 网络与硬件层:厂商把观测做成了商品</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-%E7%AE%97%E6%B3%95%E5%B1%82-%E4%BB%8E%E6%AD%A3%E5%88%99%E5%88%B0%E6%89%A7%E8%A1%8C%E9%87%8D%E7%8E%B0%E5%86%8D%E5%88%B0-agent"><span class="toc-number">1.7.4.</span> <span class="toc-text">6.4 算法层:从正则到执行重现再到 agent</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-5-%E4%B8%A4%E6%9D%A1%E6%94%B6%E6%95%9B%E7%BA%BF"><span class="toc-number">1.7.5.</span> <span class="toc-text">6.5 两条收敛线</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E6%9B%B4%E5%A4%A7%E7%9A%84%E5%9B%BE-AI-%E9%9B%86%E7%BE%A4%E5%8F%AF%E8%A7%82%E6%B5%8B%E6%80%A7%E7%9A%84%E5%9C%B0%E6%9D%BF%E5%9C%A8%E5%93%AA%E9%87%8C"><span class="toc-number">1.8.</span> <span class="toc-text">七、更大的图:AI 集群可观测性的地板在哪里</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E5%9C%B0%E6%9D%BF%E8%A2%AB%E6%8E%A8%E5%88%B0%E4%BA%86%E5%86%85%E6%A0%B8%E9%A9%B1%E5%8A%A8%E5%B1%82"><span class="toc-number">1.8.1.</span> <span class="toc-text">7.1 地板被推到了内核驱动层</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-observability-first-%E6%98%AF%E6%AF%94%E5%B7%A5%E5%85%B7%E6%9C%AC%E8%BA%AB%E6%9B%B4%E5%80%BC%E5%BE%97%E8%AE%B0%E4%BD%8F%E7%9A%84%E8%AF%8D"><span class="toc-number">1.8.2.</span> <span class="toc-text">7.2 &quot;observability-first&quot;是比工具本身更值得记住的词</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-%E9%80%9A%E7%94%A8%E4%B8%8E%E4%B8%93%E7%B2%BE%E7%9A%84%E5%88%86%E9%87%8E%E4%BC%9A%E9%95%BF%E6%9C%9F%E5%AD%98%E5%9C%A8"><span class="toc-number">1.8.3.</span> <span class="toc-text">7.3 通用与专精的分野会长期存在</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-%E7%9B%B2%E5%8C%BA%E6%B8%85%E5%8D%95%E4%BB%8D%E7%84%B6%E5%BE%88%E9%95%BF"><span class="toc-number">1.8.4.</span> <span class="toc-text">7.4 盲区清单仍然很长</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%80%BB%E7%BB%93%E4%B8%8E%E4%B8%89%E4%B8%AA%E5%88%A4%E6%96%AD"><span class="toc-number">1.9.</span> <span class="toc-text">八、总结与三个判断</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84-%E5%85%B3%E9%94%AE%E6%95%B0%E5%AD%97%E9%80%9F%E6%9F%A5"><span class="toc-number">1.10.</span> <span class="toc-text">附:关键数字速查</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.11.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</a><time datetime="2026-09-09T16:00:00.000Z" title="发表于 2026-09-10 00:00:00">2026-09-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</a><time datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

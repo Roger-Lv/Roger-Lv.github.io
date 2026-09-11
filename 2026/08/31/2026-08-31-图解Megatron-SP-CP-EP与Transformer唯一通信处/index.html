@@ -1,0 +1,685 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从&quot;一个 Transformer 层里 99% 的计算不需要跨 GPU 通信,唯一全员大会只有 Attention&quot;这个支点出发,图解 Megatron 的 TP&#x2F;SP&#x2F;PP&#x2F;DP&#x2F;CP&#x2F;EP 六维并行如何围绕 Attention 设计成一张交通调度图。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从一维到多维:图解 Megatron 的 SP &#x2F; CP &#x2F; EP 与 Transformer 唯一通信处">
+<meta property="og:url" content="http://example.com/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从&quot;一个 Transformer 层里 99% 的计算不需要跨 GPU 通信,唯一全员大会只有 Attention&quot;这个支点出发,图解 Megatron 的 TP&#x2F;SP&#x2F;PP&#x2F;DP&#x2F;CP&#x2F;EP 六维并行如何围绕 Attention 设计成一张交通调度图。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-30T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-09-03T07:32:07.583Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Transformer">
+<meta property="article:tag" content="Megatron">
+<meta property="article:tag" content="并行策略">
+<meta property="article:tag" content="SP">
+<meta property="article:tag" content="CP">
+<meta property="article:tag" content="EP">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处",
+  "url": "http://example.com/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-30T16:00:00.000Z",
+  "dateModified": "2026-09-03T07:32:07.583Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-30T16:00:00.000Z" title="发表于 2026-08-31 00:00:00">2026-08-31</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-03T07:32:07.583Z" title="更新于 2026-09-03 15:32:07">2026-09-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83/">分布式训练</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/" data-flag-title="从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处</h1>
+<p>本文从一个反直觉的观察出发:<strong>一个 Transformer 层里,99% 的计算模块根本不需要跨 GPU 通信,唯一的&quot;全员大会&quot;只有 Attention</strong>。理解了这一点,Megatron-LM 那套看似复杂的 6 维并行(TP / SP / PP / DP / CP / EP)就不再是黑魔法,而是一张围绕 Attention 设计的&quot;交通调度图&quot;。</p>
+<blockquote>
+<p>关联阅读:本文讲训练并行维度的拆解;VLA 场景下为何选 FSDP 而非 Megatron 见 <a href="2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron.md">为什么 VLA 训练选 FSDP 而不是 Megatron</a>。</p>
+</blockquote>
+<hr>
+<h2 id="一、先看清楚-Transformer-层里到底有什么">一、先看清楚:Transformer 层里到底有什么</h2>
+<p>把一个标准 Transformer 层展开,数据流是这样的(Pre-LN 结构):</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line">    层输入 x [batch, seq, d]</span><br><span class="line">         │</span><br><span class="line">         ├────────────────────────┐ (残差)</span><br><span class="line">         ▼                        │</span><br><span class="line">①  LayerNorm                      │</span><br><span class="line">         ▼                        │</span><br><span class="line">②  Linear (QKV 投影)              │</span><br><span class="line">    xW_q  xW_k  xW_v → Q, K, V   │</span><br><span class="line">         ▼                        │</span><br><span class="line">③  Attention   ★ 唯一的红灯区 ★    │</span><br><span class="line">    score[t,j] = Q[t]·K[j]        │</span><br><span class="line">    softmax → Σ w_j · V[j]        │</span><br><span class="line">         ▼                        │</span><br><span class="line">④  Linear (输出投影 W_o)           │</span><br><span class="line">         ▼                        │</span><br><span class="line">       ( + ) ←────────────────────┘</span><br><span class="line">         │</span><br><span class="line">         ├────────────────────────┐ (残差)</span><br><span class="line">         ▼                        │</span><br><span class="line">⑤  LayerNorm                      │</span><br><span class="line">         ▼                        │</span><br><span class="line">⑥  MLP = Linear(d→4d)             │</span><br><span class="line">        → GELU                    │</span><br><span class="line">        → Linear(4d→d)            │</span><br><span class="line">         ▼                        │</span><br><span class="line">       ( + ) ←────────────────────┘</span><br><span class="line">         │</span><br><span class="line">    层输出 → 重复 × N 层</span><br></pre></td></tr></table></figure>
+<p>现在问一个关键问题:如果把这 8 个 token 切成两半分给两张 GPU,哪些模块还能各算各的?</p>
+<h3 id="token-local-vs-token-global-一张表看懂">token-local vs token-global:一张表看懂</h3>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>每个词的计算</th>
+<th>依赖其他词?</th>
+<th>能否按序列切分</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LayerNorm</td>
+<td>对 [The] 自己的 hidden 维度归一化</td>
+<td>否</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Linear(QKV 投影等)</td>
+<td>hidden × W,纯矩阵乘</td>
+<td>否</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>MLP(FFN)</td>
+<td>Linear + GELU + Linear</td>
+<td>否</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><strong>Attention</strong></td>
+<td>[here] 的 Q 要和 [The][cat][sat] 的 K 点积</td>
+<td><strong>是</strong></td>
+<td>❌ 必须补通信</td>
+</tr>
+</tbody>
+</table>
+<p>前三个模块的共同点:计算一个 token 的输出,只需要这个 token 自己的输入向量 + 共享权重。它们像&quot;各自批改各自的学生作业&quot;,随便分发,<strong>零通信</strong>。</p>
+<p>Attention 则是&quot;全班讨论&quot;:第 t 个 token 的注意力权重 <code>score[t,j] = Q[t]·K[j]</code> 要遍历所有 j 位置。把序列切开,GPU0 上的 [here] 就看不到 GPU1 上的 [The] 的 K/V——信息被截断了。</p>
+<p>用一张色块图总结(绿 = token-local 可切,红 = token-global 需通信,黄 = TP 权重切分区):</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────┐</span><br><span class="line">│ ① LayerNorm        ┃ 绿 ┃ SP/CP 直接切      │</span><br><span class="line">│ ② Linear (QKV)     ┃ 黄 ┃ TP 按权重列切     │</span><br><span class="line">│ ③ Attention        ┃ 红 ┃ CP Ring Attention │</span><br><span class="line">│ ④ Linear (W_o)     ┃ 黄 ┃ TP 行切+AllReduce │</span><br><span class="line">│ ⑤ LayerNorm        ┃ 绿 ┃ 直接切            │</span><br><span class="line">│ ⑥ MLP              ┃ 黄 ┃ TP 切 / EP 切专家 │</span><br><span class="line">└─────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p><strong>整个 Transformer 层只有 ③ 一处红灯。</strong> 后面所有的并行设计,本质上都是在回答同一个问题:<em>怎么让绿灯区随便切、把红灯区的通信代价降到最低、以及绕开或者补齐它。</em></p>
+<hr>
+<h2 id="二、让真实数字流过整个网络">二、让真实数字流过整个网络</h2>
+<p>光看色块图还不够直观,我们让一个真实的数字流跑一遍。下面所有数字都来自一个真实运行的小模型(<code>d_model=4, seq=4, batch=2, 1 个注意力头</code>;真实大模型是 <code>d=4096+、seq=8K+</code>,但逻辑一模一样)。</p>
+<h3 id="2-1-batch-seq-d-是什么">2.1 batch / seq / d 是什么</h3>
+<p>张量形状 <code>[batch, seq, d]</code>,三个维度分别是:</p>
+<ul>
+<li><code>batch = 2</code> 一次喂几句话(互不相关)</li>
+<li><code>seq = 4</code> 每句话几个 token</li>
+<li><code>d = 4</code> 每个 token 用多长的向量表示</li>
+</ul>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">[</span><br><span class="line">  [ [t0的4个数], [t1的4个数], [t2的4个数], [t3的4个数] ],   ← 句子1 &quot;The cat sat here&quot;</span><br><span class="line">  [ [t0的4个数], [t1的4个数], [t2的4个数], [t3的4个数] ],   ← 句子2 &quot;A dog ran fast&quot;</span><br><span class="line">]</span><br></pre></td></tr></table></figure>
+<p><strong>关键直觉:矩阵的&quot;行&quot;是 token,&quot;列&quot;是特征。</strong> 后面所有讨论都围绕&quot;哪些计算沿行独立、哪些计算要跨行&quot;。</p>
+<h3 id="2-2-让-“The-cat-sat-here”-流过整个网络">2.2 让 “The cat sat here” 流过整个网络</h3>
+<p><strong>第 0 步:tokenize + embedding。</strong> “The cat sat here” → <code>[0, 1, 2, 3]</code> → 查嵌入表 → <code>x[2, 4, 4]</code>。句子 1 的 x(每行 = 一个 token 的身份向量):</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">        d1      d2      d3      d4</span><br><span class="line">The  [-1.126, -1.152, -0.251, -0.434]</span><br><span class="line">cat  [ 0.849,  0.692, -0.316, -2.115]</span><br><span class="line">sat  [ 0.322, -1.263,  0.350,  0.308]</span><br><span class="line">here [ 0.120,  1.238,  1.117, -0.247]</span><br></pre></td></tr></table></figure>
+<p>从这一刻起,&quot;cat&quot;这个词就变成了向量 <code>[0.849, 0.692, -0.316, -2.115]</code>,后续所有模块处理的都是这种数字,不再有&quot;词&quot;的概念。</p>
+<p><strong>① LayerNorm:每行自己归一化。</strong> 对每一行(每个 token 自己的 4 个数)求均值方差,变成均值 0、方差 1:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">        d1      d2      d3      d4</span><br><span class="line">The  [-0.954, -1.020,  1.214,  0.760]</span><br><span class="line">cat  [ 0.908,  0.775, -0.079, -1.603]</span><br><span class="line">sat  [ 0.571, -1.732,  0.611,  0.550]</span><br><span class="line">here [-0.688,  1.072,  0.882, -1.266]</span><br></pre></td></tr></table></figure>
+<p>验证:每行均值≈0(1e-7 量级),每行方差≈1。注意看:算 The 那一行的归一化,用到的数字全部来自 The 自己那 4 个数——cat 行变成什么、在不在同一张 GPU 上,完全无所谓。<strong>这就是 token-local</strong>。此时如果把&quot;The cat&quot;放 GPU0、&quot;sat here&quot;放 GPU1,各算各的,结果一模一样,零通信。</p>
+<p><strong>② Linear(QKV 投影):整行乘同一个权重。</strong> <code>Q = x @ W_q</code>,每个 token 的向量独立地乘权重矩阵:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">Q(每行 = 该token的&quot;查询&quot;向量):</span><br><span class="line">       q1      q2      q3      q4</span><br><span class="line">The  [-0.236,  0.295, -0.016,  1.213]</span><br><span class="line">cat  [ 0.306, -0.338,  0.567, -1.023]</span><br><span class="line">sat  [-0.257, -0.641,  0.254,  0.594]</span><br><span class="line">here [ 0.261,  0.551,  0.373, -0.121]</span><br></pre></td></tr></table></figure>
+<p>K、V 同理各有一份。The 的 Q 只由 The 的输入向量算出,<strong>依然 token-local</strong>。TP 切的是这里的 <code>W_q</code>(列切)——即把 4 列权重分给不同 GPU,各算 2 列,而不是切 token。</p>
+<p><strong>③ Attention:唯一跨行的地方。</strong> 现在算 <code>score[t,j] = Q[t]·K[j]</code>——注意下标:Q 的行 t 点乘 K 的行 j。第 1 行 The 的注意力分数要跟所有 4 行 K 做点积:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">score 矩阵(4×4,行=查询token,列=被看的token):</span><br><span class="line">          K(The)  K(cat)  K(sat)  K(here)</span><br><span class="line">Q(The)   [-0.530,  0.307, -0.233, -0.120]</span><br><span class="line">Q(cat)   [ 0.417, -0.282,  0.318, -0.064]</span><br><span class="line">Q(sat)   [-0.341, -0.013, -0.108, -0.341]</span><br><span class="line">Q(here)  [ 0.092,  0.085,  0.148,  0.077]</span><br></pre></td></tr></table></figure>
+<p>softmax 后(每行加权和=1):</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Q(The)   [0.162, 0.375, 0.218, 0.245]   ← &quot;The&quot; 分给 cat 37.5% 的注意力</span><br><span class="line">Q(cat)   [0.331, 0.165, 0.300, 0.205]</span><br><span class="line">Q(sat)   [0.215, 0.299, 0.272, 0.215]</span><br><span class="line">Q(here)  [0.248, 0.246, 0.262, 0.244]</span><br></pre></td></tr></table></figure>
+<p>输出 = 权重 @ V(&quot;The&quot;的新表示 = 16.2%·V(The) + 37.5%·V(cat) + …)。看 Q(The) 那一行:它引用了 K(cat)、K(sat)、K(here)——<strong>跨行交互发生了</strong>。如果 cat/sat/here 的 K/V 在别的 GPU 上,The 的输出就是错的。这就是 CP 必须用 Ring Attention 把 K/V 沿环传一圈的原因:让每一行的 Q 都&quot;见过&quot;全部 K/V。</p>
+<p>对比一下 ①② 和 ③:</p>
+<ul>
+<li>①② 的计算是&quot;行内&quot;的(每行独立);</li>
+<li>③ 的 score 矩阵是&quot;行×行&quot;的(Q 的行 × K 的行)——<strong>这个 4×4 矩阵就是通信需求的来源,序列越长它越大(seq=128K 时是 128K×128K,这就是 O(N²))</strong>。</li>
+</ul>
+<p><strong>④ 输出投影 + 残差。</strong> <code>Wo(attn_out) + h</code>,又回到行内计算,加上残差跳线(把 ① 之前的输入直接加回来):</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">[ 0.540,  0.755,  0.163, -1.819]   ← cat 行</span><br></pre></td></tr></table></figure>
+<p><strong>⑤ 第二个 LayerNorm。</strong> 同 ①,行内归一化。</p>
+<p><strong>⑥ MLP:升维 → 激活 → 降维。</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Linear W_up: d=4 → d_ff=8   (&quot;cat&quot;那行变成 8 个数)</span><br><span class="line">[ 0.632,  0.729,  0.258, -0.508,  0.987, -0.241, -0.315, -0.160]</span><br><span class="line">       ↓ GELU(逐元素,还是行内)</span><br><span class="line">       ↓ Linear W_down: 8 → 4</span><br></pre></td></tr></table></figure>
+<p>加残差 → 本层最终输出 <code>[2, 4, 4]</code>:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">        d1      d2      d3      d4</span><br><span class="line">The  [-1.069, -1.101,  1.231,  0.584]</span><br><span class="line">cat  [ 0.081,  0.936, -0.100, -1.433]</span><br><span class="line">sat  [ 0.433, -1.860,  0.802,  0.348]</span><br><span class="line">here [-1.333,  1.452,  0.889, -1.015]</span><br></pre></td></tr></table></figure>
+<p>→ 送入下一层,重复 N 次(如 Llama-70B 是 80 层)。</p>
+<p>整个过程一句话:<strong>每行(token)带着自己的 4 个数出发,在 ③ 处短暂地&quot;看&quot;了一眼所有其他行,其余时间都在自己行内做变换。</strong></p>
+<h3 id="2-3-三个维度正好对应三种并行">2.3 三个维度正好对应三种并行</h3>
+<p>现在回头看 <code>[batch, seq, d]</code>,你会发现并行的切分刀口就落在这三个轴上:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">              batch 轴(2句)</span><br><span class="line">                ↓ DP 在这里切:句子1给一组GPU,句子2给另一组</span><br><span class="line">┌───────────────────────────────┐</span><br><span class="line">│ [The][cat][sat][here]          │ ← seq 轴:SP/CP 在这里切</span><br><span class="line">│  ↓    ↓    ↓    ↓              │    &quot;The cat&quot;给GPU0, &quot;sat here&quot;给GPU1</span><br><span class="line">│  各token独立的4维向量           │</span><br><span class="line">│    [d1 d2 d3 d4]               │ ← d 轴:TP 在这里切</span><br><span class="line">└───────────────────────────────┘    W_q 的4列分给不同GPU</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>切哪里</th>
+<th>用上面的例子说</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>DP 切 batch</strong></td>
+<td>句子1给 GPU 组 A,句子2给 GPU 组 B,最后同步梯度</td>
+<td>两句话本来互不相干,怎么分都对</td>
+</tr>
+<tr>
+<td><strong>SP / CP 切 seq</strong></td>
+<td>token [The][cat] 给 GPU0,[sat][here] 给 GPU1</td>
+<td>①②⑤⑥ 行内计算照常;只有 ③ 的 score 矩阵被切成 4 块,GPU0 的 Q(The) 需要 K(sat)K(here) → Ring Attention 环形传递</td>
+</tr>
+<tr>
+<td><strong>TP 切 d</strong></td>
+<td>每个 token 的 4 维向量(和权重矩阵的 4 列)分给多卡</td>
+<td>GPU0 算每行的前 2 个特征,GPU1 算后 2 个,All-Reduce 合并</td>
+</tr>
+<tr>
+<td><strong>EP(MoE)</strong></td>
+<td>⑥ 的 MLP 换成 8 个专家,每卡持 2 个</td>
+<td>[The] 被路由到专家 1(GPU0),[cat] 被路由到专家 3(GPU1),All-to-All 流动</td>
+</tr>
+</tbody>
+</table>
+<p>最妙的一点:<strong>③ 的 score 矩阵形状恰好是 <code>[seq, seq]</code>——seq 维切分(CP)直接切这个矩阵的行和列,d 维切分(TP)则完全不碰它(切的是产生 Q/K/V 的权重)</strong>。这就是为什么 CP 管&quot;序列长&quot;、TP 管&quot;模型宽&quot;,两者天然正交、可以叠加。</p>
+<hr>
+<h2 id="三、Megatron-到底有-几维-并行">三、Megatron 到底有&quot;几维&quot;并行?</h2>
+<p>先澄清一个常见困惑:网上有人说 Megatron 是 5D,有人说是 6D,到底几个?</p>
+<p><strong>NVIDIA 官方口径是 5D-parallelism:TP + PP + DP + CP + EP</strong>(EP 被明确定位为&quot;第五维度&quot;)。如果把与 TP 绑定的 SP 也算独立一维,社区习惯上称 <strong>6D</strong>。MoE 场景下还有 ETP(专家张量并行,即 DeepSeek 论文里的 ESPT)和 EDP(专家数据并行)两个扩展维度。</p>
+<p>各维度的定位一览:</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>切分对象</th>
+<th>解决什么瓶颈</th>
+<th>核心通信原语</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>DP</strong></td>
+<td>batch 维度的数据</td>
+<td>吞吐扩展</td>
+<td>梯度 All-Reduce</td>
+</tr>
+<tr>
+<td><strong>TP</strong></td>
+<td>权重矩阵(行/列)</td>
+<td>单层权重单卡放不下</td>
+<td>All-Reduce</td>
+</tr>
+<tr>
+<td><strong>SP</strong></td>
+<td>TP 区域外的激活(序列维)</td>
+<td>激活显存冗余</td>
+<td>All-Gather + Reduce-Scatter</td>
+</tr>
+<tr>
+<td><strong>PP</strong></td>
+<td>模型层(按 stage)</td>
+<td>层数太多跨机切</td>
+<td>stage 间点对点</td>
+</tr>
+<tr>
+<td><strong>CP</strong></td>
+<td>整条序列(含 Attention)</td>
+<td>长上下文 O(N²)</td>
+<td>KV 环形 P2P(Ring Attention)</td>
+</tr>
+<tr>
+<td><strong>EP</strong></td>
+<td>MoE 的专家集合</td>
+<td>专家数量多</td>
+<td>Dispatch/Combine All-to-All</td>
+</tr>
+</tbody>
+</table>
+<p>初学者最容易混淆的就是 <strong>SP / CP / EP</strong> 这三个名字里都带&quot;并行&quot;的东西。下面逐个拆开。</p>
+<hr>
+<h2 id="四、SP-TP-的-伴生机制-切的是-TP-管不到的激活">四、SP:TP 的&quot;伴生机制&quot;,切的是 TP 管不到的激活</h2>
+<p><strong>配置</strong>:TP=2,SP=2,共 4 卡,序列 8 个 token。</p>
+<p>SP 的出发点很朴素:TP 切权重,但 LayerNorm 和 Dropout 没有 TP 的 All-Reduce 保护,它们的激活在每张卡上都是全量冗余的。SP 把这部分激活也按序列切开:</p>
+<ul>
+<li><strong>TP 区域之外</strong>(LayerNorm、Dropout):激活按序列切两半,GPU0/1 持 token 1–4,GPU2/3 持 token 5–8——绿区,零通信;</li>
+<li><strong>进入 TP 区域</strong>(QKV 投影、MLP):先 All-Gather 把序列拼完整,再按 TP 切权重计算;</li>
+<li><strong>退出 TP 区域</strong>:原来的 All-Reduce 替换为 Reduce-Scatter,输出回到序列切分状态。</li>
+</ul>
+<p>注意一个微妙的事实:<strong>SP 并没有减少总通信量</strong>——它只是把 TP 的 2 次 All-Reduce 换成等量的 All-Gather + Reduce-Scatter(数学上 All-Reduce = All-Gather + Reduce-Scatter)。真正省下的是绿区的激活显存,从&quot;每卡全量&quot;降到 1/N。</p>
+<p>两个关键定位:</p>
+<ul>
+<li>SP 与 TP 共用同一个进程组,<code>--sequence-parallel</code> 不是独立维度,是 <strong>TP 的开关</strong>;</li>
+<li>SP 全程绕开 Attention 的跨 token 需求——因为进 TP 区域前序列已经拼回完整,Attention 看到的永远是全序列。</li>
+</ul>
+<p><strong>适用场景</strong>:TP 已经开到 8(单机 NVLink 域内),激活显存仍然紧张时打开。这就是为什么 Megatron 的大模型配方里 SP 几乎总是伴随 TP 出现。</p>
+<hr>
+<h2 id="五、CP-唯一敢-切开-Attention-的方案">五、CP:唯一敢&quot;切开 Attention&quot;的方案</h2>
+<p><strong>配置</strong>:CP=2,序列 8K,GPU0 处理 token 1–4K,GPU1 处理 4K–8K。</p>
+<ul>
+<li><strong>LayerNorm / Linear / MLP</strong>:各卡独立计算,零通信(绿区属性);</li>
+<li><strong>Attention</strong>:GPU0 的 Q 需要看到 token 4K–8K 的 K/V——问题就在这里;</li>
+<li><strong>反向传播</strong>:梯度通过 Reduce-Scatter 回到序列分片状态。</li>
+</ul>
+<p>这就是 <strong>Ring Attention</strong> 登场的时刻。</p>
+<h3 id="Ring-Attention-让-KV-沿环传一圈">Ring Attention:让 KV 沿环传一圈</h3>
+<p>核心思想:每张卡保存自己那段 K/V 分块,让 KV 块沿&quot;环&quot;逐站传递,传一圈后每张卡的 Q 都&quot;见过&quot;所有 K/V。</p>
+<p>设 4 卡、序列 8K、每卡持 2K token 的 Q/K/V:</p>
+<table>
+<thead>
+<tr>
+<th>轮次</th>
+<th>GPU0(Q₀)</th>
+<th>GPU1(Q₁)</th>
+<th>GPU2(Q₂)</th>
+<th>GPU3(Q₃)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>初始</td>
+<td>持 K₀V₀</td>
+<td>持 K₁V₁</td>
+<td>持 K₂V₂</td>
+<td>持 K₃V₃</td>
+</tr>
+<tr>
+<td>第 1 轮</td>
+<td>用 K₀V₀ 算部分注意力</td>
+<td>K₁V₁</td>
+<td>K₂V₂</td>
+<td>K₃V₃</td>
+</tr>
+<tr>
+<td>传递 ↓</td>
+<td>收 K₃V₃</td>
+<td>收 K₀V₀</td>
+<td>收 K₁V₁</td>
+<td>收 K₂V₂</td>
+</tr>
+<tr>
+<td>第 2 轮</td>
+<td>用 K₃V₃ 累积</td>
+<td>K₀V₀</td>
+<td>K₁V₁</td>
+<td>K₂V₂</td>
+</tr>
+<tr>
+<td>…</td>
+<td>(共 4 轮)</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>结束</td>
+<td>Q₀ 已见过全部 K/V ✓</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+</tbody>
+</table>
+<p>三要素缺一不可:</p>
+<ul>
+<li><strong>分块计算</strong>:softmax 分子和分母按块累积(在线 softmax 技巧),不用一次性算出完整 N×N 注意力矩阵;</li>
+<li><strong>环形 P2P 通信</strong>:KV 沿环单方向流动,避免全局 All-Gather 的显存峰值;</li>
+<li><strong>计算通信重叠</strong>:GPU 在算当前 KV 块的注意力时,网络已经在预取下一块。</li>
+</ul>
+<p>Megatron 的 CP 是这套算法的工业级实现:底层用环形 P2P 改写 All-Gather/Reduce-Scatter,配合 FlashAttention 内核、causal mask 的负载均衡优化。</p>
+<h3 id="SP-和-CP-的本质区别-面试高频">SP 和 CP 的本质区别(面试高频)</h3>
+<p>NVIDIA 官方原文说得很清楚:<em>“Unlike prior SP which only splits the sequence of Dropout and LayerNorm activations, CP partitions the network inputs and all activations along sequence dimension.”</em></p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>SP</th>
+<th>CP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>切分范围</td>
+<td>仅 TP 区域外的激活(LayerNorm/Dropout)</td>
+<td>整条前向序列,包括 Attention</td>
+</tr>
+<tr>
+<td>是否独立维度</td>
+<td>否,绑定 TP 进程组</td>
+<td>是,独立进程组</td>
+</tr>
+<tr>
+<td>如何处理 Attention</td>
+<td>进 TP 区域前拼回完整序列,<strong>绕开</strong></td>
+<td>用 Ring Attention <strong>穿过去</strong></td>
+</tr>
+<tr>
+<td>解决的瓶颈</td>
+<td>激活显存冗余</td>
+<td>长序列 O(N²)</td>
+</tr>
+<tr>
+<td>典型配置</td>
+<td>TP=8 时伴随开启</td>
+<td>32K/128K 长上下文训练</td>
+</tr>
+</tbody>
+</table>
+<p>一句话:<strong>SP 是&quot;绕着 Attention 走&quot;,CP 是&quot;穿过 Attention 走&quot;</strong>。</p>
+<hr>
+<h2 id="六、EP-切专家-与序列维度完全正交">六、EP:切专家,与序列维度完全正交</h2>
+<p><strong>配置</strong>:EP=4,模型含 8 个专家,每卡持有 2 个专家的完整权重。</p>
+<p>EP 面向 MoE 模型(DeepSeek-V3、Mixtral 等)。MoE 层用 Router + 多个专家 MLP 替换了上面结构图里的 ⑥——注意被替换的正是 token-local 的绿区,这也是 EP 能干净利落切分的前提。</p>
+<p>设一个 batch 有 8 个 token,Router 做 Top-2 路由:</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>路由到</th>
+<th>所在 GPU</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>t1</td>
+<td>专家 1, 5</td>
+<td>GPU0(持专家 1–2)、GPU2(持专家 5–6)</td>
+</tr>
+<tr>
+<td>t2</td>
+<td>专家 3, 8</td>
+<td>GPU1、GPU3</td>
+</tr>
+<tr>
+<td>t3</td>
+<td>专家 2, 7</td>
+<td>GPU0、GPU3</td>
+</tr>
+</tbody>
+</table>
+<p>四步流程:</p>
+<ol>
+<li><strong>Router 计算</strong>:每个 token 经门控网络得到 Top-K 专家编号;</li>
+<li><strong>Dispatch(All-to-All)</strong>:GPU0 发现 t1 要去 GPU2 的专家 5,同时 GPU2 也有 token 要来——双向 All-to-All 把 hidden state 发往目标卡;</li>
+<li><strong>专家计算</strong>:各卡收齐发往自己专家的 token,批量执行 MLP;</li>
+<li><strong>Combine(All-to-All 回传)</strong>:结果沿原路发回来源卡,按路由权重加权合并。</li>
+</ol>
+<p><strong>EP 与 CP/SP 在维度上完全正交</strong>:前两者切序列位置,EP 切专家集合;通信原语一个是 All-Gather/环形 P2P,一个是 All-to-All。这也是为什么 DeepSeek-V3 能同时叠加 CP + EP + TP——各自负责不同模块的不同瓶颈,互不冲突(新版本 Megatron-Core 支持 MLA + CP + EP 组合,需 TransformerEngine ≥ 2.5)。</p>
+<p>补充:当单个专家本身过大时,还可在专家内部再切一刀——即 <strong>ETP</strong>(DeepSeek 称为 ESPT,Expert-Sliced Tensor Parallelism)。MoE 层的完整并行折叠就是 <code>ETP × EP × EDP × PP</code>,与注意力层的 <code>TP × CP × DP × PP</code> 两套布局在 PP 上保持对齐。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">注意力层布局                 MoE 层布局</span><br><span class="line">TP × CP × DP × PP   ←对齐→   ETP × EP × EDP × PP</span><br><span class="line">     └──── PP 共享 ────┘</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="七、一套直观类比">七、一套直观类比</h2>
+<ul>
+<li><strong>LayerNorm / Linear / MLP</strong> 像&quot;各自批改各自的作业&quot;——随便分发,零通信;</li>
+<li><strong>Attention</strong> 像&quot;全班讨论&quot;——必须让每个人听到所有人发言,Ring Attention 就是环形传话筒;</li>
+<li><strong>SP</strong> 是&quot;教室内部重新分工&quot;——只切 TP 旁边的绿区,省显存不省通信;</li>
+<li><strong>CP</strong> 是&quot;把一本书拆给 4 个人读&quot;——段落级切分,读到需要引用别处时通信一次(KV 环形传递);</li>
+<li><strong>EP</strong> 是&quot;每个老师专教自己擅长的科目&quot;——token 按需被路由到对应专家,学完回来加权汇总。</li>
+</ul>
+<hr>
+<h2 id="八、选型速查">八、选型速查</h2>
+<table>
+<thead>
+<tr>
+<th>症状</th>
+<th>药方</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>模型大到 TP 已开满(单机 8 卡 NVLink 域),激活显存仍紧张</td>
+<td><strong>TP + SP</strong></td>
+</tr>
+<tr>
+<td>上下文长到单卡放不下注意力(32K/128K 训练、长文本 prefill)</td>
+<td><strong>加 CP(Ring Attention)</strong></td>
+</tr>
+<tr>
+<td>模型是 MoE,专家需要分布到多卡</td>
+<td><strong>加 EP(All-to-All dispatch/combine)</strong></td>
+</tr>
+<tr>
+<td>层数多,跨机切分</td>
+<td><strong>加 PP</strong></td>
+</tr>
+<tr>
+<td>都不够,吞吐还要拉满</td>
+<td>以上叠加 + DP,如 DeepSeek-V3 同时用 CP + EP + TP(ESPT)</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="九、总结">九、总结</h2>
+<p>回到开头那句话:一个 Transformer 层 = “绿(随便切)→ 黄(TP 切权重)→ 红(唯一要通信的注意力)→ 黄 → 绿 → 残差” 的循环。</p>
+<p>所有的多维并行策略,本质上都是在为这三个色区做分工:</p>
+<ul>
+<li><strong>SP</strong> 负责绿区的序列维切分(省激活显存,绕开 Attention);</li>
+<li><strong>CP</strong> 负责红区的序列维切分(Ring Attention 穿过 Attention,解长上下文);</li>
+<li><strong>EP</strong> 负责 MoE 化的绿区(专家维切分 + token 流动);</li>
+<li><strong>TP</strong> 负责全部黄区(权重切分);</li>
+<li><strong>PP 和 DP</strong> 在层间和 batch 维度上完成最后的拼图。</li>
+</ul>
+<p>理解了&quot;<strong>Attention 是唯一需要跨 token 通信的地方</strong>&quot;这个支点,6 维并行就不再是玄学——它们只是围绕这个支点搭起来的、各司其职的脚手架。</p>
+<hr>
+<p><em>本文结构图与流程图均为示意,实际的 Megatron-Core 实现细节(RankGenerator、Parallel Folding 的进程组映射、causal mask 负载均衡等)可参考 NVIDIA 技术报告与开源代码。写于 2026 年 8 月,基于 Megatron-Core 新版本(支持 DeepSeek-V3 架构 MLA + CP + EP)。</em></p>
+<h3 id="参考">参考</h3>
+<ul>
+<li>NVIDIA Megatron-Core 技术报告(SP / CP / EP 官方定义)</li>
+<li>DeepSeek-V3 论文(ESPT、MLA 架构)</li>
+<li>Ring Attention 原始论文</li>
+<li>本文关联:<a href="2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron.md">为什么 VLA 训练选 FSDP 而不是 Megatron</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/">http://example.com/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Transformer/">Transformer</a><a class="post-meta__tags" href="/tags/Megatron/">Megatron</a><a class="post-meta__tags" href="/tags/%E5%B9%B6%E8%A1%8C%E7%AD%96%E7%95%A5/">并行策略</a><a class="post-meta__tags" href="/tags/SP/">SP</a><a class="post-meta__tags" href="/tags/CP/">CP</a><a class="post-meta__tags" href="/tags/EP/">EP</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</div></div><div class="info-2"><div class="info-item-1">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的 多租户是云计算的立身之本——成千上万个互不信任的租户共享同一批物理机、同一批交换机、同一批存储盘,却要求彼此&quot;看不见、摸不着&quot;。这篇文章从计算、网络、数据、管理面四个维度拆解隔离体系,然后聚焦最核心也最容易被误解的一环:VPC 逻辑隔离为什么真的能隔离。我们会用一个&quot;故意撞 IP、故意共宿主机&quot;的例子逐跳追踪报文,再回答两个高频疑问:subnet 能不能做租户隔离?subnet 在路由表和交换机里的真实拓扑长什么样?  一、多租户隔离体系总览 隔离的本质命题是:在共享物理资源的前提下,为每个租户构建一个&quot;逻辑上独立、必要时可物理隔离&quot;的运行环境,同时兼顾安全性与资源利用率。 不同云服务模型的隔离锚点不同:IaaS 靠 Hypervisor 和网络虚拟化,PaaS 靠容器沙箱与命名空间,SaaS 靠应用层的 Tenant-ID 与数据权限策略。    隔离维度 共享程度 核心实现机制 典型技术/产品     计算隔离 共享硬件,独立内...</div></div></div></a><a class="pagination-related" href="/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/" title="具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环</div></div><div class="info-2"><div class="info-item-1">具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环 具身智能真正的瓶颈,早已不在模型架构——VLA、Diffusion Policy、世界模型这些路线正在快速收敛——而在于数据基础设施:怎么把物理世界的交互数据高效地采上来、存下来、洗出来、训得动,再让推理结果回流形成飞轮。 国地中心在建设人形机器人训练场时就把问题归结为四点:PB 级多模态数据存不下、真实采集成本高昂、视觉/触觉/力觉/位姿格式各异治理困难、跨域流转受限;中国信通院的测算更直接:若要支撑 55B 参数级具身基座模型,需要约 2.12 万台机器人以 8Hz 控制频率连续工作一年,才能产出千万小时级有效数据,而当前全球可用高质量真实数据仅数十万至百万小时级。 这意味着,那套我们熟悉的大数据技术栈——数据湖表格式、Hadoop/Spark 生态、OLAP 引擎、gRPC/MQTT/WebRTC 通信协议——在具身智能场景里不是&quot;能用&quot;,而是刚需。本文尝试把这条链路完整拆开:从一台机器人的传感器带宽算起,到湖仓选型、清洗管线、OLAP 评测、推理回流的闭环架构。  关联阅读:本文是数据基础设...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/05/2024-09-05-Transformer%E8%A7%A3%E6%9E%90/" title="Transformer解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/transformer.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-05</div><div class="info-item-2">Transformer解析</div></div><div class="info-2"><div class="info-item-1">Transformer解析（Attention Is All You Need） 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 Transformer论文逐段精读【论文精读】_哔哩哔哩_bilibili 【超详细】【原理篇&amp;实战篇】一文读懂Transformer-CSDN博客 大模型面试准备（十二）：深入剖析Transformer - 残差连接和层归一化_残差层和归一化层-CSDN博客 Transformer通俗笔记：从Word2Vec、Seq2Seq逐步理解到GPT、BERT-CSDN博客  “Attention Is All You Need” 是一篇由 Ashish Vaswani 等人撰写的论文，发表于 2017 年的 NeurIPS 会议上。这篇论文提出了 Transformer 模型，Transformer是一种用于自然语言处理（NLP）和其他序列到序列（sequence-to-sequence）任务的深度学习模型架构。Transformer架构引入了自注意力机制（self-attention mechanism），这是一个...</div></div></div></a><a class="pagination-related" href="/2025/08/18/2025-08-18-%E6%9E%81%E7%AE%80-Megatron-LM-%E6%A8%A1%E5%9E%8B%E5%B9%B6%E8%A1%8C%E5%88%87%E5%88%86%E4%BB%8B%E7%BB%8D/" title="极简 Megatron-LM 模型并行切分介绍"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Megatron.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-18</div><div class="info-item-2">极简 Megatron-LM 模型并行切分介绍</div></div><div class="info-2"><div class="info-item-1">极简 Megatron-LM 模型并行切分介绍 转自：https://zhuanlan.zhihu.com/p/498422407 在大模型流行的年代，我经常需要给同事解释 Megatron-LM 是怎么做的模型并行，自己也经常记不清从头推。而现有大多数的文章都是算法向或者历史向的，信息浓度比较低。为了节省大家的时间，在这里记录一下 Megatron-LM 的切分方式。由于只考虑切分，所以本文忽略 transformer 模型中的各种 elementwise 运算和 layernorm。 下文中，我们规定 b 为 batch size，s 为 sequence length，h 为 hidden size，n 为 num head，p 为切分数，用中括号表示 tensor 形状，例如 [b, s, h] 为常规的 transformer encoder 输入。这种表示方法参考了尤洋老师的 An Efficient 2D Method for Training Super-Large Deep Learning Models。 transformer encoder 结构 tran...</div></div></div></a><a class="pagination-related" href="/2025/08/27/2025-08-27-Megatron-&-Swift%E7%9B%91%E7%9D%A3%E5%BE%AE%E8%B0%83Qwen3-8B/" title="Megatron &amp; Swift监督微调Qwen3-8B"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/megatron-lm.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-27</div><div class="info-item-2">Megatron &amp; Swift监督微调Qwen3-8B</div></div><div class="info-2"><div class="info-item-1">Megatron &amp; Swift监督微调Qwen3-8B 因为纯Megatron的example中没有对于Qwen的支持，且在社区中没有找到对应封装好的实现。这里Swift已经封装好了对于微调/预训练/强化学习/多种模型/dataloader的各种支持，同时也包含训练结果的图像绘制，可以自主选择Megatron的后端路径（如果要进行修改，就对开源的core_r0.13.0分支的代码进行修改就行，运行时指定该路径）。 平台是选用的无问芯穹的开发机进行实验 注：也可以用llama-factory去做，后续可以试一试 参考 Megatron-SWIFT训练：https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html 千问3最佳实践：https://swift.readthedocs.io/zh-cn/latest/BestPractices/Qwen3最佳实践.html#megatron-swift 注意参数：https://swift.readthedo...</div></div></div></a><a class="pagination-related" href="/2025/12/10/2025-12-10-%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3Megatron-LM/" title="深入理解Megatron-LM"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Megatron.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-12-10</div><div class="info-item-2">深入理解Megatron-LM</div></div><div class="info-2"><div class="info-item-1">深入理解Megatron-LM 基础知识：https://zhuanlan.zhihu.com/p/650234985 原理介绍：https://zhuanlan.zhihu.com/p/650383289 megatron中的pipeline并行https://zhuanlan.zhihu.com/p/432969288 代码结构：https://zhuanlan.zhihu.com/p/650237820 并行设置：https://zhuanlan.zhihu.com/p/650500590 张量并行：https://zhuanlan.zhihu.com/p/650237833 流水线刷新机制：https://zhuanlan.zhihu.com/p/651341660 1F1B流水线并行负载不均衡：https://zhuanlan.zhihu.com/p/693425934  进程模型： 当你使用 torch.distributed.launch 或 torchrun 启动训练时，会启动 N 个独立的 Python 进程（N = GPU 数量），每个进程绑定到一个 GPU，...</div></div></div></a><a class="pagination-related" href="/2026/07/19/2026-07-19-Megatron-LM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron-LM 源码精读——大模型并行训练全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-19</div><div class="info-item-2">Megatron-LM 源码精读——大模型并行训练全景</div></div><div class="info-2"><div class="info-item-1">Megatron-LM 源码精读——大模型并行训练全景 https://blog.csdn.net/Antai_ZHU/article/details/144409187  本文基于 NVIDIA Megatron-LM 源码（megatron/core/，即 Megatron-Core）。目标：让你在面试时能从&quot;5D 并行 + rank 排布&quot;讲到&quot;ColumnParallelLinear 的 autograd 通信插入&quot;、从&quot;1F1B vs Interleaved&quot;讲到&quot;DDP 的 param/grad buffer 与 distributed optimizer&quot;、从源码结构讲到工程取舍。读完这篇，Megatron 这关基本通杀。   一、Megatron 是什么、为什么面试要问 Megatron-LM 是 NVIDIA 开源的大模型分布式训练框架，论文从 2019（张量并行）一路到 2022（PP+SP）、2023（CP、MoE）。它的核心价值是把&quot;怎么把一个 Transformer...</div></div></div></a><a class="pagination-related" href="/2026/07/20/2026-07-20-Megatron-Timers%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron Timers 源码精读——分布式训练性能打点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-20</div><div class="info-item-2">Megatron Timers 源码精读——分布式训练性能打点</div></div><div class="info-2"><div class="info-item-1">Megatron Timers 源码精读——分布式训练性能打点  本文精读 Megatron-Core 的 megatron/core/timers.py（约 300 行）。目标：让你面试时能讲清&quot;训练里怎么打点测一段算子耗时、为什么必须 torch.cuda.synchronize()、为什么分布式打点要跨 rank 聚合、log_level/DummyTimer 的开销控制怎么做&quot;。这是个&quot;小而完整&quot;的子系统，特别适合讲清&quot;分布式时序测量的陷阱&quot;。   一、为什么需要专门的 Timer 训练几百亿参数、几千卡，一句&quot;前向多快&quot;没法用 time.time() 包一下就答——它有四个坑：  GPU 异步：PyTorch 的 CUDA op 是异步 launch，CPU 侧 time.time() 测的是&quot;把 kernel 丢进队列&quot;的时间，不是 GPU 真跑完的时间。必须 torch.cuda.synchronize() 强制等 GPU 空闲再取时间。 多 rank 不同步：上千张...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">从一维到多维:图解 Megatron 的 SP &#x2F; CP &#x2F; EP 与 Transformer 唯一通信处</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E7%9C%8B%E6%B8%85%E6%A5%9A-Transformer-%E5%B1%82%E9%87%8C%E5%88%B0%E5%BA%95%E6%9C%89%E4%BB%80%E4%B9%88"><span class="toc-number">1.1.</span> <span class="toc-text">一、先看清楚:Transformer 层里到底有什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#token-local-vs-token-global-%E4%B8%80%E5%BC%A0%E8%A1%A8%E7%9C%8B%E6%87%82"><span class="toc-number">1.1.1.</span> <span class="toc-text">token-local vs token-global:一张表看懂</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E8%AE%A9%E7%9C%9F%E5%AE%9E%E6%95%B0%E5%AD%97%E6%B5%81%E8%BF%87%E6%95%B4%E4%B8%AA%E7%BD%91%E7%BB%9C"><span class="toc-number">1.2.</span> <span class="toc-text">二、让真实数字流过整个网络</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-batch-seq-d-%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 batch &#x2F; seq &#x2F; d 是什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E8%AE%A9-%E2%80%9CThe-cat-sat-here%E2%80%9D-%E6%B5%81%E8%BF%87%E6%95%B4%E4%B8%AA%E7%BD%91%E7%BB%9C"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 让 “The cat sat here” 流过整个网络</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E4%B8%89%E4%B8%AA%E7%BB%B4%E5%BA%A6%E6%AD%A3%E5%A5%BD%E5%AF%B9%E5%BA%94%E4%B8%89%E7%A7%8D%E5%B9%B6%E8%A1%8C"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 三个维度正好对应三种并行</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Megatron-%E5%88%B0%E5%BA%95%E6%9C%89-%E5%87%A0%E7%BB%B4-%E5%B9%B6%E8%A1%8C"><span class="toc-number">1.3.</span> <span class="toc-text">三、Megatron 到底有&quot;几维&quot;并行?</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81SP-TP-%E7%9A%84-%E4%BC%B4%E7%94%9F%E6%9C%BA%E5%88%B6-%E5%88%87%E7%9A%84%E6%98%AF-TP-%E7%AE%A1%E4%B8%8D%E5%88%B0%E7%9A%84%E6%BF%80%E6%B4%BB"><span class="toc-number">1.4.</span> <span class="toc-text">四、SP:TP 的&quot;伴生机制&quot;,切的是 TP 管不到的激活</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81CP-%E5%94%AF%E4%B8%80%E6%95%A2-%E5%88%87%E5%BC%80-Attention-%E7%9A%84%E6%96%B9%E6%A1%88"><span class="toc-number">1.5.</span> <span class="toc-text">五、CP:唯一敢&quot;切开 Attention&quot;的方案</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Ring-Attention-%E8%AE%A9-KV-%E6%B2%BF%E7%8E%AF%E4%BC%A0%E4%B8%80%E5%9C%88"><span class="toc-number">1.5.1.</span> <span class="toc-text">Ring Attention:让 KV 沿环传一圈</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#SP-%E5%92%8C-CP-%E7%9A%84%E6%9C%AC%E8%B4%A8%E5%8C%BA%E5%88%AB-%E9%9D%A2%E8%AF%95%E9%AB%98%E9%A2%91"><span class="toc-number">1.5.2.</span> <span class="toc-text">SP 和 CP 的本质区别(面试高频)</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81EP-%E5%88%87%E4%B8%93%E5%AE%B6-%E4%B8%8E%E5%BA%8F%E5%88%97%E7%BB%B4%E5%BA%A6%E5%AE%8C%E5%85%A8%E6%AD%A3%E4%BA%A4"><span class="toc-number">1.6.</span> <span class="toc-text">六、EP:切专家,与序列维度完全正交</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E4%B8%80%E5%A5%97%E7%9B%B4%E8%A7%82%E7%B1%BB%E6%AF%94"><span class="toc-number">1.7.</span> <span class="toc-text">七、一套直观类比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E9%80%89%E5%9E%8B%E9%80%9F%E6%9F%A5"><span class="toc-number">1.8.</span> <span class="toc-text">八、选型速查</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E6%80%BB%E7%BB%93"><span class="toc-number">1.9.</span> <span class="toc-text">九、总结</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.9.1.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</a><time datetime="2026-09-09T16:00:00.000Z" title="发表于 2026-09-10 00:00:00">2026-09-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</a><time datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

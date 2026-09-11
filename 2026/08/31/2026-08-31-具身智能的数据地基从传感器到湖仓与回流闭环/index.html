@@ -1,0 +1,445 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="具身智能真正的瓶颈已不在模型架构而在数据基础设施。本文从一台机器人的传感器带宽算起,拆解采集(MQTT&#x2F;gRPC&#x2F;WebRTC)、湖仓(Iceberg&#x2F;Delta)、Spark 清洗、OLAP 评测(Doris&#x2F;ClickHouse)、推理回流闭环的完整链路与选型。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环">
+<meta property="og:url" content="http://example.com/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="具身智能真正的瓶颈已不在模型架构而在数据基础设施。本文从一台机器人的传感器带宽算起,拆解采集(MQTT&#x2F;gRPC&#x2F;WebRTC)、湖仓(Iceberg&#x2F;Delta)、Spark 清洗、OLAP 评测(Doris&#x2F;ClickHouse)、推理回流闭环的完整链路与选型。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-08-30T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-08-30T16:25:33.433Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="具身智能">
+<meta property="article:tag" content="Spark">
+<meta property="article:tag" content="Iceberg">
+<meta property="article:tag" content="数据湖仓">
+<meta property="article:tag" content="数据飞轮">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环",
+  "url": "http://example.com/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-08-30T16:00:00.000Z",
+  "dateModified": "2026-08-30T16:25:33.433Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-08-30T16:00:00.000Z" title="发表于 2026-08-31 00:00:00">2026-08-31</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-08-30T16:25:33.433Z" title="更新于 2026-08-31 00:25:33">2026-08-31</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/" data-flag-title="具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环</h1>
+<p>具身智能真正的瓶颈,早已不在模型架构——VLA、Diffusion Policy、世界模型这些路线正在快速收敛——而在于<strong>数据基础设施</strong>:怎么把物理世界的交互数据高效地采上来、存下来、洗出来、训得动,再让推理结果回流形成飞轮。</p>
+<p>国地中心在建设人形机器人训练场时就把问题归结为四点:PB 级多模态数据存不下、真实采集成本高昂、视觉/触觉/力觉/位姿格式各异治理困难、跨域流转受限;中国信通院的测算更直接:若要支撑 55B 参数级具身基座模型,需要约 <strong>2.12 万台机器人以 8Hz 控制频率连续工作一年</strong>,才能产出千万小时级有效数据,而当前全球可用高质量真实数据仅数十万至百万小时级。</p>
+<p>这意味着,那套我们熟悉的大数据技术栈——数据湖表格式、Hadoop/Spark 生态、OLAP 引擎、gRPC/MQTT/WebRTC 通信协议——在具身智能场景里不是&quot;能用&quot;,而是<strong>刚需</strong>。本文尝试把这条链路完整拆开:从一台机器人的传感器带宽算起,到湖仓选型、清洗管线、OLAP 评测、推理回流的闭环架构。</p>
+<blockquote>
+<p>关联阅读:本文是数据基础设施视角的展开;VLA 训练栈与模型格式见 <a href="2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra.md">从 LLM Infra 到具身智能 Infra</a> 与 <a href="2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron.md">为什么 VLA 训练选 FSDP 而不是 Megatron</a>。</p>
+</blockquote>
+<hr>
+<h2 id="一、先算一笔账-为什么具身数据必须上湖仓">一、先算一笔账:为什么具身数据必须上湖仓</h2>
+<p>具身智能和 LLM 在数据侧有一个本质区别:<strong>互联网上没有物理交互数据可爬</strong>。文本和图文可以被动积累,而机器人需要的视觉、动作、关节扭矩、力触觉等多模态交互数据,此前从未被系统性记录,只能从零逐条生产。谷歌组织 16 人团队、花 17 个月、投入上千万美元,也只采集了 23 万条真机轨迹——这个量级连 LLM 预训练语料的零头都不到。</p>
+<p>不妨做一次具身智能版的&quot;数据规模测算&quot;。以一台典型人形机器人为例:</p>
+<ul>
+<li><strong>视觉</strong>:头部 RGB-D × 2 + 腕部相机 × 2。每路 1080p@30fps H.264 压缩后约 4 Mbps,深度流压缩后约 15 Mbps,合计约 45 Mbps;</li>
+<li><strong>本体感知</strong>:以 40 个自由度计,每个关节 1kHz 上报位置/速度/力矩(3×float64 ≈ 24B),加上六维力传感器、IMU、触觉阵列,结构化数据流约 10-15 Mbps;</li>
+<li><strong>语音与其他</strong>:约 5 Mbps。</li>
+</ul>
+<p><strong>单台机器人原始数据率约 60-65 Mbps ≈ 8 MB/s</strong>。每天有效采集 8 小时就是 230 GB,一台机器人年采集 300 天约 70 TB(归档压缩后减半)。百台规模的训练场,一年就是 <strong>3-7 PB</strong>——这和国地中心&quot;每次训练产生 PB 级多模态数据&quot;的判断完全吻合。</p>
+<p>这个量级带来三个工程硬约束:</p>
+<ol>
+<li><strong>存得下</strong>:对象存储(S3/OSS/HDFS)是唯一经济的选择,但裸文件没有事务、没有版本、没有 schema 管理,很快会变成&quot;数据沼泽&quot;;</li>
+<li><strong>找得到</strong>:百万条轨迹里筛选&quot;失败案例&quot;“特定物体类别”&quot;特定光照条件&quot;的子集,需要元数据层的强过滤能力;</li>
+<li><strong>训得动</strong>:训练框架要能流式读取任意 episode 切片,而不是每次全量拷贝。</li>
+</ol>
+<p>这三点正是<strong>数据湖表格式(Iceberg/Delta Lake)</strong> 的用武之地。</p>
+<hr>
+<h2 id="二、技术选型总览-一张表看清全生命周期">二、技术选型总览:一张表看清全生命周期</h2>
+<p>在展开每个环节之前,先用一张表建立全局图景:</p>
+<table>
+<thead>
+<tr>
+<th>数据生命周期阶段</th>
+<th>核心挑战</th>
+<th>技术选型</th>
+<th>选型理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>设备遥测上报</td>
+<td>百台集群、低带宽/不稳定网络</td>
+<td>MQTT(QoS 分级)</td>
+<td>轻量发布/订阅,QoS 1/2 保证状态与告警可靠传输</td>
+</tr>
+<tr>
+<td>服务间编排与策略下发</td>
+<td>毫秒级控制指令、观测上传</td>
+<td>gRPC 双向流</td>
+<td>Protobuf 序列化 + HTTP/2 多路复用,LeRobot 多机通信即此方案</td>
+</tr>
+<tr>
+<td>遥操作视频回传</td>
+<td>&lt;300ms 端到端延迟、NAT 穿透</td>
+<td>WebRTC</td>
+<td>内建 ICE/STUN/TURN,实测机器人监控延迟可压至 142ms</td>
+</tr>
+<tr>
+<td>多模态数据落湖</td>
+<td>PB 级、Schema 频繁演进、多引擎读写</td>
+<td>Iceberg(主)/ Delta</td>
+<td>元数据分层避免单点瓶颈,Spark/Flink/Trino 全平台支持</td>
+</tr>
+<tr>
+<td>清洗与特征工程</td>
+<td>亿级视频帧抽帧、去重、跨本体对齐</td>
+<td>Spark + Daft</td>
+<td>Daft 将 Image/Video/Tensor 视为一等公民,可嵌入大模型推理</td>
+</tr>
+<tr>
+<td>训练数据集管理</td>
+<td>Episode 级版本、流式读取</td>
+<td>Iceberg + LeRobotDataset v3.0</td>
+<td>分块 Episode 格式支撑 OXE 量级(&gt;400GB)数据集</td>
+</tr>
+<tr>
+<td>评测与报表分析</td>
+<td>多表 Join、成功率统计、回归对比</td>
+<td>Doris / StarRocks</td>
+<td>Merge-on-Write 支持高频更新,复杂 Join 能力强</td>
+</tr>
+<tr>
+<td>遥测明细监控</td>
+<td>单表百亿级行为日志、高吞吐写入</td>
+<td>ClickHouse</td>
+<td>单机吞吐与压缩比优势,适合追加式日志分析</td>
+</tr>
+<tr>
+<td>推理回流闭环</td>
+<td>集群策略下发、真机 Rollout、数据筛选</td>
+<td>gRPC + Kafka + Flink</td>
+<td>星海图 G-Fleet 即此形态的完整实现</td>
+</tr>
+</tbody>
+</table>
+<p>一个常见的认知误区是&quot;湖仓 = 更大的数据库&quot;。湖仓在具身场景要解决的不是 OLTP,而是让 PB 级多模态数据&quot;存得下、找得到、训得动&quot;——事务保证的是<strong>数据集版本可回溯</strong>(训练结果复现),快照隔离保证的是<strong>清洗任务与训练任务并发不冲突</strong>,schema 演进保证的是<strong>新增传感器通道不需要重写历史数据</strong>。</p>
+<hr>
+<h2 id="三、场景一-真机数据采集——三种协议各守一道关">三、场景一:真机数据采集——三种协议各守一道关</h2>
+<p>具身智能的数据采集现场,三种通信协议不是互相替代,而是分工明确:</p>
+<h3 id="MQTT-设备遥测的毛细血管">MQTT:设备遥测的毛细血管</h3>
+<p>训练场里几百台机器人的心跳、电量、关节温度、异常告警,走 MQTT 再合适不过。关键在 <strong>QoS 分级的使用策略</strong>:高频遥测(关节温度、电量)用 QoS 0,丢一帧无所谓,省流量;安全告警、急停状态同步用 QoS 1,至少送达一次;涉及计费或审计的关键事件才用 QoS 2,四次握手保证恰好一次。MQTT 的长连接机制也远比 HTTP 高效——一次 TCP 建连后异步收发,不用每条消息都重传头部。</p>
+<h3 id="gRPC-服务间编排的主动脉">gRPC:服务间编排的主动脉</h3>
+<p>LeRobot 的多机器人分布式控制系统就是用 gRPC 构建的:<code>AsyncInference</code> 服务处理观测数据上传和动作指令下发,<code>LearnerService</code> 负责模型参数同步和训练数据收集,通过 Protobuf 定义的消息状态机(<code>TRANSFER_BEGIN → MIDDLE → END</code>)管理大文件分片传输。Isaac Sim 的远程控制同样采用 gRPC——仿真端作为服务器流式推送机器人状态,客户端下发控制指令,<code>sub_state</code> 返回 stream <code>JointState</code> 实现订阅式状态同步。相比 ROS 的 DDS 广播分发,gRPC 的点对点模型天然适合跨网段、跨公网的分布式部署。</p>
+<h3 id="WebRTC-遥操作临场感的生命线">WebRTC:遥操作临场感的生命线</h3>
+<p>遥操作是当前真机数据采集的主流方式,而它的体验瓶颈完全在视频延迟。Pi0 机器人的实测数据很说明问题:MJPEG 流延迟 1.8 秒、RTMP+VLC 延迟 1.2 秒,而 <strong>WebRTC 原生方案延迟 142ms</strong>,接近人类视觉-运动反应的生理极限(约 100-150ms)。Phantom Bridge 的作者在选型时说得透彻:如果用 DDS 自己实现 NAT 穿透、媒体编码、浏览器解码,最后很可能是在重新发明 WebRTC——浏览器天然支持 WebRTC 硬件加速解码,这是 DDS 生态不具备的。</p>
+<p><strong>通信协议选型的本质,就是 WebRTC 保遥操作临场感、gRPC 保服务间毫秒级编排、MQTT 保百台集群设备接入——三者缺一不可。</strong></p>
+<hr>
+<h2 id="四、场景二-数据湖存储与训练数据集管理">四、场景二:数据湖存储与训练数据集管理</h2>
+<p>采集上来的多模态数据如何组织?这里有两条并行演进的路线,它们其实是<strong>互补关系而非竞争</strong>。</p>
+<p><strong>LeRobotDataset v3.0</strong> 定义了机器人轨迹的<strong>逻辑格式</strong>:分块式 Episode 结构(每个 episode 一个视频文件 + 一个 Parquet 元数据文件),支持流式读取,专门面向 OXE(Open X-Embodiment)这种 &gt;400GB 量级的数据集做了效率优化。OXE 本身则是 34 个实验室、60 个数据集、超过 100 万条真实轨迹、覆盖 22 种机器人本体的统一格式尝试,是 RT-X/OpenVLA/Octo/π0 等模型的训练底座。</p>
+<p><strong>Iceberg/Delta</strong> 提供的是<strong>物理管理层</strong>:ACID 事务(数据集版本可回溯)、快照隔离(清洗与训练并发)、隐藏分区与分区演进(按机器人 ID / 任务类型 / 采集日期分区,新增分区不影响旧查询)、时间旅行(对比两周前后的模型在相同数据切片上的表现)。LeRobot 格式的 Parquet 文件与视频文件完全可以注册为 Iceberg 表来管理,<strong>逻辑格式与物理管理层各司其职</strong>。</p>
+<p>选型上:</p>
+<ul>
+<li>如果计算引擎以 Spark 为主且深度绑定 Databricks,<strong>Delta Lake</strong> 集成成本最低;</li>
+<li>如果是 Flink 写入 + Trino/StarRocks 查询的多引擎并存——这在具身场景很常见(实时回流用 Flink,离线训练用 Spark,评测查询用 StarRocks)——<strong>Iceberg</strong> 是更中立的选择;</li>
+<li><strong>Hudi</strong> 则在需要高频 Upsert 的场景(比如机器人状态表的持续更新)有优势。</li>
+</ul>
+<hr>
+<h2 id="五、场景三-Spark-清洗管线——具身智能的-脏活累活">五、场景三:Spark 清洗管线——具身智能的&quot;脏活累活&quot;</h2>
+<p>原始采集数据里充斥着无效内容:静止画面、模糊镜头、空抓产生的虚假触觉信号、以及遥操作特有的&quot;缓慢机械动作&quot;(同一任务遥操作耗时是直接操作的 3-5 倍)。清洗管线的典型步骤:</p>
+<ol>
+<li><strong>视频抽帧与关键帧筛选</strong>:数千小时视频解码后是数亿张图像帧,需要分布式抽帧并过滤静止/模糊帧;</li>
+<li><strong>跨本体数据对齐(Retargeting)</strong>:动捕采集的人体数据要重映射为不同构型机械臂的动作数据,需要一个可交互、可计算的物理环境做对齐、清洗和验证;</li>
+<li><strong>多模态时间对齐</strong>:视觉 30fps、关节状态 1kHz、力觉 100Hz,要统一到模型训练所需的控制频率;</li>
+<li><strong>数据增广与合成</strong>:用 Seedance 等视频生成模型基于第一视角生成第三视角视频、扩展不同桌面布局与光照条件、将裸手操作泛化为不同构型机械臂数据;NVIDIA GR00T-Mimic 更激进——11 小时生成 78 万条合成轨迹,相当于 6500 小时人工演示。</li>
+</ol>
+<p>这些工作负载在 Spark 上的效率差异巨大。阿里云 EMR Serverless Spark 引入的 <strong>Daft 引擎</strong>值得单独一提:它把 Image、Video、Audio、Tensor 视为 DataFrame 的一等公民类型,一行表达式即可完成分布式视频解码与帧提取;更关键的是&quot;<strong>数据处理即 AI 推理</strong>&quot;——通过 UDF 将通义千问等大模型直接嵌入 Pipeline,图像理解和视频描述生成与数据清洗无缝衔接。这对具身场景太重要了:<strong>用 VLM 给每一帧打标签(物体类别、场景、任务阶段)本来就是清洗的必备步骤</strong>。</p>
+<hr>
+<h2 id="六、场景四-OLAP-引擎在评测与监控中的分工">六、场景四:OLAP 引擎在评测与监控中的分工</h2>
+<p>OLAP 选型不是比谁跑分高,而是看<strong>评测报表和遥测监控哪个先把你逼疯</strong>。具身场景里这两类负载差异极大:</p>
+<p><strong>评测分析(Doris/StarRocks 的主场)</strong>:每次模型迭代都要跑评测——按任务类型 × 物体类别 × 场景光照 × 机器人本体多维交叉统计成功率、平均耗时、失败模式分布。这是典型的多表复杂 Join + 高频更新负载:评测结果表要不断 Merge 新数据,任务元数据表、场景配置表、机器人信息表要频繁关联。Doris 的 Unique Key Merge-on-Write 模型支持毫秒级主键点查与秒级 CDC 可见,配合 Colocate Join 和 Runtime Filter,在这种混合负载下明显稳于 ClickHouse。</p>
+<p><strong>遥测明细监控(ClickHouse 的主场)</strong>:百台机器人 × 1kHz 关节状态 × 30 天 = 数百亿行追加式日志。查询模式相对简单(按机器人 ID + 时间范围扫描),但写入吞吐和存储成本是核心矛盾。ClickHouse 的单机吞吐与列式压缩比在这里优势明显——OpenAI 也在大量使用它做可观测性分析。</p>
+<p>一个务实的组合是:<strong>ClickHouse 吃遥测明细,Doris/StarRocks 做评测聚合与报表,两者通过物化视图或定时 ETL 衔接</strong>。</p>
+<hr>
+<h2 id="七、场景五-推理服务与数据回流——闭环的最后一公里">七、场景五:推理服务与数据回流——闭环的最后一公里</h2>
+<p>具身智能的完整链路是&quot;环境感知输入 → 模型理解与任务决策 → 可执行动作生成 → 硬件本体执行 → 环境实时反馈 → 有效数据回流迭代&quot;。星海图的 <strong>G-Fleet</strong> 系统把这个闭环做到了工程化:集群级策略下发、并行真机 Rollout、真实场景数据回流、人工干预校准、分布式强化学习训练、自动评测与版本发布全流程打通。</p>
+<p>技术上,这一层的核心是 <strong>gRPC 双向流</strong>:机器人端持续上传观测(图像 + 本体状态),推理服务端流式下发动作 chunk。LeRobot 的实现里有几个值得借鉴的细节:观测数据多层过滤(时间步去重减少 30% 计算量、帧相似性检测节省 20% 带宽)、<code>predict_action_chunk</code> 批量动作预测优化推理效率。回流的轨迹数据经 Kafka 缓冲后由 Flink 实时打标(成功/失败/需人工复核),写入 Iceberg 表供下一轮训练筛选。</p>
+<pre class="mermaid">flowchart LR
+    subgraph 采集端
+        A[机器人集群<br/>视觉/力觉/关节状态] -->|MQTT QoS分级| B[设备网关]
+        A -->|WebRTC <300ms| C[遥操作工作站]
+    end
+    subgraph 边缘/服务层
+        B -->|gRPC 双向流| D[推理服务<br/>VLA/世界模型]
+        C --> D
+        D -->|gRPC 动作chunk| A
+    end
+    subgraph 数据平台
+        D -->|Kafka| E[Flink 实时打标]
+        E -->|写入| F[(Iceberg 数据湖<br/>LeRobot Episode 格式)]
+        G[Spark+Daft 清洗管线<br/>抽帧/去重/Retargeting/合成增广] --> F
+        F -->|流式读取| H[训练集群<br/>GR00T/OpenVLA/π0]
+        F -->|外表查询| I[Doris/StarRocks<br/>评测报表]
+        B -->|遥测明细| J[ClickHouse<br/>监控分析]
+    end
+    H -->|新模型| D</pre>
+<hr>
+<h2 id="八、落地建议与几点思考">八、落地建议与几点思考</h2>
+<p><strong>起步阶段不必全套上齐</strong>。如果团队只有几台机器人,先用 LeRobot 格式 + 对象存储 + 单机 Spark 就能跑通闭环;等数据量过百 TB、或多引擎并发读写成为瓶颈时,再引入 Iceberg。OLAP 引擎同理:初期一个 Doris 就够,等遥测明细把磁盘吃爆了再拆 ClickHouse。</p>
+<p><strong>协议选型要克制</strong>。ROS2/DDS 在机器人内部通信(局域网、类型化消息、discovery)依然是合理选择,没必要为了&quot;技术先进&quot;强行替换成 gRPC;但如果涉及跨公网、跨 NAT、浏览器客户端,WebRTC/gRPC 的组合几乎是唯一解。</p>
+<p><strong>合成数据是必须项而非可选项</strong>。谷歌 17 个月 23 万条真机轨迹的成本曲线已经说明,纯真机路径在经济上不可持续。GR00T-Mimic、Cosmos Transfer、Seedance 这类合成数据管线应该尽早进入数据工厂规划——它们不是真机数据的替代,而是<strong>覆盖长尾场景(罕见物体、极端光照、危险操作)的唯一可行方式</strong>。</p>
+<hr>
+<h2 id="结语">结语</h2>
+<p>回到开头那个判断:具身智能公司的核心竞争力,正在从&quot;谁的模型架构更新颖&quot;转向&quot;<strong>谁的数据飞轮转得更快</strong>&quot;。而数据飞轮的每一圈——采集、传输、存储、清洗、训练、评测、回流——背后站着的是一套经过十年打磨的大数据基础设施。</p>
+<p>这套技术栈不是具身智能的&quot;配套设施&quot;,<strong>它就是具身智能的地基</strong>。</p>
+<hr>
+<h3 id="参考">参考</h3>
+<ul>
+<li>中国信通院《人形机器人产业级训练场建设指南》(数据规模测算)</li>
+<li>国地中心人形机器人训练场建设(四点数据瓶颈)</li>
+<li>HuggingFace <a target="_blank" rel="noopener" href="https://github.com/huggingface/lerobot">LeRobot Documentation</a>(LeRobotDataset v3.0、OXE)</li>
+<li>Apache Iceberg / Delta Lake / Hudi 表格式文档</li>
+<li>阿里云 EMR Serverless Spark + Daft 引擎</li>
+<li>NVIDIA Isaac Sim / GR00T-Mimic</li>
+<li>星海图 G-Fleet 集群调度系统</li>
+<li>本文姊妹篇:<a href="2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra.md">从 LLM Infra 到具身智能 Infra</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/">http://example.com/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a><a class="post-meta__tags" href="/tags/Spark/">Spark</a><a class="post-meta__tags" href="/tags/Iceberg/">Iceberg</a><a class="post-meta__tags" href="/tags/%E6%95%B0%E6%8D%AE%E6%B9%96%E4%BB%93/">数据湖仓</a><a class="post-meta__tags" href="/tags/%E6%95%B0%E6%8D%AE%E9%A3%9E%E8%BD%AE/">数据飞轮</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/" title="从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处</div></div><div class="info-2"><div class="info-item-1">从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处 本文从一个反直觉的观察出发:一个 Transformer 层里,99% 的计算模块根本不需要跨 GPU 通信,唯一的&quot;全员大会&quot;只有 Attention。理解了这一点,Megatron-LM 那套看似复杂的 6 维并行(TP / SP / PP / DP / CP / EP)就不再是黑魔法,而是一张围绕 Attention 设计的&quot;交通调度图&quot;。  关联阅读:本文讲训练并行维度的拆解;VLA 场景下为何选 FSDP 而非 Megatron 见 为什么 VLA 训练选 FSDP 而不是 Megatron。   一、先看清楚:Transformer 层里到底有什么 把一个标准 Transformer 层展开,数据流是这样的(Pre-LN 结构): 12345678910111213141516171819202122232425262728    层输入 x [batch, seq, d]         │         ├─────...</div></div></div></a><a class="pagination-related" href="/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%95%B0%E6%8D%AE%E5%B9%B3%E5%8F%B0%E4%B8%89%E5%A4%A7%E4%BB%B6%E6%B8%85%E6%B4%97%E6%95%B0%E6%8D%AE%E9%9B%86%E7%AE%A1%E7%90%86%E4%B8%8E%E8%AF%84%E6%B5%8B%E5%88%86%E6%9E%90/" title="具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地</div></div><div class="info-2"><div class="info-item-1">具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地  本文是 具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环 的落地实操篇——那篇讲全景与选型,这篇把三大件怎么写代码、怎么衔接拆透。  具身智能的数据工程,说到底就是三件事:把脏数据洗干净(Spark + Daft)、把干净数据管起来(Iceberg + LeRobotDataset)、让数据可查可分析(Doris / StarRocks)。这三个环节分别对应数据生命周期的不同阶段,解决的是完全不同性质的问题——如果混淆了层次,很容易在选型上踩坑:比如试图用 Spark 直接管理数据集版本,或者让 OLAP 引擎承担数据清洗的重活。 这篇文章把这三个模块逐一拆开,讲清楚每个工具在具身场景下的定位、用法和它们之间的衔接方式。  一、Spark + Daft:具身数据清洗管线怎么写 1.1 为什么需要 Daft,Spark 自己不够吗 Spark 擅长海量结构化数据的 ETL,但具身智能的数据主体是多模态非结构化数据——视频、图像、点云、张量。用原生 Spark 处理视频,你需要自己写 UDF 管理解码器、处理分...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%95%B0%E6%8D%AE%E5%B9%B3%E5%8F%B0%E4%B8%89%E5%A4%A7%E4%BB%B6%E6%B8%85%E6%B4%97%E6%95%B0%E6%8D%AE%E9%9B%86%E7%AE%A1%E7%90%86%E4%B8%8E%E8%AF%84%E6%B5%8B%E5%88%86%E6%9E%90/" title="具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-31</div><div class="info-item-2">具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地</div></div><div class="info-2"><div class="info-item-1">具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地  本文是 具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环 的落地实操篇——那篇讲全景与选型,这篇把三大件怎么写代码、怎么衔接拆透。  具身智能的数据工程,说到底就是三件事:把脏数据洗干净(Spark + Daft)、把干净数据管起来(Iceberg + LeRobotDataset)、让数据可查可分析(Doris / StarRocks)。这三个环节分别对应数据生命周期的不同阶段,解决的是完全不同性质的问题——如果混淆了层次,很容易在选型上踩坑:比如试图用 Spark 直接管理数据集版本,或者让 OLAP 引擎承担数据清洗的重活。 这篇文章把这三个模块逐一拆开,讲清楚每个工具在具身场景下的定位、用法和它们之间的衔接方式。  一、Spark + Daft:具身数据清洗管线怎么写 1.1 为什么需要 Daft,Spark 自己不够吗 Spark 擅长海量结构化数据的 ETL,但具身智能的数据主体是多模态非结构化数据——视频、图像、点云、张量。用原生 Spark 处理视频,你需要自己写 UDF 管理解码器、处理分...</div></div></div></a><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</div></div><div class="info-2"><div class="info-item-1">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 写给一位即将从大模型 Infra 转向具身智能 Infra 的工程师,也写给所有关注这个方向的人。  引言:一次心智模型的切换 过去三年做大模型 Infra 的人,心智模型基本是稳定的:海量文本 token 进、GPU 集群算、ckpt 出、推理服务化。但具身智能完全不同——它训练的不是&quot;下一个 token&quot;,而是&quot;机器人在物理世界里的下一步动作&quot;;它的数据不是从互联网爬来的,而是真机遥操作、仿真合成、人类视频多源混合出来的;它的基础设施不仅要支撑训练,还要支撑大规模并行仿真和真机数据回流这两个 LLM 时代从未存在过的环节。 如果你从 LLM Infra 背景切入这个领域,大约 60-70% 的工程经验可以直接平移,剩下 30-40% 需要新建心智模型。本文拆解其中三个最核心的新模块:仿真集群的算力形态、VLA 训练栈的真实结构、以及数据管线的工程全貌。  一、仿真集群:GPU 上的&quot;平行世界&quot; 1.1 它到底是什么 具身智能训...</div></div></div></a><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</div></div><div class="info-2"><div class="info-item-1">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立  本文是 从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 的姊妹篇——那篇给出了&quot;VLA 训练用 FSDP 而非 Megatron&quot;的结论,这篇把背后的逻辑彻底拆透。  核心原因一句话:VLA 模型的参数规模(1B-34B)刚好落在 FSDP 的&quot;甜点区&quot;,加上它基于 HuggingFace 生态的异构多模态结构让 Megatron 类框架难以适配,而科研社区主导的开源生态天然偏向 PyTorch 原生方案。下面把逻辑拆开讲。  一、先看 VLA 训练的真实规模和场景 VLA 训练的参数量和你熟悉的 LLM 预训练完全不是一个量级:    场景 参数规模 典型硬件 训练方式     VLA 预训练 7B(OpenVLA)/ 3B(π0) 64 张 A100 × 15 天 全量   VLA 微调(主流场景) 7B 单节点 8 张 A100 LoRA 或全量   VLA-RL 后训练 7B 单节点到多节点 FSDP 管理  ...</div></div></div></a><a class="pagination-related" href="/2026/09/03/2026-09-03-RLark%E8%B7%A8%E9%9B%86%E7%BE%A4%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BA%91%E5%8E%9F%E7%94%9F%E5%B9%B3%E5%8F%B0%E5%85%A8%E6%A0%88%E6%9E%B6%E6%9E%84/" title="RLark 深度解析:跨集群具身智能云原生平台的全栈架构"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">RLark 深度解析:跨集群具身智能云原生平台的全栈架构</div></div><div class="info-2"><div class="info-item-1">RLark 深度解析:跨集群具身智能云原生平台的全栈架构 具身智能有个硬约束:训练在云上 GPU 集群跑,部署在边缘的机械臂/相机/传感器上——两者物理上分布在不同的网络、不同的集群、甚至不同的安全域。现有平台要么只管云训练(K8s/Volcano),要么只管边缘设备(ROS),中间那条&quot;云到边、跨集群、带鉴权&quot;的路没人铺。 RLark(github.com/RLinf/RLark,2026/08 开源,Apache 2.0)就是来铺这条路的——一个跨集群具身智能云原生平台:用 kcp 做轻量控制面,统一管理云 GPU 集群和边缘设备,通过 Domain/Node/Job/Task/Workflow 一套 CRD 把&quot;训练→部署&quot;全链路声明式化,再用 TUN+gVisor+SSH 隧道让跨集群 Pod 直接通信,最后用 Device Plugin 把 ROS 机器人和相机接进 K8s 调度。 本文基于源码深挖,把 RLark 拆成四层:CRD 模型、kcp 控制面、跨集群 Pod 网络、具身运行时。  关联阅读:具身智能训练栈与数据管线见 ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E7%AE%97%E4%B8%80%E7%AC%94%E8%B4%A6-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%85%B7%E8%BA%AB%E6%95%B0%E6%8D%AE%E5%BF%85%E9%A1%BB%E4%B8%8A%E6%B9%96%E4%BB%93"><span class="toc-number">1.1.</span> <span class="toc-text">一、先算一笔账:为什么具身数据必须上湖仓</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%8A%80%E6%9C%AF%E9%80%89%E5%9E%8B%E6%80%BB%E8%A7%88-%E4%B8%80%E5%BC%A0%E8%A1%A8%E7%9C%8B%E6%B8%85%E5%85%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="toc-number">1.2.</span> <span class="toc-text">二、技术选型总览:一张表看清全生命周期</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%9C%BA%E6%99%AF%E4%B8%80-%E7%9C%9F%E6%9C%BA%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E2%80%94%E2%80%94%E4%B8%89%E7%A7%8D%E5%8D%8F%E8%AE%AE%E5%90%84%E5%AE%88%E4%B8%80%E9%81%93%E5%85%B3"><span class="toc-number">1.3.</span> <span class="toc-text">三、场景一:真机数据采集——三种协议各守一道关</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#MQTT-%E8%AE%BE%E5%A4%87%E9%81%A5%E6%B5%8B%E7%9A%84%E6%AF%9B%E7%BB%86%E8%A1%80%E7%AE%A1"><span class="toc-number">1.3.1.</span> <span class="toc-text">MQTT:设备遥测的毛细血管</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#gRPC-%E6%9C%8D%E5%8A%A1%E9%97%B4%E7%BC%96%E6%8E%92%E7%9A%84%E4%B8%BB%E5%8A%A8%E8%84%89"><span class="toc-number">1.3.2.</span> <span class="toc-text">gRPC:服务间编排的主动脉</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#WebRTC-%E9%81%A5%E6%93%8D%E4%BD%9C%E4%B8%B4%E5%9C%BA%E6%84%9F%E7%9A%84%E7%94%9F%E5%91%BD%E7%BA%BF"><span class="toc-number">1.3.3.</span> <span class="toc-text">WebRTC:遥操作临场感的生命线</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%9C%BA%E6%99%AF%E4%BA%8C-%E6%95%B0%E6%8D%AE%E6%B9%96%E5%AD%98%E5%82%A8%E4%B8%8E%E8%AE%AD%E7%BB%83%E6%95%B0%E6%8D%AE%E9%9B%86%E7%AE%A1%E7%90%86"><span class="toc-number">1.4.</span> <span class="toc-text">四、场景二:数据湖存储与训练数据集管理</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%9C%BA%E6%99%AF%E4%B8%89-Spark-%E6%B8%85%E6%B4%97%E7%AE%A1%E7%BA%BF%E2%80%94%E2%80%94%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84-%E8%84%8F%E6%B4%BB%E7%B4%AF%E6%B4%BB"><span class="toc-number">1.5.</span> <span class="toc-text">五、场景三:Spark 清洗管线——具身智能的&quot;脏活累活&quot;</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%9C%BA%E6%99%AF%E5%9B%9B-OLAP-%E5%BC%95%E6%93%8E%E5%9C%A8%E8%AF%84%E6%B5%8B%E4%B8%8E%E7%9B%91%E6%8E%A7%E4%B8%AD%E7%9A%84%E5%88%86%E5%B7%A5"><span class="toc-number">1.6.</span> <span class="toc-text">六、场景四:OLAP 引擎在评测与监控中的分工</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%9C%BA%E6%99%AF%E4%BA%94-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E4%B8%8E%E6%95%B0%E6%8D%AE%E5%9B%9E%E6%B5%81%E2%80%94%E2%80%94%E9%97%AD%E7%8E%AF%E7%9A%84%E6%9C%80%E5%90%8E%E4%B8%80%E5%85%AC%E9%87%8C"><span class="toc-number">1.7.</span> <span class="toc-text">七、场景五:推理服务与数据回流——闭环的最后一公里</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E8%90%BD%E5%9C%B0%E5%BB%BA%E8%AE%AE%E4%B8%8E%E5%87%A0%E7%82%B9%E6%80%9D%E8%80%83"><span class="toc-number">1.8.</span> <span class="toc-text">八、落地建议与几点思考</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BB%93%E8%AF%AD"><span class="toc-number">1.9.</span> <span class="toc-text">结语</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%8F%82%E8%80%83"><span class="toc-number">1.9.1.</span> <span class="toc-text">参考</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</a><time datetime="2026-09-09T16:00:00.000Z" title="发表于 2026-09-10 00:00:00">2026-09-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</a><time datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,470 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="通过一张张架构图,从 ECS&#x2F;SLB 讲到 Subnet&#x2F;EIP&#x2F;mTLS&#x2F;Service Mesh,再理清 kube-proxy&#x2F;CNI&#x2F;Istio 三剑客分层数据路径,最后落到声明式控制平面与调谐循环范式——云原生基础设施骨架的全景地图。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南">
+<meta property="og:url" content="http://example.com/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="通过一张张架构图,从 ECS&#x2F;SLB 讲到 Subnet&#x2F;EIP&#x2F;mTLS&#x2F;Service Mesh,再理清 kube-proxy&#x2F;CNI&#x2F;Istio 三剑客分层数据路径,最后落到声明式控制平面与调谐循环范式——云原生基础设施骨架的全景地图。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-09-02T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-09-03T04:10:33.472Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="云原生">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="SLB">
+<meta property="article:tag" content="Kube-OVN">
+<meta property="article:tag" content="Service-Mesh">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南",
+  "url": "http://example.com/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-09-02T16:00:00.000Z",
+  "dateModified": "2026-09-03T04:10:33.472Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-03T04:10:33.472Z" title="更新于 2026-09-03 12:10:33">2026-09-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/" data-flag-title="构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南(含架构图详解)</h1>
+<p>在当今的云原生时代,无论是后端开发者、运维工程师还是架构师,每天都会被各种眼花缭乱的技术名词包围:ECS、SLB、mTLS、Service Mesh、Kube-OVN、声明式 API……</p>
+<p>这些概念看似分散在各个领域,但实际上它们共同拼图成了现代高可用、高并发应用的基础设施骨架。本文将通过一张张架构图,带你从底层的云服务器,一路漫游到 Kubernetes 的控制平面大脑。</p>
+<hr>
+<h2 id="第一层-云上的-砖块-与-门卫-——ECS-与-SLB">第一层:云上的&quot;砖块&quot;与&quot;门卫&quot;——ECS 与 SLB</h2>
+<p>所有云上架构的起点,都离不开计算与流量分发。在阿里云等公有云体系中,最基础的黄金组合就是 <strong>ECS(弹性计算服务,即虚拟机)与 SLB(负载均衡)</strong>。</p>
+<h3 id="经典组合架构全景图">经典组合架构全景图</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">            公网用户</span><br><span class="line">               │</span><br><span class="line">               ▼</span><br><span class="line">      ┌─── [EIP / SLB] ───┐     ← 接入层:流量分发、健康检查、SSL 卸载</span><br><span class="line">      │                  │</span><br><span class="line">      ▼                  ▼</span><br><span class="line">┌─[ECS-A]-┐        ┌─[ECS-B]-┐   ← 计算层:多台 ECS 跨可用区部署</span><br><span class="line">│ Web/微服务        │ Web/微服务</span><br><span class="line">└────────┘        └────────┘</span><br><span class="line">      ▲                  ▲</span><br><span class="line">      │    [ESS 弹性伸缩]      ← 根据 CPU/QPS 自动增减 ECS 数量</span><br><span class="line">      └────────┬────────┘</span><br><span class="line">               ▼</span><br><span class="line">      ┌──── [RDS / Redis] ────┐   ← 数据层:主备架构 + 读写分离</span><br><span class="line">      └───────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="图解-一次请求的完整生命周期">图解:一次请求的完整生命周期</h3>
+<ol>
+<li><strong>公网入口</strong>:用户请求首先打到 SLB 绑定的 EIP(弹性公网 IP)上。EIP 绑定到 SLB 而非单台 ECS,是为了保证后端实例可以自由扩缩、故障切换,而公网入口地址保持不变。</li>
+<li><strong>流量分发</strong>:SLB 根据监听器规则(四层 TCP 或七层 HTTP)和负载均衡算法(加权轮询、最小连接数等),选择一台健康的后端 ECS。</li>
+<li><strong>业务处理</strong>:ECS 处理业务逻辑,期间可能访问 RDS 读数据、Redis 读缓存。</li>
+<li><strong>健康检查</strong>:SLB 周期性探测后端 ECS,一旦某可用区节点异常,自动将其从负载均衡池剔除,流量转给健康节点——<strong>这就是高可用的本质</strong>。</li>
+<li><strong>弹性伸缩</strong>:当 ESS 监测到 ECS CPU 超过阈值(如 70%),分钟级扩容新实例并自动挂载到 SLB 后端;流量低谷时自动缩容释放,成本随流量曲线动态匹配。</li>
+</ol>
+<h3 id="SLB-产品家族选型表">SLB 产品家族选型表</h3>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>协议层</th>
+<th>核心能力</th>
+<th>单实例性能</th>
+<th>典型场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ALB(应用型)</strong></td>
+<td>七层 HTTP/HTTPS/QUIC</td>
+<td>基于域名/路径/Header/Cookie 的内容路由</td>
+<td>最高 100 万 QPS</td>
+<td>Web 应用、API 网关、灰度发布、K8s Ingress</td>
+</tr>
+<tr>
+<td><strong>NLB(网络型)</strong></td>
+<td>四层 TCP/UDP/TCPSSL</td>
+<td>超高性能、自动弹性、全端口监听</td>
+<td>最高 1 亿并发连接</td>
+<td>IoT/MQTT、游戏、音视频、高并发 TCP</td>
+</tr>
+<tr>
+<td><strong>CLB(传统型)</strong></td>
+<td>四层 + 基础七层</td>
+<td>老牌产品,仅基础转发</td>
+<td>100 万并发 / 5 万 QPS</td>
+<td>存量系统沿用(新业务不推荐)</td>
+</tr>
+<tr>
+<td><strong>GWLB(网关型)</strong></td>
+<td>三层 IP</td>
+<td>通过 Geneve 隧道做透明流量牵引</td>
+<td>—</td>
+<td>防火墙、IDS/IPS 安全设备集群</td>
+</tr>
+</tbody>
+</table>
+<p><strong>实战场景</strong>:电商&quot;双 11&quot;零点流量洪峰——NLB 自动弹性扩容承接千万级并发连接;ESS 监测到 CPU 超标后分钟级扩容几十台 ECS 并自动挂到 NLB 后端;RDS 通过只读实例扛住读流量;高峰过后自动缩容。这就是&quot;接入层 + 计算层 + 数据层&quot;黄金组合的价值。</p>
+<hr>
+<h2 id="第二层-走进-K8s-网络——Subnet、EIP、mTLS-与-Service-Mesh">第二层:走进 K8s 网络——Subnet、EIP、mTLS 与 Service Mesh</h2>
+<p>当业务复杂到一定程度,传统 ECS 架构往往让位于 Kubernetes 容器化架构。在 K8s 多租户安全网络中,四个核心概念构成一条完整链路:</p>
+<h3 id="四概念协作关系图">四概念协作关系图</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">公网用户</span><br><span class="line">   │</span><br><span class="line">   ▼  [EIP]  ── 公网入口,NAT 映射到 K8s 集群(解决&quot;外部怎么进来&quot;,L3)</span><br><span class="line">   │</span><br><span class="line">   ▼  [Kube-OVN Subnet] ── 决定 Pod 的 IP 段与租户边界(解决&quot;Pod 在哪&quot;,L2/L3)</span><br><span class="line">   │</span><br><span class="line">   ▼  [Istio sidecar / Service Mesh] ── L7 路由 + 灰度 + 遥测(解决&quot;流量怎么治理&quot;,L4–L7)</span><br><span class="line">   │</span><br><span class="line">   ▼  [mTLS] ── 服务间加密与身份认证(解决&quot;如何可信通信&quot;,L4)</span><br><span class="line">   │</span><br><span class="line">   ▼  目标 Pod</span><br></pre></td></tr></table></figure>
+<h3 id="1-Subnet-子网-——Pod-的-门牌号规划">1. Subnet(子网)——Pod 的&quot;门牌号规划&quot;</h3>
+<p>子网是通过 CIDR 划分出的独立 IP 地址段(如 <code>10.16.0.0/16</code> 可容纳 6 万多个地址)。在 Kube-OVN 中,每个 Subnet 对应一个 OVN Logical Switch,Namespace 可绑定到 Subnet,其下所有 Pod 自动从该段分配 IP:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">kubeovn.io/v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Subnet</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">production</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">protocol:</span> <span class="string">IPv4</span></span><br><span class="line">  <span class="attr">cidrBlock:</span> <span class="number">10.16</span><span class="number">.0</span><span class="number">.0</span><span class="string">/16</span></span><br><span class="line">  <span class="attr">gateway:</span> <span class="number">10.16</span><span class="number">.0</span><span class="number">.1</span></span><br><span class="line">  <span class="attr">excludeIps:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="number">10.16</span><span class="number">.0</span><span class="number">.1</span><span class="string">..10.16.0.10</span>     <span class="comment"># 预留给网关等设备的地址</span></span><br><span class="line">  <span class="attr">namespaces:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="string">prod-ns</span>                    <span class="comment"># 绑定到该 Namespace,Pod 自动使用此网段</span></span><br></pre></td></tr></table></figure>
+<p><strong>典型用法</strong>:生产、测试、财务系统分别绑定三个 Subnet,用 ACL 在子网边界做访问控制;给 KubeVirt 虚拟机预留静态 IP 段,保证热迁移时 IP 不变。</p>
+<h3 id="2-EIP-弹性公网-IP-——可漂移的-大门牌">2. EIP(弹性公网 IP)——可漂移的&quot;大门牌&quot;</h3>
+<p>EIP 是独立持有的公网 IP 资源,位于云厂商公网网关上,通过 NAT 映射到被绑定的资源。它的核心价值在于<strong>解耦</strong>:把 EIP 从集群 A 的 SLB 解绑、绑到集群 B 的 SLB,秒级完成灾备切换,DNS 不变、用户无感。</p>
+<p>在 Kube-OVN 多租户场景下,还有 <code>VpcEip</code> 和 <code>VpcNatGateway</code> CRD,让每个租户 VPC 拥有独立的 EIP 和 SNAT/DNAT 规则。</p>
+<h3 id="3-mTLS-双向-TLS-——服务间的-双向验明正身">3. mTLS(双向 TLS)——服务间的&quot;双向验明正身&quot;</h3>
+<p>传统 TLS 只有客户端验证服务器;mTLS 要求<strong>双方都出示证书并互相验证</strong>。握手流程:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ClientHello → ServerHello + 服务器证书 + CertificateRequest</span><br><span class="line">→ 客户端验证服务器证书 → 客户端提交自己的证书</span><br><span class="line">→ 服务器验证客户端证书 → 双方协商对称密钥 → 加密通信</span><br></pre></td></tr></table></figure>
+<p>在 Istio 零信任体系中,每个 Service Account 都会获得一张内含 SPIFFE 身份的短期证书(如 <code>spiffe://cluster.local/ns/default/sa/my-service</code>),默认 24 小时自动轮换。通过以下 CRD 即可强制整个命名空间走 mTLS:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">security.istio.io/v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">PeerAuthentication</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">default</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">production</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">mtls:</span></span><br><span class="line">    <span class="attr">mode:</span> <span class="string">STRICT</span>   <span class="comment"># 明文流量直接被拒绝</span></span><br></pre></td></tr></table></figure>
+<h3 id="4-Service-Mesh-服务网格-——流量治理的-总调度台">4. Service Mesh(服务网格)——流量治理的&quot;总调度台&quot;</h3>
+<p>Mesh 通过在 Pod 旁注入 Envoy 代理,把路由、重试、加密、遥测从业务代码中剥离。最经典的玩法是<strong>声明式灰度发布</strong>:</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">networking.istio.io/v1beta1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">VirtualService</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">reviews</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">hosts:</span> [<span class="string">reviews</span>]</span><br><span class="line">  <span class="attr">http:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">match:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">headers:</span> &#123;<span class="attr">end-user:</span> &#123;<span class="attr">exact:</span> <span class="string">beta-tester</span>&#125;&#125;</span><br><span class="line">    <span class="attr">route:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">destination:</span> &#123;<span class="attr">host:</span> <span class="string">reviews</span>, <span class="attr">subset:</span> <span class="string">v2</span>&#125;   <span class="comment"># 内测用户全量走新版本</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">route:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">destination:</span> &#123;<span class="attr">host:</span> <span class="string">reviews</span>, <span class="attr">subset:</span> <span class="string">v1</span>&#125;</span><br><span class="line">      <span class="attr">weight:</span> <span class="number">95</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">destination:</span> &#123;<span class="attr">host:</span> <span class="string">reviews</span>, <span class="attr">subset:</span> <span class="string">v2</span>&#125;</span><br><span class="line">      <span class="attr">weight:</span> <span class="number">5</span>                                   <span class="comment"># 其他用户 5% 灰度</span></span><br></pre></td></tr></table></figure>
+<p><strong>实战场景</strong>:大促前将新推荐算法从 1% 逐步放量到 100%,只需修改 <code>weight</code> 字段;同时通过遥测面板观察新版本 P99 延迟,异常立即回滚 weight 为 0,全程零业务代码改动。</p>
+<hr>
+<h2 id="第三层-理清网络栈的-三剑客-——kube-proxy、CNI-与-Istio">第三层:理清网络栈的&quot;三剑客&quot;——kube-proxy、CNI 与 Istio</h2>
+<h3 id="三者分层数据路径图">三者分层数据路径图</h3>
+<p>一个跨节点 HTTP 请求的完整旅程,三条链路在同一份数据包上依次叠加:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────── Pod A 所在节点 ───────────────────┐</span><br><span class="line">│                                                      │</span><br><span class="line">│  Pod A 发出请求 → 目标是 Service 的 ClusterIP          │</span><br><span class="line">│        │                                             │</span><br><span class="line">│        ▼                                             │</span><br><span class="line">│  ① kube-proxy 编程的 iptables 规则                    │</span><br><span class="line">│     把 ClusterIP DNAT 为某个具体 Pod B 的 IP           │</span><br><span class="line">│        │                                             │</span><br><span class="line">│        ▼                                             │</span><br><span class="line">│  ② Istio 注入的 iptables 规则把出向流量                │</span><br><span class="line">│     劫持到本 Pod 的 Envoy sidecar,                   │</span><br><span class="line">│     Envoy 做 L7 路由 + mTLS 加密后发出                 │</span><br><span class="line">│        │                                             │</span><br><span class="line">└────────┼─────────────────────────────────────────────┘</span><br><span class="line">         ▼</span><br><span class="line">  ③ CNI(Kube-OVN)建立的 Geneve 隧道跨越物理网络</span><br><span class="line">         │</span><br><span class="line">┌─────────▼───────── Pod B 所在节点 ───────────────────┐</span><br><span class="line">│        │                                             │</span><br><span class="line">│  OVS/OVN 流表解封包,送入 Pod B 网络命名空间            │</span><br><span class="line">│        │                                             │</span><br><span class="line">│        ▼                                             │</span><br><span class="line">│  再次被 Istio 规则劫持到 Pod B 的 Envoy,              │</span><br><span class="line">│  解密后最终到达业务容器                                 │</span><br><span class="line">└──────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<h3 id="多维对比总览">多维对比总览</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>kube-proxy</th>
+<th>CNI(Kube-OVN)</th>
+<th>Istio</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>所在层级</td>
+<td>L4(TCP/UDP)</td>
+<td>L2/L3 组网为主</td>
+<td>L4–L7 应用层</td>
+</tr>
+<tr>
+<td>核心职责</td>
+<td>Service 虚拟 IP → Pod 转发</td>
+<td>Pod 网卡创建、IPAM、跨节点隧道、子网/VPC</td>
+<td>流量管理、mTLS、可观测性、熔断</td>
+</tr>
+<tr>
+<td>实现机制</td>
+<td>iptables / IPVS / nftables</td>
+<td>OVS 流表 + Geneve 隧道</td>
+<td>iptables/eBPF 劫持到 Envoy</td>
+</tr>
+<tr>
+<td>典型 API</td>
+<td>Service、EndpointSlice</td>
+<td>Subnet、VPC、VpcNatGateway</td>
+<td>VirtualService、DestinationRule</td>
+</tr>
+<tr>
+<td>有无代理</td>
+<td>无(纯内核规则)</td>
+<td>无(流表+隧道)</td>
+<td>有(Envoy / ztunnel)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="三个高频混淆点">三个高频混淆点</h3>
+<ol>
+<li><strong>“Istio 替代 kube-proxy?”</strong> —— 不替代,是<strong>叠加</strong>。即便装了 Istio,kube-proxy 的 ClusterIP 转发规则依然生效。</li>
+<li><strong>“Istio-CNI 是网络插件吗?”</strong> —— 不是。它只负责写流量劫持规则,Pod IP 分配仍由真正的网络 CNI 完成。</li>
+<li><strong>“Kube-OVN 能替代 Istio 吗?”</strong> —— 不能。它能做 L3/L4 的 NetworkPolicy,但做不了 HTTP 路由、金丝雀、分布式追踪。</li>
+</ol>
+<blockquote>
+<p><strong>配置冲突提醒</strong>:Kube-OVN 安装时必须通过 <code>--service-cluster-ip-range</code> 显式感知 Service CIDR,否则其规则可能与 kube-proxy 冲突,导致 Service 无法访问。</p>
+</blockquote>
+<hr>
+<h2 id="第四层-所有一切背后的-大脑-——Kubernetes-like-控制平面">第四层:所有一切背后的&quot;大脑&quot;——Kubernetes-like 控制平面</h2>
+<h3 id="控制平面与数据平面分离架构">控制平面与数据平面分离架构</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">┌───────────────── 控制平面(决策层)──────────────────┐</span><br><span class="line">│                                                    │</span><br><span class="line">│   用户提交 YAML(声明式 API)                          │</span><br><span class="line">│        │                                           │</span><br><span class="line">│        ▼                                           │</span><br><span class="line">│   ┌──────────────┐    持久化     ┌──────────┐       │</span><br><span class="line">│   │ API Server   │◄───────────►│   etcd   │       │</span><br><span class="line">│   │(认证/鉴权/准入)│              │(唯一事实来源)│   │</span><br><span class="line">│   └──────────────┘              └──────────┘       │</span><br><span class="line">│        ▲              ▲                            │</span><br><span class="line">│        │              │        Watch 资源变化        │</span><br><span class="line">│   ┌────┴─────┐  ┌─────┴──────────┐                  │</span><br><span class="line">│   │Scheduler │  │Controller Mgr  │                 │</span><br><span class="line">│   │(计算最佳节点)│ │(各类调谐循环)  │                 │</span><br><span class="line">│   └──────────┘  └────────────────┘                 │</span><br><span class="line">└────────────────────┬───────────────────────────────┘</span><br><span class="line">                     │ Watch API(数据平面主动感知)</span><br><span class="line">┌────────────────────▼──── 数据平面(执行层)───────────┐</span><br><span class="line">│   ┌──────────┐  ┌────────────┐  ┌──────────┐       │</span><br><span class="line">│   │ kubelet  │  │ kube-proxy │  │ 容器运行时 │       │</span><br><span class="line">│   │(Pod 生命周期)│ │(Service 转发)│ │(containerd)│ │</span><br><span class="line">│   └──────────┘  └────────────┘  └──────────┘       │</span><br><span class="line">└────────────────────────────────────────────────────┘</span><br></pre></td></tr></table></figure>
+<p>这套架构的底层逻辑是两大设计模式:</p>
+<ul>
+<li><strong>声明式 API</strong>:用户声明&quot;我要 3 个 nginx:1.25 副本&quot;,而非&quot;启动 3 个容器&quot;。</li>
+<li><strong>调谐循环</strong>:控制器持续执行 <code>Watch → Diff → Act → 更新 status</code>。它是<strong>水平触发</strong>(周期性检查整体状态,宕机恢复后可重新收敛)且<strong>幂等</strong>(同一函数执行多次结果一致)的,因此天然具备故障自愈与漂移纠正能力。</li>
+</ul>
+<h3 id="该范式在五大场景中的落地">该范式在五大场景中的落地</h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>代表系统</th>
+<th>Desired State</th>
+<th>Actual State</th>
+<th>控制器做的事</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>云资源管理</td>
+<td>Crossplane</td>
+<td>YAML 声明的 Bucket/RDS</td>
+<td>云厂商上的真实资源</td>
+<td>调用云 API 创建资源,发现控制台手改后自动纠正</td>
+</tr>
+<tr>
+<td>服务网格</td>
+<td>Istio</td>
+<td>VirtualService 路由规则</td>
+<td>各 Pod 中 Envoy 的实际配置</td>
+<td>istiod 把 CRD 转换为 Envoy 配置并下发</td>
+</tr>
+<tr>
+<td>GitOps</td>
+<td>ArgoCD</td>
+<td>Git 仓库中的 YAML</td>
+<td>集群实际运行的资源</td>
+<td>持续 Diff,发现漂移即同步/告警,回滚 = git revert</td>
+</tr>
+<tr>
+<td>多集群管理</td>
+<td>Karmada</td>
+<td>用户提交的资源 + PropagationPolicy</td>
+<td>各成员集群中的资源</td>
+<td>按策略分发到上百个集群,支持 Push/Pull 两种模式</td>
+</tr>
+<tr>
+<td>虚拟机管理</td>
+<td>KubeVirt</td>
+<td>VirtualMachine CRD</td>
+<td>节点上 libvirt/QEMU 运行的 VM</td>
+<td>VM 与 Pod 同一控制平面管理,支持热迁移、快照</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="结语-一张总图看懂全局">结语:一张总图看懂全局</h2>
+<p>把四层知识串联起来,就是现代云上应用的完整骨架:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">      [声明式控制平面]  ← ArgoCD/Crossplane/Istiod/Karmada 统一调度</span><br><span class="line">             │</span><br><span class="line">   ┌─────────┼─────────┐</span><br><span class="line">   ▼         ▼         ▼</span><br><span class="line">[EIP 入口] [SLB 分发] [Mesh 治理]  ← 南北向流量入口 + 东西向流量治理</span><br><span class="line">   │         │         │</span><br><span class="line">   ▼         ▼         ▼</span><br><span class="line">[ECS/K8s Node 承载计算]  [Subnet 规划网络]  [mTLS 加密通信]</span><br><span class="line">   │</span><br><span class="line">   ▼</span><br><span class="line">[Pod / 容器运行实际业务]</span><br></pre></td></tr></table></figure>
+<p>掌握各概念的分层定位——<strong>ECS 提供计算、SLB 提供入口、Subnet 规划地址、EIP 解耦公网、CNI 打通 Pod、kube-proxy 转发 Service、Mesh 治理东西向、控制平面声明一切</strong>——你就能在面对&quot;该用 Kube-OVN 还是 Istio&quot;、“该自建 VM 还是上 K8s”、&quot;如何做流量灰度&quot;这类问题时,迅速判断出归属与最佳组合。希望这篇带图详解的扫盲指南,能成为你探索云原生深水区的一张全景地图。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/">http://example.com/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/SLB/">SLB</a><a class="post-meta__tags" href="/tags/Kube-OVN/">Kube-OVN</a><a class="post-meta__tags" href="/tags/Service-Mesh/">Service-Mesh</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/09/03/2026-09-03-RLark%E8%B7%A8%E9%9B%86%E7%BE%A4%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BA%91%E5%8E%9F%E7%94%9F%E5%B9%B3%E5%8F%B0%E5%85%A8%E6%A0%88%E6%9E%B6%E6%9E%84/" title="RLark 深度解析:跨集群具身智能云原生平台的全栈架构"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">RLark 深度解析:跨集群具身智能云原生平台的全栈架构</div></div><div class="info-2"><div class="info-item-1">RLark 深度解析:跨集群具身智能云原生平台的全栈架构 具身智能有个硬约束:训练在云上 GPU 集群跑,部署在边缘的机械臂/相机/传感器上——两者物理上分布在不同的网络、不同的集群、甚至不同的安全域。现有平台要么只管云训练(K8s/Volcano),要么只管边缘设备(ROS),中间那条&quot;云到边、跨集群、带鉴权&quot;的路没人铺。 RLark(github.com/RLinf/RLark,2026/08 开源,Apache 2.0)就是来铺这条路的——一个跨集群具身智能云原生平台:用 kcp 做轻量控制面,统一管理云 GPU 集群和边缘设备,通过 Domain/Node/Job/Task/Workflow 一套 CRD 把&quot;训练→部署&quot;全链路声明式化,再用 TUN+gVisor+SSH 隧道让跨集群 Pod 直接通信,最后用 Device Plugin 把 ROS 机器人和相机接进 K8s 调度。 本文基于源码深挖,把 RLark 拆成四层:CRD 模型、kcp 控制面、跨集群 Pod 网络、具身运行时。  关联阅读:具身智能训练栈与数据管线见 ...</div></div></div></a><a class="pagination-related" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</div></div><div class="info-2"><div class="info-item-1">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的 多租户是云计算的立身之本——成千上万个互不信任的租户共享同一批物理机、同一批交换机、同一批存储盘,却要求彼此&quot;看不见、摸不着&quot;。这篇文章从计算、网络、数据、管理面四个维度拆解隔离体系,然后聚焦最核心也最容易被误解的一环:VPC 逻辑隔离为什么真的能隔离。我们会用一个&quot;故意撞 IP、故意共宿主机&quot;的例子逐跳追踪报文,再回答两个高频疑问:subnet 能不能做租户隔离?subnet 在路由表和交换机里的真实拓扑长什么样?  一、多租户隔离体系总览 隔离的本质命题是:在共享物理资源的前提下,为每个租户构建一个&quot;逻辑上独立、必要时可物理隔离&quot;的运行环境,同时兼顾安全性与资源利用率。 不同云服务模型的隔离锚点不同:IaaS 靠 Hypervisor 和网络虚拟化,PaaS 靠容器沙箱与命名空间,SaaS 靠应用层的 Tenant-ID 与数据权限策略。    隔离维度 共享程度 核心实现机制 典型技术/产品     计算隔离 共享硬件,独立内...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/" title="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</div></div><div class="info-2"><div class="info-item-1">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器 把一个千卡训练任务调度好,比把一百个 Web 服务调度好难得多。难点不在&quot;算力够不够&quot;,而在三件 Web 服务从不操心的事:  通信拓扑要聚拢:TP/PP 切出来的通信组,必须落在同一片 RDMA 交换机域里,跨机架一跳,AllReduce 延迟能差好几倍。 资源要&quot;留得住&quot;:训练任务动辄跑几小时几天,中途被别的任务抢占、重启就要从头来;但集群又要混部在线/离线,不能不让抢。 同卡型才好比:A100 节点和 H100 节点不能混进同一个通信组,不然快的等慢的,贵的卡当便宜的用。  通用调度器(kube-scheduler)对这三件事基本无解,Volcano 解决了 Gang 但也没碰拓扑。Sky-Scheduler 就是冲着这三件事来的——一个 Volcano 衍生的 Kubernetes 调度器,在 Volcano 的 session 框架上做了几处关键改造:把&quot;Pod→Node 一跳&quot;改成 “Task→Quota→Node 两跳”,引入...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐</div></div><div class="info-2"><div class="info-item-1">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐 DRA(Dynamic Resource Allocation)已经原生支持拓扑感知调度,而且这是它的核心设计目标之一——通过 ResourceSlice 暴露设备拓扑信息,配合 ResourceClaim 中的约束(constraint)让调度器在 Pod 绑定前就完成 NUMA / PCIe 级别的拓扑对齐。本文从实现机制、版本演进、使用示例和当前局限几个维度展开说明。  本文是 深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 的深入篇——那篇讲 HAMi 怎么用 DRA 做异构 GPU 分配,这篇专讲 DRA 本身的拓扑感知能力。   一、实现机制:拓扑如何参与调度决策 DRA 的拓扑感知能力建立在 KEP-4381(DRA Structured Parameters) 引入的结构化参数模型之上,核心链路分三层: 123456789101112131415161718192021222324              ┌─────────────────────────...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-%E4%BB%8EKServe%E5%88%B0Kthena%E4%BA%91%E5%8E%9F%E7%94%9F%E6%A8%A1%E5%9E%8B%E6%9C%8D%E5%8A%A1%E5%B9%B3%E5%8F%B0%E6%BC%94%E8%BF%9B/" title="从 KServe 到 Kthena:云原生模型服务平台的技术演进"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">从 KServe 到 Kthena:云原生模型服务平台的技术演进</div></div><div class="info-2"><div class="info-item-1">从 KServe 到 Kthena:云原生模型服务平台的技术演进 在 Kubernetes 上部署一个模型服务,为什么需要专门的平台?本文从 Serverless 的本质出发,深入拆解 KServe 的拓扑架构与技术细节,并对比 2026 年新晋的 LLM 推理专用平台 Kthena,梳理云原生推理领域的技术选型思路。  一、为什么需要模型服务平台 在 KServe 出现之前,在 Kubernetes 上部署一个推理服务,意味着手动拼装 Deployment、Service、HPA、Ingress、ConfigMap 等一堆资源。而模型服务还有其独特的痛点:  框架异构:PyTorch、TensorFlow、XGBoost、ONNX、vLLM、TGI……每个引擎的部署方式各不相同; 成本压力:GPU 极其昂贵,闲置时的空转是巨大的浪费; 运维复杂:版本灰度、流量切分、可解释性、日志审计,每一项都需要额外的工程投入。  KServe(前身是 Kubeflow 下的 KFServing,2022 年独立,2025 年 9 月进入 CNCF 孵化)给出的答案是:用一个 Inferenc...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">虚拟化技术学习路线——从原理到云原生</div></div><div class="info-2"><div class="info-item-1">虚拟化技术学习路线——从原理到云原生  本文目标：给你一条从零到能独立设计/运维虚拟化平台的清晰路径。覆盖 CPU/内存/IO 虚拟化、QEMU/KVM、容器与 namesapce/cgroup、网络与存储虚拟化、云编排，最后落到大模型训练/推理场景下的 GPU 虚拟化与云原生调度。 学习哲学：先吃透&quot;一个虚拟机是怎么被造出来的&quot;，再学&quot;容器是怎么隔离的&quot;，最后学&quot;云平台怎么把它们编排起来&quot;。原理是地基，工程是楼层，地基不稳楼越高越晃。   学习路线总览（六个阶段） 12345678910111213阶段0  打地基：操作系统与硬件基础   │阶段1  虚拟化原理：CPU / 内存 / IO 三大虚拟化   │阶段2  Type-1 / Type-2 与 QEMU-KVM 全栈   │阶段3  容器虚拟化：namespace + cgroup + rootfs   │阶段4  网络与存储虚拟化：virtio / SDN / 分布式存储   │阶段5  云编排：OpenStack / Kubernetes / 调度   │...</div></div></div></a><a class="pagination-related" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</div></div><div class="info-2"><div class="info-item-1">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的 多租户是云计算的立身之本——成千上万个互不信任的租户共享同一批物理机、同一批交换机、同一批存储盘,却要求彼此&quot;看不见、摸不着&quot;。这篇文章从计算、网络、数据、管理面四个维度拆解隔离体系,然后聚焦最核心也最容易被误解的一环:VPC 逻辑隔离为什么真的能隔离。我们会用一个&quot;故意撞 IP、故意共宿主机&quot;的例子逐跳追踪报文,再回答两个高频疑问:subnet 能不能做租户隔离?subnet 在路由表和交换机里的真实拓扑长什么样?  一、多租户隔离体系总览 隔离的本质命题是:在共享物理资源的前提下,为每个租户构建一个&quot;逻辑上独立、必要时可物理隔离&quot;的运行环境,同时兼顾安全性与资源利用率。 不同云服务模型的隔离锚点不同:IaaS 靠 Hypervisor 和网络虚拟化,PaaS 靠容器沙箱与命名空间,SaaS 靠应用层的 Tenant-ID 与数据权限策略。    隔离维度 共享程度 核心实现机制 典型技术/产品     计算隔离 共享硬件,独立内...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南(含架构图详解)</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E5%B1%82-%E4%BA%91%E4%B8%8A%E7%9A%84-%E7%A0%96%E5%9D%97-%E4%B8%8E-%E9%97%A8%E5%8D%AB-%E2%80%94%E2%80%94ECS-%E4%B8%8E-SLB"><span class="toc-number">1.1.</span> <span class="toc-text">第一层:云上的&quot;砖块&quot;与&quot;门卫&quot;——ECS 与 SLB</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BB%8F%E5%85%B8%E7%BB%84%E5%90%88%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E5%9B%BE"><span class="toc-number">1.1.1.</span> <span class="toc-text">经典组合架构全景图</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%BE%E8%A7%A3-%E4%B8%80%E6%AC%A1%E8%AF%B7%E6%B1%82%E7%9A%84%E5%AE%8C%E6%95%B4%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="toc-number">1.1.2.</span> <span class="toc-text">图解:一次请求的完整生命周期</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#SLB-%E4%BA%A7%E5%93%81%E5%AE%B6%E6%97%8F%E9%80%89%E5%9E%8B%E8%A1%A8"><span class="toc-number">1.1.3.</span> <span class="toc-text">SLB 产品家族选型表</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%BA%8C%E5%B1%82-%E8%B5%B0%E8%BF%9B-K8s-%E7%BD%91%E7%BB%9C%E2%80%94%E2%80%94Subnet%E3%80%81EIP%E3%80%81mTLS-%E4%B8%8E-Service-Mesh"><span class="toc-number">1.2.</span> <span class="toc-text">第二层:走进 K8s 网络——Subnet、EIP、mTLS 与 Service Mesh</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%9B%E6%A6%82%E5%BF%B5%E5%8D%8F%E4%BD%9C%E5%85%B3%E7%B3%BB%E5%9B%BE"><span class="toc-number">1.2.1.</span> <span class="toc-text">四概念协作关系图</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-Subnet-%E5%AD%90%E7%BD%91-%E2%80%94%E2%80%94Pod-%E7%9A%84-%E9%97%A8%E7%89%8C%E5%8F%B7%E8%A7%84%E5%88%92"><span class="toc-number">1.2.2.</span> <span class="toc-text">1. Subnet(子网)——Pod 的&quot;门牌号规划&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-EIP-%E5%BC%B9%E6%80%A7%E5%85%AC%E7%BD%91-IP-%E2%80%94%E2%80%94%E5%8F%AF%E6%BC%82%E7%A7%BB%E7%9A%84-%E5%A4%A7%E9%97%A8%E7%89%8C"><span class="toc-number">1.2.3.</span> <span class="toc-text">2. EIP(弹性公网 IP)——可漂移的&quot;大门牌&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-mTLS-%E5%8F%8C%E5%90%91-TLS-%E2%80%94%E2%80%94%E6%9C%8D%E5%8A%A1%E9%97%B4%E7%9A%84-%E5%8F%8C%E5%90%91%E9%AA%8C%E6%98%8E%E6%AD%A3%E8%BA%AB"><span class="toc-number">1.2.4.</span> <span class="toc-text">3. mTLS(双向 TLS)——服务间的&quot;双向验明正身&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-Service-Mesh-%E6%9C%8D%E5%8A%A1%E7%BD%91%E6%A0%BC-%E2%80%94%E2%80%94%E6%B5%81%E9%87%8F%E6%B2%BB%E7%90%86%E7%9A%84-%E6%80%BB%E8%B0%83%E5%BA%A6%E5%8F%B0"><span class="toc-number">1.2.5.</span> <span class="toc-text">4. Service Mesh(服务网格)——流量治理的&quot;总调度台&quot;</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E4%B8%89%E5%B1%82-%E7%90%86%E6%B8%85%E7%BD%91%E7%BB%9C%E6%A0%88%E7%9A%84-%E4%B8%89%E5%89%91%E5%AE%A2-%E2%80%94%E2%80%94kube-proxy%E3%80%81CNI-%E4%B8%8E-Istio"><span class="toc-number">1.3.</span> <span class="toc-text">第三层:理清网络栈的&quot;三剑客&quot;——kube-proxy、CNI 与 Istio</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E8%80%85%E5%88%86%E5%B1%82%E6%95%B0%E6%8D%AE%E8%B7%AF%E5%BE%84%E5%9B%BE"><span class="toc-number">1.3.1.</span> <span class="toc-text">三者分层数据路径图</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E7%BB%B4%E5%AF%B9%E6%AF%94%E6%80%BB%E8%A7%88"><span class="toc-number">1.3.2.</span> <span class="toc-text">多维对比总览</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E4%B8%AA%E9%AB%98%E9%A2%91%E6%B7%B7%E6%B7%86%E7%82%B9"><span class="toc-number">1.3.3.</span> <span class="toc-text">三个高频混淆点</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%AC%AC%E5%9B%9B%E5%B1%82-%E6%89%80%E6%9C%89%E4%B8%80%E5%88%87%E8%83%8C%E5%90%8E%E7%9A%84-%E5%A4%A7%E8%84%91-%E2%80%94%E2%80%94Kubernetes-like-%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2"><span class="toc-number">1.4.</span> <span class="toc-text">第四层:所有一切背后的&quot;大脑&quot;——Kubernetes-like 控制平面</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2%E4%B8%8E%E6%95%B0%E6%8D%AE%E5%B9%B3%E9%9D%A2%E5%88%86%E7%A6%BB%E6%9E%B6%E6%9E%84"><span class="toc-number">1.4.1.</span> <span class="toc-text">控制平面与数据平面分离架构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%A5%E8%8C%83%E5%BC%8F%E5%9C%A8%E4%BA%94%E5%A4%A7%E5%9C%BA%E6%99%AF%E4%B8%AD%E7%9A%84%E8%90%BD%E5%9C%B0"><span class="toc-number">1.4.2.</span> <span class="toc-text">该范式在五大场景中的落地</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BB%93%E8%AF%AD-%E4%B8%80%E5%BC%A0%E6%80%BB%E5%9B%BE%E7%9C%8B%E6%87%82%E5%85%A8%E5%B1%80"><span class="toc-number">1.5.</span> <span class="toc-text">结语:一张总图看懂全局</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</a><time datetime="2026-09-09T16:00:00.000Z" title="发表于 2026-09-10 00:00:00">2026-09-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</a><time datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

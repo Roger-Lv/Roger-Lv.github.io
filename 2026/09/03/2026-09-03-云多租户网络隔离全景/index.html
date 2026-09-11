@@ -1,0 +1,871 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从计算、网络、数据、管理面四个维度拆解多租户隔离体系,聚焦 VPC 逻辑隔离为什么真的能隔离——用&quot;故意撞 IP、故意共宿主机&quot;的例子逐跳追踪报文,回答 subnet 能不能做租户隔离、它在路由表和交换机里的真实拓扑。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的">
+<meta property="og:url" content="http://example.com/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从计算、网络、数据、管理面四个维度拆解多租户隔离体系,聚焦 VPC 逻辑隔离为什么真的能隔离——用&quot;故意撞 IP、故意共宿主机&quot;的例子逐跳追踪报文,回答 subnet 能不能做租户隔离、它在路由表和交换机里的真实拓扑。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/img/avatar.jpg">
+<meta property="article:published_time" content="2026-09-02T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-09-03T04:44:46.838Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="云原生">
+<meta property="article:tag" content="VPC">
+<meta property="article:tag" content="VXLAN">
+<meta property="article:tag" content="多租户">
+<meta property="article:tag" content="网络隔离">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的",
+  "url": "http://example.com/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/",
+  "image": "http://example.com/img/avatar.jpg",
+  "datePublished": "2026-09-02T16:00:00.000Z",
+  "dateModified": "2026-09-03T04:44:46.838Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "http://example.com"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="http://example.com/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/font.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-09-03T04:44:46.838Z" title="更新于 2026-09-03 12:44:46">2026-09-03</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" data-flag-title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</h1>
+<p>多租户是云计算的立身之本——成千上万个互不信任的租户共享同一批物理机、同一批交换机、同一批存储盘,却要求彼此&quot;看不见、摸不着&quot;。这篇文章从计算、网络、数据、管理面四个维度拆解隔离体系,然后聚焦最核心也最容易被误解的一环:<strong>VPC 逻辑隔离为什么真的能隔离</strong>。我们会用一个&quot;故意撞 IP、故意共宿主机&quot;的例子逐跳追踪报文,再回答两个高频疑问:subnet 能不能做租户隔离?subnet 在路由表和交换机里的真实拓扑长什么样?</p>
+<hr>
+<h2 id="一、多租户隔离体系总览">一、多租户隔离体系总览</h2>
+<p>隔离的本质命题是:在共享物理资源的前提下,为每个租户构建一个&quot;逻辑上独立、必要时可物理隔离&quot;的运行环境,同时兼顾安全性与资源利用率。</p>
+<p>不同云服务模型的隔离锚点不同:IaaS 靠 Hypervisor 和网络虚拟化,PaaS 靠容器沙箱与命名空间,SaaS 靠应用层的 Tenant-ID 与数据权限策略。</p>
+<table>
+<thead>
+<tr>
+<th>隔离维度</th>
+<th>共享程度</th>
+<th>核心实现机制</th>
+<th>典型技术/产品</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>计算隔离</td>
+<td>共享硬件,独立内核</td>
+<td>Hypervisor 虚拟机、安全容器、机密计算</td>
+<td>KVM/Xen、Kata Containers、Firecracker、gVisor、AMD SEV/Intel TDX/SGX</td>
+</tr>
+<tr>
+<td>网络隔离</td>
+<td>共享物理网络,独立逻辑网络</td>
+<td>VPC + VXLAN Overlay、安全组、网络 ACL</td>
+<td>VPC、VNI(24 位标识,约 1600 万租户)</td>
+</tr>
+<tr>
+<td>存储隔离</td>
+<td>共享存储池,独立卷/桶</td>
+<td>计算存储分离、QoS 限速、数据擦除、透明加密</td>
+<td>云硬盘、对象存储 Bucket、KMS</td>
+</tr>
+<tr>
+<td>数据隔离</td>
+<td>共享实例/表,逻辑分片</td>
+<td>独立实例 / 独立 Schema / 共享表+RLS</td>
+<td>PostgreSQL RLS、tenant_id 过滤</td>
+</tr>
+<tr>
+<td>管理面隔离</td>
+<td>共享控制平面</td>
+<td>IAM 多账户、最小权限、审计日志</td>
+<td>RBAC/ABAC、CloudTrail、操作审计</td>
+</tr>
+</tbody>
+</table>
+<h3 id="1-1-计算隔离-从-Hypervisor-到机密计算">1.1 计算隔离:从 Hypervisor 到机密计算</h3>
+<p>计算隔离的核心是让租户的工作负载无法访问彼此的内存与 CPU 资源,实现强度由弱到强分三档:</p>
+<p><strong>Hypervisor 虚拟机隔离(IaaS 主流)</strong>:每个租户运行在独立 VM 中,由 KVM/Xen 等虚拟化管理程序在硬件层面做地址空间隔离。云厂商还会配合虚拟机布局算法防止恶意租户&quot;探测&quot;自身所在物理机,并对虚拟化层做热补丁修复和逃逸检测。</p>
+<p><strong>容器/沙箱隔离(PaaS 主流)</strong>:通过 Linux namespaces + cgroups 做轻量隔离,多个租户共享宿主机内核,隔离强度依赖内核安全性。为弥补共享内核的风险,业界引入了三类增强方案:</p>
+<ul>
+<li>gVisor:用户态拦截 syscall,开销约 45MB 内存、启动约 85ms;</li>
+<li>Kata Containers:每个 Pod 运行在独立轻量 VM 中,具备完整内核隔离,适合多租户不可信代码与金融/政务场景;</li>
+<li>Firecracker microVM:AWS Lambda/Fargate 采用的极致轻量 VMM,启动 &lt;125ms、内存约 28MB,禁用多余设备模拟,攻击面最小。</li>
+</ul>
+<p><strong>机密计算隔离(高合规场景)</strong>:基于 CPU TEE(AMD SEV-ES、Intel SGX/TDX)对租户内存做硬件加密,连云厂商的 Hypervisor 和管理员都无法窥视运行中的数据。</p>
+<h3 id="1-2-网络隔离-VPC-VXLAN-Overlay">1.2 网络隔离:VPC + VXLAN Overlay</h3>
+<p>网络隔离的核心思想是:在共享的物理网络上,通过 Overlay 封装为每个租户构建专属的虚拟网络,让租户之间的流量在二/三层都无法互通。</p>
+<ul>
+<li><strong>VPC 逻辑隔离</strong>:每个租户分配独立 VPC,拥有自定义 CIDR 网段、子网、路由表,不同 VPC 之间默认完全隔离,互访必须通过显式的对等连接、专线或 VPN;</li>
+<li><strong>VXLAN 封装实现多租户标识</strong>:传统 VLAN 只有 12 位标签(4094 个),无法满足大规模多租户;VXLAN 在原始以太网帧外新增 8 字节头部(含 24 位 VNI),理论支持 2²⁴ ≈ 1600 万个租户网络;</li>
+<li><strong>安全组与网络 ACL</strong>:作为 VPC 内的 L4 状态防火墙,安全组以 ENI 为对象控制实例级出入流量,网络 ACL 以子网为对象做无状态访问控制,两者组合实现细粒度&quot;微分段&quot;;</li>
+<li><strong>网络加密(可选)</strong>:高合规租户可开启 VPC 内加密,计算节点与网关之间的流量全程加密,对云厂商也保持不透明。</li>
+</ul>
+<h3 id="1-3-存储与数据隔离">1.3 存储与数据隔离</h3>
+<p>存储层隔离有两个目标:性能上防&quot;吵闹邻居&quot;,安全上防数据越权访问。</p>
+<ul>
+<li><strong>存储卷隔离</strong>:计算与存储分离架构下,虚拟机只能访问分配给它的磁盘空间;实例释放时对原存储介质做可靠的数据擦除,防止跨租户数据残留;</li>
+<li><strong>QoS 性能隔离</strong>:对云硬盘、对象存储 Bucket、消息队列等设置每租户的 IOPS/吞吐/QPS 上限;</li>
+<li><strong>数据加密隔离</strong>:通过 KMS 为每个租户分配独立密钥(BYOK),对静态数据做服务端透明加密;部分高安全方案甚至实现&quot;加密隔离&quot;——即使集群管理员也无法解密租户数据;</li>
+</ul>
+<p><strong>SaaS 数据隔离的三种模式</strong>(应用层最关键的选型问题):</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>隔离性</th>
+<th>成本</th>
+<th>适用规模</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>独立实例(一租户一 DB 实例)</td>
+<td>最高(物理/进程级)</td>
+<td>最高</td>
+<td>&lt;50 租户,金融/政务</td>
+</tr>
+<tr>
+<td>独立 Schema(一租户一库)</td>
+<td>高(逻辑库级)</td>
+<td>中等</td>
+<td>50–500 租户</td>
+</tr>
+<tr>
+<td>共享库 + tenant_id + RLS</td>
+<td>依赖应用层 + 行级策略</td>
+<td>最低</td>
+<td>500+ 租户</td>
+</tr>
+</tbody>
+</table>
+<p>共享表方案最大的风险是应用层 SQL 漏写 WHERE 条件导致串数据,因此推荐把访问控制下沉到数据库引擎层的行级安全(PostgreSQL RLS):在查询执行器阶段自动为每条 SQL 注入租户过滤条件,即使绕过应用直连数据库也不会泄露跨租户数据。</p>
+<h3 id="1-4-管理面隔离">1.4 管理面隔离</h3>
+<p>共享的控制平面是横向渗透的高危路径:</p>
+<ul>
+<li><strong>身份与权限隔离</strong>:每个租户对应独立 IAM 账户体系,通过 RBAC/ABAC 实现最小权限;所有 API 请求必须携带合法 TenantID,在接口权限、数据权限、操作权限三层做分层校验;</li>
+<li><strong>物理运维通道隔离</strong>:云厂商内部运维通过堡垒机 + 多因素认证进入生产网,与租户网络完全隔离;</li>
+<li><strong>审计与溯源</strong>:全量记录租户操作日志与控制面调用日志,通过 eBPF tracepoint 等手段做零侵入式审计;</li>
+<li><strong>元数据隔离(SaaS 层)</strong>:Salesforce 等多租户 SaaS 通过租户专属 metadata 实现功能差异化,避免代码分叉。</li>
+</ul>
+<h3 id="1-5-选型原则">1.5 选型原则</h3>
+<p>隔离方案的选择本质是合规强度、性能隔离需求与成本三者之间的权衡:</p>
+<ul>
+<li>金融、政务、医疗等强合规行业倾向于&quot;物理/加密隔离&quot;路线:裸金属、独立 VPC、独立 DB 实例、机密计算、专属 KMS——用较高成本换取清晰的责任边界与审计路径;</li>
+<li>互联网 SaaS、AI 推理平台等规模型业务倾向于&quot;逻辑隔离&quot;路线:共享硬件 + Kata 安全容器 + 共享表 + RLS + 严格的配额与审计——通过把隔离机制从&quot;人肉纪律&quot;升级为&quot;平台强制&quot;来取得平衡。</li>
+</ul>
+<hr>
+<h2 id="二、VPC-逻辑隔离为什么就能隔离租户网络">二、VPC 逻辑隔离为什么就能隔离租户网络?</h2>
+<p>&quot;逻辑隔离&quot;听起来很虚:明明所有租户的报文都在同一批交换机、同一批光纤上跑,为什么 A 租户的虚拟机就&quot;够不着&quot;B 租户的虚拟机?</p>
+<p>关键在于:<strong>物理网络搬运的从来不是租户的原始报文,而是被封装后打了租户标签的&quot;包裹&quot;,而解封、转发、隔离的决策全部发生在宿主机的虚拟交换机上。</strong></p>
+<h3 id="2-1-物理网络上跑的到底是什么">2.1 物理网络上跑的到底是什么</h3>
+<p>假设租户 A 的 VM1(10.0.0.5)要 ping 租户 B 的 VM2(192.168.1.5),报文离开 VM 后的第一站不是物理交换机,而是宿主机上的 vSwitch(虚拟交换机,如 OVS)。vSwitch 会做一件事:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">原始报文(租户 A 的 VM 发出,源 10.0.0.5 → 目的 B 的 IP)</span><br><span class="line">    ↓ vSwitch 判断:目的 MAC 不在本机,需要跨宿主机转发</span><br><span class="line">    ↓ 查表:VM1 属于 VNI=100(租户 A 的网络标识)</span><br><span class="line">    ↓ VXLAN 封装:</span><br><span class="line">       外层以太网头(宿主机物理网卡的 MAC)</span><br><span class="line">       外层 IP 头(源=本宿主机,目的=远端宿主机)   ← 物理网络只认识这个</span><br><span class="line">       UDP 4789 端口 + VXLAN 头(VNI=100)</span><br><span class="line">       内层:租户 A 的原始报文(源 10.0.0.5 → ...)</span><br></pre></td></tr></table></figure>
+<p>物理交换机看到的是&quot;宿主机 → 宿主机&quot;的普通 UDP 流量,它根本不知道、也不需要知道里面装的是哪个租户的包。<strong>物理网络(underlay)只负责把包裹送到正确的宿主机,租户网络(overlay)的寻址、隔离都在两端解封装时完成。</strong></p>
+<h3 id="2-2-隔离真正发生的三个关卡">2.2 隔离真正发生的三个关卡</h3>
+<p><strong>关卡 1:VM 入网时的&quot;门禁&quot;——端口绑定 VNI</strong></p>
+<p>每台 VM 的虚拟网卡接入 vSwitch 时,云平台控制面就已经把这条端口和一个 VNI 绑死了。这个绑定是平台下发的,租户无法修改。VM 就算被完全攻破、root 权限拿到手,它发出的报文进入 vSwitch 时仍会被强制打上 VNI=100 的标签——<strong>租户没有&quot;冒充别的租户&quot;的通道</strong>。</p>
+<p><strong>关卡 2:vSwitch 转发时的&quot;查无此路&quot;</strong></p>
+<p>隔离的核心机制其实简单到只有一句话:<strong>vSwitch 的转发表里,不同 VNI 是完全独立的命名空间,转发查询永远在同一个 VNI 内进行。</strong></p>
+<ul>
+<li>目的 MAC 在本机、同 VNI → 本地二层直接交付;</li>
+<li>目的 MAC 不在本机、同 VNI → 封装 VXLAN,发给目标宿主机的 VTEP;</li>
+<li>目的 MAC/IP 不在本 VNI 的表里 → 直接丢弃。</li>
+</ul>
+<p>A 租户的 VM 发往 B 租户 IP 的报文,在 VNI=100 的转发表里查不到任何匹配项——<strong>不是因为&quot;禁止&quot;,而是因为&quot;根本不存在这条路由&quot;</strong>。</p>
+<p><strong>关卡 3:跨 VNI 通信必须过网关</strong></p>
+<p>如果两个租户确实需要通信,报文必须送到分布式网关/VPC Router。网关是唯一&quot;能看见多个 VNI&quot;的组件;是否放行,取决于控制面有没有下发对等连接、专线、VPN 等显式规则;默认没有规则 = 默认拒绝。</p>
+<p>所以隔离模型是:<strong>数据面(vSwitch)无差别执行&quot;VNI 之间不通&quot;,控制面(SDN 控制器)显式开通例外。</strong></p>
+<h3 id="2-3-容易被忽略但同样关键的旁路封堵">2.3 容易被忽略但同样关键的旁路封堵</h3>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>防的是什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MAC/IP 反欺骗</td>
+<td>租户在 VM 里把 IP 改成 B 租户的 IP 冒名访问;vSwitch 校验源 MAC/IP 与端口绑定不一致即丢弃</td>
+</tr>
+<tr>
+<td>ARP 域收窄</td>
+<td>ARP 请求只在同 VNI 内广播/代答,A 租户永远 ARP 不出 B 租户的 MAC</td>
+</tr>
+<tr>
+<td>隔离的默认路由表</td>
+<td>每个 VPC 有独立虚拟路由表,B 租户的网段在 A 的路由表里压根不存在</td>
+</tr>
+<tr>
+<td>网关上的安全组/ACL</td>
+<td>即使开通了对等连接,流量还要过状态防火墙</td>
+</tr>
+<tr>
+<td>VTEP 白名单</td>
+<td>防止恶意租户伪造外层 IP 直接注入伪造 VNI 的报文</td>
+</tr>
+</tbody>
+</table>
+<h3 id="2-4-一句话总结隔离的本质">2.4 一句话总结隔离的本质</h3>
+<p><strong>VPC 的&quot;逻辑隔离&quot; = 把每个租户的网络身份(VNI)固化在租户无法触碰的宿主机数据面里,让跨租户流量不是因为被拦截而失败,而是因为&quot;查无此路&quot;而根本无法产生。</strong></p>
+<p>物理层完全共享,但租户能操控的边界止步于自己的虚拟网卡;从 vNIC 往外的第一跳开始,打标、查表、封装、路由的每一个决策都在云平台控制的组件里完成。</p>
+<h3 id="2-5-诚实的补充-它依赖什么前提">2.5 诚实的补充:它依赖什么前提</h3>
+<p>逻辑隔离不是魔法,它的安全性建立在几个前提上,这也是它和物理隔离的真正差距:</p>
+<ul>
+<li><strong>vSwitch/Hypervisor 无漏洞</strong>——历史上确实出过 VXLAN VNI 校验漏洞、虚拟化逃逸漏洞,云厂商靠快速热补丁和逃逸检测兜底;</li>
+<li><strong>控制面不可被租户渗透</strong>——SDN 控制器、宿主机管理通道一旦失守,所有 VNI 都会暴露;</li>
+<li><strong>硬件资源侧信道</strong>——网络带宽、宿主机缓存这类共享资源仍存在&quot;吵闹邻居&quot;问题,逻辑隔离不解决性能隔离。</li>
+</ul>
+<p>正因为这些残余风险,强合规场景会在逻辑隔离之上再叠加:裸金属/专属宿主机、VPC 内流量加密(连云厂商的网关都看不到明文)、以及基于 TEE 的机密计算——<strong>把信任边界从&quot;相信云平台的实现正确&quot;收紧到&quot;只相信硬件加密&quot;</strong>。</p>
+<hr>
+<h2 id="三、实战推演-故意让两个租户撞-IP、共宿主机">三、实战推演:故意让两个租户撞 IP、共宿主机</h2>
+<p>为了真正看清楚隔离发生在哪里,我们故意设计一个最恶劣的场景:两个租户使用完全相同的网段,两台分属不同租户的虚机落在同一台物理宿主机上。</p>
+<h3 id="3-1-场景设定">3.1 场景设定</h3>
+<pre class="mermaid">flowchart LR
+    A1[VM-A1<br/>172.16.0.5] -- vNIC p1 --> VS1
+    A2[VM-A2<br/>172.16.0.6] -- vNIC p7 --> VS2
+    B1[VM-B1<br/>172.16.0.6<br/>与A2同IP!] -- vNIC p9 --> VS2
+    subgraph H1[宿主机 H1 / 10.10.0.11]
+        VS1[vSwitch + VTEP1<br/>按VNI分转发表]
+    end
+    subgraph H2[宿主机 H2 / 10.10.0.12]
+        VS2[vSwitch + VTEP2<br/>按VNI分转发表]
+    end
+    VS1 -- 物理网络 UDP 4789<br/>只看到 H1→H2 --> VS2</pre>
+<table>
+<thead>
+<tr>
+<th>角色</th>
+<th>属性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>租户 A</td>
+<td>VPC-A,网段 172.16.0.0/16,VNI = 10001</td>
+</tr>
+<tr>
+<td>VM-A1</td>
+<td>172.16.0.5,MAC 02:11:22:33:44:55,宿主机 H1</td>
+</tr>
+<tr>
+<td>VM-A2</td>
+<td>172.16.0.6,MAC 02:aa:bb:cc:dd:ee,宿主机 H2</td>
+</tr>
+<tr>
+<td>租户 B</td>
+<td>VPC-B,网段 172.16.0.0/16(与 A 撞网段),VNI = 20002</td>
+</tr>
+<tr>
+<td>VM-B1</td>
+<td>172.16.0.6(与 A2 完全同 IP),宿主机 H2(与 A2 同一台物理机)</td>
+</tr>
+<tr>
+<td>H1 / H2</td>
+<td>物理网卡 IP 10.10.0.11 / 10.10.0.12,各跑一个 vSwitch,充当 VTEP</td>
+</tr>
+</tbody>
+</table>
+<p><strong>动作:VM-A1 ping 172.16.0.6。</strong> 这个目标 IP 同时是 A2 和 B1 的地址,网络必须准确知道&quot;该给谁、不该给谁&quot;。</p>
+<h3 id="3-2-正向流程-A1-→-A2-报文一步步怎么走">3.2 正向流程:A1 → A2 报文一步步怎么走</h3>
+<p><strong>第 0 步:A1 发 ARP 查询(隔离第一关卡)</strong></p>
+<p>A1 内核构造 ARP Request(目的 MAC = ff:ff:ff:ff:ff:ff):“谁是 172.16.0.6?” 这个广播不会走物理网络。vSwitch 查询控制面下发的租户 ARP/端口映射表:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">端口 p1 (VM-A1)         → VNI=10001</span><br><span class="line">VNI=10001, 172.16.0.6   → MAC 02:aa:bb:cc:dd:ee @ 远端 VTEP 10.10.0.12</span><br></pre></td></tr></table></figure>
+<p>vSwitch 直接代答(proxy ARP),把 A2 的 MAC 回给 A1。<strong>ARP 广播域被收窄到 VNI=10001 内部,永远&quot;波及&quot;不到 B 租户。</strong></p>
+<p><strong>第 1 步:ICMP 帧从 A1 的 vNIC 发出</strong></p>
+<p>原始(内层)以太网帧:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">源 MAC    : 02:11:22:33:44:55   (VM-A1)</span><br><span class="line">目的 MAC  : 02:aa:bb:cc:dd:ee   (VM-A2)</span><br><span class="line">源 IP     : 172.16.0.5</span><br><span class="line">目的 IP   : 172.16.0.6</span><br><span class="line">载荷      : ICMP Echo Request</span><br></pre></td></tr></table></figure>
+<p><strong>第 2 步:vSwitch 打标 + 查表(隔离真正发生的第一站)</strong></p>
+<p>vSwitch 在入口处做三件事,全部由平台侧执行,租户无法干预:</p>
+<ol>
+<li>按端口绑定强制打 VNI:p1 绑定了 VNI=10001,这帧报文被强制标记为租户 A;</li>
+<li>MAC/IP 反欺骗校验:源 MAC、源 IP 与控制面下发的绑定表比对,不一致直接丢弃;</li>
+<li>查转发位置:在 VNI=10001 的专属转发表里查目的 MAC → 命中远端表项,对应 VTEP 地址 10.10.0.12。</li>
+</ol>
+<p><strong>这一步是整个隔离体系的根:vSwitch 的所有转发表按 VNI 分命名空间,查询永远发生在本租户那张表里。</strong></p>
+<p><strong>第 3 步:VXLAN 封装(打包裹)</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">外层以太网头:源/目的 MAC = H1 物理网卡 ↔ 物理交换机下一跳</span><br><span class="line">外层 IP 头:源 10.10.0.11 (H1),目的 10.10.0.12 (H2)</span><br><span class="line">UDP 头:目的端口 4789 (VXLAN)</span><br><span class="line">VXLAN 头(8 字节):VNI = 10001   ← 平台打上,租户改不了</span><br><span class="line">载荷:[A1→A2 的完整原始以太网帧]</span><br></pre></td></tr></table></figure>
+<p>从这一刻起,物理网络只看到&quot;H1→H2 的普通 UDP 流量&quot;。</p>
+<p><strong>第 4 步:物理网络转发(不做租户判断)</strong></p>
+<p>物理交换机按外层目的 IP 做普通三层转发。这层不做任何隔离判断——隔离已经在两端 vSwitch 完成,underlay 只负责&quot;送快递&quot;。</p>
+<p><strong>第 5 步:H2 vSwitch 解封装(验身份证)</strong></p>
+<ol>
+<li>剥外层头,取出 VNI=10001;</li>
+<li>合法性校验:来源 VTEP 是否在白名单、VNI 是否在本机合法集合内——不合法直接丢弃;</li>
+<li>在 VNI=10001 的本机转发表里查目的 MAC → 命中本地端口 p7(VM-A2 的 vNIC)。</li>
+</ol>
+<p><strong>第 6 步:交付</strong></p>
+<p>vSwitch 把剥干净的原始帧过一道安全组(L3/L4 状态过滤)后,从 p7 发给 VM-A2。回程反向走同样的路。</p>
+<p>整个流程中,报文从未&quot;裸奔&quot;在物理网络上,租户身份始终由 VNI 标记、由平台侧 vSwitch 把关——<strong>即使 A2 和 B1 同宿主机、同 IP,各自的流量在 vSwitch 的不同 VNI 表里走完全独立的路径。</strong></p>
+<h3 id="3-3-反例-A1-恶意尝试访问-B1-会发生什么">3.3 反例:A1 恶意尝试访问 B1 会发生什么</h3>
+<p>假设 A1 被攻破,攻击者直接 ping 172.16.0.6 想试试能不能串到 B 租户:</p>
+<ol>
+<li><strong>卡在 ARP</strong>:ARP 广播被限定在 VNI=10001 内,vSwitch 只会用 A2 的 MAC 代答,永远 ARP 不出 B1 的 MAC;</li>
+<li><strong>伪造目的 MAC</strong>:即使猜到 B1 的真实 MAC 手工构帧,vSwitch 在 VNI=10001 的表里查不到 → 丢弃;</li>
+<li><strong>绕过 vSwitch 直接注入伪造 VXLAN 包</strong>(外层伪装成 VTEP、VNI 填 20002):H2 vSwitch 校验 VTEP 白名单,发现不合法 → 丢弃;</li>
+<li><strong>从 A 的 VPC 路由表找路</strong>:控制面从未下发指向 B 的路由,查表 miss → 丢弃。</li>
+</ol>
+<p>每条路都是死胡同,原因高度一致:<strong>跨租户流量不是被&quot;拦截&quot;,而是&quot;查无此路&quot;。</strong></p>
+<h3 id="3-4-逐跳对照表">3.4 逐跳对照表</h3>
+<table>
+<thead>
+<tr>
+<th>步骤</th>
+<th>发生位置</th>
+<th>动作</th>
+<th>隔离判断</th>
+<th>为什么必须在这层做</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>A1 内核 → vSwitch p1</td>
+<td>ARP 广播</td>
+<td>广播域限定 VNI=10001</td>
+<td>防跨租户 ARP 泛洪/欺骗</td>
+</tr>
+<tr>
+<td>1</td>
+<td>vSwitch (H1) 入口</td>
+<td>强制打 VNI=10001</td>
+<td>端口身份固化</td>
+<td>攻破 VM 也改不了租户归属</td>
+</tr>
+<tr>
+<td>2</td>
+<td>vSwitch (H1) 查表</td>
+<td>VNI=10001 表内查目的 MAC</td>
+<td>按 VNI 分命名空间</td>
+<td>&quot;查无此路&quot;式硬隔离</td>
+</tr>
+<tr>
+<td>3</td>
+<td>vSwitch (H1) 封装</td>
+<td>外层 IP + UDP 4789 + VNI</td>
+<td>VNI 由平台打上不可篡改</td>
+<td>物理网络可区分身份但不暴露拓扑</td>
+</tr>
+<tr>
+<td>4</td>
+<td>物理交换机</td>
+<td>按外层 IP 转发</td>
+<td>不判断(不需要)</td>
+<td>underlay 保持通用</td>
+</tr>
+<tr>
+<td>5</td>
+<td>vSwitch (H2) 入口</td>
+<td>VTEP 白名单 + VNI 合法性</td>
+<td>伪造来源丢弃</td>
+<td>防注入绕过</td>
+</tr>
+<tr>
+<td>6</td>
+<td>vSwitch (H2) 查表</td>
+<td>VNI=10001 表查目的 MAC</td>
+<td>查不到 → 丢弃</td>
+<td>双向对称隔离</td>
+</tr>
+<tr>
+<td>7</td>
+<td>交付 vNIC</td>
+<td>剥净后送入</td>
+<td>安全组 L4 过滤</td>
+<td>兜底细粒度控制</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-5-精确校准-四个容易忽略的实现细节">3.5 精确校准:四个容易忽略的实现细节</h3>
+<p>上面的流程是主干,四个细节需要精确化:</p>
+<p><strong>1. ARP 的处理方式取决于控制面实现,不总是&quot;代答&quot;</strong></p>
+<p>公有云 VPC 里普遍是 vSwitch 代答——广播根本不出宿主机;传统 EVPN-VXLAN 部署里更多是 ARP Suppression(抑制)——本地表命中就代答,未命中才把 ARP 作为 BUM 流量在 VNI 内泛洪(泛洪范围仍被 VNI 截断)。两种形式隔离效果一致,区别只是广播是否&quot;漏出&quot;本机。</p>
+<p><strong>2. 同宿主机的流量根本不封装 VXLAN</strong></p>
+<p>如果源 VM 和目的 VM 在同一台宿主机,vSwitch 在 VNI=10001 的本地转发表里直接命中本地端口,做的是本地二层交换——不封装、不出物理网卡、不经过 VTEP。VXLAN 只在跨宿主机时才登场。例子里 A2 和 B1 同宿主机同 IP,隔离靠的就是本地转发表的 VNI 命名空间,跟 VXLAN 封装无关。</p>
+<p><strong>3. 源 VTEP 校验发生在解封装一侧</strong></p>
+<p>校验由收包方的 vSwitch 执行:封装一侧只负责打标,不校验自己。OVS 里校验的形式通常是隧道表里登记的合法远端 VTEP IP 列表——来源 IP 不在表内则无法映射到合法隧道,直接丢弃。</p>
+<p><strong>4. 交付前的最后一道:安全组</strong></p>
+<p>剥离成原始帧后、送进 vNIC 前,vSwitch 还会按端口上挂的安全组规则做 L3/L4 状态过滤——这是租户自己定义的策略,属于授权后的细粒度控制,与 VNI 的&quot;硬隔离&quot;是叠加关系。</p>
+<p><strong>修正后的完整心智模型:</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">VM 发包</span><br><span class="line">  ↓</span><br><span class="line">[入口] vSwitch 按端口绑定打 VNI + MAC/IP 反欺骗</span><br><span class="line">  ↓</span><br><span class="line">[ARP]   VNI 内代答或 VNI 内泛洪(广播域被 VNI 截断)</span><br><span class="line">  ↓</span><br><span class="line">[查表]  在 VNI 专属转发表查目的 MAC</span><br><span class="line">  ├─ 本地命中 → 本地交换,直接交付(不经 VXLAN)</span><br><span class="line">  └─ 远端命中 → VXLAN 封装(外层 IP + VNI)→ underlay → 对端 vSwitch</span><br><span class="line">                  ↓</span><br><span class="line">              [解封装] 校验源 VTEP 白名单 + VNI 合法性</span><br><span class="line">                  ↓</span><br><span class="line">              [查表] VNI 表内查目的 MAC</span><br><span class="line">                  ↓</span><br><span class="line">              [安全组] L3/L4 过滤</span><br><span class="line">                  ↓</span><br><span class="line">              剥离原始帧 → 交付 vNIC</span><br></pre></td></tr></table></figure>
+<h3 id="3-6-隔离层次总结">3.6 隔离层次总结</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">L1 物理层     :所有租户共享交换机/光纤 —— 不隔离(也不需要)</span><br><span class="line">L2 Overlay 层 :VXLAN VNI —— 租户身份的唯一可信标识</span><br><span class="line">L3 转发表层   :vSwitch 按 VNI 分命名空间 —— &quot;查无此路&quot;式硬隔离(真正的根)</span><br><span class="line">L4 控制面层   :VPC 路由/对等连接显式开通 —— 跨租户通信必须显式授权修路</span><br><span class="line">L5 应用层     :安全组/网络 ACL —— 授权后的细粒度过滤</span><br></pre></td></tr></table></figure>
+<p>最关键的认知:<strong>L3 是隔离的根——不是靠防火墙&quot;拦截&quot;,而是靠&quot;不存在那条路&quot;;L4 控制面决定要不要修路,L3 数据面决定有没有路。</strong></p>
+<hr>
+<h2 id="四、那么-subnet-能不能做租户隔离">四、那么,subnet 能不能做租户隔离?</h2>
+<p><strong>答案:不能。</strong> VNI + vSwitch 按租户分命名空间的转发表,才是 VPC 隔离租户的&quot;根&quot;;subnet 回答的是另一个维度的问题——VPC 内部的分区控制。</p>
+<p>subnet 在云里的真实角色:VPC 内的一段 IP 地址规划(CIDR),附属于一张路由表,本质上只是&quot;地址分配和路由的记账单位&quot;,不是隔离边界。四个原因,一个比一个致命:</p>
+<h3 id="4-1-IP-是-租户自报的身份-不是平台担保的身份">4.1 IP 是&quot;租户自报的身份&quot;,不是平台担保的身份</h3>
+<p>subnet 隔离依赖路由器/防火墙按 IP 做判断,但 VM 里的 IP 是租户自己配置的:</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ifconfig eth0 172.16.0.6   <span class="comment"># 伪装成别的子网/别的机器的 IP</span></span><br></pre></td></tr></table></figure>
+<p>如果隔离只靠&quot;目的 IP 属于哪个网段&quot;来判断,源 IP 伪造就能绕过。对比 VNI:VNI 绑定在 vSwitch 端口上,由平台写入、租户改不了。这就是&quot;逻辑地址&quot;与&quot;物理身份锚点&quot;的差别——<strong>隔离强度取决于 enforcement point 在哪一层:越靠近租户触碰不到的地方(vSwitch 端口、VNI)越硬,越靠近租户可配置的层面(IP、路由)越软。</strong></p>
+<h3 id="4-2-subnet-隔离是-有路但设卡-VNI-隔离是-根本没有路">4.2 subnet 隔离是&quot;有路但设卡&quot;,VNI 隔离是&quot;根本没有路&quot;</h3>
+<ul>
+<li><strong>VNI 模式</strong>:租户 B 的 MAC 表项只存在于 VNI=20002 的转发表里,租户 A 的报文查询的是 VNI=10001 那张表,查不到就是查不到——那条路径在数据面上不存在;</li>
+<li><strong>subnet 模式</strong>:路由器上两张子网的路由都在同一张全局路由表里,隔离靠中间挂 ACL/防火墙规则&quot;禁止转发&quot;。一旦规则配错一条、防火墙被绕过一条路径,隔离就破了。</li>
+</ul>
+<p>安全设计上,前者叫 <strong>deny by absence(默认无路)</strong>,后者叫 <strong>deny by policy(有路设卡)</strong>。前者不依赖策略的正确性,后者完全依赖——而策略是会出错的。</p>
+<h3 id="4-3-撞网段问题-subnet-方案直接崩溃">4.3 撞网段问题:subnet 方案直接崩溃</h3>
+<p>公有云几百万租户,一定有大量租户都想用 172.16.0.0/16 或 10.0.0.0/8 这类私网段:</p>
+<ul>
+<li>路由器上同一个目的网段只能有一个下一跳——两个租户都用 172.16.0.0/16 时,全局路由表直接冲突;</li>
+<li>所以 subnet 方案要求所有租户网段全局唯一,这在租户规模上不可行。</li>
+</ul>
+<p>而 VNI 模式下,报文的&quot;归属&quot;由 VNI 决定、内层 IP 原样保留,每个租户拥有独立的虚拟路由表和独立的 MAC 地址空间,<strong>撞网段完全合法</strong>。第三章那个 A2/B1 同 IP 同宿主机的例子,在纯 subnet 世界里根本不可能运转。</p>
+<h3 id="4-4-二层广播域拦不住">4.4 二层广播域拦不住</h3>
+<p>VNI 模式下广播域被 VNI 硬截断;而同一物理网络里的两台 subnet 机器,如果二层连通(没有 VLAN),ARP 广播双方都收得到——攻击者可以通过 ARP 泛洪/欺骗持续探测、投毒。</p>
+<h3 id="4-5-对比表">4.5 对比表</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>VNI 隔离(VPC 根机制)</th>
+<th>subnet 隔离</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>身份锚点</td>
+<td>vSwitch 端口绑定的 VNI,租户不可篡改</td>
+<td>IP 地址,租户自配可伪造</td>
+</tr>
+<tr>
+<td>隔离方式</td>
+<td>转发表按 VNI 分命名空间,“查无此路”</td>
+<td>路由表/ACL 策略拒绝,“有路设卡”</td>
+</tr>
+<tr>
+<td>失效条件</td>
+<td>需要 vSwitch 实现有 bug</td>
+<td>任何一条策略配错即穿透</td>
+</tr>
+<tr>
+<td>撞网段</td>
+<td>天然支持,每租户独立地址空间</td>
+<td>全局路由冲突,无法共存</td>
+</tr>
+<tr>
+<td>广播域</td>
+<td>硬截断在 VNI 内</td>
+<td>取决于 VLAN 配置,易泛洪</td>
+</tr>
+<tr>
+<td>隔离的层级</td>
+<td>L2 虚拟化层(数据面)</td>
+<td>L3 路由策略层(控制面)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-6-subnet-的正确战场-VPC-内部微分段">4.6 subnet 的正确战场:VPC 内部微分段</h3>
+<p>公道地说,subnet 并非无用,它的正确用法是在 VNI 已把租户硬隔离之后,做租户内部的子网微分段,机制是三层叠加:</p>
+<ol>
+<li><strong>路由表切分</strong>:把子网关联到不同路由表,去掉指向对方子网的路由——这是&quot;收窄路径&quot;的 subnet 版本;</li>
+<li><strong>网络 ACL</strong>:子网边界的无状态 L3/L4 过滤;</li>
+<li><strong>安全组</strong>:实例级有状态过滤,作用在 vNIC 上。</li>
+</ol>
+<p>典型分层架构:public subnet 放对外服务,private subnet 放应用,隔离的 data subnet 放数据库且不放通往 IGW 的路由——通过&quot;不给路由&quot;实现数据库子网无法出网,这其实就是缩小版的 deny by absence。<strong>注意安全组在这个体系里反而最强——因为它同样下沉到了 vNIC/vSwitch 端口层执行。</strong></p>
+<p>历史上这也是真实演进路径:数据中心早期靠&quot;VLAN + subnet + 防火墙分区&quot;做隔离,撞上了 4094 个 VLAN 上限、网段全局唯一、策略人工维护出错这些墙,才发展出 VXLAN/VNI + SDN 控制面这套体系——<strong>把隔离从&quot;运维纪律&quot;升级成了&quot;平台机制&quot;</strong>。</p>
+<hr>
+<h2 id="五、subnet-在路由表和交换机中的真实拓扑">五、subnet 在路由表和交换机中的真实拓扑</h2>
+<p>subnet 有两层拓扑:一层是租户在控制台上看到的<strong>逻辑拓扑</strong>(VPC → 子网 → 实例),另一层是数据面真实存在的<strong>实现拓扑</strong>(子网 ↔ 二层 VNI/Bridge Domain ↔ 虚拟路由器 ↔ 底层 Leaf-Spine)。两层的错位正是困惑的根源。</p>
+<h3 id="5-1-层次全景">5.1 层次全景</h3>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>组件</th>
+<th>与 subnet 的关系</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>L0 物理层</td>
+<td>Leaf(TOR)→ Spine 交换机,underlay IP/BGP</td>
+<td>不感知 subnet:跨宿主机的子网流量只是一条宿主机间的 UDP 4789 普通流量</td>
+</tr>
+<tr>
+<td>L1 Overlay 隧道层</td>
+<td>VTEP + VXLAN 隧道</td>
+<td>按隧道转发到目标宿主机,不管隧道里装的是哪个子网的帧</td>
+</tr>
+<tr>
+<td>L2 二层虚拟网络层</td>
+<td>二层 VNI ↔ Bridge Domain(BD),每个 subnet 对应一个 BD/VSI</td>
+<td>subnet 在这层第一次&quot;实体化&quot;:同子网 = 同 BD = 二层互通;不同子网 = 二层隔离</td>
+</tr>
+<tr>
+<td>L3 虚拟路由层</td>
+<td>路由表(VPC 级)+ 分布式虚拟路由器</td>
+<td>跨子网通信的唯一通道:出子网必须查本子网关联的路由表</td>
+</tr>
+<tr>
+<td>L4 租户网络层</td>
+<td>VPC 整体边界(三层 VNI / VPN 实例)</td>
+<td>subnet 的&quot;天花板&quot;:所有子网都在同一个 VPC 命名空间内</td>
+</tr>
+<tr>
+<td>L5 逻辑视图层</td>
+<td>控制台上的 VPC → subnet → ENI → VM</td>
+<td>只是地址记账和策略挂载点,不是转发实体</td>
+</tr>
+</tbody>
+</table>
+<p>两个重要&quot;错位&quot;:</p>
+<ul>
+<li><strong>subnet 与 AZ 没有物理绑定</strong>:公有云的 subnet 是区域级逻辑对象,同一子网的实例可以分布在多个 AZ 的不同宿主机上;控制面保证&quot;subnet ID → VNI&quot;的映射在区域内全局一致,但底层物理路径每个 AZ 各自独立;</li>
+<li><strong>subnet 与物理交换机没有绑定</strong>:一个子网的流量可能横跨几百台宿主机、几十台 Leaf 交换机;一台 Leaf 上的隧道里同时跑着上千个不同子网(不同 VNI)的流量。</li>
+</ul>
+<h3 id="5-2-具体例子-一个-VPC-2-个-AZ-3-类-subnet">5.2 具体例子:一个 VPC,2 个 AZ,3 类 subnet</h3>
+<pre class="mermaid">flowchart TB
+    subgraph VPC[租户 A 的 VPC / 172.16.0.0/16]
+        subgraph AZ1[可用区 1]
+            PUB1[Public-Subnet-AZ1<br/>172.16.1.0/24<br/>关联 RT-Public]
+            PRIV1[Private-Subnet-AZ1<br/>172.16.2.0/24<br/>关联 RT-Private]
+        end
+        subgraph AZ2[可用区 2]
+            PUB2[Public-Subnet-AZ2<br/>172.16.3.0/24<br/>关联 RT-Public]
+            PRIV2[Private-Subnet-AZ2<br/>172.16.4.0/24<br/>关联 RT-Private]
+        end
+        DB[DB-Subnet / 172.16.5.0/24<br/>关联 RT-DB]
+        RT-Public[RT-Public]
+        RT-Private[RT-Private]
+        RT-DB[RT-DB]
+    end
+    IGW[Internet 网关] --- RT-Public
+    NAT[NAT 网关] --- RT-Private
+    RT-DB -.仅含 local 路由.- VPC</pre>
+<p>每张路由表的内容:</p>
+<table>
+<thead>
+<tr>
+<th>路由表</th>
+<th>关联子网</th>
+<th>路由条目</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RT-Public</td>
+<td>172.16.1.0/24、172.16.3.0/24</td>
+<td>172.16.0.0/16 → local;0.0.0.0/0 → IGW</td>
+</tr>
+<tr>
+<td>RT-Private</td>
+<td>172.16.2.0/24、172.16.4.0/24</td>
+<td>172.16.0.0/16 → local;0.0.0.0/0 → NAT 网关</td>
+</tr>
+<tr>
+<td>RT-DB</td>
+<td>172.16.5.0/24</td>
+<td>172.16.0.0/16 → local(刻意不配出网路由)</td>
+</tr>
+</tbody>
+</table>
+<p>三个结构细节:</p>
+<ol>
+<li><strong>local 路由是隐式自动生成的</strong>,指向整个 VPC 网段,删不掉——它是&quot;子网间互通&quot;的物理基础;</li>
+<li><strong>0.0.0.0/0 是默认路由</strong>,决定子网的&quot;出网属性&quot;(public/private/DB 的差别就在这一条);</li>
+<li><strong>一个子网同一时刻只关联一张路由表</strong>(显式关联优先;没显式关联就吃 VPC 主路由表)。多子网可共享一张表——例子中 AZ1/AZ2 的 public subnet 共享 RT-Public,这是把&quot;同策略子网&quot;归类的常规做法。</li>
+</ol>
+<h3 id="5-3-数据面逐跳追踪-subnet-在转发中-实体化-在哪">5.3 数据面逐跳追踪:subnet 在转发中&quot;实体化&quot;在哪</h3>
+<p>部署:Web-VM(172.16.2.10,宿主机 H1,AZ1)→ DB-VM(172.16.5.20,宿主机 H2,AZ2)。</p>
+<p><strong>第一跳:Web-VM 判断目标不在本子网</strong></p>
+<p>VM 内核发现目的 IP 172.16.5.20 不在 172.16.2.0/24 内 → 关键分叉:<strong>同子网走二层</strong>(直接 ARP + 同 BD 的 VXLAN 转发),<strong>跨子网必须走三层</strong>(发给网关)。VM 把帧发给虚拟网关 MAC(SDN 控制器写入每个 VM 的默认网关,实际是分布式虚拟路由器在各宿主机上的接口 MAC)。</p>
+<p><strong>第二跳:vSwitch 识别&quot;这是发给路由器的包&quot;</strong></p>
+<p>H1 的 vSwitch 解析目的 MAC = 虚拟路由器接口 → 触发三层转发:剥离以太网头,按 172.16.5.0/24 查 RT-Private → 命中 local → 换成出接口,重新封装以太网头(源 MAC = 路由器,目的 MAC = ARP 查到的 DB-VM MAC)。公有云把这个路由功能分布到了每个宿主机 vSwitch 上(<strong>分布式路由</strong>)。</p>
+<p><strong>第三步:VXLAN 封装(换 VNI)</strong></p>
+<p>vSwitch 把&quot;路由后&quot;的帧封装进 VNI=BD(DB-Subnet)——注意:<strong>不是原子网的 VNI,而是目的子网的 VNI</strong>,外层 IP 打 H2 的地址,送进 underlay。</p>
+<p><strong>第四步:Leaf/Spine 转发(完全不看 subnet)</strong></p>
+<p>物理交换机按外层 IP 做普通转发——对里面装的子网、VPC、租户全部无感。</p>
+<p><strong>第五步:H2 vSwitch 解封装交付</strong></p>
+<p>剥外层头、验 VNI/VTEP、在 BD(DB-Subnet) 的表里查 DB-VM MAC、过安全组,交付。</p>
+<p>整个路径说明一个要点:<strong>&quot;子网&quot;在物理网络上从未出现过,它只以 VNI(BD) 的形式存在于宿主机 vSwitch 的转发表里,以路由条目的形式存在于虚拟路由器里。物理网络是纯粹的信使。</strong></p>
+<h3 id="5-4-与传统物理网络-VLAN-模式-对照">5.4 与传统物理网络(VLAN 模式)对照</h3>
+<table>
+<thead>
+<tr>
+<th>结构点</th>
+<th>传统数据中心(VLAN+SVI)</th>
+<th>公有云(VXLAN overlay)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>子网的二层实体</td>
+<td>一段 VLAN(12bit,全局 4094 个)</td>
+<td>一个 BD/二层 VNI(24bit,1600 万)</td>
+</tr>
+<tr>
+<td>子网间的路由点</td>
+<td>核心交换机上的 SVI(VLAN 接口)</td>
+<td>分布式虚拟路由器 + VPC 路由表</td>
+</tr>
+<tr>
+<td>子网跨机柜/跨楼</td>
+<td>受物理二层延伸(Trunk/堆叠)限制</td>
+<td>underlay IP 路由,无二层延伸限制</td>
+</tr>
+<tr>
+<td>子网跨 AZ</td>
+<td>基本做不到(二层跨 DC 很脆)</td>
+<td>逻辑上同一个 subnet(区域级对象),物理上每 AZ 独立 leaf-spine,靠控制面统一映射</td>
+</tr>
+<tr>
+<td>谁决定&quot;可达&quot;</td>
+<td>交换机配置 + STP/VLAN 剪枝</td>
+<td>路由表条目 + VNI 命名空间</td>
+</tr>
+</tbody>
+</table>
+<p>一句话归纳:<strong>传统网络里 subnet 是&quot;物理绑定的 VLAN&quot;,云网络里 subnet 是&quot;逻辑映射的 VNI + 路由表条目&quot;——所有实体化都发生在宿主机 vSwitch 和虚拟路由器上,物理交换机退化为纯粹的 IP 信使。</strong></p>
+<h3 id="5-5-按子网内-跨子网区分查表行为">5.5 按子网内 / 跨子网区分查表行为</h3>
+<ul>
+<li><strong>同子网两 VM</strong>:纯二层流程,vSwitch 在 BD(Private-Subnet) 的 MAC 表里查目的,不查路由表;</li>
+<li><strong>跨子网两 VM(Web → DB)</strong>:必须经虚拟路由器,两次查表(VM 出子网查路由表,路由后进入目的子网查 BD MAC 表);</li>
+<li><strong>出 VPC(Web → 互联网)</strong>:同跨子网,但出接口指向 IGW,由 IGW 做 NAT 后送进外部网络。</li>
+</ul>
+<p>这就是为什么 RT-DB 不配出网路由就够了——子网内互访走 local,出网路径因为&quot;路由表里没有那条&quot;而不存在。<strong>路由表的&quot;没有&quot;决定&quot;没有路径&quot;,与 VNI 的&quot;查无此路&quot;是一脉相承的设计哲学。</strong></p>
+<hr>
+<h2 id="六、总结-贯穿全文的三条设计哲学">六、总结:贯穿全文的三条设计哲学</h2>
+<p>把全文收拢到三个可迁移的原则上:</p>
+<p><strong>1. 身份要锚定在租户触碰不到的层。</strong></p>
+<p>租户隔离的强度不取决于隔离机制多复杂,而取决于 enforcement point 的位置:VNI 绑死在 vSwitch 端口(硬)、安全组挂在 vNIC(硬)、tenant_id 过滤靠应用自觉(软)、subnet 划分靠 IP(最软,可伪造)。<strong>凡是租户能改的参数,都不能作为安全身份的依据。</strong></p>
+<p><strong>2. 优先 deny by absence,而不是 deny by policy。</strong></p>
+<p>VNI 命名空间让跨租户路径&quot;不存在&quot;,local 路由让子网间互通&quot;天然有&quot;,IGW 路由的缺席让数据子网&quot;出不了网&quot;。相比之下,靠防火墙规则&quot;有路设卡&quot;的方案,安全性等于策略配置的零失误率——这在人身上是奢求,在平台上是纪律。</p>
+<p><strong>3. 物理层共享、逻辑层独立,是隔离与成本的帕累托解。</strong></p>
+<p>Leaf-Spine 上跑着所有租户的 UDP 包,宿主机上住着互相撞 IP 的邻居虚机,存储池里混着大家的加密数据——共享换来了云的成本曲线,而 VNI、Hypervisor、KMS、TEE 把逻辑边界守住了。残余风险(Hypervisor 漏洞、控制面失守、侧信道)不是被忽略,而是被强合规场景用裸金属、VPC 加密、机密计算逐级买断。</p>
+<p>理解了这三条,再看云上任何隔离设计——不管是容器沙箱、数据库 RLS,还是对象存储的桶策略——你都能快速定位同一个问题:<strong>它的 enforcement point 在哪一层?租户的手能不能伸到那一层?答案是&quot;够不着&quot;的,就是可靠的隔离。</strong></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="http://example.com">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="http://example.com/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/">http://example.com/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="http://example.com" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a><a class="post-meta__tags" href="/tags/VPC/">VPC</a><a class="post-meta__tags" href="/tags/VXLAN/">VXLAN</a><a class="post-meta__tags" href="/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户</a><a class="post-meta__tags" href="/tags/%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB/">网络隔离</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/" title="构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南</div></div><div class="info-2"><div class="info-item-1">构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南(含架构图详解) 在当今的云原生时代,无论是后端开发者、运维工程师还是架构师,每天都会被各种眼花缭乱的技术名词包围:ECS、SLB、mTLS、Service Mesh、Kube-OVN、声明式 API…… 这些概念看似分散在各个领域,但实际上它们共同拼图成了现代高可用、高并发应用的基础设施骨架。本文将通过一张张架构图,带你从底层的云服务器,一路漫游到 Kubernetes 的控制平面大脑。  第一层:云上的&quot;砖块&quot;与&quot;门卫&quot;——ECS 与 SLB 所有云上架构的起点,都离不开计算与流量分发。在阿里云等公有云体系中,最基础的黄金组合就是 ECS(弹性计算服务,即虚拟机)与 SLB(负载均衡)。 经典组合架构全景图 123456789101112131415            公网用户               │               ▼      ┌─── [EIP / SLB] ───┐     ← 接入层:流量分发、健康检查、SSL 卸载      │     ...</div></div></div></a><a class="pagination-related" href="/2026/08/31/2026-08-31-%E5%9B%BE%E8%A7%A3Megatron-SP-CP-EP%E4%B8%8ETransformer%E5%94%AF%E4%B8%80%E9%80%9A%E4%BF%A1%E5%A4%84/" title="从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处</div></div><div class="info-2"><div class="info-item-1">从一维到多维:图解 Megatron 的 SP / CP / EP 与 Transformer 唯一通信处 本文从一个反直觉的观察出发:一个 Transformer 层里,99% 的计算模块根本不需要跨 GPU 通信,唯一的&quot;全员大会&quot;只有 Attention。理解了这一点,Megatron-LM 那套看似复杂的 6 维并行(TP / SP / PP / DP / CP / EP)就不再是黑魔法,而是一张围绕 Attention 设计的&quot;交通调度图&quot;。  关联阅读:本文讲训练并行维度的拆解;VLA 场景下为何选 FSDP 而非 Megatron 见 为什么 VLA 训练选 FSDP 而不是 Megatron。   一、先看清楚:Transformer 层里到底有什么 把一个标准 Transformer 层展开,数据流是这样的(Pre-LN 结构): 12345678910111213141516171819202122232425262728    层输入 x [batch, seq, d]         │         ├─────...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/17/2025-07-17-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%AD%A6%E4%B9%A0%E8%B7%AF%E7%BA%BF/" title="虚拟化技术学习路线——从原理到云原生"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">虚拟化技术学习路线——从原理到云原生</div></div><div class="info-2"><div class="info-item-1">虚拟化技术学习路线——从原理到云原生  本文目标：给你一条从零到能独立设计/运维虚拟化平台的清晰路径。覆盖 CPU/内存/IO 虚拟化、QEMU/KVM、容器与 namesapce/cgroup、网络与存储虚拟化、云编排，最后落到大模型训练/推理场景下的 GPU 虚拟化与云原生调度。 学习哲学：先吃透&quot;一个虚拟机是怎么被造出来的&quot;，再学&quot;容器是怎么隔离的&quot;，最后学&quot;云平台怎么把它们编排起来&quot;。原理是地基，工程是楼层，地基不稳楼越高越晃。   学习路线总览（六个阶段） 12345678910111213阶段0  打地基：操作系统与硬件基础   │阶段1  虚拟化原理：CPU / 内存 / IO 三大虚拟化   │阶段2  Type-1 / Type-2 与 QEMU-KVM 全栈   │阶段3  容器虚拟化：namespace + cgroup + rootfs   │阶段4  网络与存储虚拟化：virtio / SDN / 分布式存储   │阶段5  云编排：OpenStack / Kubernetes / 调度   │...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/" title="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</div></div><div class="info-2"><div class="info-item-1">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器 把一个千卡训练任务调度好,比把一百个 Web 服务调度好难得多。难点不在&quot;算力够不够&quot;,而在三件 Web 服务从不操心的事:  通信拓扑要聚拢:TP/PP 切出来的通信组,必须落在同一片 RDMA 交换机域里,跨机架一跳,AllReduce 延迟能差好几倍。 资源要&quot;留得住&quot;:训练任务动辄跑几小时几天,中途被别的任务抢占、重启就要从头来;但集群又要混部在线/离线,不能不让抢。 同卡型才好比:A100 节点和 H100 节点不能混进同一个通信组,不然快的等慢的,贵的卡当便宜的用。  通用调度器(kube-scheduler)对这三件事基本无解,Volcano 解决了 Gang 但也没碰拓扑。Sky-Scheduler 就是冲着这三件事来的——一个 Volcano 衍生的 Kubernetes 调度器,在 Volcano 的 session 框架上做了几处关键改造:把&quot;Pod→Node 一跳&quot;改成 “Task→Quota→Node 两跳”,引入...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐</div></div><div class="info-2"><div class="info-item-1">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐 DRA(Dynamic Resource Allocation)已经原生支持拓扑感知调度,而且这是它的核心设计目标之一——通过 ResourceSlice 暴露设备拓扑信息,配合 ResourceClaim 中的约束(constraint)让调度器在 Pod 绑定前就完成 NUMA / PCIe 级别的拓扑对齐。本文从实现机制、版本演进、使用示例和当前局限几个维度展开说明。  本文是 深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 的深入篇——那篇讲 HAMi 怎么用 DRA 做异构 GPU 分配,这篇专讲 DRA 本身的拓扑感知能力。   一、实现机制:拓扑如何参与调度决策 DRA 的拓扑感知能力建立在 KEP-4381(DRA Structured Parameters) 引入的结构化参数模型之上,核心链路分三层: 123456789101112131415161718192021222324              ┌─────────────────────────...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-%E4%BB%8EKServe%E5%88%B0Kthena%E4%BA%91%E5%8E%9F%E7%94%9F%E6%A8%A1%E5%9E%8B%E6%9C%8D%E5%8A%A1%E5%B9%B3%E5%8F%B0%E6%BC%94%E8%BF%9B/" title="从 KServe 到 Kthena:云原生模型服务平台的技术演进"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">从 KServe 到 Kthena:云原生模型服务平台的技术演进</div></div><div class="info-2"><div class="info-item-1">从 KServe 到 Kthena:云原生模型服务平台的技术演进 在 Kubernetes 上部署一个模型服务,为什么需要专门的平台?本文从 Serverless 的本质出发,深入拆解 KServe 的拓扑架构与技术细节,并对比 2026 年新晋的 LLM 推理专用平台 Kthena,梳理云原生推理领域的技术选型思路。  一、为什么需要模型服务平台 在 KServe 出现之前,在 Kubernetes 上部署一个推理服务,意味着手动拼装 Deployment、Service、HPA、Ingress、ConfigMap 等一堆资源。而模型服务还有其独特的痛点:  框架异构:PyTorch、TensorFlow、XGBoost、ONNX、vLLM、TGI……每个引擎的部署方式各不相同; 成本压力:GPU 极其昂贵,闲置时的空转是巨大的浪费; 运维复杂:版本灰度、流量切分、可解释性、日志审计,每一项都需要额外的工程投入。  KServe(前身是 Kubeflow 下的 KFServing,2022 年独立,2025 年 9 月进入 CNCF 孵化)给出的答案是:用一个 Inferenc...</div></div></div></a><a class="pagination-related" href="/2026/09/03/2026-09-03-%E6%9E%84%E5%BB%BA%E9%AB%98%E5%8F%AF%E7%94%A8%E4%BA%91%E5%8E%9F%E7%94%9F%E6%9E%B6%E6%9E%84%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97/" title="构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南</div></div><div class="info-2"><div class="info-item-1">构建高可用云原生架构:从云基础组件到 K8s 控制平面的全景指南(含架构图详解) 在当今的云原生时代,无论是后端开发者、运维工程师还是架构师,每天都会被各种眼花缭乱的技术名词包围:ECS、SLB、mTLS、Service Mesh、Kube-OVN、声明式 API…… 这些概念看似分散在各个领域,但实际上它们共同拼图成了现代高可用、高并发应用的基础设施骨架。本文将通过一张张架构图,带你从底层的云服务器,一路漫游到 Kubernetes 的控制平面大脑。  第一层:云上的&quot;砖块&quot;与&quot;门卫&quot;——ECS 与 SLB 所有云上架构的起点,都离不开计算与流量分发。在阿里云等公有云体系中,最基础的黄金组合就是 ECS(弹性计算服务,即虚拟机)与 SLB(负载均衡)。 经典组合架构全景图 123456789101112131415            公网用户               │               ▼      ┌─── [EIP / SLB] ───┐     ← 接入层:流量分发、健康检查、SSL 卸载      │     ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">271</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">340</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%A4%9A%E7%A7%9F%E6%88%B7%E9%9A%94%E7%A6%BB%E4%BD%93%E7%B3%BB%E6%80%BB%E8%A7%88"><span class="toc-number">1.1.</span> <span class="toc-text">一、多租户隔离体系总览</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E8%AE%A1%E7%AE%97%E9%9A%94%E7%A6%BB-%E4%BB%8E-Hypervisor-%E5%88%B0%E6%9C%BA%E5%AF%86%E8%AE%A1%E7%AE%97"><span class="toc-number">1.1.1.</span> <span class="toc-text">1.1 计算隔离:从 Hypervisor 到机密计算</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB-VPC-VXLAN-Overlay"><span class="toc-number">1.1.2.</span> <span class="toc-text">1.2 网络隔离:VPC + VXLAN Overlay</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E9%9A%94%E7%A6%BB"><span class="toc-number">1.1.3.</span> <span class="toc-text">1.3 存储与数据隔离</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-4-%E7%AE%A1%E7%90%86%E9%9D%A2%E9%9A%94%E7%A6%BB"><span class="toc-number">1.1.4.</span> <span class="toc-text">1.4 管理面隔离</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-5-%E9%80%89%E5%9E%8B%E5%8E%9F%E5%88%99"><span class="toc-number">1.1.5.</span> <span class="toc-text">1.5 选型原则</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81VPC-%E9%80%BB%E8%BE%91%E9%9A%94%E7%A6%BB%E4%B8%BA%E4%BB%80%E4%B9%88%E5%B0%B1%E8%83%BD%E9%9A%94%E7%A6%BB%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C"><span class="toc-number">1.2.</span> <span class="toc-text">二、VPC 逻辑隔离为什么就能隔离租户网络?</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E7%89%A9%E7%90%86%E7%BD%91%E7%BB%9C%E4%B8%8A%E8%B7%91%E7%9A%84%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 物理网络上跑的到底是什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E9%9A%94%E7%A6%BB%E7%9C%9F%E6%AD%A3%E5%8F%91%E7%94%9F%E7%9A%84%E4%B8%89%E4%B8%AA%E5%85%B3%E5%8D%A1"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 隔离真正发生的三个关卡</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E5%AE%B9%E6%98%93%E8%A2%AB%E5%BF%BD%E7%95%A5%E4%BD%86%E5%90%8C%E6%A0%B7%E5%85%B3%E9%94%AE%E7%9A%84%E6%97%81%E8%B7%AF%E5%B0%81%E5%A0%B5"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 容易被忽略但同样关键的旁路封堵</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E4%B8%80%E5%8F%A5%E8%AF%9D%E6%80%BB%E7%BB%93%E9%9A%94%E7%A6%BB%E7%9A%84%E6%9C%AC%E8%B4%A8"><span class="toc-number">1.2.4.</span> <span class="toc-text">2.4 一句话总结隔离的本质</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E8%AF%9A%E5%AE%9E%E7%9A%84%E8%A1%A5%E5%85%85-%E5%AE%83%E4%BE%9D%E8%B5%96%E4%BB%80%E4%B9%88%E5%89%8D%E6%8F%90"><span class="toc-number">1.2.5.</span> <span class="toc-text">2.5 诚实的补充:它依赖什么前提</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%AE%9E%E6%88%98%E6%8E%A8%E6%BC%94-%E6%95%85%E6%84%8F%E8%AE%A9%E4%B8%A4%E4%B8%AA%E7%A7%9F%E6%88%B7%E6%92%9E-IP%E3%80%81%E5%85%B1%E5%AE%BF%E4%B8%BB%E6%9C%BA"><span class="toc-number">1.3.</span> <span class="toc-text">三、实战推演:故意让两个租户撞 IP、共宿主机</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E5%9C%BA%E6%99%AF%E8%AE%BE%E5%AE%9A"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 场景设定</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E6%AD%A3%E5%90%91%E6%B5%81%E7%A8%8B-A1-%E2%86%92-A2-%E6%8A%A5%E6%96%87%E4%B8%80%E6%AD%A5%E6%AD%A5%E6%80%8E%E4%B9%88%E8%B5%B0"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 正向流程:A1 → A2 报文一步步怎么走</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E5%8F%8D%E4%BE%8B-A1-%E6%81%B6%E6%84%8F%E5%B0%9D%E8%AF%95%E8%AE%BF%E9%97%AE-B1-%E4%BC%9A%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 反例:A1 恶意尝试访问 B1 会发生什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E9%80%90%E8%B7%B3%E5%AF%B9%E7%85%A7%E8%A1%A8"><span class="toc-number">1.3.4.</span> <span class="toc-text">3.4 逐跳对照表</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E7%B2%BE%E7%A1%AE%E6%A0%A1%E5%87%86-%E5%9B%9B%E4%B8%AA%E5%AE%B9%E6%98%93%E5%BF%BD%E7%95%A5%E7%9A%84%E5%AE%9E%E7%8E%B0%E7%BB%86%E8%8A%82"><span class="toc-number">1.3.5.</span> <span class="toc-text">3.5 精确校准:四个容易忽略的实现细节</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-6-%E9%9A%94%E7%A6%BB%E5%B1%82%E6%AC%A1%E6%80%BB%E7%BB%93"><span class="toc-number">1.3.6.</span> <span class="toc-text">3.6 隔离层次总结</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E9%82%A3%E4%B9%88-subnet-%E8%83%BD%E4%B8%8D%E8%83%BD%E5%81%9A%E7%A7%9F%E6%88%B7%E9%9A%94%E7%A6%BB"><span class="toc-number">1.4.</span> <span class="toc-text">四、那么,subnet 能不能做租户隔离?</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-IP-%E6%98%AF-%E7%A7%9F%E6%88%B7%E8%87%AA%E6%8A%A5%E7%9A%84%E8%BA%AB%E4%BB%BD-%E4%B8%8D%E6%98%AF%E5%B9%B3%E5%8F%B0%E6%8B%85%E4%BF%9D%E7%9A%84%E8%BA%AB%E4%BB%BD"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 IP 是&quot;租户自报的身份&quot;,不是平台担保的身份</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-subnet-%E9%9A%94%E7%A6%BB%E6%98%AF-%E6%9C%89%E8%B7%AF%E4%BD%86%E8%AE%BE%E5%8D%A1-VNI-%E9%9A%94%E7%A6%BB%E6%98%AF-%E6%A0%B9%E6%9C%AC%E6%B2%A1%E6%9C%89%E8%B7%AF"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 subnet 隔离是&quot;有路但设卡&quot;,VNI 隔离是&quot;根本没有路&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E6%92%9E%E7%BD%91%E6%AE%B5%E9%97%AE%E9%A2%98-subnet-%E6%96%B9%E6%A1%88%E7%9B%B4%E6%8E%A5%E5%B4%A9%E6%BA%83"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 撞网段问题:subnet 方案直接崩溃</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E4%BA%8C%E5%B1%82%E5%B9%BF%E6%92%AD%E5%9F%9F%E6%8B%A6%E4%B8%8D%E4%BD%8F"><span class="toc-number">1.4.4.</span> <span class="toc-text">4.4 二层广播域拦不住</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E5%AF%B9%E6%AF%94%E8%A1%A8"><span class="toc-number">1.4.5.</span> <span class="toc-text">4.5 对比表</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-6-subnet-%E7%9A%84%E6%AD%A3%E7%A1%AE%E6%88%98%E5%9C%BA-VPC-%E5%86%85%E9%83%A8%E5%BE%AE%E5%88%86%E6%AE%B5"><span class="toc-number">1.4.6.</span> <span class="toc-text">4.6 subnet 的正确战场:VPC 内部微分段</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81subnet-%E5%9C%A8%E8%B7%AF%E7%94%B1%E8%A1%A8%E5%92%8C%E4%BA%A4%E6%8D%A2%E6%9C%BA%E4%B8%AD%E7%9A%84%E7%9C%9F%E5%AE%9E%E6%8B%93%E6%89%91"><span class="toc-number">1.5.</span> <span class="toc-text">五、subnet 在路由表和交换机中的真实拓扑</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E5%B1%82%E6%AC%A1%E5%85%A8%E6%99%AF"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 层次全景</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E5%85%B7%E4%BD%93%E4%BE%8B%E5%AD%90-%E4%B8%80%E4%B8%AA-VPC-2-%E4%B8%AA-AZ-3-%E7%B1%BB-subnet"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 具体例子:一个 VPC,2 个 AZ,3 类 subnet</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E6%95%B0%E6%8D%AE%E9%9D%A2%E9%80%90%E8%B7%B3%E8%BF%BD%E8%B8%AA-subnet-%E5%9C%A8%E8%BD%AC%E5%8F%91%E4%B8%AD-%E5%AE%9E%E4%BD%93%E5%8C%96-%E5%9C%A8%E5%93%AA"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 数据面逐跳追踪:subnet 在转发中&quot;实体化&quot;在哪</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E4%B8%8E%E4%BC%A0%E7%BB%9F%E7%89%A9%E7%90%86%E7%BD%91%E7%BB%9C-VLAN-%E6%A8%A1%E5%BC%8F-%E5%AF%B9%E7%85%A7"><span class="toc-number">1.5.4.</span> <span class="toc-text">5.4 与传统物理网络(VLAN 模式)对照</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-%E6%8C%89%E5%AD%90%E7%BD%91%E5%86%85-%E8%B7%A8%E5%AD%90%E7%BD%91%E5%8C%BA%E5%88%86%E6%9F%A5%E8%A1%A8%E8%A1%8C%E4%B8%BA"><span class="toc-number">1.5.5.</span> <span class="toc-text">5.5 按子网内 &#x2F; 跨子网区分查表行为</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E6%80%BB%E7%BB%93-%E8%B4%AF%E7%A9%BF%E5%85%A8%E6%96%87%E7%9A%84%E4%B8%89%E6%9D%A1%E8%AE%BE%E8%AE%A1%E5%93%B2%E5%AD%A6"><span class="toc-number">1.6.</span> <span class="toc-text">六、总结:贯穿全文的三条设计哲学</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-Linux%E5%86%85%E6%A0%B8%E6%A8%A1%E5%9D%97%E7%A8%8B%E5%BA%8F%E7%BB%93%E6%9E%84%E4%BA%94%E8%A6%81%E7%B4%A0%E4%B8%8E%E5%AE%8F%E5%B1%95%E5%BC%80/" title="Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误">Linux 内核模块程序结构:五要素、宏展开,以及教程里常见的四个错误</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</a><time datetime="2026-09-10T16:00:00.000Z" title="发表于 2026-09-11 00:00:00">2026-09-11</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</a><time datetime="2026-09-09T16:00:00.000Z" title="发表于 2026-09-10 00:00:00">2026-09-10</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</a><time datetime="2026-09-02T16:00:00.000Z" title="发表于 2026-09-03 00:00:00">2026-09-03</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
