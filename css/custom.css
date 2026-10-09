@@ -1,0 +1,676 @@
+/* ==========================================================================
+   custom.css —— 科技渐变风皮肤
+   覆盖 Butterfly 5.x 默认样式。全部用变量驱动,想换配色只改 :root 即可。
+   加载方式:_config.yml 的 inject.head 注入 /css/custom.css
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. 设计令牌
+   -------------------------------------------------------------------------- */
+:root {
+  /* 主渐变:靛蓝 → 紫罗兰 */
+  --rg-indigo: #6366f1;
+  --rg-violet: #8b5cf6;
+  --rg-cyan: #22d3ee;
+  --rg-grad: linear-gradient(120deg, #6366f1 0%, #8b5cf6 52%, #a855f7 100%);
+  --rg-grad-soft: linear-gradient(120deg, rgba(99, 102, 241, .12), rgba(139, 92, 246, .12));
+
+  /* 圆角与节奏 */
+  --rg-radius: 16px;
+  --rg-radius-sm: 10px;
+  --rg-ease: cubic-bezier(.22, .61, .36, 1);
+
+  /* 毛玻璃 */
+  --rg-glass: rgba(255, 255, 255, .72);
+  --rg-glass-border: rgba(255, 255, 255, .65);
+  --rg-glow: 0 8px 32px rgba(99, 102, 241, .10);
+  --rg-glow-hover: 0 18px 48px rgba(99, 102, 241, .22);
+
+  /* 文字层级 */
+  --rg-text: #1e2235;
+  --rg-text-sub: #5b6178;
+  --rg-text-muted: #8a90a6;
+}
+
+/* 覆盖 Butterfly 自身变量,让内置组件一起换色 */
+:root {
+  --rg-scrollbar: var(--rg-violet);
+
+  /* 关键:主题用 var(--card-bg) 给所有卡片上底色(cardHover / recent-post-item /
+     card-widget / pagination 共用一条规则)。直接覆盖变量,比跟主题比选择器优先级可靠。 */
+  --card-bg: var(--rg-glass);
+}
+
+/* 暗色模式下的令牌 */
+[data-theme='dark'] {
+  --rg-glass: rgba(30, 32, 48, .62);
+  --rg-glass-border: rgba(139, 92, 246, .22);
+  --rg-glow: 0 8px 32px rgba(0, 0, 0, .36);
+  --rg-glow-hover: 0 18px 48px rgba(139, 92, 246, .28);
+  --rg-text: #e6e8f2;
+  --rg-text-sub: #a8aec4;
+  --rg-text-muted: #767c94;
+  --card-bg: var(--rg-glass);
+}
+
+/* --------------------------------------------------------------------------
+   2. 全局背景 —— 柔和光晕网格,为毛玻璃提供层次
+   -------------------------------------------------------------------------- */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(58rem 58rem at 8% -5%, rgba(99, 102, 241, .13), transparent 62%),
+    radial-gradient(48rem 48rem at 95% 12%, rgba(139, 92, 246, .11), transparent 62%),
+    radial-gradient(42rem 42rem at 45% 105%, rgba(34, 211, 238, .09), transparent 62%);
+}
+
+[data-theme='dark'] body::before {
+  background:
+    radial-gradient(58rem 58rem at 8% -5%, rgba(99, 102, 241, .20), transparent 62%),
+    radial-gradient(48rem 48rem at 95% 12%, rgba(139, 92, 246, .16), transparent 62%),
+    radial-gradient(42rem 42rem at 45% 105%, rgba(34, 211, 238, .10), transparent 62%);
+}
+
+/* --------------------------------------------------------------------------
+   3. 顶部横幅 —— 渐变叠加 + 光晕,保留原背景图
+   主题用 #page-header:before 做遮罩(mask.header),这里接管它
+   -------------------------------------------------------------------------- */
+#page-header:not(.not-top-img)::before {
+  background:
+    radial-gradient(38rem 38rem at 16% 28%, rgba(99, 102, 241, .58), transparent 66%),
+    radial-gradient(32rem 32rem at 84% 72%, rgba(139, 92, 246, .48), transparent 66%),
+    linear-gradient(160deg, rgba(30, 27, 75, .86) 0%, rgba(49, 46, 129, .70) 48%, rgba(15, 23, 42, .90) 100%);
+}
+
+/* 首页横幅:底部渐隐过渡,和正文自然衔接 */
+#page-header.full_page {
+  background-attachment: fixed;
+}
+
+#page-header.full_page::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 26%;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--global-bg));
+}
+
+/* 站点标题:渐变文字 */
+#page-header #site-title {
+  background: linear-gradient(120deg, #ffffff 0%, #c7d2fe 38%, #a5b4fc 58%, #ffffff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: none;
+  letter-spacing: .02em;
+  font-weight: 700;
+}
+
+#page-header #site-subtitle {
+  color: rgba(226, 232, 240, .92);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, .35);
+  letter-spacing: .06em;
+}
+
+/* 向下箭头:淡出效果 */
+#page-header #scroll-down {
+  opacity: .85;
+}
+
+#scroll-down .scroll-down-effects {
+  color: rgba(226, 232, 240, .9);
+}
+
+/* --------------------------------------------------------------------------
+   4. 导航栏 —— 毛玻璃吸顶
+   -------------------------------------------------------------------------- */
+#nav {
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  background: rgba(255, 255, 255, .70);
+  box-shadow: 0 2px 20px rgba(99, 102, 241, .07);
+}
+
+[data-theme='dark'] #nav {
+  background: rgba(20, 22, 36, .72);
+  box-shadow: 0 2px 20px rgba(0, 0, 0, .30);
+}
+
+#nav .site-name,
+#nav .site-page {
+  transition: color .25s var(--rg-ease);
+}
+
+#nav .site-page::after {
+  background: var(--rg-grad) !important;
+  height: 2px;
+  border-radius: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   5. 通用卡片毛玻璃 + hover 上浮
+   注意:主题的结构是 #recent-posts .recent-post-items > .recent-post-item,
+   中间隔了一层,所以必须用后代选择器(不能用 >)
+   -------------------------------------------------------------------------- */
+.card-widget,
+#recent-posts .recent-post-item {
+  border-radius: var(--rg-radius) !important;
+  backdrop-filter: blur(18px) saturate(170%);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  border: 1px solid var(--rg-glass-border);
+  box-shadow: var(--rg-glow);
+  transition: transform .35s var(--rg-ease), box-shadow .35s var(--rg-ease);
+}
+
+.card-widget:hover,
+#recent-posts .recent-post-item:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--rg-glow-hover);
+}
+
+/* 左侧/右侧服务色条 */
+.card-widget::before {
+  border-radius: var(--rg-radius);
+}
+
+/* --------------------------------------------------------------------------
+   6. 首页文章卡片
+   -------------------------------------------------------------------------- */
+#recent-posts .recent-post-item {
+  overflow: hidden;
+}
+
+/* 封面图:轻微放大 + 渐变遮罩 */
+#recent-posts .post_cover {
+  overflow: hidden;
+}
+
+#recent-posts .post_cover img.post_bg {
+  transition: transform .55s var(--rg-ease), filter .55s var(--rg-ease);
+}
+
+#recent-posts .recent-post-item:hover .post_cover img.post_bg {
+  transform: scale(1.07);
+  filter: saturate(1.12);
+}
+
+/* 文章标题:渐变下划线 */
+#recent-posts .recent-post-info .article-title {
+  transition: color .25s var(--rg-ease);
+  background-image: linear-gradient(120deg, transparent, transparent);
+  background-repeat: no-repeat;
+  background-position: 0 88%;
+  background-size: 0% 0;
+}
+
+#recent-posts .recent-post-item:hover .recent-post-info .article-title {
+  color: var(--rg-indigo);
+}
+
+[data-theme='dark'] #recent-posts .recent-post-item:hover .recent-post-info .article-title {
+  color: #a5b4fc;
+}
+
+/* 分类/标签药丸 */
+#recent-posts .article-meta__categories,
+#recent-posts .article-meta__tags,
+.post-meta .article-meta__categories,
+.post-meta .article-meta__tags {
+  border-radius: 999px;
+  padding: 1px 10px;
+  background: var(--rg-grad-soft);
+  transition: background .25s var(--rg-ease), color .25s var(--rg-ease);
+}
+
+/* --------------------------------------------------------------------------
+   7. 文章正文排版
+   -------------------------------------------------------------------------- */
+.layout .post-content,
+#article-container {
+  font-size: 16px;
+  line-height: 1.88;
+  color: var(--rg-text);
+  letter-spacing: .012em;
+}
+
+/* 段落间距 */
+#article-container p {
+  margin: 0 0 1.15em;
+}
+
+/* 标题:左侧渐变竖条 */
+#article-container h2,
+#article-container h3,
+#article-container h4 {
+  position: relative;
+  padding-left: 16px;
+  transition: color .25s var(--rg-ease);
+}
+
+#article-container h2::before,
+#article-container h3::before,
+#article-container h4::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 5px;
+  border-radius: 3px;
+  background: var(--rg-grad);
+}
+
+#article-container h2::before {
+  height: 1.05em;
+}
+
+#article-container h3::before {
+  height: .92em;
+}
+
+#article-container h4::before {
+  height: .78em;
+}
+
+/* 行内代码 */
+#article-container code:not([class*='hljs']):not(.hljs) {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--rg-grad-soft);
+  color: var(--rg-indigo);
+  font-size: .92em;
+}
+
+[data-theme='dark'] #article-container code:not([class*='hljs']):not(.hljs) {
+  color: #a5b4fc;
+}
+
+/* 引用块:渐变左边条 */
+#article-container blockquote {
+  border-left: 4px solid;
+  border-image: var(--rg-grad) 1;
+  border-radius: 0 var(--rg-radius-sm) var(--rg-radius-sm) 0;
+  background: var(--rg-grad-soft);
+  padding: 14px 18px;
+}
+
+/* 表格 */
+#article-container table {
+  border-radius: var(--rg-radius-sm);
+  overflow: hidden;
+}
+
+#article-container table thead th {
+  background: var(--rg-grad);
+  color: #fff;
+  border: none;
+}
+
+#article-container table tbody tr {
+  transition: background .2s var(--rg-ease);
+}
+
+#article-container table tbody tr:hover {
+  background: var(--rg-grad-soft);
+}
+
+/* 图片:圆角 + 阴影 */
+#article-container img {
+  border-radius: var(--rg-radius-sm);
+  box-shadow: 0 6px 24px rgba(30, 34, 53, .10);
+  transition: transform .35s var(--rg-ease), box-shadow .35s var(--rg-ease);
+}
+
+#article-container img:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 36px rgba(30, 34, 53, .16);
+}
+
+/* 链接:渐变下划线 */
+#article-container a:not(.headerlink):not(.fancybox) {
+  color: var(--rg-indigo);
+  text-decoration: none;
+  background-image: var(--rg-grad);
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 1px;
+  transition: background-size .3s var(--rg-ease), color .25s var(--rg-ease);
+}
+
+#article-container a:not(.headerlink):not(.fancybox):hover {
+  background-size: 100% 2px;
+}
+
+[data-theme='dark'] #article-container a:not(.headerlink):not(.fancybox) {
+  color: #a5b4fc;
+}
+
+/* 分割线 */
+#article-container hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, .35), transparent);
+}
+
+/* --------------------------------------------------------------------------
+   8. 代码块
+   -------------------------------------------------------------------------- */
+figure.highlight,
+#article-container pre:not(.mermaid) {
+  border-radius: var(--rg-radius-sm);
+  box-shadow: 0 4px 20px rgba(30, 34, 53, .08);
+  border: 1px solid rgba(99, 102, 241, .10);
+}
+
+/* 代码块顶部工具条 */
+figure.highlight .highlight-tools {
+  background: var(--rg-grad-soft);
+}
+
+figure.highlight .highlight-tools .code-lang {
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
+/* 复制按钮 */
+figure.highlight .copy-notice {
+  background: var(--rg-indigo) !important;
+}
+
+/* --------------------------------------------------------------------------
+   9. 侧边栏卡片
+   -------------------------------------------------------------------------- */
+/* 作者卡 */
+#aside-content .card-info .author-info__name {
+  background: var(--rg-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+}
+
+#aside-content .card-info .author-info__description {
+  color: var(--rg-text-sub);
+}
+
+/* 作者卡按钮(主题实际 id 是 #card-info-btn) */
+#aside-content .card-info #card-info-btn {
+  background: var(--rg-grad) !important;
+  border-radius: 999px !important;
+  border: none !important;
+  transition: transform .25s var(--rg-ease), box-shadow .25s var(--rg-ease), filter .25s var(--rg-ease);
+}
+
+#aside-content .card-info #card-info-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(99, 102, 241, .34);
+  filter: brightness(1.06);
+}
+
+#aside-content .card-info .card-info-social-icons a {
+  transition: transform .25s var(--rg-ease), filter .25s var(--rg-ease);
+}
+
+#aside-content .card-info .card-info-social-icons a:hover {
+  transform: translateY(-3px) scale(1.06);
+}
+
+/* 公告卡:渐变描边感 */
+#aside-content .card-announcement .item-headline {
+  color: var(--rg-indigo);
+}
+
+/* 卡片标题小图标换成渐变 */
+#aside-content .item-headline i {
+  background: var(--rg-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 分类/归档条目 hover 位移 */
+#aside-content .card-categories .category-list-item,
+#aside-content .card-archives .archive-list-item,
+#aside-content .card-recent-post .recent-post-item {
+  transition: transform .25s var(--rg-ease);
+}
+
+#aside-content .card-categories .category-list-item:hover,
+#aside-content .card-archives .archive-list-item:hover,
+#aside-content .card-recent-post .recent-post-item:hover {
+  transform: translateX(4px);
+}
+
+/* 标签云 */
+#aside-content .card-tag-cloud a {
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin: 2px;
+  transition: transform .2s var(--rg-ease), background .2s var(--rg-ease), color .2s var(--rg-ease);
+}
+
+#aside-content .card-tag-cloud a:hover {
+  background: var(--rg-grad);
+  color: #fff !important;
+  transform: translateY(-2px);
+}
+
+/* 站点信息数字 */
+#aside-content .card-webinfo .webinfo-item .webinfo-count {
+  background: var(--rg-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------------------
+   10. 文章目录 TOC
+   -------------------------------------------------------------------------- */
+/* 提高特异性压过主题的 .toc-percentage */
+#aside-content #card-toc .toc-percentage {
+  color: var(--rg-indigo) !important;
+  font-weight: 600;
+}
+
+#card-toc .toc-link {
+  transition: color .2s var(--rg-ease), padding-left .2s var(--rg-ease);
+}
+
+#card-toc .toc-link:hover {
+  color: var(--rg-indigo);
+  padding-left: 4px;
+}
+
+#card-toc .toc-link.active {
+  background: var(--rg-grad) !important;
+  border-radius: 6px;
+}
+
+/* --------------------------------------------------------------------------
+   11. 按钮 / 分页器 / 评论框
+   -------------------------------------------------------------------------- */
+#pagination .page-number.current,
+#pagination .extend.next,
+#pagination .extend.prev,
+a.button,
+button.button,
+/* Valine 评论的提交按钮 */
+.vsubmit,
+.vbtn {
+  background: var(--rg-grad) !important;
+  border: none !important;
+  border-radius: 999px !important;
+  color: #fff !important;
+  transition: transform .25s var(--rg-ease), box-shadow .25s var(--rg-ease), filter .25s var(--rg-ease);
+}
+
+#pagination .page-number.current:hover,
+#pagination .extend.next:hover,
+#pagination .extend.prev:hover,
+a.button:hover,
+button.button:hover,
+.vsubmit:hover,
+.vbtn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(99, 102, 241, .34);
+  filter: brightness(1.06);
+}
+
+#pagination .page-number:not(.current):hover {
+  color: var(--rg-indigo);
+}
+
+/* 评论框:圆角 + 柔和描边,和卡片语言统一 */
+#vcomment .vwrap,
+.v .vwrap {
+  border-radius: var(--rg-radius-sm);
+  border-color: rgba(99, 102, 241, .18);
+}
+
+#vcomment .veditor,
+.v .veditor {
+  background: transparent;
+}
+
+#vcomment .vheader .vnick,
+#vcomment .vheader .vmail,
+#vcomment .vheader .vlink {
+  border-radius: var(--rg-radius-sm);
+}
+
+/* --------------------------------------------------------------------------
+   12. 页脚 —— 渐变收尾
+   -------------------------------------------------------------------------- */
+#footer {
+  background: var(--rg-grad) !important;
+  color: rgba(255, 255, 255, .90);
+}
+
+#footer::before {
+  background: transparent !important;
+}
+
+#footer a,
+#footer .footer-separator,
+#footer .copyright,
+#footer .framework-info {
+  color: rgba(255, 255, 255, .90) !important;
+}
+
+#footer a:hover {
+  color: #fff !important;
+  text-decoration: underline;
+}
+
+/* 页脚顶部留一点呼吸空间,避免和正文卡片贴死 */
+#footer-wrap {
+  padding: 24px 0;
+}
+
+/* --------------------------------------------------------------------------
+   12. 滚动条
+   -------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--rg-grad);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--rg-violet);
+  background-clip: content-box;
+}
+
+/* --------------------------------------------------------------------------
+   13. 暗色模式补充
+   -------------------------------------------------------------------------- */
+[data-theme='dark'] .card-widget,
+[data-theme='dark'] #recent-posts .recent-post-item {
+  background: var(--rg-glass);
+}
+
+[data-theme='dark'] #footer {
+  background: transparent;
+}
+
+[data-theme='dark'] figure.highlight,
+[data-theme='dark'] #article-container pre:not(.mermaid) {
+  border-color: rgba(139, 92, 246, .18);
+}
+
+[data-theme='dark'] #article-container img {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .40);
+}
+
+/* 暗色下霓虹辉光点缀 */
+[data-theme='dark'] #page-header:not(.not-top-img)::before {
+  background:
+    radial-gradient(38rem 38rem at 16% 28%, rgba(99, 102, 241, .50), transparent 66%),
+    radial-gradient(32rem 32rem at 84% 72%, rgba(168, 85, 247, .42), transparent 66%),
+    linear-gradient(160deg, rgba(12, 10, 32, .90) 0%, rgba(30, 27, 75, .80) 48%, rgba(6, 8, 20, .94) 100%);
+}
+
+/* --------------------------------------------------------------------------
+   14. 响应式
+   -------------------------------------------------------------------------- */
+@media screen and (max-width: 768px) {
+  :root {
+    --rg-radius: 13px;
+  }
+
+  .layout .post-content,
+  #article-container {
+    font-size: 15.5px;
+    line-height: 1.82;
+  }
+
+  #page-header #site-title {
+    letter-spacing: 0;
+  }
+
+  /* 移动端降低模糊强度,省电且更流畅 */
+  .card-widget,
+  #recent-posts .recent-post-item,
+  #nav {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   15. 无障碍 —— 尊重系统「减少动效」
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .card-widget:hover,
+  #recent-posts .recent-post-item:hover,
+  #article-container img:hover {
+    transform: none;
+  }
+}
