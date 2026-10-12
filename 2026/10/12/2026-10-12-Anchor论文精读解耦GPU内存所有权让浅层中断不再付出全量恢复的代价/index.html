@@ -1,0 +1,755 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="解读 SOSP &#39;26 论文 Anchor(清华 &amp; 上交):大模型集群 65.8%–98.8% 的故障是&quot;浅层中断&quot;——进程崩了但 GPU 硬件完好,现有机制却都要 checkpoint → 重启 → 全量重载。Anchor 用 daemon 进程持有 GPU 内存、worker 经 IPC 零开销映射,崩溃后新 worker 直接重挂同一块显存;配合访问路径张量身份解析与训练&#x2F;推理各自的轻量一">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价">
+<meta property="og:url" content="https://roger-lv.github.io/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="解读 SOSP &#39;26 论文 Anchor(清华 &amp; 上交):大模型集群 65.8%–98.8% 的故障是&quot;浅层中断&quot;——进程崩了但 GPU 硬件完好,现有机制却都要 checkpoint → 重启 → 全量重载。Anchor 用 daemon 进程持有 GPU 内存、worker 经 IPC 零开销映射,崩溃后新 worker 直接重挂同一块显存;配合访问路径张量身份解析与训练&#x2F;推理各自的轻量一">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-10-11T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-10-12T08:20:59.920Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="AI Infra">
+<meta property="article:tag" content="GPU">
+<meta property="article:tag" content="vLLM">
+<meta property="article:tag" content="论文解读">
+<meta property="article:tag" content="SOSP">
+<meta property="article:tag" content="故障恢复">
+<meta property="article:tag" content="LLM训练">
+<meta property="article:tag" content="DeepSpeed">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Anchor 论文精读:解耦 GPU 内存所有权,让\"浅层中断\"不再付出全量恢复的代价",
+  "url": "https://roger-lv.github.io/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-10-11T16:00:00.000Z",
+  "dateModified": "2026-10-12T08:20:59.920Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Anchor 论文精读:解耦 GPU 内存所有权,让"浅层中断"不再付出全量恢复的代价',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">281</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">368</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-12T08:20:59.920Z" title="更新于 2026-10-12 16:20:59">2026-10-12</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/" data-flag-title="Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价</h1>
+<blockquote>
+<p><strong>论文</strong>:<em>Anchor: Mitigating GPU Shallow Disruptions with Decoupled Memory</em><br>
+<strong>作者</strong>:Haoyi Ma、Shiwei Gao、Youmin Chen、Junrong Huang、Youyou Lu、Jiwu Shu(清华大学 &amp; 上海交通大学)<br>
+<strong>发表</strong>:SOSP '26(ACM SIGOPS 第 32 届操作系统原理研讨会)</p>
+</blockquote>
+<h2 id="TL-DR">TL;DR</h2>
+<p>大规模 LLM 集群中的绝大多数故障其实是&quot;浅层中断&quot;——进程崩了,但 GPU 硬件和 OS 内核毫发无损。现有恢复机制对此一视同仁:<strong>checkpoint → 重启 → 全量重载</strong>,哪怕数据本来就还完好在显存里。</p>
+<p>Anchor 的核心主张是:<strong>内存所有权不应与进程生命周期绑定</strong>。它用一个 daemon 进程持有 GPU 内存,worker 通过 GPU IPC 机制零开销地映射访问;worker 崩溃后,新 worker 直接把同一块物理显存重新映射回来,数据从未离开过 GPU。配合基于&quot;访问路径&quot;的张量身份解析和面向训练/推理语义的轻量一致性协议,Anchor 在 DeepSpeed 和 vLLM 上实现后,<strong>推理恢复时间平均缩短 60.7%,训练平均缩短 26.6%</strong>;Qwen3-235B 推理恢复从 143.78 s 降到 27.85 s。</p>
+<hr>
+<h2 id="一、问题-为什么-GPU-集群的故障恢复这么贵">一、问题:为什么 GPU 集群的故障恢复这么贵?</h2>
+<h3 id="1-1-故障画像-大多数故障其实很-浅">1.1 故障画像:大多数故障其实很&quot;浅&quot;</h3>
+<p>作者分析了三个生产集群公开的故障追踪数据(Alibaba、ByteDance、Shanghai AI Lab),把中断归为四类:</p>
+<table>
+<thead>
+<tr>
+<th>故障类别</th>
+<th>ByteDance</th>
+<th>Alibaba</th>
+<th>Shanghai AI Lab</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>用户主动重启</td>
+<td>17.3%</td>
+<td>—</td>
+<td>71.4%</td>
+</tr>
+<tr>
+<td>运行时异常</td>
+<td>10.7%</td>
+<td>11.7%</td>
+<td>7.4%</td>
+</tr>
+<tr>
+<td>软件栈故障</td>
+<td>70.8%</td>
+<td>54.1%</td>
+<td>18.0%</td>
+</tr>
+<tr>
+<td><strong>毁灭性故障</strong></td>
+<td><strong>1.2%</strong></td>
+<td><strong>34.2%</strong></td>
+<td><strong>3.2%</strong></td>
+</tr>
+<tr>
+<td><strong>浅层中断合计</strong></td>
+<td><strong>98.8%</strong></td>
+<td><strong>65.8%</strong></td>
+<td><strong>96.8%</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>注:Alibaba 的故障中未单独统计用户主动重启一类,三类合计 100%。其中瞬时网络错误(NCCL 超时、链路抖动、连接重置)是其最大的单一来源。</p>
+</blockquote>
+<p>论文据此把故障分成两个等级:</p>
+<ul>
+<li><strong>毁灭性故障(destructive failure)</strong>:GPU 硬件、驱动或宿主 OS 发生不可恢复的故障(设备丢失、不可纠正的 ECC 错误、机器重启),任务必须迁移到新节点;</li>
+<li><strong>浅层中断(shallow disruption)</strong>:GPU 设备及其软件栈完好,<strong>只有用户态 worker 进程退出</strong>。用户重启、运行时异常、软件栈故障全部属于此类。</li>
+</ul>
+<p>关键结论:<strong>毁灭性故障只占少数,浅层中断在三个集群中占 65.8%–98.8%</strong>。</p>
+<h3 id="1-2-现有恢复的统一套路-checkpoint-→-restart-→-reload">1.2 现有恢复的统一套路:checkpoint → restart → reload</h3>
+<p>无论故障多轻,现有系统都走同一条路:周期性 checkpoint,故障后回滚到最近有效检查点,全量加载恢复。但 LLM 的运行时状态极大——训练要保权重 + 优化器状态(Adam 混合精度下每参数 16–20 字节),推理要保权重 + KV cache。作者在 8×A800 节点上实测的代价:</p>
+<p><strong>训练(单卡,保存 / 恢复耗时,单位秒):</strong></p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>Llama3.2-1B</th>
+<th>Qwen3-1.7B</th>
+<th>Llama3.2-3B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>保存(DeepSpeed)</td>
+<td>24.98</td>
+<td>36.05</td>
+<td>66.20</td>
+</tr>
+<tr>
+<td>保存(CheckFreq)</td>
+<td>9.83</td>
+<td>12.77</td>
+<td>24.68</td>
+</tr>
+<tr>
+<td>保存(In-memory)</td>
+<td>5.31</td>
+<td>5.64</td>
+<td>9.07</td>
+</tr>
+<tr>
+<td>恢复(DeepSpeed)</td>
+<td>24.01</td>
+<td>28.84</td>
+<td>42.86</td>
+</tr>
+<tr>
+<td>恢复(CheckFreq)</td>
+<td>24.73</td>
+<td>27.12</td>
+<td>42.42</td>
+</tr>
+<tr>
+<td>恢复(In-memory)</td>
+<td>15.93</td>
+<td>19.04</td>
+<td>25.19</td>
+</tr>
+</tbody>
+</table>
+<p><strong>推理(恢复耗时,权重已在 CPU page cache 中):</strong></p>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>Qwen3-8B</th>
+<th>Qwen3-14B</th>
+<th>Qwen3-32B</th>
+<th>Qwen3-235B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Replay(重算 prefill)</td>
+<td>38.48</td>
+<td>56.47</td>
+<td>52.22</td>
+<td>153.07</td>
+</tr>
+<tr>
+<td>KV-memory(CPU KV 检查点)</td>
+<td>34.20</td>
+<td>38.20</td>
+<td>49.02</td>
+<td><strong>143.78</strong></td>
+</tr>
+</tbody>
+</table>
+<p>即便是优化到极致的方案,Qwen3-235B 的推理重启仍需 143.78 秒。</p>
+<h3 id="1-3-一个-病态-的观察与根因">1.3 一个&quot;病态&quot;的观察与根因</h3>
+<p>对于浅层中断,调度器通常已经会<strong>原地重启</strong>(in-place restart)任务——因为内核和硬件完好,不需要重新分配节点。但此时出现了一个病态现象:<strong>checkpoint 机制先把数据从 GPU 上存出去,再原样加载回同一块 GPU</strong>。</p>
+<p>为什么数据必须离开 GPU?根因是 GPU 执行模型的 <strong>fate-sharing(命运共享)特性</strong>:一个 CUDA context 拥有它分配的所有 GPU 内存对象;进程崩溃时 context 被销毁,全部内存被驱动回收。这正是 Anchor 要打破的耦合。</p>
+<hr>
+<h2 id="二、核心洞察-把内存所有权从-worker-进程中解耦">二、核心洞察:把内存所有权从 worker 进程中解耦</h2>
+<p>Anchor 引入一个 <strong>daemon 进程</strong>作为 worker 的 sidecar,由它来持有(allocate 并 own)需要跨重启存活的 GPU 内存。其技术支点是现代 GPU 原生的 <strong>IPC memory 机制</strong>(CUDA 的 <code>cudaIpcGetMemHandle/OpenMemHandle</code>,AMD 侧对应 <code>hipIpcGet/OpenMemHandle</code>),它具备两个关键性质:</p>
+<ol>
+<li><strong>引用计数</strong>:内存区域通过 IPC 被多个 context 共享时,GPU 驱动维护引用计数。任何共享进程退出只会减一,<strong>不会触发实际回收</strong>——只要 daemon 还持有引用,内存就活着;</li>
+<li><strong>VM–PM 映射的零开销访问</strong>:IPC 共享的底层实现是把 owner 的物理内存地址插入消费方的 GPU 页表。映射建立后,消费方的访问直接由 GPU 硬件 MMU/TLB 服务,<strong>正常执行路径上没有任何额外运行时开销</strong>——张量在 worker 地址空间里看起来与自分配内存毫无区别。</li>
+</ol>
+<p>于是整个机制变成:worker 要分配张量时,daemon 代为分配并持有所有权,再通过 IPC 授予 worker 读写权限;worker 在自己的 context 里照常计算。worker 因浅层中断退出时,daemon 里的内存因引用计数不受影响;新 worker 启动后,daemon 把<strong>同一块 GPU 内存</strong>重新映射给它。这样,每卡数十 GB、每节点数百 GB 的 GPU 内存都可以&quot;锚定&quot;在 GPU 上。</p>
+<p>值得强调的是 daemon 的<strong>窄失效面</strong>:它只执行内存分配和 IPC,不执行任何用户定义的 CPU 逻辑或 GPU kernel,因此不受用户代码错误的影响(这与 Singularity 等代理方案形成对比——代理发 kernel,kernel 故障会击穿代理)。</p>
+<hr>
+<h2 id="三、从-锚定一个张量-到-锚定一个-ML-系统">三、从&quot;锚定一个张量&quot;到&quot;锚定一个 ML 系统&quot;</h2>
+<p>单张量锚定只是起点。落地到真实 ML 框架,Anchor 要解决两个挑战:<strong>C1 身份解析</strong>(daemon 存的是裸 GPU 内存对象,框架用的是带应用语义的逻辑张量,重启后如何重建一一对应)和 <strong>C2 一致性</strong>(worker 可能在 kernel 执行中途崩溃,daemon 里的数据是&quot;半成品&quot;)。</p>
+<h3 id="3-1-总体架构与工作流">3.1 总体架构与工作流</h3>
+<p>系统由四个组件构成:</p>
+<ul>
+<li><strong>Allocation Proxy</strong>(worker 侧):驻留在分配路径上,拦截受管 scope 内的分配/释放请求,翻译成与 daemon 的协议操作;</li>
+<li><strong>Memory Manager</strong>(daemon 内):分配 GPU 内存对象,维护逻辑名到物理对象的映射;</li>
+<li><strong>Rebinder</strong>:为对象生成稳定标识,worker 重启后把框架中的逻辑张量重新绑定到 daemon 持有的 GPU 对象;</li>
+<li><strong>Consistency Guard</strong>:保证保留状态的一致性——训练恢复到&quot;已完成的优化器步&quot;边界,推理只暴露已提交的 KV cache 元数据并重放未提交后缀。</li>
+</ul>
+<p><strong>Scope 式托管</strong>是刻意的设计取舍:Anchor 只托管需要跨重启存活的长期对象(模型权重、优化器状态、KV cache 页),激活值、临时缓冲等短命对象仍走原生分配路径,<strong>执行路径上零拦截</strong>。用户只需把状态初始化代码包进 <code>managed_scope</code>:</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># === 初始化:拦截分配 ===</span></span><br><span class="line"><span class="keyword">with</span> Anchor.managed_scope():</span><br><span class="line">    model = LLaMA(config)          <span class="comment"># 被拦截</span></span><br><span class="line">    optimizer = Adam(model.params) <span class="comment"># 被拦截</span></span><br><span class="line"><span class="comment"># scope 退出:naming + rebind + IPC mapping</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># === 训练:正常执行,无需任何修改 ===</span></span><br><span class="line"><span class="keyword">for</span> batch <span class="keyword">in</span> dataloader:</span><br><span class="line">    loss = model(batch)</span><br><span class="line">    loss.backward()</span><br><span class="line">    optimizer.step()               <span class="comment"># 内部触发一致性协议</span></span><br></pre></td></tr></table></figure>
+<p><strong>工作流三阶段</strong>:</p>
+<ol>
+<li><strong>拦截与占位张量创建</strong>:进入 scope 后,每次分配请求先生成一个轻量 placeholder 张量,承载元数据并记录创建方式,把全局命名和对象解析推迟到 scope 退出;</li>
+<li><strong>身份解析</strong>:scope 退出时,Rebinder 扫描所有存活的占位张量,为每个对象解析出访问路径标识,连同元数据发给 daemon;daemon 按逻辑名匹配既有的 GPU 对象或新分配,返回 IPC handle;</li>
+<li><strong>IPC 映射</strong>:worker 在自己的 GPU context 里映射这些 handle,原位替换占位张量的数据指针——此后框架把它们当普通张量无缝使用。</li>
+</ol>
+<p><strong>释放与回收</strong>:受管对象被释放时,Proxy 把释放事件转发给 daemon 回收。一个特殊分支是 worker <strong>正常退出</strong>(如代码调试后的主动重启):Anchor 检测 Python 解释器状态,<strong>停止转发释放命令</strong>,使保留对象留在 daemon 中以备重启后重绑复用。</p>
+<h3 id="3-2-Rebinder-跨重启稳定的张量身份-C1">3.2 Rebinder:跨重启稳定的张量身份(C1)</h3>
+<p><strong>为什么现有命名方案都不行?</strong></p>
+<ul>
+<li><em>分配序号</em>:不允许增删张量——而用户调试后恰恰可能改代码;</li>
+<li><em>源码位置</em>:重构导致行号漂移,循环体内的同一行会产生多个不同实例;</li>
+<li><em>框架工具</em>(如 PyTorch <code>state_dict</code>):只覆盖注册在 <code>nn.Module</code> 层级里的 <code>nn.Parameter</code>。而如下面的 vLLM 引擎例子,KV cache 是用户应用里的原生 dict,游离在任何 PyTorch module 之外。</li>
+</ul>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">class</span> <span class="title class_">LLMEngine</span>:</span><br><span class="line">    <span class="keyword">def</span> <span class="title function_">__init__</span>(<span class="params">self, config</span>):</span><br><span class="line">        <span class="variable language_">self</span>.model = LLaMA(config)        <span class="comment"># 标准 nn.Module</span></span><br><span class="line">        <span class="comment"># KV cache 是原生 dict,对 state_dict() 不可见</span></span><br><span class="line">        <span class="comment"># 访问路径: engine.kv_cache[&#x27;layer_0&#x27;]</span></span><br><span class="line">        <span class="variable language_">self</span>.kv_cache = &#123;&#125;</span><br><span class="line">        <span class="keyword">for</span> i <span class="keyword">in</span> <span class="built_in">range</span>(config.num_layers):</span><br><span class="line">            <span class="variable language_">self</span>.kv_cache[<span class="string">f&quot;layer_<span class="subst">&#123;i&#125;</span>&quot;</span>] = torch.zeros(</span><br><span class="line">                config.kv_shape, device=<span class="string">&quot;cuda&quot;</span>)</span><br><span class="line"></span><br><span class="line"><span class="keyword">with</span> Anchor.managed_scope():</span><br><span class="line">    engine = LLMEngine(config)</span><br></pre></td></tr></table></figure>
+<p><strong>方案:用访问路径(access path)作为标识符。</strong> Python 的执行模型中,所有存活对象通过属性引用和容器索引构成一张有向对象图。Anchor 用 <code>inspect.current_frame()</code> 拿到调用栈活跃帧的变量作为遍历根,每个对象都能通过 <code>.attr</code> 与 <code>[i]/[key]</code> 组成的路径定位——例如 <code>engine.kv_cache['layer_0']</code>。这类路径由带清晰应用语义的索引操作构成,<strong>跨多次运行天然稳定</strong>。</p>
+<p><strong>别名与确定性</strong>:同一个对象可能有多个访问路径(如 LLM 的 embedding 权重常被输入/输出层共享)。Anchor 采用确定性搜索:从根集出发做 BFS,同层按访问器的字典序展开,并用 visited 集合断环;<strong>对象在 BFS 中首次被到达的路径</strong>即为其稳定标识。</p>
+<p><strong>延迟命名(deferred naming)</strong>:完整 BFS 必须自顶向下(对象不知道自己的父节点),若每次分配后都全图遍历代价太高。因此 Anchor 把命名推迟到 scope 退出时<strong>一次性完成</strong>:scope 内每个被拦截的分配请求只生成占位张量;退出时单次 BFS,给所有仍存活的占位张量集体赋予规范路径——scope 内创建但中途释放的临时对象自然被排除。</p>
+<p><strong>占位张量(placeholder tensor)</strong>:为保证命名期内框架的元数据查询(用 shape 推断其他缓冲大小等)透明可用,占位张量是一个只含<strong>单个物理元素</strong>的 GPU 对象,其 shape/dtype/device 与请求张量完全一致,而 <strong>stride 全零</strong>——所有逻辑索引映射到同一物理元素,元数据正确且显存开销极小。由于其生命周期限于初始化阶段(框架只读元数据、不执行计算 kernel),零 stride 不会引发正确性问题。</p>
+<p>占位张量还记录初始化方式,供 daemon 首次创建时复现对象:</p>
+<ul>
+<li><strong>Shape 型</strong>(如 <code>torch.empty(shape, dtype)</code>):直接记录算子与参数;</li>
+<li><strong>Like 型</strong>(如 <code>torch.zeros_like(src)</code>):提取源张量元数据并归约为 shape 型;</li>
+<li><strong>Copy 型</strong>(如 <code>tensor.clone()</code>、<code>tensor.to(device)</code>):数据内容依赖源张量,而命名是延迟的——Anchor 在拦截时刻就把源数据缓冲到 CPU,保证延迟重建的正确性。</li>
+</ul>
+<p><strong>Daemon 匹配的三种结果</strong>:➊ <strong>Match</strong>——标识已存在且元数据兼容(dtype/shape 匹配),返回既有对象的 IPC handle;➋ <strong>首次创建</strong>——标识不存在,新分配并返回新 handle;➌ <strong>冲突</strong>——标识存在但元数据不兼容,依策略要么报告冲突并安全退出,要么释放旧对象、按新元数据重建。拿到 handle 后,worker 原位替换占位张量的数据指针,框架即可无缝使用。</p>
+<h3 id="3-3-Consistency-Guard-崩溃瞬间的-半成品-C2">3.3 Consistency Guard:崩溃瞬间的&quot;半成品&quot;(C2)</h3>
+<h4 id="通用方案-跟踪-CoW-组回滚">通用方案:跟踪 + CoW + 组回滚</h4>
+<p>应用无关的保障借鉴 PhoenixOS 思路,分三步:</p>
+<ol>
+<li><strong>内存跟踪</strong>——worker 即将启动 GPU kernel 时,通过拦截分析 API 调用参数,识别 kernel 将修改哪些 daemon 托管区域,并在运行时验证工作集;</li>
+<li><strong>GPU 驻留写时复制</strong>——kernel 真正执行前,daemon 分配 GPU 缓冲并备份待改数据;</li>
+<li><strong>基于组的回滚/提交</strong>——把一组 kernel(如训练/推理的一步,涵盖所有层)视为原子单元,因为<strong>层间激活值没有保存,部分层回滚不可行</strong>;组内全部完成则释放 CoW 缓冲,中断则回滚到旧版本。</li>
+</ol>
+<p>代价显而易见:跟踪要拦截分析 API 与 kernel 行为;更重要的是 <strong>CoW 需要在显存中全量备份待写数据</strong>——更新优化器状态或模型权重时可达数十 GB。</p>
+<h4 id="训练协议-最终化梯度是-免费的-redo-log">训练协议:最终化梯度是&quot;免费的 redo log&quot;</h4>
+<p>训练一致性的定义:完成一个训练迭代后的模型状态(权重 + 优化器状态)与对应 checkpoint 版本一致。</p>
+<p>观察训练流水线:反向传播中梯度 collective 与计算重叠,DeepSpeed/FSDP 等框架要求<strong>所有 collective 完成后才能开始 optimizer step</strong>——论文称之为<strong>梯度终结边界(gradient-finalization boundary)</strong>。由此得到关键观察:</p>
+<blockquote>
+<p>梯度终结边界保证梯度在整个优化器步内不可变。于是&quot;当前模型状态 + 最终化梯度 + 每步元数据&quot;完全确定下一版本。只要保留梯度到步结束,Anchor 就能用<strong>既有梯度缓冲区作为 redo log</strong> 重放任何未完成的 chunk 更新,<strong>零额外显存开销</strong>。</p>
+</blockquote>
+<p>唯一的缺口:正在修改的 chunk 可能被写了一半,直接重放会二次更新部分元素。Anchor 用<strong>单个 undo buffer</strong>(只覆盖 cursor 处的活跃 chunk)+ <strong>持久化 cursor</strong> 弥合,协议按 chunk 粒度执行(chunk = 一次 optimizer 调用所写的一组参数与优化器状态;DeepSpeed ZeRO-3 下对应一个参数子组的本地分片,受 <code>sub_group_size</code> 约束,默认 10⁹ 个元素):</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"># chunk[], grad[], undo_buf, cursor, undo_chunk 由 daemon 持有,跨崩溃存活</span><br><span class="line"></span><br><span class="line">procedure ApplyChunk(i):</span><br><span class="line">    undo_buf   ← Copy(chunk[i])</span><br><span class="line">    undo_chunk ← i                    # 发布完整 undo</span><br><span class="line">    Optimizer.Apply(chunk[i], grad[i])</span><br><span class="line">    cursor ← i + 1                    # 提交该 chunk</span><br><span class="line"></span><br><span class="line"># ── 正常路径 ──</span><br><span class="line">cursor ← 0; undo_chunk ← ⊥</span><br><span class="line">for i = 0 to N−1: ApplyChunk(i)</span><br><span class="line"></span><br><span class="line"># ── 恢复路径 ──</span><br><span class="line">if cursor &lt; N then:                   # 优化步中途被打断</span><br><span class="line">    if undo_chunk = cursor then</span><br><span class="line">        chunk[cursor] ← Copy(undo_buf)  # 回滚半写的 chunk</span><br><span class="line">    for j = cursor to N−1:</span><br><span class="line">        ApplyChunk(j)                 # 用梯度 redo log 重放</span><br></pre></td></tr></table></figure>
+<p>梯度终结边界之后,各 rank 独立更新自己参数分片的 chunk,无需跨 rank 协调。三种中断位置都能正确收敛:被打断在修改中的 rank 回滚后重放;已完成更新但未推进 cursor 的 rank 回滚后重放;已提交的 rank 跳过回滚只重放剩余部分。</p>
+<p>开销对比鲜明:通用 CoW 协议需全量复制权重与优化器状态;Anchor 只需<strong>一个恢复 chunk 大小的 undo buffer</strong>(正常路径复制耗时 0.03–0.07 s),redo log 直接复用既有梯度缓冲。</p>
+<h4 id="推理协议-append-only-KV-CPU-侧元数据">推理协议:append-only KV + CPU 侧元数据</h4>
+<p>推理一致性的定义:中断后 KV cache 处于&quot;已完成一步推理&quot;的状态。观察:<strong>PagedAttention 下 KV cache 条目是 append-only 的</strong>——引擎把当前新 token(s) 的 KV 直接<strong>盲写</strong>进对应 slot(不依赖旧值),再调用 attention kernel。最坏情况是 worker 在 kernel 执行中崩溃,留下被部分写污染的 slot;但恢复时引擎重放该前向 pass,脏数据会被正确数据覆盖。</p>
+<p>协议因此只需 CPU 侧元数据管理:</p>
+<ul>
+<li><strong>正常执行</strong>:worker 自由写入;一个 decode 步或 chunked prefill 完成后,Anchor 在 CPU 侧提交该序列的元数据(块表映射、序列长度 cursor);</li>
+<li><strong>中断恢复</strong>:若崩溃发生在元数据提交前,恢复时从 daemon 加载最后提交的元数据重建页表视图,从该点继续;被打断前向 pass 涉及的 slot 会在重执行时被覆盖,无需显式清理。</li>
+</ul>
+<p>开销:<strong>零 GPU 显存开销</strong>,仅持久化少量页表元数据;每个请求的代价是重算一个(decode)token 或一个 prefill chunk。</p>
+<hr>
+<h2 id="四、实现要点">四、实现要点</h2>
+<ul>
+<li><strong>纯用户态实现</strong>,基于 PyTorch 2.9.1、DeepSpeed 0.17.7、vLLM 0.14.1;对每个 ML 框架的侵入仅 <strong>200–300 行代码</strong>;</li>
+<li><strong>分配拦截</strong>:PyTorch 默认的 caching allocator 做大粒度物理分配再切逻辑块,daemon 无法识别被管对象。Anchor 在受管 scope 内<strong>关闭 caching allocator</strong>——daemon 在初始化期不频繁分配释放,不会造成碎片,同时保证这些区域由 daemon 独占管理;</li>
+<li><strong>多 GPU</strong>:每张卡一个独立 daemon,worker 只与本卡 daemon 通信,Anchor 层面<strong>无跨卡协调</strong>。NCCL 等库自分配的内部缓冲(通信环、scratch memory)位于受管 scope 之外,留在 worker 本地;</li>
+<li><strong>回退策略</strong>:daemon 失效面窄,但为覆盖范围之外的情况,Anchor 保守回退到最新应用检查点,触发条件有三个:①毁灭性故障;②daemon 已死;③故障无法被确信地归类为浅层。</li>
+</ul>
+<hr>
+<h2 id="五、实验评估">五、实验评估</h2>
+<h3 id="5-1-设置">5.1 设置</h3>
+<ul>
+<li><strong>平台</strong>:8×NVIDIA A800-SXM4-80GB(NVLink 全互联,双 NUMA),2×Xeon Platinum 8358,1 TiB 内存,Ubuntu 22.04.5 / Linux 5.15.0;256 GB NVMe 共享文件系统 + 400 GB tmpfs。可移植性实验用单卡 AMD Instinct MI100(ROCm 6.4.3-128);</li>
+<li><strong>负载</strong>:训练用 WikiText-2,Llama3.2-1B / Qwen3-1.7B / Llama3.2-3B(单卡)+ Qwen2.5-14B(8 卡),BF16 + DeepSpeed ZeRO-3,每 100 步存检查点,共 2,000 步;推理用清洗后的 ShareGPT trace,固定并发,Qwen3-8B/14B/32B(单卡)+ Qwen3-235B(8 卡),每轮固定 10,000 请求;</li>
+<li><strong>故障模型</strong>:注入非毁灭性故障——终止 worker 进程但不复位 GPU 设备;训练每秒 0.1%、推理每秒 1% 的故障概率,原地重启并测量&quot;重新连接保留状态、恢复有效工作&quot;的时间。</li>
+</ul>
+<h3 id="5-2-恢复延迟与持久化开销">5.2 恢复延迟与持久化开销</h3>
+<p><strong>训练侧持久化的阻塞延迟(秒):</strong></p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>Llama3.2-1B</th>
+<th>Qwen3-1.7B</th>
+<th>Llama3.2-3B</th>
+<th>Qwen2.5-14B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DeepSpeed native</td>
+<td>24.98</td>
+<td>36.05</td>
+<td>66.20</td>
+<td>66.76</td>
+</tr>
+<tr>
+<td>CheckFreq</td>
+<td>9.83</td>
+<td>12.77</td>
+<td>24.68</td>
+<td>35.61</td>
+</tr>
+<tr>
+<td>In-memory checkpoint</td>
+<td>5.31</td>
+<td>5.64</td>
+<td>9.07</td>
+<td>28.16</td>
+</tr>
+<tr>
+<td><strong>Anchor</strong></td>
+<td><strong>0.03</strong></td>
+<td><strong>0.04</strong></td>
+<td><strong>0.07</strong></td>
+<td><strong>0.05</strong></td>
+</tr>
+</tbody>
+</table>
+<p>作者严谨地提醒:<strong>这些数字不应被解读为&quot;保存加速比&quot;</strong>——基线物化全量快照,Anchor 只保护一个驻留在 GPU 上的恢复 chunk,操作覆盖的状态量和执行频率都不同;真正相关的结论是 chunk 级保护足够小,从而带来低稳态开销。</p>
+<p><strong>恢复延迟</strong>:恢复时间被分解为&quot;启动 + 状态恢复&quot;。对 Anchor 而言,加载/重挂载几乎消失,剩余延迟由框架启动主导:</p>
+<ul>
+<li><strong>训练</strong>:相对最强基线(In-memory)<strong>平均降低 26.6%</strong>;undo/redo 记录把优化器状态恢复到最新,避免回滚到更早的检查点;</li>
+<li><strong>推理</strong>:相对最强基线<strong>平均降低 60.7%</strong>;<strong>Qwen3-235B 从 KV-memory 的 143.78 s 降到 27.85 s,5.16× 加速</strong>(Replay 为 153.07 s)。基线需要重建推理引擎并搬回 KV 状态,而 Anchor 权重与 KV cache 都在原地。</li>
+</ul>
+<h3 id="5-3-端到端性能-注入故障的完整运行">5.3 端到端性能(注入故障的完整运行)</h3>
+<ul>
+<li><strong>训练</strong>:吞吐相对最强基线提升 <strong>5.1%</strong>,相对 DeepSpeed native 达 <strong>1.81×</strong>。检查点方案要付周期性持久化 + 故障后加载 + 检查点间隔内的步数重算;Anchor 把已完成进度留在显存里:梯度终结前故障只需重算被中断的迭代,优化步中途故障回滚当前 chunk 后用保留梯度完成更新;</li>
+<li><strong>推理</strong>:延迟相对最强基线降低 <strong>17.0%</strong>。每次重启都省掉模型重载、CPU→GPU KV 回搬和 prefill 重算,收益在 10,000 请求的运行中累积。端到端收益小于 60.7% 的孤立恢复收益——因为无故障计算仍占主导,这是符合预期的。</li>
+</ul>
+<h3 id="5-4-正确性验证">5.4 正确性验证</h3>
+<p><strong>重绑定正确性</strong>——构造 8 种程序变更,配置 daemon 遇元数据冲突即报告并安全退出;以&quot;修改后程序无重绑定的全新执行&quot;为 ground truth,输出一致才判为正确:</p>
+<table>
+<thead>
+<tr>
+<th>用例</th>
+<th>程序变更</th>
+<th>分配序匹配</th>
+<th>Anchor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(a)</td>
+<td>启用 LoRA 适配器</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>(b)</td>
+<td>移除视觉编码器</td>
+<td>▲</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>©</td>
+<td>启用 INT8 量化</td>
+<td>▲</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>(d)</td>
+<td>重命名 KV cache 张量</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>(e)</td>
+<td>交换 attention/MLP 初始化顺序</td>
+<td>▲</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>(f)</td>
+<td>移除最后一个 decoder 层</td>
+<td>▲</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>(g)</td>
+<td>缩小 KV cache 容量</td>
+<td>▲</td>
+<td>▲(安全拒绝)</td>
+</tr>
+<tr>
+<td>(h)</td>
+<td>更换 KV cache 布局(NHD→HND)</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+</tbody>
+</table>
+<p>✓ 正确;▲ 安全拒绝;✗ 错误</p>
+<p>Anchor 正确处理 6 例,分配序匹配只有 2 例。在 (b)©(e)(f) 中分配顺序变了而对象标识未变——例如 INT8 量化在每层引入额外 scale 张量并使后续分配整体后移,Anchor 仍能正确匹配。(g) 触发元数据冲突,daemon 安全拒绝——这是<strong>设计内的行为</strong>。(h) 揭示了一个本质局限:换 attention backend 改变了对缓存数据的解释方式,但标识、shape、dtype 都没变,<strong>两种方法都静默复用了不兼容的数据</strong>——Anchor 无法检测&quot;标识与元数据均未变&quot;的语义变更。</p>
+<p><strong>训练状态一致性</strong>——在五个阶段(更新前、更新中、提交前、提交后、步间)反复注入 worker 故障,共 10 次。恢复的 2,000 步运行与无故障运行的 loss 轨迹高度重合,平滑后的每步差异保持在 2.5×10⁻² 以下(小幅差异源于同一 GPU kernel 跨运行的浮点结果差异)。全部 10 次注入故障均成功恢复。</p>
+<h3 id="5-5-无故障-稳态-开销">5.5 无故障(稳态)开销</h3>
+<p>以无故障原生基线为参照、工作负载达到稳态后测量:</p>
+<ul>
+<li><strong>训练</strong>:GPU 显存 +4.9%(主要是一个 chunk 的 undo buffer,而非模型状态全量副本;最终化梯度直接复用作 redo log,不再另拷),step time +2.6%(最大 4.7%,来自更新前的 chunk 拷贝与 cursor 推进)。训练路径<strong>不</strong>每步序列化完整检查点;</li>
+<li><strong>推理</strong>:GPU 显存 +0.45%,token 吞吐 −2.0%(最大 −3.2%)。Anchor 不复制模型权重或 KV 载荷,只在 decode / chunked-prefill 边界提交每序列元数据。</li>
+</ul>
+<h3 id="5-6-AMD-可移植性">5.6 AMD 可移植性</h3>
+<p>在 MI100 上以 ROCm/HIP IPC 复现训练实验:Anchor 恢复延迟 17.3–19.0 s,基线 19.9–28.7 s;恢复分解与 NVIDIA 一致——重挂载消除了绝大部分恢复工作,框架初始化成为主要成本。持久化阻塞延迟:Anchor 1.07/1.76/0.04 s(Llama3.2-1B / Qwen2.5-1.5B / Qwen3-0.6B),对比 DeepSpeed native 16.81/21.32/10.02 s、CheckFreq 4.06/5.17/2.57 s、In-memory 3.89/4.17/2.48 s。这说明机制<strong>不依赖 CUDA 特定的 IPC 实现</strong>。</p>
+<hr>
+<h2 id="六、边界与讨论-论文自己承认的局限">六、边界与讨论(论文自己承认的局限)</h2>
+<ol>
+<li><strong>重绑定假设</strong>:访问路径相同不代表语义相同。例如 DeepSpeed 将多个参数的优化器状态按固定大小分组,模型结构新增权重会使受影响组及后续组的张量改变——&quot;名字没变但语义大变&quot;的修改不受支持;</li>
+<li><strong>故障覆盖与回退</strong>:daemon 不执行用户逻辑,失效面远小于 worker;但毁灭性故障、daemon 死亡、故障类型不确定这三种情况会回退到既有检查点——Anchor 与现有 checkpointing 是<strong>互补</strong>而非替代;</li>
+<li><strong>静默错误不在此列</strong>:SDC 和 buggy kernel 的错误写入不会以 worker 退出等显式信号暴露,属于 Anchor 范围之外,需专用 GPU 诊断配合应用级校验处理;</li>
+<li><strong>轻量协议的适用前提</strong>:训练协议假设存在梯度终结边界,推理协议假设 KV 更新只追加——当前主流框架满足;若不满足(如把参数更新融合进 backward 的优化器、维护原地更新递归状态的线性注意力解码器),则退回通用 CoW 协议。</li>
+</ol>
+<hr>
+<h2 id="七、相关工作坐标系">七、相关工作坐标系</h2>
+<ul>
+<li><strong>检查点式恢复</strong>(周期式 / Just-in-Time;PhOS、NVCR 等进程透明 checkpoint/restart):本质上都是 <strong>save-and-reconstruct</strong>——显式把可恢复状态物化到运行进程之外,故障后重建。Anchor 则在非毁灭性故障下直接复用幸存的 GPU 驻留状态;</li>
+<li><strong>代理式 GPU 系统</strong>(Singularity、NVIDIA MPS):Singularity 的代理负责发 kernel,kernel 故障会击穿代理,需重放调用重建 GPU;MPS 的客户端共享故障域。Anchor 的 daemon 只做内存分配与 IPC,worker 故障不会波及 GPU 状态;</li>
+<li><strong>跨进程 GPU 资源访问</strong>(NCCL/UCX/UCC、ServerlessLLM):此前系统用 IPC 支持<strong>存活进程间</strong>的并发通信/共享/加载;Anchor 用 IPC 解耦的是<strong>内存对象生命周期与 worker 生命周期</strong>;</li>
+<li><strong>虚拟-物理内存解耦</strong>(GMLake、vAttention、vTensor):这些工作在<strong>单个运行中的进程内</strong>解耦虚拟与物理内存;Anchor 解耦的是<strong>跨进程生命周期的内存所有权</strong>。</li>
+</ul>
+<hr>
+<h2 id="八、总结与点评">八、总结与点评</h2>
+<p><strong>一句话总结</strong>:Anchor 把&quot;故障恢复&quot;从&quot;存出去再搬回来&quot;变成了&quot;原地等新进程来认领&quot;——利用 GPU IPC 的引用计数与硬件页表映射,让长期状态跨进程崩溃存活,再用基于 Python 对象图访问路径的身份解析和面向训练/推理语义的轻量一致性协议,把这件事做成了一套 200–300 行代码侵入的实用系统。</p>
+<p><strong>几点值得咀嚼的设计智慧</strong>:</p>
+<ol>
+<li><strong>故障分级而不是一视同仁</strong>。浅层中断占比高达 65.8%–98.8%,为它们省下的每一秒都是真实的集群算力。这套&quot;按故障严重性选择恢复动作&quot;的思路与生产系统已有的健康监测信号天然衔接;</li>
+<li><strong>对&quot;命运共享&quot;的精准打击</strong>。问题被归结为&quot;所有权与进程生命周期耦合&quot;这一个根因,解法也相应地只动所有权——daemon 不碰任何用户代码和 kernel,换来极窄的失效面。这是典型的&quot;最小特权&quot;式系统设计;</li>
+<li><strong>巧用应用语义换一致性成本</strong>。通用 CoW 方案可行但太贵(数十 GB 级备份);而&quot;最终化梯度 = 免费 redo log&quot;、&quot;KV cache append-only + 盲写覆盖&quot;这两个观察,把训练和推理的一致性成本分别压到一个 chunk 和零显存。领域知识在正确性与开销之间撬动的杠杆,比任何通用机制都长;</li>
+<li><strong>诚实的评估</strong>。论文明确指出 0.03 s vs 5.31 s 不是保存加速比、端到端收益小于孤立恢复收益、以及 case (h) 这类自身无法处理的语义变更——这些自我限定让结论更可信,也划清了系统与既有 checkpointing 的互补边界。</li>
+</ol>
+<p>对从事 LLM 训练/推理基础设施的工程师而言,这篇论文提供的最大启发或许是:<strong>当进程崩溃成为常态时,值得重新审视&quot;数据到底属于谁&quot;这个最基本的问题。</strong></p>
+<hr>
+<h2 id="附录-Anchor-背后的操作系统底层知识-从零讲起">附录:Anchor 背后的操作系统底层知识,从零讲起</h2>
+<p><strong>一句话主线</strong>:论文的全部设计,其实叠在五个基础概念上——进程与地址空间、虚拟内存与页表、CUDA context、IPC 共享内存、守护进程。核心矛盾是&quot;进程一死,它名下的内存全部陪葬&quot;;核心解法是&quot;把内存挂到一个几乎不会死的进程名下,再靠硬件页表让访问它像访问自己的内存一样快&quot;。</p>
+<p>下面按&quot;是什么 → 直觉理解 → 论文里怎么用&quot;的顺序,把每个概念拆开讲。</p>
+<h3 id="A-1-进程与地址空间-程序一死-它的整个世界跟着消失">A.1 进程与地址空间:程序一死,它的整个世界跟着消失</h3>
+<p><strong>是什么</strong>:程序是躺在磁盘上的文件,进程是它被运行起来的那一刻——双击打开微信,就产生了一个进程。操作系统给每个进程一个独立的<strong>虚拟地址空间</strong>:一块属于它自己的、从 0 开始编址的&quot;私人记忆领地&quot;,里面装着它的代码、变量、堆栈。</p>
+<p><strong>关键规则</strong>:进程退出(无论是正常结束还是崩溃)时,操作系统会做一次大扫除——把它名下的所有资源统统回收:内存、打开的文件、它向 GPU 申请的显存,一个不留。这种&quot;一荣俱荣、一损俱损&quot;的特性有个术语,叫 <strong>fate-sharing(命运共享)</strong>。</p>
+<p><strong>论文里对应什么</strong>:这正是问题的起点。worker 进程崩溃 → 操作系统回收它的一切 → GPU 驱动随之销毁它的 context、回收它的显存 → 模型权重、KV cache 全部蒸发。这就是为什么传统方案&quot;不得不&quot;做 checkpoint:数据必须先存到 GPU 之外才能幸免(对应正文 §3.1 的&quot;病态观察&quot;)。另外补一句论文里 “shallow” 的含义:浅层中断时,<strong>OS 内核和 GPU 硬件都完好,死的只是用户态这一个进程</strong>——所以才有&quot;原地重启、数据其实还在卡上&quot;的机会可抓。</p>
+<h3 id="A-2-虚拟内存与页表-每个进程活在自己的-平行世界">A.2 虚拟内存与页表:每个进程活在自己的&quot;平行世界&quot;</h3>
+<p><strong>是什么</strong>:进程里代码使用的地址叫<strong>虚拟地址</strong>,真实内存条的地址叫<strong>物理地址</strong>,两者之间的翻译由硬件(<strong>MMU</strong>,内存管理单元)查一张表(<strong>页表</strong>,page table)来完成。</p>
+<p><strong>直觉</strong>:你家的门牌号是&quot;3 栋 502&quot;(虚拟地址),快递员查物业登记表(页表)才知道实际对应仓库的哪个格子(物理地址)。妙处在于:<strong>每个进程都以为自己住在&quot;3 栋 502&quot;</strong>,但物理上各是各的格子——所以两个进程互不干扰,这就是地址空间的隔离。为了不每次都查表,CPU 用 <strong>TLB</strong>(一种高速缓存)记最近用过的翻译结果,所以日常访问基本是纯硬件动作,没有软件开销。</p>
+<p><strong>这个机制的关键妙用</strong>:既然翻译表是人为维护的,那如果<strong>两张页表里的某几条指向同一块物理内存</strong>,两个进程就能共享那块内存——而且各自访问时完全感觉不到任何区别。</p>
+<p><strong>论文里对应什么</strong>:GPU 其实就是一台挂在主机里的小型计算机,<strong>它自己也有 MMU、TLB 和页表</strong>。论文说的 “VM–PM mapping”(虚拟-物理映射)与 “zero-overhead access” 就是这套原理在 GPU 上的翻版:一旦共享关系建立,worker 访问&quot;借来的&quot;显存时,翻译直接由 GPU 硬件完成,不经过任何软件中转——性能与访问自己分配的显存<strong>一模一样</strong>。这就是&quot;复用幸存显存却不交性能税&quot;的根基。</p>
+<h3 id="A-3-CUDA-context-GPU-世界的-进程">A.3 CUDA context:GPU 世界的&quot;进程&quot;</h3>
+<p><strong>是什么</strong>:GPU 不直接认识主机上的进程。进程想用 GPU 时,驱动会先为它创建一个 <strong>context(上下文)</strong>——可以理解为进程在 GPU 侧开的&quot;租户账户&quot;,里面有自己的 GPU 页表、自己的地址空间;后续所有的 <code>cudaMalloc</code>、kernel 启动都记在这个账户名下。</p>
+<p><strong>关键规则</strong>:和操作系统如出一辙——<strong>谁在 context 里分配的显存归 context 所有;进程退出 → context 被清理 → 它名下显存全部释放</strong>(CUDA 在进程退出时自动清理,<code>cudaDeviceReset</code> 也是同样的全量释放语义)。</p>
+<p><strong>论文里对应什么</strong>:这就是论文点名的那条 “fate-sharing property of the GPU execution model”:<em>a CUDA context owns all GPU memory objects it allocates</em>。数据必须&quot;存出去再搬回来&quot;的根因就在这条规则上。<strong>Anchor 的第一刀,就是砍在这条规则上</strong>——而砍它的工具,就是下一个概念。</p>
+<h3 id="A-4-GPU-IPC-内存机制-让两张页表指向同一块显存">A.4 GPU IPC 内存机制:让两张页表指向同一块显存</h3>
+<p><strong>是什么</strong>:现代 GPU 原生提供了跨进程共享显存的机制。CUDA 里是两个 API:<code>cudaIpcGetMemHandle</code>(拥有者把某块显存&quot;登记&quot;成一个 handle)和 <code>cudaIpcOpenMemHandle</code>(其他进程拿 handle 在自己的 context 里&quot;打开&quot;);AMD 侧对应 <code>hipIpcGet/OpenMemHandle</code>(论文脚注 1)。</p>
+<p><strong>handle 是什么</strong>:一串不透明的字节,像<strong>储物柜的取件凭证</strong>——它不暴露地址、不可伪造使用,交给 GPU 驱动,驱动帮你把对应的物理显存挂进你自己的 GPU 页表。</p>
+<p><strong>论文抓住的两个性质</strong>:</p>
+<ol>
+<li><strong>引用计数(reference counting)</strong>:一块显存被多个 context 共享时,驱动记着&quot;还有几个人在用&quot;。任何一个进程退出只让计数减一,<strong>不触发实际回收</strong>——只要还有一个持有者在,显存就活着;</li>
+<li><strong>零开销访问</strong>:&quot;打开&quot;的本质,是把拥有者的物理内存地址插入使用方的 GPU 页表(上一节讲过的那个动作)。之后访问由 GPU 硬件 MMU/TLB 直接服务,没有运行时开销。</li>
+</ol>
+<p><strong>直觉</strong>:引用计数解决&quot;显存别跟着某个进程陪葬&quot;;页表映射解决&quot;借来的显存用起来跟自己的一样快&quot;。两个性质一组合,&quot;跨进程复用显存&quot;就从不可能变成了几乎免费。</p>
+<p><strong>论文里对应什么</strong>:这是 Anchor 全部技术的支点。daemon 代 worker 分配显存并<strong>持有所有权</strong>,再通过 IPC 把使用权授予 worker;worker 崩溃时计数只减一,显存岿然不动;新 worker 启动后再&quot;打开&quot;一次,同一块物理显存回来了——数据的物理位置从未变过。</p>
+<h3 id="A-5-Daemon-守护进程-一个刻意-什么都不做-的进程">A.5 Daemon(守护进程):一个刻意&quot;什么都不做&quot;的进程</h3>
+<p><strong>是什么</strong>:daemon 指在后台长期运行、不与用户直接交互的服务进程(比如 Linux 里的 sshd)。sidecar 指与主进程同生共死、在旁边干辅助活的进程。Anchor 的 daemon 是 worker 的 sidecar:worker 启动它也启动,负责本卡的显存分配与 IPC handle 管理(多卡时每卡一个,互不通信)。</p>
+<p><strong>为什么它不会死</strong>:这是最巧妙的一步。worker 死的原因五花八门——用户代码抛异常、NCCL 超时、kernel 非法访存、OOM……<strong>这些全都发生在&quot;执行用户逻辑&quot;的进程里</strong>。而 Anchor 的 daemon 只做两件事:分配显存、管理 handle,<strong>不执行任何用户 CPU 代码,不跑任何 GPU kernel</strong>。用户代码的 bug 击不穿它。系统设计里管这叫<strong>窄失效面(narrow failure surface)</strong>:能害死它的原因列表非常非常短。</p>
+<p><strong>直觉</strong>:延续正文的保管箱类比——worker 是来来去去、可能摔倒的顾客,daemon 是常驻柜台、只负责登记和递凭证的管理员。顾客摔倒不影响柜台。</p>
+<p><strong>论文里对应什么</strong>:&quot;锚&quot;得住的根本原因,是被锚定数据的持有者(daemon)几乎不会死。论文也留了兜底:万一 daemon 也死了、或故障无法确信归类为浅层,就回退到传统的 checkpoint 方案(对应正文&quot;回退策略&quot;三个触发条件)。</p>
+<h3 id="A-6-顺带一提-Python-对象图-不是-OS-但机制同源">A.6 顺带一提:Python 对象图(不是 OS,但机制同源)</h3>
+<p>论文用&quot;访问路径&quot;给张量起名字,靠的是 Python 运行时的一个特性:所有存活对象通过属性引用和容器索引连成一张<strong>对象图</strong>,从栈上的变量出发总能走到任何对象。这本质上是垃圾回收里&quot;可达性&quot;思想的反面运用——对象只要被引用就不会被回收,所以沿着引用走就一定能找到它。你会发现它和显存的引用计数是同一个思想在不同层面的体现:<strong>“还有人在指着我,我就存在”</strong>。这部分属于语言运行时知识,点到为止。</p>
+<h3 id="A-7-把积木搭回去-这些概念如何拼成-Anchor">A.7 把积木搭回去:这些概念如何拼成 Anchor</h3>
+<p>一条完整的因果链:</p>
+<ol>
+<li><strong>进程模型 + fate-sharing</strong>(A.1、A.3)造成了问题:进程死 → context 死 → 显存陪葬 → 只能 checkpoint;</li>
+<li><strong>虚拟内存/页表</strong>(A.2)提供了理论可能:同一块物理内存,可以出现在多个&quot;视角&quot;里,且硬件翻译、零开销;</li>
+<li><strong>GPU IPC</strong>(A.4)把这个可能产品化:handle + 引用计数 + 页表映射,让显存所有权可以与任意一个进程脱钩;</li>
+<li><strong>daemon</strong>(A.5)把&quot;永远有一个持有者&quot;落到实处:一个窄失效面的进程托住全部长期数据;</li>
+<li>于是浅层中断发生时——<strong>死的只是 worker 的&quot;视角&quot;,物理显存安然无恙</strong>,新 worker 重新&quot;打开&quot;即可。原本&quot;存出去再搬回来&quot;的大动作,被&quot;换一个持有者&quot;的轻动作替代了。</li>
+</ol>
+<h3 id="A-8-汇总速查表">A.8 汇总速查表</h3>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>一句话本质</th>
+<th>在 Anchor 中的角色</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>进程与地址空间</td>
+<td>进程是运行中的程序,死了名下资源全回收</td>
+<td>问题的根源(fate-sharing)</td>
+</tr>
+<tr>
+<td>虚拟内存 / 页表 / MMU / TLB</td>
+<td>硬件查表把虚拟地址翻译成物理地址</td>
+<td>共享显存&quot;用起来像自己的&quot;且零开销</td>
+</tr>
+<tr>
+<td>CUDA context</td>
+<td>进程在 GPU 侧的租户账户,拥有它分配的显存</td>
+<td>被打破的对象:context 死 ≠ 显存死</td>
+</tr>
+<tr>
+<td>GPU IPC 内存</td>
+<td>handle + 引用计数 + 页表映射</td>
+<td>技术支点:所有权可与进程脱钩</td>
+</tr>
+<tr>
+<td>Daemon / 窄失效面</td>
+<td>只管显存、不跑用户代码的后台进程</td>
+<td>&quot;锚&quot;的载体:几乎不会死的持有者</td>
+</tr>
+</tbody>
+</table>
+<p>如果你只记住一件事,那就是:<strong>操作系统里&quot;共享&quot;的通用套路——让多个视角的翻译表指向同一份物理资源,并用引用计数决定它何时真正消失。</strong> Anchor 把这个套路从 CPU 内存搬到了 GPU 显存上,再叠加一个刻意简单的持有者进程而已。</p>
+<hr>
+<h2 id="延伸资源">延伸资源</h2>
+<ul>
+<li>相关阅读:<a href="/2026/10/12/%E6%8B%86%E8%A7%A3%E9%82%A311.9%25-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E7%9A%84%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8D%9F%E5%A4%B1%E5%BA%A6%E9%87%8F%E4%B8%8E%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B2%BB%E7%90%86/">《拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理》</a>——度量侧的姊妹篇:那篇回答&quot;损失了多少、损失在哪&quot;,本文回答&quot;浅层中断的单次恢复成本怎么压&quot;;两篇的&quot;故障分级处置&quot;思想一脉相承</li>
+<li>相关阅读:<a href="/2026/10/12/%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/">《从零搞懂 GPU 集群调度》</a>——本文 5.2 节&quot;恢复延迟由框架启动主导&quot;正是那篇 5.2 节&quot;启动慢&quot;痛点的系统层解法</li>
+<li>相关阅读:<a href="/2026/10/09/Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/">《Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道》</a>——本文实验所用的 vLLM/DeepSpeed 负载跑在那篇讲的多网卡 RDMA 环境上</li>
+<li>相关阅读:<a href="/2026/10/09/IPoIB%E4%B8%8Epkey%E5%AD%90%E6%8E%A5%E5%8F%A3InfiniBand%E4%B8%96%E7%95%8C%E9%87%8C%E7%9A%84IP%E7%BD%91%E5%8D%A1%E4%B8%8EVLAN/">《IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;》</a>——故障画像中&quot;瞬时网络错误&quot;的底层第一现场</li>
+<li>底层知识预备:不熟悉进程/虚拟内存/CUDA context 的读者,建议先读文末<strong>附录</strong>(五个基础概念从零讲起),再回到正文</li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/">https://roger-lv.github.io/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/AI-Infra/">AI Infra</a><a class="post-meta__tags" href="/tags/GPU/">GPU</a><a class="post-meta__tags" href="/tags/vLLM/">vLLM</a><a class="post-meta__tags" href="/tags/%E8%AE%BA%E6%96%87%E8%A7%A3%E8%AF%BB/">论文解读</a><a class="post-meta__tags" href="/tags/SOSP/">SOSP</a><a class="post-meta__tags" href="/tags/%E6%95%85%E9%9A%9C%E6%81%A2%E5%A4%8D/">故障恢复</a><a class="post-meta__tags" href="/tags/LLM%E8%AE%AD%E7%BB%83/">LLM训练</a><a class="post-meta__tags" href="/tags/DeepSpeed/">DeepSpeed</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/10/12/2026-10-12-VPC%E4%B8%8ECiliumClusterMesh%E5%A4%9A%E9%9B%86%E7%BE%A4%E7%BB%84%E7%BD%91%E7%9A%84%E5%9C%B0%E5%9F%BA%E4%B8%8E%E4%B8%8A%E5%B1%82%E5%BB%BA%E7%AD%91/" title="VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑</div></div><div class="info-2"><div class="info-item-1">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑 VPC 是公有云上通过逻辑隔离为你划出的一块&quot;私有网段+自管路由&quot;的虚拟网络,而 Cilium ClusterMesh 解决的是多个 Kubernetes 集群之间的 Pod IP 直连、跨集群服务发现、跨集群 NetworkPolicy 与负载均衡问题;跨集群通信通常通过 VPC Peering/专线打通底层网络后,由 Cilium ClusterMesh、Submariner 等方案组网;集群与机房并非一一对应,常见是&quot;单机房多集群(隔离/灰度)&quot;&quot;多机房单集群(同城双活)&quot;和&quot;多机房多集群(异地容灾)&quot;三种模式按容灾等级选择;混合云场景下则建议用&quot;专线 + VPN 主备链路 + 路由器统一打通 CIDR&quot;的思路,把公有云 VPC 与私有化机房做成一张可路由的大内网。 先看两个概念在定位上的差异:    维度 VPC Cilium ClusterMesh     层级 IaaS 层的逻辑网络 Kube...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/20/2024-09-20-AI%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/" title="AI资源调度"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/aiinfra.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-20</div><div class="info-item-2">AI资源调度</div></div><div class="info-2"><div class="info-item-1">AI资源调度 100道k8s面试题：https://zhuanlan.zhihu.com/p/721588398 [云原生 AI 的资源调度和 AI 工作流引擎设计分享_paddleflow-CSDN博客](https://blog.csdn.net/lihui49/article/details/129260286?ops_request_misc={&quot;request_id&quot;%3A&quot;81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&quot;%2C&quot;scm&quot;%3A&quot;20140713.130102334..&quot;}&amp;request_id=81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-3-129260286-null-null.142^v100^pc_search_re...</div></div></div></a><a class="pagination-related" href="/2024/09/24/2024-09-24-%E4%B8%80%E7%A7%8D%E5%9F%BA%E4%BA%8E%E7%BB%8F%E9%AA%8C%E7%9A%84%E5%8A%A8%E6%80%81%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%EF%BC%9AStraightLine-An-End-to-End-Resource-Aware-Scheduler-for-Machine-Learning-Application-Requests/" title="一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/dynamic.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-24</div><div class="info-item-2">一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests</div></div><div class="info-2"><div class="info-item-1">StraightLine: An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests  摘要： 提出了一个端到端的资源感知调度器，用于在混合基础设施中调度机器学习应用请求的最优资源。 关键词： 机器学习部署、异构资源、资源放置、容器化、无服务器计算。 主要内容：  ML应用的生命周期包括模型开发和模型部署两个阶段。 传统ML系统通常只关注生命周期中的一个特定阶段或阶段。 StraightLine通过一个基于经验的动态放置算法，根据请求的独特特征（如请求频率、输入数据大小和数据分布）智能地放置请求。 包括三个层次：模型开发抽象、多种实现部署、实时资源调度。  模型容器化：   使用NVIDIA-Docker实现模型开发的容器化。   为模型训练构建了强大的NVIDIA-Docker，为模型验证构建了轻量级的NVIDIA-Docker。 深度学习docker环境配置之nvidia-docker安装使用_nvidia docker-CSDN博客   容器定制：  根据不同的压缩ML模...</div></div></div></a><a class="pagination-related" href="/2024/10/01/2024-10-01-CUDA%E5%AE%B9%E5%99%A8%E5%8C%96&Container-runtime%E7%9B%B8%E5%85%B3%E6%8A%80%E6%9C%AF%E6%A2%B3%E7%90%86/" title="CUDA容器化&amp;Container runtime相关技术梳理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-10-01</div><div class="info-item-2">CUDA容器化&amp;Container runtime相关技术梳理</div></div><div class="info-2"><div class="info-item-1">CUDA容器化&amp;Container runtime相关技术梳理 整体结构 CUDA API体系  CUDA Driver API：GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）； CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度； CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。 因此要实现 NVIDIA 容器化，也就是要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内应用程序内可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 NVIDIA CONTAINER TOOLKIT 具体结构  GPU 容器底层实现 GPU 容器相关概念 一些背景知识  什么是运行时？什么是高级运行时（high-level runtime）和低级运行时(low-level runtime):  参考：ht...</div></div></div></a><a class="pagination-related" href="/2025/11/10/2025-11-10-NCCL%E9%80%9A%E4%BF%A1%E5%8E%9F%E8%AF%AD/" title="NCCL通信原语"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-11-10</div><div class="info-item-2">NCCL通信原语</div></div><div class="info-2"><div class="info-item-1">NCCL通信原语 参考： https://blog.csdn.net/2401_84208172/article/details/142610913?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=142610913&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link 1. Broadcast 其实就是把自己卡上面的东西让所有卡都知道 2. Scatter 其实就是把自己的东西分成多块，按照顺序向其他GPU发送data block 3. Reduce 就是把所有卡的部分在自己卡上面作一个sum。注意这里只有自己的卡作sum 4. Gather 其实对应于Scatter，是把分布在其他卡上的data block在自己卡上面拼起来。注意，这里也是只有自己这一张卡 5. AllReduce 每张卡都对所有卡作一个sum=reduce scatter+all gather, 通信成本也等于这俩加起来 官方说法：将每个节点的数据规约并...</div></div></div></a><a class="pagination-related" href="/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="RDMA技术手册：面向AI场景的深度解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-04-20</div><div class="info-item-2">RDMA技术手册：面向AI场景的深度解析</div></div><div class="info-2"><div class="info-item-1">RDMA技术手册：面向AI场景的深度解析 目录 概述 RDMA原理与架构 2.1 RDMA基本原理 2.2 RDMA网络类型与协议 2.3 RDMA编程模型与Verbs接口 2.4 GPUDirect RDMA技术 RDMA在AI场景的应用实践 3.1 RDMA在分布式训练中的应用 3.2 RDMA在推理服务中的应用 3.3 RDMA在存储与数据IO中的应用 3.4 RDMA在Kubernetes中的集成与实践性能优化与最佳实践 4.1 RDMA性能优化策略 4.2 性能测试与基准工具 4.3 典型问题与调优案例总结与展望 第1章 概述 背景与需求： 随着人工智能（AI）模型规模的爆炸式增长，训练和推理过程对网络通信提出了前所未有的高要求。传统基于TCP/IP的网络通信在延迟和带宽上已难以满足大规模分布式训练的需求。远程直接内存访问（Remote Direct Memory Access，RDMA）技术应运而生，它通过绕过操作系统内核，实现网络接口直接访问应用内存，从而极大降低了通信延迟、提高了吞吐量。在现代AI数据中心中，RDMA已成为加速分布式训练和大规模推理的关键网络技术。...</div></div></div></a><a class="pagination-related" href="/2026/05/06/2026-05-06-AI-Agent-%E7%9A%84%E5%AE%89%E5%85%A8%E6%B8%B8%E4%B9%90%E5%9C%BA%EF%BC%9A%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3-Agent-%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E6%B2%99%E7%AE%B1%E6%8A%80%E6%9C%AF/" title="AI Agent 的&quot;&quot;安全游乐场&quot;：深入理解 Agent 场景下的沙箱技术"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-05-06</div><div class="info-item-2">AI Agent 的&quot;&quot;安全游乐场&quot;：深入理解 Agent 场景下的沙箱技术</div></div><div class="info-2"><div class="info-item-1">AI Agent 的“安全游乐场”：深入理解 Agent 场景下的沙箱技术 随着大语言模型驱动的 AI Agent 不再只是“动嘴”，而是能真实“动手”——运行代码、操控浏览器、调用系统命令——我们面临一个根本矛盾：如何让一个本质上不可预测的模型，在真实环境中安全地执行有副作用的操作？ 答案就是沙箱（Sandbox）。它不是一个新鲜词汇，但在 Agent 时代获得了全新的内涵：沙箱不再仅仅是安全防线，更是赋予 Agent “自由探索、安全失败”能力的基石。本文将从必要性、具体形态、关键能力以及实际产品四个维度，为你拆解 Agent 场景下的沙箱技术。  一、为什么 Agent 比任何软件都更需要沙箱？ 传统沙箱主要用于防止恶意软件越权，而 Agent 沙箱需要对抗的是一种更微妙的风险：模型输出的不确定性与工具的真实副作用之间的矛盾。   代码的“黑盒性” LLM 生成的代码完全不可预测——可能有逻辑错误、死循环，甚至包含 rm -rf / 这样的毁灭性指令。直接在主系统执行等于把钥匙交给了未知的“创作”。沙箱提供了一次性的、即使毁灭也不心疼的环境。   工具调用的真实副作用 当 ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">281</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">368</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#TL-DR"><span class="toc-number">1.1.</span> <span class="toc-text">TL;DR</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E9%97%AE%E9%A2%98-%E4%B8%BA%E4%BB%80%E4%B9%88-GPU-%E9%9B%86%E7%BE%A4%E7%9A%84%E6%95%85%E9%9A%9C%E6%81%A2%E5%A4%8D%E8%BF%99%E4%B9%88%E8%B4%B5"><span class="toc-number">1.2.</span> <span class="toc-text">一、问题:为什么 GPU 集群的故障恢复这么贵?</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E6%95%85%E9%9A%9C%E7%94%BB%E5%83%8F-%E5%A4%A7%E5%A4%9A%E6%95%B0%E6%95%85%E9%9A%9C%E5%85%B6%E5%AE%9E%E5%BE%88-%E6%B5%85"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 故障画像:大多数故障其实很&quot;浅&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E7%8E%B0%E6%9C%89%E6%81%A2%E5%A4%8D%E7%9A%84%E7%BB%9F%E4%B8%80%E5%A5%97%E8%B7%AF-checkpoint-%E2%86%92-restart-%E2%86%92-reload"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 现有恢复的统一套路:checkpoint → restart → reload</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-%E4%B8%80%E4%B8%AA-%E7%97%85%E6%80%81-%E7%9A%84%E8%A7%82%E5%AF%9F%E4%B8%8E%E6%A0%B9%E5%9B%A0"><span class="toc-number">1.2.3.</span> <span class="toc-text">1.3 一个&quot;病态&quot;的观察与根因</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%A0%B8%E5%BF%83%E6%B4%9E%E5%AF%9F-%E6%8A%8A%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E4%BB%8E-worker-%E8%BF%9B%E7%A8%8B%E4%B8%AD%E8%A7%A3%E8%80%A6"><span class="toc-number">1.3.</span> <span class="toc-text">二、核心洞察:把内存所有权从 worker 进程中解耦</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E4%BB%8E-%E9%94%9A%E5%AE%9A%E4%B8%80%E4%B8%AA%E5%BC%A0%E9%87%8F-%E5%88%B0-%E9%94%9A%E5%AE%9A%E4%B8%80%E4%B8%AA-ML-%E7%B3%BB%E7%BB%9F"><span class="toc-number">1.4.</span> <span class="toc-text">三、从&quot;锚定一个张量&quot;到&quot;锚定一个 ML 系统&quot;</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E6%80%BB%E4%BD%93%E6%9E%B6%E6%9E%84%E4%B8%8E%E5%B7%A5%E4%BD%9C%E6%B5%81"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 总体架构与工作流</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-Rebinder-%E8%B7%A8%E9%87%8D%E5%90%AF%E7%A8%B3%E5%AE%9A%E7%9A%84%E5%BC%A0%E9%87%8F%E8%BA%AB%E4%BB%BD-C1"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 Rebinder:跨重启稳定的张量身份(C1)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-Consistency-Guard-%E5%B4%A9%E6%BA%83%E7%9E%AC%E9%97%B4%E7%9A%84-%E5%8D%8A%E6%88%90%E5%93%81-C2"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 Consistency Guard:崩溃瞬间的&quot;半成品&quot;(C2)</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E9%80%9A%E7%94%A8%E6%96%B9%E6%A1%88-%E8%B7%9F%E8%B8%AA-CoW-%E7%BB%84%E5%9B%9E%E6%BB%9A"><span class="toc-number">1.4.3.1.</span> <span class="toc-text">通用方案:跟踪 + CoW + 组回滚</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AE%AD%E7%BB%83%E5%8D%8F%E8%AE%AE-%E6%9C%80%E7%BB%88%E5%8C%96%E6%A2%AF%E5%BA%A6%E6%98%AF-%E5%85%8D%E8%B4%B9%E7%9A%84-redo-log"><span class="toc-number">1.4.3.2.</span> <span class="toc-text">训练协议:最终化梯度是&quot;免费的 redo log&quot;</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%8E%A8%E7%90%86%E5%8D%8F%E8%AE%AE-append-only-KV-CPU-%E4%BE%A7%E5%85%83%E6%95%B0%E6%8D%AE"><span class="toc-number">1.4.3.3.</span> <span class="toc-text">推理协议:append-only KV + CPU 侧元数据</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%AE%9E%E7%8E%B0%E8%A6%81%E7%82%B9"><span class="toc-number">1.5.</span> <span class="toc-text">四、实现要点</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%AE%9E%E9%AA%8C%E8%AF%84%E4%BC%B0"><span class="toc-number">1.6.</span> <span class="toc-text">五、实验评估</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E8%AE%BE%E7%BD%AE"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 设置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E6%81%A2%E5%A4%8D%E5%BB%B6%E8%BF%9F%E4%B8%8E%E6%8C%81%E4%B9%85%E5%8C%96%E5%BC%80%E9%94%80"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 恢复延迟与持久化开销</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E7%AB%AF%E5%88%B0%E7%AB%AF%E6%80%A7%E8%83%BD-%E6%B3%A8%E5%85%A5%E6%95%85%E9%9A%9C%E7%9A%84%E5%AE%8C%E6%95%B4%E8%BF%90%E8%A1%8C"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 端到端性能(注入故障的完整运行)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E6%AD%A3%E7%A1%AE%E6%80%A7%E9%AA%8C%E8%AF%81"><span class="toc-number">1.6.4.</span> <span class="toc-text">5.4 正确性验证</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-%E6%97%A0%E6%95%85%E9%9A%9C-%E7%A8%B3%E6%80%81-%E5%BC%80%E9%94%80"><span class="toc-number">1.6.5.</span> <span class="toc-text">5.5 无故障(稳态)开销</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-6-AMD-%E5%8F%AF%E7%A7%BB%E6%A4%8D%E6%80%A7"><span class="toc-number">1.6.6.</span> <span class="toc-text">5.6 AMD 可移植性</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E8%BE%B9%E7%95%8C%E4%B8%8E%E8%AE%A8%E8%AE%BA-%E8%AE%BA%E6%96%87%E8%87%AA%E5%B7%B1%E6%89%BF%E8%AE%A4%E7%9A%84%E5%B1%80%E9%99%90"><span class="toc-number">1.7.</span> <span class="toc-text">六、边界与讨论(论文自己承认的局限)</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E7%9B%B8%E5%85%B3%E5%B7%A5%E4%BD%9C%E5%9D%90%E6%A0%87%E7%B3%BB"><span class="toc-number">1.8.</span> <span class="toc-text">七、相关工作坐标系</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%80%BB%E7%BB%93%E4%B8%8E%E7%82%B9%E8%AF%84"><span class="toc-number">1.9.</span> <span class="toc-text">八、总结与点评</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%E5%BD%95-Anchor-%E8%83%8C%E5%90%8E%E7%9A%84%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E5%BA%95%E5%B1%82%E7%9F%A5%E8%AF%86-%E4%BB%8E%E9%9B%B6%E8%AE%B2%E8%B5%B7"><span class="toc-number">1.10.</span> <span class="toc-text">附录:Anchor 背后的操作系统底层知识,从零讲起</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#A-1-%E8%BF%9B%E7%A8%8B%E4%B8%8E%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4-%E7%A8%8B%E5%BA%8F%E4%B8%80%E6%AD%BB-%E5%AE%83%E7%9A%84%E6%95%B4%E4%B8%AA%E4%B8%96%E7%95%8C%E8%B7%9F%E7%9D%80%E6%B6%88%E5%A4%B1"><span class="toc-number">1.10.1.</span> <span class="toc-text">A.1 进程与地址空间:程序一死,它的整个世界跟着消失</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#A-2-%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E4%B8%8E%E9%A1%B5%E8%A1%A8-%E6%AF%8F%E4%B8%AA%E8%BF%9B%E7%A8%8B%E6%B4%BB%E5%9C%A8%E8%87%AA%E5%B7%B1%E7%9A%84-%E5%B9%B3%E8%A1%8C%E4%B8%96%E7%95%8C"><span class="toc-number">1.10.2.</span> <span class="toc-text">A.2 虚拟内存与页表:每个进程活在自己的&quot;平行世界&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#A-3-CUDA-context-GPU-%E4%B8%96%E7%95%8C%E7%9A%84-%E8%BF%9B%E7%A8%8B"><span class="toc-number">1.10.3.</span> <span class="toc-text">A.3 CUDA context:GPU 世界的&quot;进程&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#A-4-GPU-IPC-%E5%86%85%E5%AD%98%E6%9C%BA%E5%88%B6-%E8%AE%A9%E4%B8%A4%E5%BC%A0%E9%A1%B5%E8%A1%A8%E6%8C%87%E5%90%91%E5%90%8C%E4%B8%80%E5%9D%97%E6%98%BE%E5%AD%98"><span class="toc-number">1.10.4.</span> <span class="toc-text">A.4 GPU IPC 内存机制:让两张页表指向同一块显存</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#A-5-Daemon-%E5%AE%88%E6%8A%A4%E8%BF%9B%E7%A8%8B-%E4%B8%80%E4%B8%AA%E5%88%BB%E6%84%8F-%E4%BB%80%E4%B9%88%E9%83%BD%E4%B8%8D%E5%81%9A-%E7%9A%84%E8%BF%9B%E7%A8%8B"><span class="toc-number">1.10.5.</span> <span class="toc-text">A.5 Daemon(守护进程):一个刻意&quot;什么都不做&quot;的进程</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#A-6-%E9%A1%BA%E5%B8%A6%E4%B8%80%E6%8F%90-Python-%E5%AF%B9%E8%B1%A1%E5%9B%BE-%E4%B8%8D%E6%98%AF-OS-%E4%BD%86%E6%9C%BA%E5%88%B6%E5%90%8C%E6%BA%90"><span class="toc-number">1.10.6.</span> <span class="toc-text">A.6 顺带一提:Python 对象图(不是 OS,但机制同源)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#A-7-%E6%8A%8A%E7%A7%AF%E6%9C%A8%E6%90%AD%E5%9B%9E%E5%8E%BB-%E8%BF%99%E4%BA%9B%E6%A6%82%E5%BF%B5%E5%A6%82%E4%BD%95%E6%8B%BC%E6%88%90-Anchor"><span class="toc-number">1.10.7.</span> <span class="toc-text">A.7 把积木搭回去:这些概念如何拼成 Anchor</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#A-8-%E6%B1%87%E6%80%BB%E9%80%9F%E6%9F%A5%E8%A1%A8"><span class="toc-number">1.10.8.</span> <span class="toc-text">A.8 汇总速查表</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BB%B6%E4%BC%B8%E8%B5%84%E6%BA%90"><span class="toc-number">1.11.</span> <span class="toc-text">延伸资源</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-%EF%BF%BD%EF%BF%BD11.9%25-'%EF%BF%BD!%EF%BF%BD%EF%BF%BD%C6%A4%EF%BF%BD%1F%EF%BF%BD%EF%BF%BD_1%EF%BF%BD%EF%BF%BD%0E%EF%BF%BD%16%EF%BF%BD%06/" title="拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理">拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-VPC%E4%B8%8ECiliumClusterMesh%E5%A4%9A%E9%9B%86%E7%BE%A4%E7%BB%84%E7%BD%91%E7%9A%84%E5%9C%B0%E5%9F%BA%E4%B8%8E%E4%B8%8A%E5%B1%82%E5%BB%BA%E7%AD%91/" title="VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/" title="Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/09/2026-10-09-Spiderpool%E5%A4%9A%E7%BD%91%E5%8D%A1IPAM%E6%96%B9%E6%A1%88%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图</a><time datetime="2026-10-08T16:00:00.000Z" title="发表于 2026-10-09 00:00:00">2026-10-09</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
