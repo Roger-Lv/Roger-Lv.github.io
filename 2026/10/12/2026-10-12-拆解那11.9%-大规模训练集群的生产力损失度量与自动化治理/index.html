@@ -1,0 +1,730 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="解读 ASE &#39;26 论文《Characterizing and Mitigating Productivity Loss in Large-Scale Model Training》:快手生产集群三个月 20,629 个任务的实证——端到端训练生产力损失 11.9%,且主要发生在资源分配之后而非排队调度;ETPR &#x3D; SG × DC × QoP 三分量分解使损失可归因;配套的 fail-stop">
+<meta property="og:type" content="article">
+<meta property="og:title" content="拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理">
+<meta property="og:url" content="https://roger-lv.github.io/2026/10/12/2026-10-12-%E6%8B%86%E8%A7%A3%E9%82%A311.9%-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E7%9A%84%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8D%9F%E5%A4%B1%E5%BA%A6%E9%87%8F%E4%B8%8E%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B2%BB%E7%90%86/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="解读 ASE &#39;26 论文《Characterizing and Mitigating Productivity Loss in Large-Scale Model Training》:快手生产集群三个月 20,629 个任务的实证——端到端训练生产力损失 11.9%,且主要发生在资源分配之后而非排队调度;ETPR &#x3D; SG × DC × QoP 三分量分解使损失可归因;配套的 fail-stop">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-10-11T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-10-12T04:31:45.950Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="大模型训练">
+<meta property="article:tag" content="可观测性">
+<meta property="article:tag" content="GPU集群">
+<meta property="article:tag" content="可靠性">
+<meta property="article:tag" content="故障诊断">
+<meta property="article:tag" content="Gang调度">
+<meta property="article:tag" content="论文解读">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理",
+  "url": "https://roger-lv.github.io/2026/10/12/2026-10-12-%E6%8B%86%E8%A7%A3%E9%82%A311.9%-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E7%9A%84%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8D%9F%E5%A4%B1%E5%BA%A6%E9%87%8F%E4%B8%8E%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B2%BB%E7%90%86/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-10-11T16:00:00.000Z",
+  "dateModified": "2026-10-12T04:31:45.950Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/10/12/2026-10-12-%E6%8B%86%E8%A7%A3%E9%82%A311.9%-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E7%9A%84%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8D%9F%E5%A4%B1%E5%BA%A6%E9%87%8F%E4%B8%8E%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B2%BB%E7%90%86/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">280</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">364</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-12T04:31:45.950Z" title="更新于 2026-10-12 12:31:45">2026-10-12</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/10/12/2026-10-12-%EF%BF%BD%EF%BF%BD11.9%25-'%EF%BF%BD!%EF%BF%BD%EF%BF%BD%C6%A4%EF%BF%BD%1F%EF%BF%BD%EF%BF%BD_1%EF%BF%BD%EF%BF%BD%0E%EF%BF%BD%16%EF%BF%BD%06/" data-flag-title="拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理</h1>
+<p>——解读 ASE '26 论文《Characterizing and Mitigating Productivity Loss in Large-Scale Model Training: An Empirical Study》</p>
+<blockquote>
+<p>论文:Xue et al., <em>Characterizing and Mitigating Productivity Loss in Large-Scale Model Training: An Empirical Study</em>, ASE '26(第 41 届 IEEE/ACM 自动化软件工程国际会议),DOI: <a target="_blank" rel="noopener" href="https://doi.org/10.1145/3832783.3834462">10.1145/3832783.3834462</a><br>
+作者团队来自北京航空航天大学与快手科技,实证数据基于快手生产训练集群。</p>
+</blockquote>
+<p><strong>TL;DR</strong></p>
+<p>这篇论文做了三件事:</p>
+<ol>
+<li>提出 <strong>ETPR(Effective Training Productivity Ratio)</strong>:把端到端训练生产力分解为调度好put(SG)× 占空比(DC)× 生产力质量(QoP)三个分量,使可靠性导致的生产力损失可以被归因到生命周期的具体阶段;</li>
+<li>完成一次生产级实证:覆盖快手集群三个月、20,629 个训练任务,发现端到端生产力中 <strong>11.9% 被损失掉</strong>,且损失主要发生在<strong>资源分配之后</strong>——而非排队调度阶段;</li>
+<li>构建并部署了自动化稳定性治理框架:统一处理 fail-stop(崩溃)、fail-hang(假死卡住)、fail-slow(隐性变慢)三类故障,四周边部署将集群 ETPR 从 88.1% 提升至 91.9%。</li>
+</ol>
+<p>下面逐层展开。</p>
+<hr>
+<h2 id="一、背景-GPU-时长是怎么被-蒸发-的">一、背景:GPU 时长是怎么被&quot;蒸发&quot;的</h2>
+<p>训练 LLaMA 3(405B)这样的模型需要 16,000+ 张加速器连续运行 54 天。在这种尺度下,生产力的瓶颈往往不是算法和峰值硬件性能,而是<strong>训练系统的可靠性</strong>:</p>
+<ul>
+<li>硬件故障(ECC 错误、GPU 掉卡、过热)</li>
+<li>网络退化(RDMA/InfiniBand 拥塞、丢包)</li>
+<li>软件缺陷(框架 bug、配置错误、依赖不匹配)</li>
+</ul>
+<p>这些故障以三种典型形态侵蚀生产力,论文借用了经典的可靠性失效分类:</p>
+<table>
+<thead>
+<tr>
+<th>失效形态</th>
+<th>表现</th>
+<th>危害特征</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fail-stop</td>
+<td>任务显式崩溃退出</td>
+<td>损失直观,但诊断/恢复时间可能远超故障本身</td>
+</tr>
+<tr>
+<td>Fail-hang</td>
+<td>进程活着但不产生任何进展(假死)</td>
+<td>无报错信号,极难察觉与定位</td>
+</tr>
+<tr>
+<td>Fail-slow</td>
+<td>迭代仍在推进,但吞吐低于健康基线</td>
+<td>最隐蔽:任务&quot;看起来正常&quot;,慢性失血</td>
+</tr>
+</tbody>
+</table>
+<p>更关键的是,<strong>故障本身往往只是损失的开始</strong>:诊断、调试、恢复过程占据的非生产时间经常超过故障造成的直接中断。论文给出了一个真实例子:一次错误的并行配置导致任务反复崩溃,用户在 30 分钟内重启多次,没有一次取得任何训练进展。</p>
+<hr>
+<h2 id="二、已有指标的盲区">二、已有指标的盲区</h2>
+<p><strong>ETTR:只看见&quot;死&quot;,看不见&quot;慢&quot;。</strong> Effective Training Time Ratio(ETTR)量化中断、抢占和恢复造成的损失,聚焦任务存活率。它无法识别那些活着但变慢的任务——而 fail-slow 恰恰是最难治理的损失来源。</p>
+<p><strong>MPG:关注效率,而非可靠性。</strong> ML Productivity Goodput(MPG)在集群规模上按系统层分解机器学习生产力,主要用于定位性能与利用率瓶颈(如编译器效率、异构调度),而不是将生产力损失归因到可靠性事件。</p>
+<p><strong>缺口。</strong> 业界缺少一个能同时回答以下问题的指标:损失发生在哪个阶段?是排队没排上、占着 GPU 不干活、还是干活干得慢?每一类损失分别对应什么运维动作?ETPR 就是为填补这个缺口设计的。</p>
+<hr>
+<h2 id="三、ETPR-把端到端生产力拆开">三、ETPR:把端到端生产力拆开</h2>
+<h3 id="3-1-任务生命周期与四个时间量">3.1 任务生命周期与四个时间量</h3>
+<p>以单个训练任务为基本分析单元,把其生命周期(覆盖正常执行与故障恢复期)分解为四个时间量:</p>
+<ul>
+<li><strong>Demanded Time(需求时间)</strong>:从任务提交到终止的端到端时间;</li>
+<li><strong>Allocated Time(分配时间)</strong>:任务成功调度后实际占用所分配 GPU 的时间;</li>
+<li><strong>Productive Time(生产时间)</strong>:分配时间中用于训练迭代、且其进展最终被有效 checkpoint 保存的部分——恢复后的重算(recompute)、重启开销、checkpoint 开销、故障处理、无进展的 hang 全部不计入;</li>
+<li><strong>Ideal Time(理想时间)</strong>:在健康执行环境、相同硬件与可比配置下,完成同样持久化进展所需的估计时间(从足够多的健康运行样本中估计健康迭代耗时)。</li>
+</ul>
+<h3 id="3-2-三分量分解">3.2 三分量分解</h3>
+<p>对观测窗口内所有任务聚合,ETPR 定义为:</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mtext>ETPR</mtext><mo>=</mo><munder><munder><mfrac><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mtext>Allocated</mtext><mi>i</mi></msub></mrow><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mtext>Demanded</mtext><mi>i</mi></msub></mrow></mfrac><mo stretchy="true">⏟</mo></munder><mtext>Scheduling Goodput (SG)</mtext></munder><mo>×</mo><munder><munder><mfrac><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mtext>Productive</mtext><mi>i</mi></msub></mrow><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mtext>Allocated</mtext><mi>i</mi></msub></mrow></mfrac><mo stretchy="true">⏟</mo></munder><mtext>Duty Cycle (DC)</mtext></munder><mo>×</mo><munder><munder><mfrac><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mtext>Ideal</mtext><mi>i</mi></msub></mrow><mrow><munder><mo>∑</mo><mi>i</mi></munder><msub><mtext>Productive</mtext><mi>i</mi></msub></mrow></mfrac><mo stretchy="true">⏟</mo></munder><mtext>Quality of Productivity (QoP)</mtext></munder></mrow><annotation encoding="application/x-tex">\text{ETPR} = \underbrace{\frac{\sum_i \text{Allocated}_i}{\sum_i \text{Demanded}_i}}_{\text{Scheduling Goodput (SG)}} \times \underbrace{\frac{\sum_i \text{Productive}_i}{\sum_i \text{Allocated}_i}}_{\text{Duty Cycle (DC)}} \times \underbrace{\frac{\sum_i \text{Ideal}_i}{\sum_i \text{Productive}_i}}_{\text{Quality of Productivity (QoP)}}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord text"><span class="mord">ETPR</span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:3.9734em;vertical-align:-2.5337em;"></span><span class="mord munder"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span style="top:-1.081em;"><span class="pstrut" style="height:3.4397em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">Scheduling Goodput (SG)</span></span></span></span></span><span style="top:-3.4397em;"><span class="pstrut" style="height:3.4397em;"></span><span class="mord munder"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span class="svg-align" style="top:-1.806em;"><span class="pstrut" style="height:3.4397em;"></span><span class="stretchy" style="height:0.548em;min-width:1.6em;"><span class="brace-left" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMinYMin slice"><path d="M0 6l6-6h17c12.688 0 19.313.3 20 1 4 4 7.313 8.3 10 13
+ 35.313 51.3 80.813 93.8 136.5 127.5 55.688 33.7 117.188 55.8 184.5 66.5.688
+ 0 2 .3 4 1 18.688 2.7 76 4.3 172 5h399450v120H429l-6-1c-124.688-8-235-61.7
+-331-161C60.687 138.7 32.312 99.3 7 54L0 41V6z"/></svg></span><span class="brace-center" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMidYMin slice"><path d="M199572 214
+c100.7 8.3 195.3 44 280 108 55.3 42 101.7 93 139 153l9 14c2.7-4 5.7-8.7 9-14
+ 53.3-86.7 123.7-153 211-199 66.7-36 137.3-56.3 212-62h199568v120H200432c-178.3
+ 11.7-311.7 78.3-403 201-6 8-9.7 12-11 12-.7.7-6.7 1-18 1s-17.3-.3-18-1c-1.3 0
+-5-4-11-12-44.7-59.3-101.3-106.3-170-141s-145.3-54.3-229-60H0V214z"/></svg></span><span class="brace-right" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMaxYMin slice"><path d="M399994 0l6 6v35l-6 11c-56 104-135.3 181.3-238 232-57.3
+ 28.7-117 45-179 50H-300V214h399897c43.3-7 81-15 113-26 100.7-33 179.7-91 237
+-174 2.7-5 6-9 10-13 .7-1 7.3-1 20-1h17z"/></svg></span></span></span><span style="top:-3.4397em;"><span class="pstrut" style="height:3.4397em;"></span><span class="mord"><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.162em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord text"><span class="mord">Demanded</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.6897em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.162em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord text"><span class="mord">Allocated</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.9857em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.6337em;"><span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:2.5337em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:3.9734em;vertical-align:-2.5337em;"></span><span class="mord munder"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span style="top:-1.081em;"><span class="pstrut" style="height:3.4397em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">Duty Cycle (DC)</span></span></span></span></span><span style="top:-3.4397em;"><span class="pstrut" style="height:3.4397em;"></span><span class="mord munder"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span class="svg-align" style="top:-1.806em;"><span class="pstrut" style="height:3.4397em;"></span><span class="stretchy" style="height:0.548em;min-width:1.6em;"><span class="brace-left" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMinYMin slice"><path d="M0 6l6-6h17c12.688 0 19.313.3 20 1 4 4 7.313 8.3 10 13
+ 35.313 51.3 80.813 93.8 136.5 127.5 55.688 33.7 117.188 55.8 184.5 66.5.688
+ 0 2 .3 4 1 18.688 2.7 76 4.3 172 5h399450v120H429l-6-1c-124.688-8-235-61.7
+-331-161C60.687 138.7 32.312 99.3 7 54L0 41V6z"/></svg></span><span class="brace-center" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMidYMin slice"><path d="M199572 214
+c100.7 8.3 195.3 44 280 108 55.3 42 101.7 93 139 153l9 14c2.7-4 5.7-8.7 9-14
+ 53.3-86.7 123.7-153 211-199 66.7-36 137.3-56.3 212-62h199568v120H200432c-178.3
+ 11.7-311.7 78.3-403 201-6 8-9.7 12-11 12-.7.7-6.7 1-18 1s-17.3-.3-18-1c-1.3 0
+-5-4-11-12-44.7-59.3-101.3-106.3-170-141s-145.3-54.3-229-60H0V214z"/></svg></span><span class="brace-right" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMaxYMin slice"><path d="M399994 0l6 6v35l-6 11c-56 104-135.3 181.3-238 232-57.3
+ 28.7-117 45-179 50H-300V214h399897c43.3-7 81-15 113-26 100.7-33 179.7-91 237
+-174 2.7-5 6-9 10-13 .7-1 7.3-1 20-1h17z"/></svg></span></span></span><span style="top:-3.4397em;"><span class="pstrut" style="height:3.4397em;"></span><span class="mord"><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.162em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord text"><span class="mord">Allocated</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.6897em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.162em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord text"><span class="mord">Productive</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.9857em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.6337em;"><span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:2.5337em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:3.9734em;vertical-align:-2.5337em;"></span><span class="mord munder"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span style="top:-1.081em;"><span class="pstrut" style="height:3.4397em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">Quality of Productivity (QoP)</span></span></span></span></span><span style="top:-3.4397em;"><span class="pstrut" style="height:3.4397em;"></span><span class="mord munder"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span class="svg-align" style="top:-1.806em;"><span class="pstrut" style="height:3.4397em;"></span><span class="stretchy" style="height:0.548em;min-width:1.6em;"><span class="brace-left" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMinYMin slice"><path d="M0 6l6-6h17c12.688 0 19.313.3 20 1 4 4 7.313 8.3 10 13
+ 35.313 51.3 80.813 93.8 136.5 127.5 55.688 33.7 117.188 55.8 184.5 66.5.688
+ 0 2 .3 4 1 18.688 2.7 76 4.3 172 5h399450v120H429l-6-1c-124.688-8-235-61.7
+-331-161C60.687 138.7 32.312 99.3 7 54L0 41V6z"/></svg></span><span class="brace-center" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMidYMin slice"><path d="M199572 214
+c100.7 8.3 195.3 44 280 108 55.3 42 101.7 93 139 153l9 14c2.7-4 5.7-8.7 9-14
+ 53.3-86.7 123.7-153 211-199 66.7-36 137.3-56.3 212-62h199568v120H200432c-178.3
+ 11.7-311.7 78.3-403 201-6 8-9.7 12-11 12-.7.7-6.7 1-18 1s-17.3-.3-18-1c-1.3 0
+-5-4-11-12-44.7-59.3-101.3-106.3-170-141s-145.3-54.3-229-60H0V214z"/></svg></span><span class="brace-right" style="height:0.548em;"><svg xmlns="http://www.w3.org/2000/svg" width="400em" height="0.548em" viewBox="0 0 400000 548" preserveAspectRatio="xMaxYMin slice"><path d="M399994 0l6 6v35l-6 11c-56 104-135.3 181.3-238 232-57.3
+ 28.7-117 45-179 50H-300V214h399897c43.3-7 81-15 113-26 100.7-33 179.7-91 237
+-174 2.7-5 6-9 10-13 .7-1 7.3-1 20-1h17z"/></svg></span></span></span><span style="top:-3.4397em;"><span class="pstrut" style="height:3.4397em;"></span><span class="mord"><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4397em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.162em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord text"><span class="mord">Productive</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.6897em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.162em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord text"><span class="mord">Ideal</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.9857em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.6337em;"><span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:2.5337em;"><span></span></span></span></span></span></span></span></span></span></p>
+<p>三个分量各有明确的运维语义:</p>
+<table>
+<thead>
+<tr>
+<th>分量</th>
+<th>语义</th>
+<th>低值的含义</th>
+<th>对应的失效形态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SG</td>
+<td>申请的 GPU 时间有多少真正变成分配执行</td>
+<td>排队等待、启动失败等调度损失</td>
+<td>—</td>
+</tr>
+<tr>
+<td>DC</td>
+<td>分配的 GPU 时间中有多少产生持久训练进展</td>
+<td>“占而不产”:fail-stop、fail-hang 及随后的诊断/恢复/failover</td>
+<td>fail-stop、fail-hang</td>
+</tr>
+<tr>
+<td>QoP</td>
+<td>生产执行离健康吞吐基线有多近</td>
+<td>任务仍在完成迭代,但比预期慢(fail-slow)</td>
+<td>fail-slow</td>
+</tr>
+</tbody>
+</table>
+<p>一个值得注意的细节:<strong>QoP 只度量&quot;活跃推进期&quot;的吞吐效率</strong>。fail-hang 产生的进展为零,因此被计入 DC 损失而非 QoP 损失——这保证了每个分量与一类运维动作的对应关系是干净的。</p>
+<h3 id="3-3-度量实现">3.3 度量实现</h3>
+<p>各时间量先按 wall-clock 区间测量,再乘以任务申请的 GPU 数 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>N</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">N_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.109em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> 换算成 GPU-time,使不同规模的任务可比较。Productive Time 从训练日志与 checkpoint 记录的时间戳推导;Ideal Time 基于同硬件环境、可比配置下的健康运行样本估计。论文明确强调:ETPR 是<strong>操作层面的集群级归因估计,而非逐步精确记账</strong>。</p>
+<hr>
+<h2 id="四、实证研究-三个月、20-629-个任务告诉我们什么">四、实证研究:三个月、20,629 个任务告诉我们什么</h2>
+<h3 id="4-1-实验设置">4.1 实验设置</h3>
+<p>数据源三路交叉:</p>
+<ol>
+<li>调度器记录与任务级遥测(提交/调度/终止时间、申请 GPU 数、执行尝试次数);</li>
+<li>训练日志与运行时监控指标(迭代进展、运行状态、故障症状);</li>
+<li>由监控告警、系统故障与用户上报生成的事件工单(含症状、日志、遥测、运维人员的诊断与处置记录)。</li>
+</ol>
+<p>根因标注:5 名资深 SRE 与软件工程研究生独立审查 443 起确认的故障事件,基于日志中的上下文错误信息确定根因,缺失显式错误信号时结合症状模式与遥测推断。标注一致性用 Cohen’s kappa 评估,达到 <strong>0.82</strong>(高一致性)。</p>
+<h3 id="4-2-RQ1-症状——损失分布">4.2 RQ1:症状——损失分布</h3>
+<p><strong>Table 1:ETPR 各维度留存率</strong></p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>留存率</th>
+<th>主要贡献因素</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scheduling Goodput</td>
+<td>99.1%</td>
+<td>排队等待</td>
+</tr>
+<tr>
+<td>Duty Cycle</td>
+<td>92.5%</td>
+<td>常规开销、Stop Failures、Hangs、Manual Stops</td>
+</tr>
+<tr>
+<td>Quality of Productivity</td>
+<td>96.1%</td>
+<td>Stragglers(落后者)</td>
+</tr>
+<tr>
+<td><strong>ETPR</strong></td>
+<td><strong>88.1%</strong></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>注:表中&quot;贡献因素&quot;(如 Stop Failures、Stragglers)不仅指事件本身,还包括处置它们所需的额外时间。</p>
+<p>整体 ETPR 为 88.1%,即<strong>端到端训练生产力损失了 11.9%</strong>。分布高度不均:</p>
+<ul>
+<li><strong>SG 损失仅 0.9%</strong>:主要来自排队等待与资源碎片化。调度不是问题所在,因此论文后文不再展开;</li>
+<li><strong>DC 损失 7.5%</strong>:其中约 20% 是常规基线开销(pod 启动、初始化、数据加载、checkpoint 读/写),其余来自 fail-stop 事件、fail-hang 停滞、人工终止及其后续诊断与恢复;</li>
+<li><strong>QoP 损失 3.9%</strong>:最可见的表现是 straggling——一个或少数 rank 反复落后,拉长所有同步迭代。fail-slow 之所以危害巨大,是因为它不仅拉长 Productive Time,还常常在异常被发现之前已持续很久;即使被发现后,任务往往还在继续运行,而运维人员仍在收集证据、缩小范围。</li>
+</ul>
+<h3 id="4-3-RQ2-根因——频次与成本的严重不对称">4.3 RQ2:根因——频次与成本的严重不对称</h3>
+<p><strong>Table 2:根因分类、典型症状与人工诊断恢复时长</strong></p>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>典型症状</th>
+<th>代表性根因</th>
+<th>占比</th>
+<th>平均诊断+恢复</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>软件/用户故障</td>
+<td>Fail-stop, Fail-hang</td>
+<td>代码 bug、API 误用、依赖问题、配置错误、驱动不匹配、张量设备/形状不匹配、CUDA kernel 与内存访问错误、Python 异常等</td>
+<td>74.1%</td>
+<td>20.3 min</td>
+</tr>
+<tr>
+<td>网络故障</td>
+<td>Fail-stop, Fail-hang, Fail-slow</td>
+<td>通信超时、连接失败、带宽退化、fabric 不稳定、远端 worker 崩溃、网络拥塞、拓扑问题</td>
+<td>15.9%</td>
+<td>148.2 min</td>
+</tr>
+<tr>
+<td>硬件故障</td>
+<td>Fail-stop, Fail-hang, Fail-slow</td>
+<td>ECC page failure、EDAC 内存错误、PCIe fatal error、GPU 掉卡、GPU 功耗/过热、NVLink/IB 物理问题、I/O 错误、NVMe 故障</td>
+<td>5.1%</td>
+<td>74.5 min</td>
+</tr>
+<tr>
+<td>资源耗尽</td>
+<td>Fail-stop, Fail-hang</td>
+<td>主机/显存耗尽、磁盘配额超限、共享内存耗尽、文件描述符耗尽</td>
+<td>4.9%</td>
+<td>53.1 min</td>
+</tr>
+</tbody>
+</table>
+<p>两个结构性发现:</p>
+<p><strong>发现 1(症状侧):主导性生产力损失发生在调度之后。</strong> DC 损失主要来自&quot;已分配但不生产&quot;的时段——fail-stop、fail-hang、人工停止及随后的诊断恢复;QoP 损失来自 fail-slow——任务持续完成迭代但吞吐退化。</p>
+<p><strong>发现 2(根因侧):故障量与治理成本呈倒挂。</strong> 软件/用户故障占 74.1% 的事件量,制造了沉重的日志诊断负担(但平均 20 分钟即可恢复);硬件与网络故障占比很小,却分别需要 74.5 和 148.2 分钟——因为它们缺乏直接可执行的框架级日志,常表现为静默 hang、持续 straggler 或间歇性通信错误,必须跨层关联硬件遥测、健康信号与网络计数器才能定位。单卡热节流(thermal throttling)甚至可能先表现为局部减速,再逐步恶化为拖垮所有 rank 的系统级瓶颈。</p>
+<hr>
+<h2 id="五、自动化稳定性治理框架">五、自动化稳定性治理框架</h2>
+<p>针对上述三类损失,论文构建了一条&quot;<strong>观测 → 诊断 → 定位 → 恢复 → 预防</strong>&quot;的端到端流水线。</p>
+<h3 id="5-0-架构总览">5.0 架构总览</h3>
+<p><strong>Tracing Plane(每个 pod 部署)</strong>:</p>
+<ul>
+<li>结构化日志解析器——摄取 stdout/stderr,转发故障相关条目;</li>
+<li>心跳监控器——跟踪 rank 存活,进展停滞时触发栈采集;</li>
+<li>CUDA 活动追踪器——基于 CUPTI Activity API 对集合通信算子插桩,记录算子级起止时间戳;</li>
+<li>系统遥测监控器——采集 GPU/CPU 利用率、内存、网络状态、NIC/PCIe 带宽等。</li>
+</ul>
+<p><strong>Master Agent</strong>:汇聚所有 pod 的信号,执行诊断、定位与恢复。它将每个任务的诊断事件串行化以避免并发/级联故障下的恢复冲突;诊断例程互斥——级联场景(如网络退化 → fail-slow → fail-hang 心跳超时)按序评估,hang 检测会等待 slow 检测完成。</p>
+<p><strong>Recovery Plane</strong>:选择破坏性最小的动作恢复持久训练进展。</p>
+<h3 id="5-1-Fail-stop-诊断-知识库-三级递进">5.1 Fail-stop 诊断:知识库 + 三级递进</h3>
+<p><strong>离线阶段</strong>:从历史故障日志挖掘高频模式构建词法规则;用 Drain 将日志解析为结构化模板;将模板 embedding 与已验证标签存入向量知识库。</p>
+<p><strong>在线阶段</strong>:fail-stop 事件虽会显式报错,但根因常被海量分布式日志与级联次生错误淹没。框架采用分布式训练引擎中的<strong>最早错误启发式(earliest-error heuristic)</strong>:跨进程比对时间戳,找到最早失败的进程,提取其主要错误条目,过滤下游级联噪声。随后三级递进分类:</p>
+<ol>
+<li><strong>Aho–Corasick 词法匹配</strong>——处理高频模式;</li>
+<li><strong>语义检索</strong>——词法不确定时检索向量知识库;</li>
+<li><strong>LLM 推理</strong>——检索置信度低时兜底。</li>
+</ol>
+<p>若主错误指向硬件/网络但缺乏精确故障 rank,框架在恢复前先做<strong>定向定位</strong>:硬件错误关联设备健康信号、用 <code>dcgmi diag</code> 验证疑似 pod/节点;网络错误(如 mpirun SSH 失败、来源不明的集合通信错误)运行 nccl-tests、<code>ib_write_bw</code> 或跨节点 all-reduce 检查以定位故障通信路径。</p>
+<h3 id="5-2-Fail-hang-诊断-栈采样-多数投票">5.2 Fail-hang 诊断:栈采样 + 多数投票</h3>
+<p>静默停滞没有显式错误信号,还必须与 checkpoint 写入等预期长延迟操作区分。诊断流水线:</p>
+<ul>
+<li>master rank 监控训练循环心跳。<strong>不用固定超时直接杀任务,而是把持续心跳丢失作为进入诊断模式的信号</strong>;</li>
+<li>通过远程 shell 用 py-spy 对每个 rank 的主线程栈等间隔采样三次;</li>
+<li>仅当三轮采样调用栈<strong>完全一致</strong>才确认 hang——该判据能有效区分真正的死锁与瞬态同步延迟;</li>
+<li><strong>定位</strong>:同步集合通信下,非故障 rank 通常阻塞在同一个同步屏障上、呈现相同调用栈。系统收集最终栈轨迹并做<strong>多数投票</strong>识别主导执行模式,任何偏离主导模式的 rank 视为离群者,映射到其物理宿主节点。</li>
+</ul>
+<h3 id="5-3-Fail-slow-诊断-先检测-后定位">5.3 Fail-slow 诊断:先检测,后定位</h3>
+<p><strong>异常检测:自适应、相位感知。</strong></p>
+<p>朴素阈值方法在训练场景下会大量误报:正常训练本身存在周期性波动,且不同模型结构的时间分布天然不同——例如 MoE 架构在健康硬件下也会出现周期性迭代耗时尖峰,而稠密模型相对平稳。</p>
+<p>为此,检测器从任务自身的无异常历史迭代校准:</p>
+<ul>
+<li>训练步可能呈周期行为 → 用**自相关函数(ACF)**估计主导周期;</li>
+<li>用干净迭代的中位数与 **MAD(Median Absolute Deviation)**构建相位感知基线;</li>
+<li>迭代耗时信号对基线归一化得到异常分数;</li>
+<li>仅当异常分数<strong>持续累积</strong>超过自校准阈值才告警——区分持续性退化与瞬态抖动。</li>
+</ul>
+<p><strong>Straggler 定位:最近启动者加权评分。</strong></p>
+<p>fail-slow rank 因计算或网络退化而变慢,它总是晚于同伴进入下一次集合通信,造成两个可观测效应:rank 间启动时间偏差增大、通信时间被拉长(同步要等所有人)。</p>
+<p>对通信组 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>G</mi></mrow><annotation encoding="application/x-tex">G</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal">G</span></span></span></span> 中的每个集合通信事件 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>e</mi></mrow><annotation encoding="application/x-tex">e</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">e</span></span></span></span>,每个 rank <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>r</mi></mrow><annotation encoding="application/x-tex">r</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">r</span></span></span></span> 上报调用起止时间 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msubsup><mi>t</mi><mi>r</mi><mtext>start</mtext></msubsup><mo separator="true">,</mo><msubsup><mi>t</mi><mi>r</mi><mtext>end</mtext></msubsup></mrow><annotation encoding="application/x-tex">t_r^{\text{start}}, t_r^{\text{end}}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0961em;vertical-align:-0.247em;"></span><span class="mord"><span class="mord mathnormal">t</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.7936em;"><span style="top:-2.453em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">start</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.247em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">t</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8491em;"><span style="top:-2.453em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">end</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.247em;"><span></span></span></span></span></span></span></span></span></span>。归一化的&quot;最晚启动者&quot;权重:</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msubsup><mi>w</mi><mrow><mi>r</mi><mo separator="true">,</mo><mi>e</mi></mrow><mtext>latest</mtext></msubsup><mo>=</mo><mfrac><mrow><msubsup><mi>t</mi><mi>r</mi><mtext>start</mtext></msubsup><mo>−</mo><munder><mrow><mi>min</mi><mo>⁡</mo></mrow><mrow><msup><mi>r</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mo>∈</mo><mi>G</mi></mrow></munder><msubsup><mi>t</mi><msup><mi>r</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mtext>start</mtext></msubsup></mrow><mrow><munder><mrow><mi>max</mi><mo>⁡</mo></mrow><mrow><msup><mi>r</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mo>∈</mo><mi>G</mi></mrow></munder><msubsup><mi>t</mi><msup><mi>r</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mtext>start</mtext></msubsup><mo>−</mo><munder><mrow><mi>min</mi><mo>⁡</mo></mrow><mrow><msup><mi>r</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mo>∈</mo><mi>G</mi></mrow></munder><msubsup><mi>t</mi><msup><mi>r</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mtext>start</mtext></msubsup></mrow></mfrac></mrow><annotation encoding="application/x-tex">w^{\text{latest}}_{r,e} = \frac{t_r^{\text{start}} - \min_{r&#x27; \in G} t_{r&#x27;}^{\text{start}}}{\max_{r&#x27; \in G} t_{r&#x27;}^{\text{start}} - \min_{r&#x27; \in G} t_{r&#x27;}^{\text{start}}}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.2822em;vertical-align:-0.3831em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8991em;"><span style="top:-2.453em;margin-left:-0.0269em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="mpunct mtight">,</span><span class="mord mathnormal mtight">e</span></span></span></span><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">latest</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3831em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.4497em;vertical-align:-0.9792em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.4706em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mop"><span class="mop">max</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.6828em;"><span style="top:-2.786em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span><span class="mrel mtight">∈</span><span class="mord mathnormal mtight">G</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1774em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">t</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.7754em;"><span style="top:-2.4068em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.6828em;"><span style="top:-2.786em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span></span></span></span><span style="top:-3.0448em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">start</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2932em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mop"><span class="mop">min</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.6828em;"><span style="top:-2.786em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span><span class="mrel mtight">∈</span><span class="mord mathnormal mtight">G</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1774em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">t</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.7754em;"><span style="top:-2.4068em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.6828em;"><span style="top:-2.786em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span></span></span></span><span style="top:-3.0448em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">start</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2932em;"><span></span></span></span></span></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord"><span class="mord mathnormal">t</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.7936em;"><span style="top:-2.453em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">start</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.247em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mop"><span class="mop">min</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.6828em;"><span style="top:-2.786em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span><span class="mrel mtight">∈</span><span class="mord mathnormal mtight">G</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1774em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">t</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.7936em;"><span style="top:-2.425em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.6828em;"><span style="top:-2.786em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span></span></span></span><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">start</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.275em;"><span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.9792em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span></span></p>
+<p>同时以组内最晚开始到最晚结束的时长度量有效通信时间 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msubsup><mi>δ</mi><mi>e</mi><mtext>comm</mtext></msubsup></mrow><annotation encoding="application/x-tex">\delta^{\text{comm}}_e</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9414em;vertical-align:-0.247em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03785em;">δ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.6644em;"><span style="top:-2.453em;margin-left:-0.0379em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">e</span></span></span><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">comm</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.247em;"><span></span></span></span></span></span></span></span></span></span>,并做通信时长加权聚合:</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi mathvariant="normal">Φ</mi><mi>r</mi></msub><mo>=</mo><mfrac><mn>1</mn><mrow><mi mathvariant="normal">∣</mi><msub><mi>E</mi><mi>r</mi></msub><mi mathvariant="normal">∣</mi></mrow></mfrac><munder><mo>∑</mo><mrow><mi>e</mi><mo>∈</mo><msub><mi>E</mi><mi>r</mi></msub></mrow></munder><msubsup><mi>w</mi><mrow><mi>r</mi><mo separator="true">,</mo><mi>e</mi></mrow><mtext>latest</mtext></msubsup><mo>⋅</mo><msubsup><mi>δ</mi><mi>e</mi><mtext>comm</mtext></msubsup></mrow><annotation encoding="application/x-tex">\Phi_r = \frac{1}{|E_r|} \sum_{e \in E_r} w^{\text{latest}}_{r,e} \cdot \delta^{\text{comm}}_e
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord">Φ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.7159em;vertical-align:-1.3944em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3214em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">∣</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.05764em;">E</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord">∣</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.936em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.05em;"><span style="top:-1.8557em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">e</span><span class="mrel mtight">∈</span><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05764em;">E</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1645em;"><span style="top:-2.357em;margin-left:-0.0576em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.143em;"><span></span></span></span></span></span></span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.3944em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8991em;"><span style="top:-2.453em;margin-left:-0.0269em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="mpunct mtight">,</span><span class="mord mathnormal mtight">e</span></span></span></span><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">latest</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3831em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.9614em;vertical-align:-0.247em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03785em;">δ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.7144em;"><span style="top:-2.453em;margin-left:-0.0379em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">e</span></span></span><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord text mtight"><span class="mord mtight">comm</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.247em;"><span></span></span></span></span></span></span></span></span></span></span></p>
+<p>其中 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mi>r</mi></msub></mrow><annotation encoding="application/x-tex">E_r</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.05764em;">E</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0576em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> 是 rank <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>r</mi></mrow><annotation encoding="application/x-tex">r</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">r</span></span></span></span> 参与的集合通信事件集合。定位只在告警之后激活,且仅使用告警窗口内的事件计算 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="normal">Φ</mi><mi>r</mi></msub></mrow><annotation encoding="application/x-tex">\Phi_r</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord">Φ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>——<strong>检测期低开销、定位期快响应</strong>。</p>
+<h3 id="5-4-故障恢复-分层、最小破坏">5.4 故障恢复:分层、最小破坏</h3>
+<p>核心设计:每个训练 pod 内运行一个 agent 作为任务本地控制平面,<strong>将训练进程生命周期与 pod 生命周期解耦</strong>——接管进程启动、环境校验、代码分发、网络配置与恢复执行。可恢复的故障通过现有 pod 集内的进程级重启处理,避免全量 pod 重建与重新调度;全局调度器只负责资源分配与 pod 替换。</p>
+<p><strong>Table 3:诊断结果 → 恢复动作映射</strong></p>
+<table>
+<thead>
+<tr>
+<th>诊断结果</th>
+<th>恢复动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>用户代码、API 误用或配置故障</td>
+<td>提供回溯与知识库提示;可修复时就地重启</td>
+</tr>
+<tr>
+<td>环境或依赖不匹配</td>
+<td>校验运行环境,将受影响组件回滚到已知良好版本</td>
+</tr>
+<tr>
+<td>资源耗尽</td>
+<td>清理非持久的临时文件、缓存、过期共享内存段,保留 checkpoint 与用户数据</td>
+</tr>
+<tr>
+<td>瞬态 fail-slow 症状</td>
+<td>跨窗口观察;若退化持续但定位置信度不足,就地重启</td>
+</tr>
+<tr>
+<td>已定位的硬件、网络或持续 straggler 故障</td>
+<td>替换受影响 pod/节点,更新 rank placement,从最近有效 checkpoint 重启</td>
+</tr>
+</tbody>
+</table>
+<p><strong>In-Place Recovery(不换 pod/机器)</strong>:用户代码 bug → 抽取完整 traceback,LLM 辅助检索知识库中的相关 issue 与解法;环境故障 → 运行校验脚本并回滚;资源耗尽 → 清理临时状态。修复后在现有 pod 集内从最新有效 checkpoint 重启全部 pod,保留已准备好的环境。</p>
+<p><strong>Pod Replacement</strong>:已确认的硬件/网络故障与持续 straggler。调度器从热备池取健康 pod 替换故障 pod,更新 placement 与 rank 映射后从最新 checkpoint 重启;故障 pod 及其物理机被标记并排除出调度池,直至修复或检修完成。</p>
+<h3 id="5-5-主动预防">5.5 主动预防</h3>
+<ul>
+<li><strong>Pre-Flight 任务校验</strong>:训练开始前校验任务配置、依赖一致性、GPU 健康、拓扑、通信就绪与存储容量;检查 GPU 数与并行维度兼容性、校验 YAML、过滤有不可修复 ECC/过热问题的 GPU、验证 PCIe/NVLink 拓扑、跑短通信测试、估算内存与存储需求;故障历史频繁的节点被标记并排除出后续调度;</li>
+<li><strong>持续舰队巡检</strong>:独立后台进程低频巡检 CPU 频率、互联状态、硬件错误日志、内存错误、存储健康、交换机连通性与硬件温度;发现严重问题时隔离资源或安全暂停训练任务,防止故障级联。</li>
+</ul>
+<hr>
+<h2 id="六、效果验证-五个案例-四周部署">六、效果验证:五个案例 + 四周部署</h2>
+<p><strong>Case #1:Fail-stop 诊断的准确率—延迟权衡。</strong></p>
+<p>用集群日志库中 14,651 条故障日志构建知识库;检索用 bge-small-en,LLM 推理用 GPT-5.4(temperature=0)。在 254 条未被词法匹配解决的 held-out 日志上评估:</p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>W-Precision</th>
+<th>W-Recall</th>
+<th>W-F1</th>
+<th>平均决策时间</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Retrieval-Only</td>
+<td>79.47%</td>
+<td>74.70%</td>
+<td>74.85%</td>
+<td>0.275s</td>
+</tr>
+<tr>
+<td>LLM-Only</td>
+<td>84.27%</td>
+<td>82.21%</td>
+<td>82.54%</td>
+<td>4.210s</td>
+</tr>
+<tr>
+<td>Retrieval + Conditional LLM</td>
+<td>82.34%</td>
+<td>80.24%</td>
+<td>80.46%</td>
+<td>0.312s</td>
+</tr>
+</tbody>
+</table>
+<p>Retrieval + Conditional LLM(检索置信度低于阈值才调用 LLM)以约 <strong>1/13 的决策时间</strong>达到了接近 LLM-Only 的分类性能——典型的准确率—延迟工程权衡。</p>
+<p><strong>Case #2:硬件导致的 Fail-stop。</strong> 128 GPU 任务在迭代 15,030 处(计划共 327,500)突然崩溃,触发跨多个 rank 的海量级联错误(泛化的 std::runtime_error 与框架级 MPI abort 消息)。词法快路径绕过下游噪声,锁定最早失败单元 Rank 14:NCCL watchdog 线程中浮现的<strong>不可修复 ECC 错误</strong>。归类为永久硬件故障后,框架自动隔离问题节点、调度健康替换 pod、从最近 checkpoint 安全重启。从故障检测到恢复持久训练,<strong>全流程不足 10 分钟</strong>。</p>
+<p><strong>Case #3:Fail-hang。</strong> 心跳持续丢失 → 进入诊断模式 → py-spy 三轮采样 → <strong>6 分钟内</strong>确认 hang 并识别可疑 rank。栈模式分析显示,某节点上一个离群 rank 在 forward 阶段阻塞在 irecv。确认后优雅停止、隔离节点、热备替换、重启——hang 未再复发。</p>
+<p><strong>Case #4:Fail-slow 异常检测。</strong> 数据集:64 个训练会话(50 正常 + 14 异常),覆盖 Dense 与 Megatron-LM 训练的 MoE 两种负载。对比三个常用统计时序基线:</p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>Accuracy↑</th>
+<th>FPR↓</th>
+<th>FNR↓</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Z-Score</td>
+<td>68.75%</td>
+<td>30.00%</td>
+<td>35.71%</td>
+</tr>
+<tr>
+<td>MAD</td>
+<td>73.43%</td>
+<td>26.00%</td>
+<td>28.57%</td>
+</tr>
+<tr>
+<td>BOCD</td>
+<td>89.06%</td>
+<td>10.00%</td>
+<td>14.28%</td>
+</tr>
+<tr>
+<td><strong>本文方法</strong></td>
+<td><strong>93.75%</strong></td>
+<td><strong>4.00%</strong></td>
+<td>14.28%</td>
+</tr>
+</tbody>
+</table>
+<p>Z-Score/MAD 这类基线无法区分正常迭代波动与真实退化,误报率高达 26–30%;本文的自适应相位感知方法把 FPR 压到 4%,同时保持对真实慢化的敏感度。</p>
+<p><strong>Case #5:GPU 降频注入的 Straggler 定位。</strong> 8 GPU、4 节点(PP=2, DP=2, TP=2)集群中,对 Rank 0 施加 SM 时钟频率上限,使其计算吞吐降低约 40%。Rank 0 因此更晚到达集合同步点,其他 rank 被迫等待。确认稳定慢化后,定位模块在告警后窗口内用 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi mathvariant="normal">Φ</mi><mi>r</mi></msub></mrow><annotation encoding="application/x-tex">\Phi_r</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord">Φ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> 排序全部 rank:<strong>Rank 0 在 3 次迭代内即成为 top-ranked</strong>,并与其他 rank 保持持续分离——以很短的响应延迟定位了注入的慢 rank。</p>
+<p><strong>部署收益:ETPR 88.1% → 91.9%。</strong> 四周全量部署后的集群级指标:</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>部署前</th>
+<th>部署后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scheduling Goodput</td>
+<td>99.1%</td>
+<td>99.0%</td>
+</tr>
+<tr>
+<td>Duty Cycle</td>
+<td>92.5%</td>
+<td><strong>95.6%</strong></td>
+</tr>
+<tr>
+<td>Quality of Productivity</td>
+<td>96.1%</td>
+<td><strong>97.1%</strong></td>
+</tr>
+<tr>
+<td><strong>ETPR</strong></td>
+<td><strong>88.1%</strong></td>
+<td><strong>91.9%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>增益主要来自 DC 与 QoP 的改善。归因分析显示:端到端诊断-恢复流水线使部分软件/用户故障可通过回滚或重启自动恢复;预检机制明显减少了配置错误(如非法并行设置)引发的故障;对网络/硬件故障,自动化诊断与恢复加上慢节点的更快发现,将平均诊断恢复时间压到 <strong>30 分钟以内</strong>。这些机制还帮助 SRE 团队识别更多潜在故障机器并将其移出调度池。</p>
+<hr>
+<h2 id="七、局限与工程教训-我认为是全文最有价值的部分之一">七、局限与工程教训(我认为是全文最有价值的部分之一)</h2>
+<h3 id="7-1-误诊是有代价的-XID-31-的教训">7.1 误诊是有代价的:XID 31 的教训</h3>
+<p>部署早期,知识库缺少对特定 GPU XID 错误的细粒度标注。当用户的有 bug 的自定义 CUDA kernel 越界访问内存时,GPU 驱动上报 <strong>Xid 31(内存页错误)</strong>,语义检索将其宽泛地误分类为物理硬件故障,触发了不必要的 pod 驱逐。由于根因在软件侧,新 pod 上的重启任务在同一个训练步再次崩溃,触发<strong>误报警循环</strong>——浪费数小时算力,还耗尽了健康备用池。</p>
+<p>修复方式:穷尽式标注 GPU XID 错误码,明确区分用户触发的软件故障与真实硬件缺陷。未来方向:结合诊断置信度、历史节点健康与预估恢复成本,做出<strong>置信度感知的恢复决策</strong>,再决定是否升级到昂贵的定位或替换动作。</p>
+<h3 id="7-2-有些故障自动化救不了-CUDA-OOM">7.2 有些故障自动化救不了:CUDA OOM</h3>
+<p>朴素地减小 batch size 或调整内存参数可以避开 OOM,但会降低 MFU、浪费硬件。论文给出了一个真实案例:某推荐模型训练因 CUDA OOM 反复中断,用户多次重启。用 torch memory snapshot 工具人工分析约<strong>两天</strong>才发现:用户自定义的训练步函数把 loss 返回在输出对象内部,导致 PyTorch 保留了计算图与中间激活,一块 embedding 相关的内存区域始终未释放。这类问题需要对用户代码和框架内存行为的深入理解,指向未来的内存泄漏检测与内存感知代码诊断方向。</p>
+<h3 id="7-3-Master-Agent-是单点">7.3 Master Agent 是单点</h3>
+<p>当前框架依赖 master agent 汇聚信号并协调诊断、定位与恢复。它一旦崩溃或不可达,系统无法自动检测、选举新 master 或继续恢复。改进方向:master 健康监控、leader election、状态复制。</p>
+<h3 id="7-4-ETPR-是操作型估计-不是精确记账">7.4 ETPR 是操作型估计,不是精确记账</h3>
+<p>健康基线来自&quot;同硬件、相似配置的健康运行&quot;,会随模型架构、并行策略、数据分布或代码的变化而漂移。新任务或显著变更的模型需要先重建健康基线,ETPR 才能准确反映 QoP 退化。未来可探索相位与配置感知的基线、以及 ETPR 值的置信度估计。</p>
+<hr>
+<h2 id="八、结语与评述">八、结语与评述</h2>
+<p>这篇论文的价值在于完成了一个闭环:</p>
+<ul>
+<li><strong>度量先行</strong>:ETPR 用 SG × DC × QoP 的乘法分解,把&quot;生产力损失&quot;从一个模糊的体感变成可归因、可分层治理的工程指标;</li>
+<li><strong>实证支撑设计</strong>:三个月 20,629 个任务的数据明确指出——调度不是问题(SG 99.1%),真正的损失在资源分配之后(DC 92.5%、QoP 96.1%),且故障频次与治理成本严重倒挂(74.1% 的事件只占 20.3 分钟/起的恢复成本,而 15.9% 的网络事件要 148.2 分钟/起);</li>
+<li><strong>按症下药</strong>:三类失效形态各配一条成熟的技术路线——fail-stop 走&quot;最早错误 + 词法/语义/LLM 三级分类&quot;,fail-hang 走&quot;心跳 + 多轮栈采样一致性 + 多数投票&quot;,fail-slow 走&quot;ACF 相位感知自适应检测 + 通信时长加权的最近启动者评分&quot;;</li>
+<li><strong>生产验证</strong>:四周边部署带来的 +3.8pp ETPR、以及基础设施故障平均恢复时间压进 30 分钟,是可以在生产集群上复现检验的数字。</li>
+</ul>
+<p>对正在建设或运营大规模训练集群的团队,这篇论文最具迁移价值的或许不是某个具体算法,而是两个思维方式:<strong>先建立可归因的生产力分解,再让每一种损失分量对应一类自动化处置动作;以及把误诊的代价当作一等公民来治理——XID 31 的故事说明,错误的&quot;重动作&quot;(驱逐 pod)比没有动作更危险。</strong></p>
+<hr>
+<h2 id="延伸资源">延伸资源</h2>
+<ul>
+<li>论文原文:<a target="_blank" rel="noopener" href="https://doi.org/10.1145/3832783.3834462">Characterizing and Mitigating Productivity Loss in Large-Scale Model Training: An Empirical Study</a>(ASE '26)</li>
+<li>相关阅读:<a href="/2026/10/12/%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/">《从零搞懂 GPU 集群调度》</a>——本文的 DC 损失对应那篇讲的万卡治理&quot;故障自愈闭环&quot;(DCGM + node-problem-detector + descheduler),本文把它推进到了诊断-恢复流水线的细粒度</li>
+<li>相关阅读:<a href="/2026/10/09/%E6%B5%85%E8%B0%88%E5%A4%A7%E8%A7%84%E6%A8%A1%E9%9B%86%E7%BE%A4%E7%9A%84%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%AE%B9%E5%99%A8%E5%8C%96%E5%BB%BA%E8%AE%BE/">《浅谈大规模集群的高性能网络容器化建设》</a>——本文 4.3 节网络故障占比 15.9%、平均诊断 148.2 分钟,那篇讲的 RDMA 组网与 NCCL 验证正是这类故障的第一现场</li>
+<li>相关阅读:<a href="/2026/10/09/Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/">《Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道》</a>——本文 fail-slow 定位依赖的集合通信插桩,落到的正是 NCCL/RoCE 这套网络栈</li>
+</ul>
+<p><em>注:受专有与保密约束,论文中的工业数据集与代码暂未公开。文中所有数据、公式与案例均转述自原论文。</em></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/10/12/2026-10-12-%E6%8B%86%E8%A7%A3%E9%82%A311.9%-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E7%9A%84%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8D%9F%E5%A4%B1%E5%BA%A6%E9%87%8F%E4%B8%8E%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B2%BB%E7%90%86/">https://roger-lv.github.io/2026/10/12/2026-10-12-%E6%8B%86%E8%A7%A3%E9%82%A311.9%-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E7%9A%84%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8D%9F%E5%A4%B1%E5%BA%A6%E9%87%8F%E4%B8%8E%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B2%BB%E7%90%86/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83/">大模型训练</a><a class="post-meta__tags" href="/tags/%E5%8F%AF%E8%A7%82%E6%B5%8B%E6%80%A7/">可观测性</a><a class="post-meta__tags" href="/tags/GPU%E9%9B%86%E7%BE%A4/">GPU集群</a><a class="post-meta__tags" href="/tags/%E5%8F%AF%E9%9D%A0%E6%80%A7/">可靠性</a><a class="post-meta__tags" href="/tags/%E6%95%85%E9%9A%9C%E8%AF%8A%E6%96%AD/">故障诊断</a><a class="post-meta__tags" href="/tags/Gang%E8%B0%83%E5%BA%A6/">Gang调度</a><a class="post-meta__tags" href="/tags/%E8%AE%BA%E6%96%87%E8%A7%A3%E8%AF%BB/">论文解读</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/10/12/2026-10-12-VPC%E4%B8%8ECiliumClusterMesh%E5%A4%9A%E9%9B%86%E7%BE%A4%E7%BB%84%E7%BD%91%E7%9A%84%E5%9C%B0%E5%9F%BA%E4%B8%8E%E4%B8%8A%E5%B1%82%E5%BB%BA%E7%AD%91/" title="VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑</div></div><div class="info-2"><div class="info-item-1">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑 VPC 是公有云上通过逻辑隔离为你划出的一块&quot;私有网段+自管路由&quot;的虚拟网络,而 Cilium ClusterMesh 解决的是多个 Kubernetes 集群之间的 Pod IP 直连、跨集群服务发现、跨集群 NetworkPolicy 与负载均衡问题;跨集群通信通常通过 VPC Peering/专线打通底层网络后,由 Cilium ClusterMesh、Submariner 等方案组网;集群与机房并非一一对应,常见是&quot;单机房多集群(隔离/灰度)&quot;&quot;多机房单集群(同城双活)&quot;和&quot;多机房多集群(异地容灾)&quot;三种模式按容灾等级选择;混合云场景下则建议用&quot;专线 + VPN 主备链路 + 路由器统一打通 CIDR&quot;的思路,把公有云 VPC 与私有化机房做成一张可路由的大内网。 先看两个概念在定位上的差异:    维度 VPC Cilium ClusterMesh     层级 IaaS 层的逻辑网络 Kube...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战</div></div><div class="info-2"><div class="info-item-1">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战 这篇长文写给算法工程师和平台工程师,从最基础的&quot;一张 GPU 卡怎么被 K8s 认识&quot;讲起,到&quot;一万张卡怎么不崩&quot;,再到&quot;大模型服务怎么在集群上跑起来&quot;,最后聊 Slurm。六大主题:K8s GPU 调度原理、万卡集群治理、资源池化、弹性伸缩、vLLM/SGLang 集群化部署、Slurm 实战。  一、开篇:为什么 GPU 调度比 CPU 调度难十倍 如果你做过 K8s 的 CPU/内存调度,可能觉得资源调度就是&quot;分配数字资源,加个 request/limit 完事&quot;。但当资源变成 GPU 之后,画风完全变了,原因有五个: 1. GPU 不可分割(默认情况下)。 CPU 可以按 0.1 核这样细粒度分配,内存可以按 MB 分配,但一张物理 GPU 卡,默认情况下,K8s 只能把它当作一个&quot;整数资源&quot;分配给一个容器——要么给你一整张卡,要么不给。这就导致一个尴尬场景:推理服...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/14/2026-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%89%E4%BD%93%E9%97%AE%E9%A2%98%E8%AE%A1%E7%AE%97%E9%80%9A%E4%BF%A1%E4%B8%8E%E5%86%85%E5%AD%98/" title="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-14</div><div class="info-item-2">大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同</div></div><div class="info-2"><div class="info-item-1">大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同 在大模型(LLM)预训练的万卡集群时代,算法架构(如 Transformer、MoE)的进步只是冰山一角。真正决定训练成本与效率的,是底层基础设施(AI Infra)的工程深度。当模型参数突破千亿,硬件算力(FLOPS)与显存带宽(HBM)、网络通信(NVLink/InfiniBand)之间的鸿沟日益扩大,性能瓶颈已从&quot;算法创新&quot;转向了&quot;硬件榨取&quot;。 本文将深入到单次训练迭代(Iteration)的微观尺度,从反向传播的数学本质出发,系统性地拆解计算墙(Kernel 优化)、通信墙(异步流水线)与内存墙(显存管理),并揭示顶级 AI Infra 团队如何通过精细的算子编写与调度策略,将 GPU 的有效算力(MFU)从 50% 拉升至 65% 以上。  一、 大模型训练的&quot;三堵墙&quot; 训练一个千亿参数的大模型,通常涉及数据并行(DP)、张量并行(TP)、流水线并行(PP)等多种并行策略的组合。在这个过程中,模型的前向与反向传播不再是简单的&quot;计...</div></div></div></a><a class="pagination-related" href="/2026/09/03/2026-09-03-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AE%B9%E9%94%99%E8%AE%AD%E7%BB%83%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%BB%8E%E6%9E%B6%E6%9E%84%E5%88%B0%E5%BD%A2%E5%BC%8F%E5%8C%96%E9%AA%8C%E8%AF%81/" title="大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证</div></div><div class="info-2"><div class="info-item-1">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证  本文基于一个真实落地的容错训练系统(下称 Aegis)的设计文档与源码整理,隐去了公司与内部组件信息,聚焦技术方案本身。  大模型训练的稳定性问题,是所有大规模训练团队的共同痛点。本文拆解 Aegis 的完整设计:为什么在调度平台层做容错、gRPC+NATS 双通道怎么配合、Master-Worker 状态机怎么流转、容错计数怎么算、故障节点怎么隔离,以及最有意思的一环——用 TLA+ 形式化验证状态机的安全性。  关联阅读:训练侧并行与通信见 图解 Megatron 的 SP/CP/EP、分布式训练核心技术:从 FSDP 到 All-Reduce。容错是这些训练技术之下的&quot;稳定性底座&quot;。   一、为什么需要专门的容错系统:三大痛点 1.1 训练频繁中断是常态 大模型分布式训练几乎都是同步方式(DDP/MPI):所有进程共同构建一个通信拓扑,任何一个进程出错,其他进程都会相继退出。而训练任务动辄跨数百个 GPU 节点,数小时到数天内大概率出各种问题:  OPT 175B 训练的 LogBo...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战</div></div><div class="info-2"><div class="info-item-1">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战 这篇长文写给算法工程师和平台工程师,从最基础的&quot;一张 GPU 卡怎么被 K8s 认识&quot;讲起,到&quot;一万张卡怎么不崩&quot;,再到&quot;大模型服务怎么在集群上跑起来&quot;,最后聊 Slurm。六大主题:K8s GPU 调度原理、万卡集群治理、资源池化、弹性伸缩、vLLM/SGLang 集群化部署、Slurm 实战。  一、开篇:为什么 GPU 调度比 CPU 调度难十倍 如果你做过 K8s 的 CPU/内存调度,可能觉得资源调度就是&quot;分配数字资源,加个 request/limit 完事&quot;。但当资源变成 GPU 之后,画风完全变了,原因有五个: 1. GPU 不可分割(默认情况下)。 CPU 可以按 0.1 核这样细粒度分配,内存可以按 MB 分配,但一张物理 GPU 卡,默认情况下,K8s 只能把它当作一个&quot;整数资源&quot;分配给一个容器——要么给你一整张卡,要么不给。这就导致一个尴尬场景:推理服...</div></div></div></a><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</div></div><div class="info-2"><div class="info-item-1">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区 2026 年 8 月 17 日,SIGCOMM 2026 在丹佛开会的第一天,第三届 Networks for AI Computing workshop(NAIC '26)上出现了一篇只有 6 页的论文:《RDMATracer: A scalable eBPF-based framework for tracing RDMA syscalls》。作者名单几乎全是 Meta 的生产工程师与网络研究员——Prankur Gupta、Miao Xu、Maxim Samoylov、Prashanth Kannan、Rajiv Krishnamurthy,加上 CMU 的 Theophilus A. Benson。 论文标题很平实,讲的是一个已经在线上连续运行多年的 eBPF 工具。但它要回答的问题一点都不平实:当十万卡规模的 AI 训练集群任务崩溃时,为什么有一类故障在所有现成的监控系统里都看不到? 这篇文章是我读完论文和配套的 LPC 2025、FOSDEM 2026 演讲材料之后的拆解笔记。我最感兴...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">280</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">364</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%83%8C%E6%99%AF-GPU-%E6%97%B6%E9%95%BF%E6%98%AF%E6%80%8E%E4%B9%88%E8%A2%AB-%E8%92%B8%E5%8F%91-%E7%9A%84"><span class="toc-number">1.1.</span> <span class="toc-text">一、背景:GPU 时长是怎么被&quot;蒸发&quot;的</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%B7%B2%E6%9C%89%E6%8C%87%E6%A0%87%E7%9A%84%E7%9B%B2%E5%8C%BA"><span class="toc-number">1.2.</span> <span class="toc-text">二、已有指标的盲区</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81ETPR-%E6%8A%8A%E7%AB%AF%E5%88%B0%E7%AB%AF%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8B%86%E5%BC%80"><span class="toc-number">1.3.</span> <span class="toc-text">三、ETPR:把端到端生产力拆开</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E4%BB%BB%E5%8A%A1%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E4%B8%8E%E5%9B%9B%E4%B8%AA%E6%97%B6%E9%97%B4%E9%87%8F"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 任务生命周期与四个时间量</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E4%B8%89%E5%88%86%E9%87%8F%E5%88%86%E8%A7%A3"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 三分量分解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E5%BA%A6%E9%87%8F%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 度量实现</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%AE%9E%E8%AF%81%E7%A0%94%E7%A9%B6-%E4%B8%89%E4%B8%AA%E6%9C%88%E3%80%8120-629-%E4%B8%AA%E4%BB%BB%E5%8A%A1%E5%91%8A%E8%AF%89%E6%88%91%E4%BB%AC%E4%BB%80%E4%B9%88"><span class="toc-number">1.4.</span> <span class="toc-text">四、实证研究:三个月、20,629 个任务告诉我们什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%AE%9E%E9%AA%8C%E8%AE%BE%E7%BD%AE"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 实验设置</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-RQ1-%E7%97%87%E7%8A%B6%E2%80%94%E2%80%94%E6%8D%9F%E5%A4%B1%E5%88%86%E5%B8%83"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 RQ1:症状——损失分布</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-RQ2-%E6%A0%B9%E5%9B%A0%E2%80%94%E2%80%94%E9%A2%91%E6%AC%A1%E4%B8%8E%E6%88%90%E6%9C%AC%E7%9A%84%E4%B8%A5%E9%87%8D%E4%B8%8D%E5%AF%B9%E7%A7%B0"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 RQ2:根因——频次与成本的严重不对称</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E8%87%AA%E5%8A%A8%E5%8C%96%E7%A8%B3%E5%AE%9A%E6%80%A7%E6%B2%BB%E7%90%86%E6%A1%86%E6%9E%B6"><span class="toc-number">1.5.</span> <span class="toc-text">五、自动化稳定性治理框架</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-0-%E6%9E%B6%E6%9E%84%E6%80%BB%E8%A7%88"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.0 架构总览</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-Fail-stop-%E8%AF%8A%E6%96%AD-%E7%9F%A5%E8%AF%86%E5%BA%93-%E4%B8%89%E7%BA%A7%E9%80%92%E8%BF%9B"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.1 Fail-stop 诊断:知识库 + 三级递进</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-Fail-hang-%E8%AF%8A%E6%96%AD-%E6%A0%88%E9%87%87%E6%A0%B7-%E5%A4%9A%E6%95%B0%E6%8A%95%E7%A5%A8"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.2 Fail-hang 诊断:栈采样 + 多数投票</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-Fail-slow-%E8%AF%8A%E6%96%AD-%E5%85%88%E6%A3%80%E6%B5%8B-%E5%90%8E%E5%AE%9A%E4%BD%8D"><span class="toc-number">1.5.4.</span> <span class="toc-text">5.3 Fail-slow 诊断:先检测,后定位</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E6%95%85%E9%9A%9C%E6%81%A2%E5%A4%8D-%E5%88%86%E5%B1%82%E3%80%81%E6%9C%80%E5%B0%8F%E7%A0%B4%E5%9D%8F"><span class="toc-number">1.5.5.</span> <span class="toc-text">5.4 故障恢复:分层、最小破坏</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-%E4%B8%BB%E5%8A%A8%E9%A2%84%E9%98%B2"><span class="toc-number">1.5.6.</span> <span class="toc-text">5.5 主动预防</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E6%95%88%E6%9E%9C%E9%AA%8C%E8%AF%81-%E4%BA%94%E4%B8%AA%E6%A1%88%E4%BE%8B-%E5%9B%9B%E5%91%A8%E9%83%A8%E7%BD%B2"><span class="toc-number">1.6.</span> <span class="toc-text">六、效果验证:五个案例 + 四周部署</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%B1%80%E9%99%90%E4%B8%8E%E5%B7%A5%E7%A8%8B%E6%95%99%E8%AE%AD-%E6%88%91%E8%AE%A4%E4%B8%BA%E6%98%AF%E5%85%A8%E6%96%87%E6%9C%80%E6%9C%89%E4%BB%B7%E5%80%BC%E7%9A%84%E9%83%A8%E5%88%86%E4%B9%8B%E4%B8%80"><span class="toc-number">1.7.</span> <span class="toc-text">七、局限与工程教训(我认为是全文最有价值的部分之一)</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E8%AF%AF%E8%AF%8A%E6%98%AF%E6%9C%89%E4%BB%A3%E4%BB%B7%E7%9A%84-XID-31-%E7%9A%84%E6%95%99%E8%AE%AD"><span class="toc-number">1.7.1.</span> <span class="toc-text">7.1 误诊是有代价的:XID 31 的教训</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-%E6%9C%89%E4%BA%9B%E6%95%85%E9%9A%9C%E8%87%AA%E5%8A%A8%E5%8C%96%E6%95%91%E4%B8%8D%E4%BA%86-CUDA-OOM"><span class="toc-number">1.7.2.</span> <span class="toc-text">7.2 有些故障自动化救不了:CUDA OOM</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-Master-Agent-%E6%98%AF%E5%8D%95%E7%82%B9"><span class="toc-number">1.7.3.</span> <span class="toc-text">7.3 Master Agent 是单点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-ETPR-%E6%98%AF%E6%93%8D%E4%BD%9C%E5%9E%8B%E4%BC%B0%E8%AE%A1-%E4%B8%8D%E6%98%AF%E7%B2%BE%E7%A1%AE%E8%AE%B0%E8%B4%A6"><span class="toc-number">1.7.4.</span> <span class="toc-text">7.4 ETPR 是操作型估计,不是精确记账</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E7%BB%93%E8%AF%AD%E4%B8%8E%E8%AF%84%E8%BF%B0"><span class="toc-number">1.8.</span> <span class="toc-text">八、结语与评述</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BB%B6%E4%BC%B8%E8%B5%84%E6%BA%90"><span class="toc-number">1.9.</span> <span class="toc-text">延伸资源</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-%EF%BF%BD%EF%BF%BD11.9%25-'%EF%BF%BD!%EF%BF%BD%EF%BF%BD%C6%A4%EF%BF%BD%1F%EF%BF%BD%EF%BF%BD_1%EF%BF%BD%EF%BF%BD%0E%EF%BF%BD%16%EF%BF%BD%06/" title="拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理">拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-VPC%E4%B8%8ECiliumClusterMesh%E5%A4%9A%E9%9B%86%E7%BE%A4%E7%BB%84%E7%BD%91%E7%9A%84%E5%9C%B0%E5%9F%BA%E4%B8%8E%E4%B8%8A%E5%B1%82%E5%BB%BA%E7%AD%91/" title="VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/09/2026-10-09-Spiderpool%E5%A4%9A%E7%BD%91%E5%8D%A1IPAM%E6%96%B9%E6%A1%88%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图</a><time datetime="2026-10-08T16:00:00.000Z" title="发表于 2026-10-09 00:00:00">2026-10-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/09/2026-10-09-IPoIB%E4%B8%8Epkey%E5%AD%90%E6%8E%A5%E5%8F%A3InfiniBand%E4%B8%96%E7%95%8C%E9%87%8C%E7%9A%84IP%E7%BD%91%E5%8D%A1%E4%B8%8EVLAN/" title="IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;</a><time datetime="2026-10-08T16:00:00.000Z" title="发表于 2026-10-09 00:00:00">2026-10-09</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
