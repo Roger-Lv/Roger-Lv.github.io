@@ -1,0 +1,1288 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从一次 AI Infra 面试复盘切入,完整梳理 GPU 性能分析、分布式训练并行策略、RayJob 弹性伸缩、GPU 混部与扩容可行性判断;再深入调度层,拆解 PriorityClass 抢占、kube-scheduler 三队列模型与 13 个扩展点、Volcano&#x2F;Kueue&#x2F;YuniKorn 三大批处理调度器、DRF 主资源公平算法、调度器与 Node 的解耦本质、多调度器冲突的三层兜底,">
+<meta property="og:type" content="article">
+<meta property="og:title" content="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析">
+<meta property="og:url" content="https://roger-lv.github.io/2026/10/15/2026-10-09-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从一次 AI Infra 面试复盘切入,完整梳理 GPU 性能分析、分布式训练并行策略、RayJob 弹性伸缩、GPU 混部与扩容可行性判断;再深入调度层,拆解 PriorityClass 抢占、kube-scheduler 三队列模型与 13 个扩展点、Volcano&#x2F;Kueue&#x2F;YuniKorn 三大批处理调度器、DRF 主资源公平算法、调度器与 Node 的解耦本质、多调度器冲突的三层兜底,">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-10-14T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-10-15T08:55:55.430Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="AI Infra">
+<meta property="article:tag" content="GPU">
+<meta property="article:tag" content="Volcano">
+<meta property="article:tag" content="分布式训练">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="调度器">
+<meta property="article:tag" content="Kueue">
+<meta property="article:tag" content="抢占">
+<meta property="article:tag" content="Nsight">
+<meta property="article:tag" content="RayJob">
+<meta property="article:tag" content="混部">
+<meta property="article:tag" content="kube-scheduler">
+<meta property="article:tag" content="DRF">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析",
+  "url": "https://roger-lv.github.io/2026/10/15/2026-10-09-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-10-14T16:00:00.000Z",
+  "dateModified": "2026-10-15T08:55:55.430Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/10/15/2026-10-09-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">283</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">373</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-14T16:00:00.000Z" title="发表于 2026-10-15 00:00:00">2026-10-15</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-15T08:55:55.430Z" title="更新于 2026-10-15 16:55:55">2026-10-15</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/10/15/2026-10-09-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" data-flag-title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</h1>
+<h2 id="本文以一次-AI-Infra-岗位一面为线索-围绕-GPU-性能分析、分布式训练、RayJob-弹性伸缩、GPU-混部与调度可行性判断五大模块展开-再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与-Node-的解耦关系、多调度器冲突、backfill-preempt-reclaim-的跨队列语义-一次讲透。核心观点先抛出来-Infra-面试考的不是名词背诵-而是-瓶颈定位-→-决策依据-→-工程权衡-这条完整链路的推理能力。调度层的所有机制-本质上都在-分布式一致性-和-资源效率-之间做权衡。">本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的<strong>调度层</strong>作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill/preempt/reclaim 的跨队列语义,一次讲透。<br>
+核心观点先抛出来:<strong>Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力</strong>。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。</h2>
+<h2 id="一、GPU-性能与分布式训练-Nsight-与并行策略">一、GPU 性能与分布式训练:Nsight 与并行策略</h2>
+<h3 id="1-1-Nsight-是什么、怎么用">1.1 Nsight 是什么、怎么用</h3>
+<p>Nsight 是 NVIDIA 提供的 GPU 性能分析工具套件,其中最核心的是两把&quot;不同倍率的放大镜&quot;:</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>定位</th>
+<th>分析粒度</th>
+<th>典型命令</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Nsight Systems (nsys)</strong></td>
+<td>全系统时间线分析</td>
+<td>CPU 线程、CUDA API、kernel 启动、内存拷贝、流活动</td>
+<td><code>nsys profile -o out ./app</code></td>
+</tr>
+<tr>
+<td><strong>Nsight Compute (ncu)</strong></td>
+<td>单 kernel 深度分析</td>
+<td>Occupancy、SM 利用率、各级存储带宽、warp stall 原因</td>
+<td><code>ncu --set full -o report ./app</code></td>
+</tr>
+<tr>
+<td>两者的关系是<strong>递进式的定位流程</strong>,不是二选一。</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>标准的瓶颈定位三步走:</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ol>
+<li><strong>先用 Nsight Systems 看时间线</strong>:判断 GPU 到底是在算还是在等。典型信号包括 kernel 之间的大段空白(GPU 饥饿,说明 CPU 侧数据准备或 Python 逻辑是瓶颈)、<code>cudaMemcpy</code> 占比过高(PCIe 传输成为瓶颈)、以及本可以重叠却串行执行的 H2D 拷贝与 kernel。</li>
+<li><strong>加 NVTX 打标</strong>:在训练循环里用 <code>nvtx.range_push(&quot;forward&quot;)</code> 等标记关键阶段,让时间线可读性大幅提升,这是生产环境必备技巧。</li>
+<li><strong>再用 Nsight Compute 深挖热点 kernel</strong>:对 nsys 里最耗时的几个 kernel 做 SpeedOfLight、Occupancy、Memory Workload 分析,判断到底是 compute-bound、memory-bound 还是 latency-bound,再对症下药。<br>
+一个容易被忽视的细节:<code>ncu</code> 会把同一个 kernel 多次重放以采集完整指标,对训练任务侵入性很强,生产环境通常要用 <code>-k &lt;regex&gt;</code> 和 <code>--launch-count</code> 限定采集范围。</li>
+</ol>
+<h3 id="1-2-分布式训练-显存、通信与拓扑的三角关系">1.2 分布式训练:显存、通信与拓扑的三角关系</h3>
+<p>面试官问&quot;对分布式训练有哪些了解&quot;,本质上是在考察能否把<strong>并行策略 → 通信模式 → 显存占用 → 网络拓扑</strong>这条因果链讲清楚。当前主流的并行维度有六种,关键差异如下:</p>
+<table>
+<thead>
+<tr>
+<th>并行方式</th>
+<th>切分维度</th>
+<th>核心通信操作</th>
+<th>通信频次</th>
+<th>显存收益</th>
+<th>拓扑要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>DP</strong>(数据并行)</td>
+<td>Batch 维度</td>
+<td>AllReduce 梯度</td>
+<td>每步 1 次,可与 backward 重叠</td>
+<td>无(每卡完整模型)</td>
+<td>对延迟容忍度最高</td>
+</tr>
+<tr>
+<td><strong>TP</strong>(张量并行)</td>
+<td>层内权重矩阵</td>
+<td>AllReduce</td>
+<td>每层 forward+backward 都要做</td>
+<td>参数/激活均分</td>
+<td><strong>必须放在 NVLink 域内</strong>,通常节点内</td>
+</tr>
+<tr>
+<td><strong>PP</strong>(流水线并行)</td>
+<td>层间切分</td>
+<td>P2P 传激活</td>
+<td>每阶段边界 1 次</td>
+<td>按层数均分</td>
+<td>对带宽要求最低,适合跨节点</td>
+</tr>
+<tr>
+<td><strong>EP</strong>(专家并行)</td>
+<td>MoE 专家</td>
+<td>All-to-All</td>
+<td>每层 router 分发时</td>
+<td>专家参数均分</td>
+<td>需网络拓扑支持大带宽</td>
+</tr>
+<tr>
+<td><strong>CP</strong>(上下文并行)</td>
+<td>序列维度</td>
+<td>Ring Attention</td>
+<td>注意力内部</td>
+<td>激活按序列均分</td>
+<td>长上下文必备</td>
+</tr>
+<tr>
+<td><strong>SP</strong>(序列并行)</td>
+<td>序列+LayerNorm/Dropout</td>
+<td>配合 TP 的通信</td>
+<td>与 TP 相当</td>
+<td>减少 TP 激活冗余</td>
+<td>与 TP 同域</td>
+</tr>
+<tr>
+<td>几个典型的&quot;题眼&quot;:</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>为什么 TP 通常限制在 8-16 卡(节点内)?</strong> TP 的 AllReduce 发生在每层 forward 和 backward,消息小、频次极高,一旦跨节点走 IB,小消息的延迟开销会被急剧放大。实测显示 TP 跨 IB 比域内 NVLink 慢 7-50 倍,小消息场景接近 50 倍。</li>
+<li><strong>为什么 DP 不能单独使用?</strong> DP 不减少每卡显存,每张卡都要装下完整模型、梯度和优化器状态,所以大模型必须配合 TP/PP,或用 ZeRO 把优化器状态、梯度、参数分片。</li>
+<li><strong>拓扑对 AllReduce 的影响</strong>:同一个 8 卡节点内,GPU0-GPU1 走 NVLink(450 GB/s 级)与 GPU0-GPU4 跨 NUMA 走 QPI 的带宽差一个量级;调度器若不感知拓扑,会把一个 NVL4 域的作业拆到两个 NUMA 上,等效带宽直接腰斩。<br>
+<strong>回答套路总结</strong>:讲清每种并行&quot;切什么、怎么通信、省多少显存、对拓扑什么要求&quot;,再给一个组合案例(例如:TP 在节点内 + PP 跨节点 + DP 外层挂 ZeRO-1,MoE 再叠 EP),就能体现体系化理解。</li>
+</ul>
+<hr>
+<h2 id="二、弹性扩缩容-RayJob-弹性的原理与业务权衡">二、弹性扩缩容:RayJob 弹性的原理与业务权衡</h2>
+<h3 id="2-1-为什么支持-RayJob-弹性">2.1 为什么支持 RayJob 弹性</h3>
+<p>RayJob 的弹性由 <strong>Ray Autoscaler</strong> 驱动,关键机制是:<strong>它依据逻辑资源请求(<code>@ray.remote</code> 里声明的 CPU/GPU 需求)而非物理机利用率来扩缩</strong>。工作流程是:</p>
+<ol>
+<li>用户提交 Ray task/actor/placement group;</li>
+<li>资源不足时请求入队,Autoscaler 侧感知到 pending demand;</li>
+<li>Autoscaler 增加 RayCluster CR 的 <code>replicas</code> 字段,KubeRay Operator 创建新的 Worker Pod;</li>
+<li>Pod 就绪后 Ray 调度器把工作负载放置上去;</li>
+<li>节点空闲超过 <code>idleTimeoutSeconds</code> 后被移除。<br>
+在 KubeRay 里实际存在<strong>三层弹性</strong>,理解分层很重要:</li>
+</ol>
+<ul>
+<li>Ray actor/task 层:Ray Serve 根据请求量自动调整副本数;</li>
+<li>Ray 节点层:Autoscaler 调整 Ray Worker Pod 数量;</li>
+<li>Kubernetes 节点层:K8s Cluster Autoscaler 为新 Pod 供给物理节点。</li>
+</ul>
+<h3 id="2-2-什么时候扩、什么时候缩">2.2 什么时候扩、什么时候缩</h3>
+<p><strong>扩容时机</strong>:出现 pending task/actor/placement group 时。这是逻辑层需求,不代表 CPU 真的满了,可能只是资源碎片化或亲和性约束导致调度不进去。<br>
+<strong>缩容时机</strong>:节点进入&quot;空闲&quot;状态(没有活跃 task/actor/object)且持续超过 idle 超时。Autoscaler 会把该 Pod 加进 <code>workersToDelete</code> 由 KubeRay Operator 删除。<br>
+<strong>推理服务为什么夜间缩容?</strong> 背后的业务逻辑是<strong>夜间流量低谷 + 离线训练任务潮汐需求</strong>:</p>
+<ul>
+<li>在线推理有明显的日周期,白天峰值、深夜谷值,峰均差可达 30 个百分点;</li>
+<li>离线训练任务全天需求旺盛,夜间是它抢到卡的最佳窗口;</li>
+<li>缩容后释放的 GPU 可以让离线训练/批处理任务上卡,实现&quot;潮汐混部&quot;,整体提升资源效率。<br>
+<strong>面试常见误区</strong>:只看 GPU 利用率决定扩缩。正确做法是从<strong>业务需求和阶段瓶颈</strong>出发,说清楚扩缩对象(是 Ray Worker 还是 K8s Node?是推理副本还是训练 Worker?)、扩缩的安全条件(推理缩容要考虑请求排空、连接排水、模型加载成本)以及冷启动代价(新 Pod 拉镜像、模型加载、Ray Worker 注册可能要几分钟,频繁扩缩反而放大成本)。</li>
+</ul>
+<hr>
+<h2 id="三、混部-资源共享的层级、隔离与回收">三、混部:资源共享的层级、隔离与回收</h2>
+<p><strong>混部的本质</strong>是让在线服务(延迟敏感、潮汐性强、平时利用率低)与离线任务(容错性好、吞吐型、全天可跑)共享同一批物理资源,用隔离和调度机制把互相干扰压到可接受范围。</p>
+<h3 id="3-1-共享资源的层级">3.1 共享资源的层级</h3>
+<p>以快手的生产实践为例,典型分层是:</p>
+<table>
+<thead>
+<tr>
+<th>QoS 等级</th>
+<th>供给保障</th>
+<th>适用负载</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>LSE / LSR</strong>(在线高优)</td>
+<td>独占 CPU 核、严格保障</td>
+<td>在线核心服务、延迟敏感推理</td>
+</tr>
+<tr>
+<td><strong>LS / Mid</strong></td>
+<td>基于服务画像和 AI 资源预测的天级别保障</td>
+<td>近线任务、Flink、特征抽取</td>
+</tr>
+<tr>
+<td><strong>BE / Free</strong></td>
+<td>基于单机水位超发,允许压缩与退避</td>
+<td>离线批处理、异步转码、测试任务</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-2-隔离方式">3.2 隔离方式</h3>
+<p>GPU 混部的隔离粒度比 CPU 复杂得多,核心手段有三种,各自作用于不同层面:</p>
+<table>
+<thead>
+<tr>
+<th>隔离技术</th>
+<th>作用层面</th>
+<th>隔离强度</th>
+<th>典型用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MIG</strong>(Multi-Instance GPU)</td>
+<td>硬件级,显存+SM 硬切</td>
+<td>最强,物理隔离</td>
+<td>A100/H100 上的多租户严格隔离</td>
+</tr>
+<tr>
+<td><strong>MPS</strong>(Multi-Process Service)</td>
+<td>软件级,SM 份额限制</td>
+<td>中等,算力软隔离</td>
+<td>训练与推理同卡混跑的算力配比</td>
+</tr>
+<tr>
+<td><strong>Time-Slicing</strong></td>
+<td>时间片轮转</td>
+<td>最弱,无显存隔离</td>
+<td>低成本共享,接受延迟毛刺</td>
+</tr>
+<tr>
+<td>需要注意两个硬约束:<strong>显存是硬边界,算力是软边界</strong>。MIG 只支持 A100/H100 等特定型号,4090、L40S 等卡只能靠 MPS/时间片做软隔离,且 MPS 的显存隔离并不完美,仍有 OOM 风险。CPU 侧则靠 cgroups v2 做细粒度控制,配合 NUMA 绑定避免跨 socket 访问拖慢关键路径。</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-3-优先级与回收策略">3.3 优先级与回收策略</h3>
+<ul>
+<li><strong>PriorityClass + Preemption</strong>:定义 P0 Training / P1 Serving / P2 Batch / P3 Interactive 四档,高优可抢占低优;关键是要给交互类任务设置 <code>preemptionPolicy: Never</code>,避免级联驱逐。</li>
+<li><strong>资源紧张时的退避</strong>:压力状态触发时,离线任务按 QoS 优先级顺序自动退避,超阈值即被压制甚至驱逐;前提是底层任务支持 checkpoint 恢复,否则驱逐代价过高。</li>
+<li><strong>保障关键负载</strong>:高优服务必须有 PDB(PodDisruptionBudget)保护,同时给低优任务加弹性边界(降级而非驱逐),训练任务被抢占后从 checkpoint 继续而非从头重跑。<br>
+<strong>回答套路</strong>:讲清&quot;哪几层资源可以共享 → 每层用什么隔离 → 优先级怎么定义 → 资源紧张时谁让路、怎么让路 → 让路后怎么恢复&quot;,这四段逻辑缺一不可。</li>
+</ul>
+<hr>
+<h2 id="四、扩容可行性-Quota、DryRun-与放置约束">四、扩容可行性:Quota、DryRun 与放置约束</h2>
+<p>这是最容易被面试者&quot;答得太浅&quot;的一道题。核心结论先行:<strong>Quota 通过 ≠ 能调度成功,DryRun 通过 ≠ 有资源预留</strong>。需要区分三层概念:<strong>额度(Quota)→ 容量(Cluster Capacity)→ 实际放置(Placement)</strong>。</p>
+<h3 id="4-1-Quota-校验做什么">4.1 Quota 校验做什么</h3>
+<p>Kubernetes 的 ResourceQuota 工作在 <strong>Admission 阶段</strong>,在 namespace 级别限制 <code>requests.cpu/memory</code>、<code>limits.cpu/memory</code>、Pod 数量、PVC 数量等聚合值。它只回答一个问题:“这个 namespace 的累计申请量会不会超配额?”<br>
+关键局限:<strong>Quota 校验完全不看节点层面有没有真实资源</strong>。namespace 配额没用完,不代表集群里能找到一台满足需求的节点。</p>
+<h3 id="4-2-DryRun-做什么">4.2 DryRun 做什么</h3>
+<p><code>kubectl apply --dry-run=server</code> 会在 API Server 上执行完整的准入链(认证 → 授权 → Mutating Webhook → Schema 校验 → Validating Webhook → ResourceQuota),但<strong>不持久化对象、不触发 controller</strong>。<br>
+一个重要的坑:<strong>Deployment 的 dry-run 不会创建 ReplicaSet 和 Pod</strong>,所以它只验证 Deployment 对象本身合法,后续 Pod 是否能通过 Quota、是否能被调度,DryRun 完全不保证。要做真正的扩容前校验,需要把 Pod 模板单独提取出来做一次 Pod 级别的 server dry-run,再叠加 Quota 剩余量聚合计算。</p>
+<h3 id="4-3-RayJob-是否有亲和约束">4.3 RayJob 是否有亲和约束</h3>
+<p>有,而且比一般工作负载更严格。关键约束有四类:<br>
+<strong>① Gang Scheduling(成组调度)</strong>。Ray 的 head 和 worker 构成一个整体,若只调度一部分 Pod 会造成两个作业各占一半资源但都无法运行。通过 Volcano 的 PodGroup 机制,一组 Pod 要么全部放置、要么全部等待,<code>minMember</code> 和 <code>minResources</code> 定义了最低门槛。KubeRay 通过 <code>--batch-scheduler=volcano</code> 启用该能力。<br>
+<strong>② 拓扑亲和(Topology Affinity)</strong>。TP 组必须放在同一个 NVLink 域内,DP 组可跨 IB。调度器需要感知节点内 NVLink/PCIe/NUMA 拓扑与节点间 RDMA 网络,通过 GPU Feature Discovery 标签 + kubelet Topology Manager + RDMA device plugin 组合实现。<br>
+<strong>③ 资源碎片</strong>。8 卡作业要找一台 8 卡连续空闲的节点,若集群里只剩 4 台各有 2 卡空闲的节点,即便总量够也无法放置;GPU 尤其敏感,因为原生 K8s 把 GPU 当作不可分割的整数资源。<br>
+<strong>④ 卡型匹配</strong>。H100 与 A800 不能混用,MIG 切分后的实例规格要匹配,这些都要通过 nodeSelector、taint/toleration 或自定义调度插件表达。</p>
+<h3 id="4-4-资源状态变化怎么办">4.4 资源状态变化怎么办</h3>
+<p>扩容决策通过后,集群状态仍在变化:新 Pod 不断加入可能挤压后续放置、节点故障会让原本可行的方案失效、低优任务被抢占可能释放资源。工程上的做法是:</p>
+<ul>
+<li>扩容走<strong>声明式 API + 控制器 reconcile</strong>,而不是一次性决策;</li>
+<li>批量扩容时使用 <strong>quota reservation</strong>(如 Kueue、YuniKorn 的 reserve 机制)避免多个作业同时判定&quot;能放下&quot;却互相冲突;</li>
+<li>对长周期任务做<strong>周期性 re-validate</strong>,状态变化时重新走一遍预选。<br>
+<strong>回答套路</strong>:先把&quot;额度够 ≠ 容量够 ≠ 能放下&quot;三层拆开,再按&quot;Quota → DryRun → Gang → 亲和 → 碎片 → 拓扑&quot;顺序展开,最后提一下状态变化的处理,基本能把这道题答满。</li>
+</ul>
+<hr>
+<h2 id="五、检查成本-检查一大堆会不会很慢">五、检查成本:检查一大堆会不会很慢?</h2>
+<p>这是一道典型的<strong>工程权衡题</strong>。面试官想听的不是&quot;会/不会&quot;,而是:<strong>检查覆盖哪些维度、每项耗时多少、是否并行、如何兜底、总体权衡在&quot;提前发现问题&quot;和&quot;启动延迟&quot;之间。</strong></p>
+<h3 id="5-1-检查会覆盖什么">5.1 检查会覆盖什么</h3>
+<p>扩容或调度前的检查链路通常包括:</p>
+<ul>
+<li><strong>API 层面</strong>:Schema 校验、Mutating/Validating Webhook;</li>
+<li><strong>配额层面</strong>:ResourceQuota、LimitRange、PDB 冲突;</li>
+<li><strong>调度层面</strong>:资源余量、亲和/反亲和、污点容忍、拓扑约束、Gang 成员;</li>
+<li><strong>运行时层面</strong>:镜像是否存在、存储是否可挂载、网络策略是否放通。</li>
+</ul>
+<h3 id="5-2-耗时与超时怎么定">5.2 耗时与超时怎么定</h3>
+<p>单次检查的耗时分布大致是:API 准入毫秒级、Quota 校验毫秒级、调度预选/优选在大集群下可达百毫秒级、Webhook 调用视实现可能到几十毫秒。真正的瓶颈往往在:</p>
+<ul>
+<li><strong>大规模集群的调度器预选</strong>:每个 Pod 要对所有节点跑一遍 filter + score,10000 节点集群即使单节点评估只要几十微秒,累计也可观;</li>
+<li><strong>Gang 调度的等待</strong>:PodGroup 需要所有成员资源满足才放行,minMember 很大时等待时间可能到分钟级;</li>
+<li><strong>镜像拉取与模型加载</strong>:一个 40GB 的大模型镜像冷启动可能要几分钟,这部分不是&quot;检查&quot;但占启动大头。<br>
+超时设置需要<strong>分级</strong>:单次检查给秒级超时快速失败,整体扩容流程给分钟级总预算,避免某一个检查点卡死整个链路。</li>
+</ul>
+<h3 id="5-3-并行与优化手段">5.3 并行与优化手段</h3>
+<ul>
+<li><strong>调度器并行预选</strong>:K8s 1.33 起默认对 500+ 节点集群启用并行 filtering,把节点池分批并发评估;</li>
+<li><strong>百分比预选</strong>:<code>percentageOfNodesToScore</code> 让调度器在找到足够可行节点后提前结束,10 万节点集群设置评估 30% 就能显著降低延迟;</li>
+<li><strong>插件短路</strong>:让明显不匹配的节点尽早返回失败,避免浪费完整评估;</li>
+<li><strong>Webhook 轻量化</strong>:混部/配额类 Webhook 要严格控制 P99 延迟,否则会拖慢整个准入链;</li>
+<li><strong>检查项分层</strong>:必检项(Quota、Schema)与可异步项(镜像预热、网络预检)分开,同步路径只保留最小集合。</li>
+</ul>
+<h3 id="5-4-故障归因与兜底">5.4 故障归因与兜底</h3>
+<h2 id="检查失败要有清晰的归因-是-Quota-不足、无可用节点、亲和性冲突还是-Webhook-拒绝-每种原因对应不同处置-扩-Quota、扩节点池、调整作业规格、修-Webhook-。检查通过后还要有事后观测——如果实际放置仍然失败-要有事件与指标能快速定位到是哪个-plugin-在哪个扩展点拒绝的。回答套路-按-覆盖范围-→-单项耗时-→-总体预算-→-并行手段-→-故障归因-→-权衡-提前发现-vs-启动延迟-“这条链路展开-最后给一个具体数字-例如-一次完整的扩容预检控制在-3-秒内-镜像预热走异步”-会显得非常扎实。">检查失败要有清晰的归因:是 Quota 不足、无可用节点、亲和性冲突还是 Webhook 拒绝?每种原因对应不同处置(扩 Quota、扩节点池、调整作业规格、修 Webhook)。检查通过后还要有<strong>事后观测</strong>——如果实际放置仍然失败,要有事件与指标能快速定位到是哪个 plugin 在哪个扩展点拒绝的。<br>
+<strong>回答套路</strong>:按&quot;覆盖范围 → 单项耗时 → 总体预算 → 并行手段 → 故障归因 → 权衡(提前发现 vs 启动延迟)“这条链路展开,最后给一个具体数字(例如&quot;一次完整的扩容预检控制在 3 秒内,镜像预热走异步”)会显得非常扎实。</h2>
+<h2 id="六、调度层深潜-抢占、队列、调度器、DRF-与跨队列语义">六、调度层深潜:抢占、队列、调度器、DRF 与跨队列语义</h2>
+<p>前五章是面试的&quot;基础盘&quot;,而调度层才是拉开差距的地方。这一章把调度层的核心机制一次讲透。</p>
+<h3 id="6-1-抢占机制-谁让路、怎么让、代价谁付">6.1 抢占机制:谁让路、怎么让、代价谁付</h3>
+<h4 id="PriorityClass-抢占的语言基础">PriorityClass:抢占的语言基础</h4>
+<p>抢占的前提是 Pod 有优先级,而优先级通过 <strong>PriorityClass</strong>(集群级资源)表达。它本质上是一个&quot;名字 → 32 位整数&quot;的映射,用户可定义的范围是 -2147483648 ~ 1000000000,超过 10 亿的值预留给系统组件(<code>system-node-critical</code> = 2000001000、<code>system-cluster-critical</code> = 2000000000)。<br>
+一个完整的 PriorityClass 有四个关键字段,每个都对应一个工程决策:</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>作用</th>
+<th>工程含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>value</code></td>
+<td>优先级数值,越大越优先</td>
+<td>决定队列排序顺序和抢占资格</td>
+</tr>
+<tr>
+<td><code>globalDefault</code></td>
+<td>未指定 priorityClassName 时的兜底</td>
+<td>生产环境必须设一个默认类,避免优先级 0</td>
+</tr>
+<tr>
+<td><code>preemptionPolicy</code></td>
+<td><code>PreemptLowerPriority</code> / <code>Never</code></td>
+<td>交互类任务通常设 <code>Never</code>,防止抢占风暴</td>
+</tr>
+<tr>
+<td><code>preemptionPolicy</code> 缺省</td>
+<td>默认 <code>PreemptLowerPriority</code></td>
+<td>所有 Pod 默认都能抢占别人</td>
+</tr>
+<tr>
+<td>一个常被忽略的细节:<strong>ResourceQuota 可以限定每个 namespace 能创建多高优先级的 Pod</strong>,这是防止多租户场景下&quot;用户把自己的作业全标成 P0&quot;的关键治理手段——Ai2 的案例中,正是因为缺乏这种限制,最终&quot;集群内 100% 的提交任务全部变成了紧急状态,多级优先级彻底失效&quot;。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="kube-scheduler-的抢占流程">kube-scheduler 的抢占流程</h4>
+<p>抢占在调度框架里由 <strong>PostFilter 扩展点</strong>触发——只有当 Filter 阶段所有节点都被淘汰时,DefaultPreemption 插件才会启动,去问一个问题:&quot;<strong>如果驱逐掉某些低优 Pod,这个 Pod 能不能放进去?</strong>&quot;整个流程分四步:</p>
+<ol>
+<li><strong>筛选候选节点</strong>:找出&quot;假如移除若干低优 Pod 就能放下目标 Pod&quot;的节点集合;</li>
+<li><strong>选择 victims</strong>:在候选节点集合里计算&quot;驱逐代价&quot;最小的组合,优先考虑优先级最低、最近被调度、打断的 PDB 最少的组合;</li>
+<li><strong>删除 victims</strong>:scheduler 只是把 victim Pod 打上删除标记(通过 API Server 走 deletion + graceful termination),真正终止由 kubelet 完成;</li>
+<li><strong>下一轮重试</strong>:victims 优雅退出后,原本 pending 的高优 Pod 在下一个调度周期成功放置。<br>
+<strong>关于 victim selection 的三个细节</strong>,面试里很容易被追问:</li>
+</ol>
+<ul>
+<li><strong>优先级不低于待调度 Pod 的 Pod 永远不会被驱逐</strong>,这是抢占的底线规则;</li>
+<li><strong>PDB(PodDisruptionBudget)只是&quot;best-effort&quot;</strong>——scheduler 会尽量避免打破 PDB,但为了放一个系统级关键 Pod,它允许打破;</li>
+<li><strong>跨 namespace 的抢占要求</strong>:只有当 victim Pod 的优先级低于抢占者、且抢占者有足够优先级跨过 namespace 边界时,才会发生跨 ns 抢占,这是防止多租户互相踩踏的护栏。</li>
+</ul>
+<h4 id="抢占的三种形态-抢占-vs-回收-vs-驱逐">抢占的三种形态:抢占 vs 回收 vs 驱逐</h4>
+<p>很多面试题把这三个概念混为一谈,其实在 AI Infra 场景下它们对应不同的调度器动作,<strong>严格区分才能答对</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>触发条件</th>
+<th>调用方</th>
+<th>典型场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>抢占</strong></td>
+<td>同队列内高优 Pod 放不下</td>
+<td>Volcano 的 <code>preempt</code> action / Kueue 的 <code>InClusterQueue</code> preemption</td>
+<td>同一团队内 P0 训练任务挤掉 P2 实验</td>
+</tr>
+<tr>
+<td><strong>回收</strong></td>
+<td>队列使用量超过 deserved,其他队列资源紧张</td>
+<td>Volcano 的 <code>reclaim</code> action / Kueue 的 <code>reclaimWithinCohort</code></td>
+<td>借了别队 GPU 的作业被&quot;还回去&quot;</td>
+</tr>
+<tr>
+<td><strong>驱逐</strong></td>
+<td>节点压力、taint 变化、PDB、硬件故障</td>
+<td>kubelet eviction / node controller</td>
+<td>内存压力下的节点级驱逐</td>
+</tr>
+<tr>
+<td><strong>Kueue 的抢占算法尤其值得展开</strong>。它有&quot;经典抢占&quot;和&quot;公平共享&quot;两种模式,核心区别在于<strong>能否跨 ClusterQueue 抢占</strong>:</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>经典抢占:只有当抢占方的 ClusterQueue 用量(在接纳后)低于 nominalQuota,或者所有候选都属于同一个 ClusterQueue 时才允许抢占。换句话说,ClusterQueue 不能靠抢占别人来维持自己的&quot;借出状态&quot;,这是&quot;先到先得&quot;语义;</li>
+<li>公平共享:允许有 pending 工作负载的 ClusterQueue 去抢占 cohort 内其他 ClusterQueue 的工作负载,直到自己拿到与权重相称的公平份额。<br>
+<strong>抢占候选的排序规则</strong>是:先挑&quot;借了配额的队列里的工作负载&quot;→ 再挑&quot;优先级最低的&quot; → 最后挑&quot;最近被接纳的&quot;,这个顺序背后的逻辑是<strong>尽量让借出去的资源先回家、让最早被误接纳的先退场</strong>。</li>
+</ul>
+<h4 id="AI-场景的抢占治理-比机制更重要的问题">AI 场景的抢占治理:比机制更重要的问题</h4>
+<p>在 AI 集群里,抢占的<strong>成本远高于普通无状态服务</strong>——一次抢占可能意味着要写几十 GB 的 checkpoint、重拉模型、重建 NCCL 通信组。Ai2 在数千张 H100 上的实践给出了一个反直觉的结论:<strong>与其堆优先级,不如用&quot;时间预算 + 分时契约&quot;</strong>:</p>
+<ul>
+<li>给每个任务声明&quot;最短受保护运行时长&quot;,保护窗口内不可被抢占;</li>
+<li>窗口结束后系统有权将其挂起重排;</li>
+<li>声明&quot;最短时长为零&quot;的任务不扣预算,代价是随时可被驱逐;</li>
+<li>配合&quot;抢占退避惩罚&quot;,频繁触发抢占的作业会被临时降级。<br>
+这套设计的核心洞察是:<strong>抢占风暴的本质不是技术问题,是博弈问题</strong>——当抢占零成本时,每个人都会把自己的任务标成最高优,多级优先级就形同虚设。治理抢占必须在机制之外叠加<strong>经济激励</strong>(预算扣减)和<strong>时间约束</strong>(保护窗口)。</li>
+</ul>
+<h3 id="6-2-队列机制-Pod-排队与作业排队的两层世界">6.2 队列机制:Pod 排队与作业排队的两层世界</h3>
+<h4 id="kube-scheduler-的三队列模型">kube-scheduler 的三队列模型</h4>
+<p>调度器内部的队列不是 FIFO,而是<strong>三个子队列 + 两个后台刷写协程</strong>构成的状态机:</p>
+<table>
+<thead>
+<tr>
+<th>队列</th>
+<th>作用</th>
+<th>排序规则</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ActiveQ</strong></td>
+<td>待调度的 Pod,scheduler 每次从这里 pop</td>
+<td>默认按优先级降序,同级按创建时间升序;可通过 QueueSort 插件自定义</td>
+</tr>
+<tr>
+<td><strong>PodBackoffQ</strong></td>
+<td>调度失败、处于指数退避期的 Pod</td>
+<td>每次失败退避时长翻倍(1s、2s、4s……),退避结束自动回 ActiveQ</td>
+</tr>
+<tr>
+<td><strong>UnschedulableQ</strong></td>
+<td>反复调度失败、等待集群状态变化的 Pod</td>
+<td>等 flushUnschedulableQLeftover 每 30s 刷一次,或等特定事件触发唤醒</td>
+</tr>
+<tr>
+<td>两个后台协程的节奏值得记住:<strong>flushBackoffQCompleted 每秒跑一次</strong>,把退避完成的 Pod 挪回 ActiveQ;<strong>flushUnschedulableQLeftover 每 30 秒跑一次</strong>,兜底把长期无人问津的 Pod 重新尝试(最坏情况一个 Pod 要在 UnschedulableQ 里等 60 秒)。</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>事件驱动的队列迁移</strong>是这套机制最精巧的部分:当节点加入、节点更新、Pod 删除、PV 创建等事件发生时,scheduler 会调用 <code>MoveAllToActiveOrBackoffQueue</code> 把相关 Pod 从 UnschedulableQ 批量搬回 ActiveQ——这就是为什么&quot;<strong>删掉一个别的 Pod 之后,之前一直 Pending 的任务突然就跑起来了</strong>&quot;。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="QueueSort-队列的排序规则">QueueSort:队列的排序规则</h4>
+<p>QueueSort 是调度框架的一个扩展点,决定 ActiveQ 内 Pod 的相对顺序。默认实现是<strong>优先级降序、创建时间升序</strong>,高优先调度、同级 FIFO。对于需要 Gang 语义的调度器,QueueSort 会被重写为按 PodGroup 的优先级和创建时间排序,保证<strong>同一 Gang 的 Pod 在队列里相邻</strong>,配合 Permit 扩展点实现&quot;凑齐再放行&quot;。</p>
+<h4 id="从-Pod-队列到作业队列-为什么要升级">从 Pod 队列到作业队列:为什么要升级</h4>
+<p>kube-scheduler 的队列粒度是<strong>单个 Pod</strong>,而 AI 场景需要<strong>作业级队列</strong>。这个差异在多团队共享 GPU 集群时会爆炸性地放大:</p>
+<ul>
+<li><strong>没有配额</strong>:一个团队可以吃光整个集群;</li>
+<li><strong>没有排队语义</strong>:新提交的作业直接抢资源,早提交的作业可能饿死;</li>
+<li><strong>没有公平性</strong>:先来先服务不等于公平,DRF(Dominant Resource Fairness)才是多资源维度的公平解。<br>
+所以 <strong>Volcano / Kueue / YuniKorn 的本质是把队列从&quot;Pod 排队&quot;升级到&quot;Workload 排队&quot;</strong>,每个 Workload 带着完整的资源请求被纳入队列治理。三者的队列模型对比如下:<br>
+| 维度                                                         | Volcano                                | Kueue                                        | YuniKorn                                |<br>
+| ------------------------------------------------------------ | -------------------------------------- | -------------------------------------------- | --------------------------------------- |<br>
+| <strong>核心 CRD</strong>                                                 | Queue + PodGroup                       | ClusterQueue + LocalQueue + Workload         | QueueInfo + hierarchical Queue          |<br>
+| <strong>队列结构</strong>                                                 | 多级队列(root → 子队列 → 叶子)         | ClusterQueue + Cohort(共享配额池)            | 严格的层级树,YARN 风格                  |<br>
+| <strong>配额语义</strong>                                                 | guarantee ≤ deserved ≤ capability 三级 | nominalQuota + borrowingLimit + lendingLimit | guaranteed + max                        |<br>
+| <strong>公平算法</strong>                                                 | proportion(weight)/ capacity 插件      | Fair Sharing(cohort 内加权)                  | DRF + StateAware / FIFO / Priority 可选 |<br>
+| <strong>Gang 调度</strong>                                                | 原生支持(PodGroup + minAvailable)      | 原生支持(Workload Admission)                 | 支持(App 级调度)                        |<br>
+| <strong>准入门槛</strong>                                                 | enqueue action 判断                    | Admission Check                              | placement rules + ACLs                  |<br>
+| <strong>Volcano 的 deserved 三级模型</strong>特别值得记住,因为它把&quot;资源保障&quot;和&quot;资源共享&quot;的关系表达得最清楚: |                                        |                                              |                                         |</li>
+<li><code>guarantee</code>:<strong>独占预留</strong>,其他队列碰不到,用于保护核心业务;</li>
+<li><code>deserved</code>:<strong>应得资源</strong>,空闲时可以被别的队列借走,忙时可以 reclaim 回来,这是弹性共享的关键;</li>
+<li><code>capability</code>:<strong>硬上限</strong>,无论集群多空闲,本队列都不能超过。<br>
+这套模型一句话总结就是&quot;<strong>预留保底、应得公平、上限封顶</strong>&quot;。</li>
+</ul>
+<h4 id="Volcano-的调度动作流水线">Volcano 的调度动作流水线</h4>
+<p>Volcano 的调度器不走 kube-scheduler 的 Filter/Score 流程,而是用 <strong>action + plugin 的可插拔架构</strong>——action 定义&quot;走哪几步&quot;,plugin 定义&quot;每一步用什么逻辑&quot;:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">enqueue  →  判断基本资源够不够,PodGroup 从 Pending → Inqueue</span><br><span class="line">allocate →  给有明确资源请求的 task 精确选节点</span><br><span class="line">backfill →  把剩余边角资源喂给 BestEffort / 小任务</span><br><span class="line">preempt  →  队列内高优先级抢占低优先级</span><br><span class="line">reclaim  →  队列间回收超额占用的资源</span><br></pre></td></tr></table></figure>
+<p><strong>调度循环的关键设计</strong>:Volcano 每隔约 1 秒 OpenSession(快照整个集群的资源和任务),按序执行 actions,最后 CloseSession 真正 bind。<strong>单 session 内串行处理所有 job,每分配一个就立即在内存快照里扣减资源</strong>——这个设计天然不会 over-commit,不会出现&quot;两个 gang 任务都判断资源够、却各自只分到一半&quot;的写倾斜问题。这一点和 kube-scheduler 的&quot;每 Pod 一次完整调度周期&quot;是本质不同的架构选择。</p>
+<h3 id="6-3-调度器框架-一个-Pod-的一生">6.3 调度器框架:一个 Pod 的一生</h3>
+<h4 id="调度周期-vs-绑定周期">调度周期 vs 绑定周期</h4>
+<p>kube-scheduler 把每个 Pod 的调度拆成两个周期:</p>
+<ul>
+<li><strong>Scheduling Cycle(调度周期)</strong>:选择节点,<strong>串行执行</strong>——因为它会修改 scheduler 的共享状态(比如 Reserve 阶段占住的资源),并发会导致竞态;</li>
+<li><strong>Binding Cycle(绑定周期)</strong>:把决策落地,<strong>可以并发执行</strong>——只是调 API Server 写 nodeName,不同 Pod 之间互不影响。<br>
+这个设计的启示是:<strong>调度器是吞吐瓶颈</strong>,因为它必须串行做决策。在大规模集群里,调度延迟往往不是 Filter/Score 慢,而是 Scheduling Cycle 排队过长。</li>
+</ul>
+<h4 id="十三个扩展点-完整流水线">十三个扩展点:完整流水线</h4>
+<p>调度框架定义了十多个扩展点,一个 Pod 从进入队列到被绑定,要完整走一遍:</p>
+<table>
+<thead>
+<tr>
+<th>扩展点</th>
+<th>作用</th>
+<th>默认实现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PreEnqueue</strong></td>
+<td>决定 Pod 是否允许进入 ActiveQ</td>
+<td>SchedulingGates 在这里卡 Pod</td>
+</tr>
+<tr>
+<td><strong>QueueSort</strong></td>
+<td>决定 ActiveQ 内排序</td>
+<td>按 PriorityClass value 降序</td>
+</tr>
+<tr>
+<td><strong>PreFilter</strong></td>
+<td>预计算 Pod 的需求,存入 CycleState</td>
+<td>NodeResourcesFit 预算资源</td>
+</tr>
+<tr>
+<td><strong>Filter</strong></td>
+<td>对每个候选节点判断&quot;能不能放&quot;</td>
+<td>14 个插件并行评估</td>
+</tr>
+<tr>
+<td><strong>PostFilter</strong></td>
+<td>所有节点都失败时触发</td>
+<td>DefaultPreemption 找 victim</td>
+</tr>
+<tr>
+<td><strong>PreScore</strong></td>
+<td>打分前的预处理</td>
+<td>初始化打分状态</td>
+</tr>
+<tr>
+<td><strong>Score</strong></td>
+<td>对每个可行节点打分</td>
+<td>9 个插件加权求和</td>
+</tr>
+<tr>
+<td><strong>Reserve</strong></td>
+<td>在调度器内存里&quot;占住&quot;资源</td>
+<td>NodeResourcesFit 占位</td>
+</tr>
+<tr>
+<td><strong>Permit</strong></td>
+<td>批准 / 拒绝 / 等待</td>
+<td>Gang 插件在这里凑齐成员</td>
+</tr>
+<tr>
+<td><strong>PreBind</strong></td>
+<td>绑定前最后一步</td>
+<td>处理 PV 绑定等</td>
+</tr>
+<tr>
+<td><strong>Bind</strong></td>
+<td>调 API Server 写 nodeName</td>
+<td>DefaultBinder</td>
+</tr>
+<tr>
+<td><strong>PostBind</strong></td>
+<td>绑定后通知</td>
+<td>一般为空</td>
+</tr>
+<tr>
+<td><strong>两个特别值得展开的扩展点</strong>:</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Permit 是 Gang 调度的实现基石</strong>。插件在这里可以返回 <code>Wait</code>,把 Pod 暂时挂起,直到同 Gang 的所有 Pod 都到达 Permit 点才统一放行——这就实现了&quot;要么全成功,要么都不调度&quot;。</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Reserve 是防止写倾斜的关键</strong>。在 Scheduling Cycle 结束前,scheduler 把这个 Pod 需要的资源在内存里占住,这样下一个 Pod 进来时看到的&quot;可用资源&quot;已经扣掉了前面 Pod 的量,避免两个 Pod 同时判断某个节点&quot;够放&quot;却实际只能放一个。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="Filter-与-Score-的默认插件">Filter 与 Score 的默认插件</h4>
+<p>Filter 阶段有 <strong>14 个内置插件</strong>,任何一个返回 Unschedulable 都会淘汰该节点,没有申诉机制:<br>
+NodeUnschedulable、NodeName、TaintToleration、NodeAffinity、NodePorts、NodeResourcesFit、VolumeRestrictions、NodeVolumeLimits、VolumeBinding、VolumeZone、PodTopologySpread、InterPodAffinity、DynamicResources、NodeDeclaredFeatures。<br>
+Score 阶段有 <strong>9 个内置插件</strong>,按权重加权求和:ImageLocality、NodeAffinity、NodeResourcesFit、NodeResourcesBalancedAllocation、PodTopologySpread、InterPodAffinity、VolumeBinding、TaintToleration、SelectorSpread。<br>
+<strong>硬规则 vs 软规则</strong>是 Filter/Score 对应的语义边界:<strong>硬规则是 Filter(nodeSelector、必须的亲和性),不满足就 Pending;软规则是 Score(weight、preferred),不满足也能调度</strong>。几乎所有的调度事故都源于 hard/soft 用错——比如把&quot;必须跑在同一 NUMA&quot;写成了 preferred,结果跨 NUMA 部署导致训练吞吐暴跌。</p>
+<h4 id="调度器性能-大规模集群的调优三板斧">调度器性能:大规模集群的调优三板斧</h4>
+<p>调度器在大规模集群下的瓶颈主要是 Filter/Score 的 O(N × M) 复杂度(N 个 Pod × M 个节点)。核心调优手段有三个:<br>
+<strong>① percentageOfNodesToScore</strong>。允许 scheduler 在找到足够可行节点后就停止 Filter,提前进入 Score。默认按集群规模线性计算:100 节点取 50%,5000 节点取 10%,最低 5%。内部还有个硬编码的<strong>最小 50 节点</strong>——集群小于 50 个节点时该参数不生效。<br>
+<strong>② 节点轮询遍历</strong>。为了让每个节点都有公平机会被选中,scheduler 用&quot;起点轮询&quot;的方式遍历节点数组——第一个 Pod 从头开始扫,第二个 Pod 从上次结束的位置继续扫,避免&quot;永远只评估前 50% 节点&quot;的偏差。<br>
+<strong>③ 并行 Filter/Score</strong>。从 Kubernetes 1.33 起,500+ 节点的集群默认启用并行 filtering/scoring,把节点池分批并发评估,大幅提升吞吐。</p>
+<h3 id="6-4-DRF-多资源维度的公平算法">6.4 DRF:多资源维度的公平算法</h3>
+<h4 id="为什么-max-min-fairness-不够用">为什么 max-min fairness 不够用</h4>
+<p>max-min fairness 的经典假设是只有一种资源——比如纯 CPU 的调度,谁分到的 CPU 份额最少就优先满足谁。但在共享集群里,用户的需求向量是异构的:A 跑 CPU 密集型任务,B 跑内存密集型任务,C 跑 GPU 密集型任务。此时&quot;对谁公平&quot;没有统一答案——按 CPU 公平、按内存公平、按 GPU 公平会得出三种完全不同的分配。<br>
+传统做法(如 Hadoop 早期)把节点切成固定规格的 slot(例如每 slot = 4 CPU + 32 MB),强行把多资源问题压回单资源——但这会让 CPU 密集型任务浪费内存、内存密集型任务浪费 CPU,整体利用率反而下降。</p>
+<h4 id="DRF-的算法核心">DRF 的算法核心</h4>
+<p>DRF(Dominant Resource Fairness,主资源公平)由 Ghodsi 等人在 2011 年 NSDI 论文提出,后来成为 Mesos 和 YARN 的默认策略。定义非常简洁:<br>
+<strong>主资源 = 作业需求向量中,相对于集群总容量占比最大的那个资源维度</strong>。计算步骤是:</p>
+<ol>
+<li>对每个作业,把它的需求向量除以集群总容量,得到份额向量;</li>
+<li>取份额向量中最大的那个分量作为该作业的 dominant share;</li>
+<li>每次调度,优先选择 dominant share 最小的作业。<br>
+用经典例子验证一下:集群 9 CPU / 18 GB,用户 A 每任务需 ⟨1 CPU, 4 GB⟩,用户 B 每任务需 ⟨3 CPU, 1 GB⟩。</li>
+</ol>
+<ul>
+<li>A 每任务份额 = ⟨1/9, 4/18⟩ = ⟨11%, 22%⟩ → dominant = 内存 22%</li>
+<li>B 每任务份额 = ⟨3/9, 1/18⟩ = ⟨33%, 6%⟩ → dominant = CPU 33%</li>
+<li>DRF 的目标是让 A 的内存份额与 B 的 CPU 份额趋近相等,最终 A 跑 3 个任务、B 跑 2 个任务,双方 dominant share 均为 67%。</li>
+</ul>
+<h4 id="Volcano-DRF-插件的实现">Volcano DRF 插件的实现</h4>
+<p>Volcano 把 DRF 做成一个独立插件,与 proportion/capacity 队列插件是<strong>叠加关系而非替代</strong>——队列级公平用 proportion 按权重分,作业级公平用 DRF 排序:</p>
+<table>
+<thead>
+<tr>
+<th>关键函数</th>
+<th>作用</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JobOrderFn</code></td>
+<td>作业排序</td>
+<td>dominant share 小者优先出队</td>
+</tr>
+<tr>
+<td><code>PreemptableFn</code></td>
+<td>抢占判断</td>
+<td>计算抢占前后双方的份额变化,<strong>只允许朝公平方向抢占</strong></td>
+</tr>
+<tr>
+<td>PreemptableFn 的逻辑是 DRF 最精妙的地方:它不是简单看优先级,而是算&quot;抢占完成后,抢占方的份额会不会仍然低于被抢占方&quot;——如果抢占会让不公平加剧,就拒绝执行。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="DRF-的四大数学性质">DRF 的四大数学性质</h4>
+<p>DRF 之所以成为多资源公平的事实标准,是因为它<strong>同时满足</strong>四个理想性质,这是之前所有算法都无法联合保证的:</p>
+<ul>
+<li><strong>Sharing Incentive(共享激励)</strong>:每个用户拿到的份额不比独占 1/n 集群差;</li>
+<li><strong>Envy-Freeness(无嫉妒)</strong>:没有用户会愿意拿别人的分配方案;</li>
+<li><strong>Pareto Efficiency(帕累托最优)</strong>:无法在不损害他人的情况下让某人更好;</li>
+<li><strong>Strategy Proofness(策略无欺)</strong>:谎报需求不会让自己得到更多。</li>
+</ul>
+<h4 id="常见误区">常见误区</h4>
+<ul>
+<li><strong>DRF ≠ max-min</strong>:max-min 只适用单资源,DRF 是它的多资源泛化;</li>
+<li><strong>DRF 不是节点级放置算法</strong>:它决定&quot;哪个作业先出队&quot;,不决定&quot;放到哪台机器&quot;;真正落节点仍然要经过 predicates/node filtering;</li>
+<li><strong>DRF 不能与 quota 治理混用</strong>:Volcano 中如果队列已启用 proportion/capacity,DRF 通常作用于队列内部的作业排序,而不是替代队列级配额。</li>
+</ul>
+<h3 id="6-5-调度器跟-Node-的资源是解耦的吗">6.5 调度器跟 Node 的资源是解耦的吗?</h3>
+<p><strong>一句话结论:逻辑上解耦,时序上有细微不一致——调度器不直接读 node 的实时状态,而是通过 Informer List-Watch 把状态同步到本地 Scheduler Cache,基于这份内存快照做决策,写入则走异步 bind 到 APIServer。</strong></p>
+<h4 id="读路径-Informer-Scheduler-Cache">读路径:Informer + Scheduler Cache</h4>
+<p>kube-scheduler 的第一个控制循环叫 <strong>Informer Path</strong>,它的唯一任务是维护一份&quot;足够新鲜的本地视图&quot;:</p>
+<ul>
+<li>启动时通过 List 拉取全量 Pod/Node/PV/PVC/StorageClass 等 9 类资源;</li>
+<li>之后通过 Watch 保持增量同步;</li>
+<li>事件通过 Handler 回调更新 Scheduler Cache(NodeInfo 树 + Pod 三态:Assumed / Added / Forgotten)。<br>
+第二个控制循环 <strong>Scheduling Path</strong> 的所有 Filter/Score 计算,<strong>全部读本地缓存</strong>,从不实时访问 API Server 或 kubelet。这是 kube-scheduler 性能的根本保证——如果每个 Pod 的调度都要对 10000 个节点各做一次网络查询,吞吐会直接崩溃。</li>
+</ul>
+<h4 id="写路径-乐观绑定">写路径:乐观绑定</h4>
+<p>调度器选定节点后,不会同步等 API Server 确认:</p>
+<ol>
+<li><strong>Reserve</strong>:在本地 Cache 里 assume 这个 Pod 已经落在 node-1 上,把资源账目扣掉——这样下一个 Pod 的 Filter 就能看到这个&quot;假设占用&quot;,防止 double-book;</li>
+<li><strong>Bind</strong>:异步起 goroutine,把 Binding 对象写到 API Server;</li>
+<li><strong>失败回滚</strong>:Bind 失败 → cache 里 assume 被回滚,Pod 重新入队重试;</li>
+<li><strong>kubelet 兜底</strong>:Pod 真正落到节点时,kubelet 会再跑一遍 Admit(GeneralPredicates)做二次校验,避免因为缓存过期导致的超卖。</li>
+</ol>
+<h4 id="这套设计的本质-牺牲强一致性换吞吐">这套设计的本质:牺牲强一致性换吞吐</h4>
+<table>
+<thead>
+<tr>
+<th>一致性风险</th>
+<th>具体场景</th>
+<th>兜底机制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>缓存滞后</td>
+<td>node-1 刚刚好被别人占满,调度器还以为有空</td>
+<td>乐观锁冲突 → bind 失败 → 重试</td>
+</tr>
+<tr>
+<td>假设失效</td>
+<td>assume 后 node-1 被 kubelet 驱逐 Pod,资源被别人拿走</td>
+<td>kubelet Admit 拒绝 → Pod 回 Pending</td>
+</tr>
+<tr>
+<td>并发 bind</td>
+<td>两个调度器同时 bind 同一个 Pod</td>
+<td>APIServer 的 ResourceVersion 乐观锁,后到者失败</td>
+</tr>
+<tr>
+<td>资源超卖</td>
+<td>调度器假设成功,实际 kubelet 发现节点资源不足</td>
+<td>kubelet Admit + 事件回传 → 调度器重新调度</td>
+</tr>
+<tr>
+<td><strong>面试要点</strong>:回答&quot;是否解耦&quot;时,关键是把&quot;<strong>读路径解耦(本地缓存)+ 写路径异步(乐观绑定)+ 兜底(kubelet Admit + 乐观锁)</strong>“这三层都说清楚,而不是简单答&quot;是&quot;或&quot;否”。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="6-6-多调度器同时调度产生冲突怎么办">6.6 多调度器同时调度产生冲突怎么办?</h3>
+<p><strong>一句话结论:Kubernetes 用 schedulerName 做&quot;Pod 级路由隔离&quot;——每个 Pod 只归一个调度器管;但不同调度器对同一 Node 的资源竞争依然存在,靠 ResourceVersion 乐观锁、kubelet Admit 兜底,以及工程上的节点池物理隔离来彻底规避。</strong></p>
+<h4 id="第一道防线-schedulerName-路由隔离">第一道防线:schedulerName 路由隔离</h4>
+<p>每个 Pod 通过 <code>spec.schedulerName</code> 指定由哪个调度器调度,不写就默认 <code>default-scheduler</code>。多个调度器<strong>都 watch 同一个 Pod 资源</strong>,但只认自己名字的 Pod,其他调度器会主动忽略——这是最基础也最有效的&quot;抢 Pod 不冲突&quot;机制。<br>
+这意味着&quot;两个调度器同时给同一个 Pod 选节点&quot;这种冲突在路由层就不存在。</p>
+<h4 id="真正的冲突-节点资源的并发占用">真正的冲突:节点资源的并发占用</h4>
+<p>但问题没完。假设 Scheduler A(kube-scheduler)和 Scheduler B(Volcano)各自 watch 到自己的 Pod 队列,都看到 node-1 有 8 张 GPU 空闲:</p>
+<ul>
+<li>Scheduler A 给 Pod-A1 决策&quot;放 node-1&quot;,在 A 的本地 cache 里 assume,异步 bind;</li>
+<li>与此同时 Scheduler B 给 Pod-B1 决策&quot;也放 node-1&quot;,在 B 的本地 cache 里 assume,异步 bind;</li>
+<li>两个 bind 请求都成功——<strong>因为 APIServer 不会做节点资源校验</strong>,它只校验 schema 和 RBAC。<br>
+结果:node-1 被超卖。Pod-A1 和 Pod-B1 都被绑定,等 kubelet 真正启动时才会发现资源不够。</li>
+</ul>
+<h4 id="三层兜底机制">三层兜底机制</h4>
+<table>
+<thead>
+<tr>
+<th>兜底层</th>
+<th>机制</th>
+<th>拦截什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>APIServer 乐观锁</strong></td>
+<td>ResourceVersion 校验</td>
+<td>同一个 Pod 的并发 bind(而不是同一个 Node 的并发 bind)</td>
+</tr>
+<tr>
+<td><strong>kubelet Admit</strong></td>
+<td>GeneralPredicates 二次校验</td>
+<td>节点资源超卖、端口冲突——最后一道防线</td>
+</tr>
+<tr>
+<td><strong>调度器 cache 同步</strong></td>
+<td>kubelet 上报的 Pod 状态通过 Informer 回流</td>
+<td>发现节点实际资源与本地快照不符</td>
+</tr>
+<tr>
+<td>注意:<strong>Reserve/Assume 是进程内缓存,别的调度器完全看不到</strong>。所以多调度器共存时,&quot;Reserve 防 double-book&quot;只对同一调度器内部有效,跨调度器必须靠 kubelet 兜底。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="工程上的三种解法">工程上的三种解法</h4>
+<table>
+<thead>
+<tr>
+<th>解法</th>
+<th>做法</th>
+<th>优缺点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Pod 级分工(默认)</strong></td>
+<td>schedulerName 路由,各自管各的 Pod</td>
+<td>实现简单,但节点资源仍可能互相踩踏</td>
+</tr>
+<tr>
+<td><strong>节点池物理隔离</strong></td>
+<td>给每个调度器分独立的节点池(taint/toleration/label),互不共享</td>
+<td>最干净彻底,牺牲一定弹性</td>
+</tr>
+<tr>
+<td><strong>统一调度器</strong></td>
+<td>干脆只用一个调度器(如 Volcano 管所有),避免多调度器共存</td>
+<td>抛弃原生调度器的生态优势</td>
+</tr>
+<tr>
+<td><strong>面试追问点</strong>:为什么 kubelet Admit 是必要防线?因为多调度器场景下,调度器的&quot;乐观假设&quot;必然存在失效窗口——跨调度器的 assume 状态无法互通,只能靠最终执行者(kubelet)做权威校验。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="6-7-backfill、preempt、reclaim-是怎么跨-ns-跨队列的">6.7 backfill、preempt、reclaim 是怎么跨 ns 跨队列的?</h3>
+<p><strong>一句话结论:三者作用域完全不同——backfill 只吃空闲边角资源不触发任何抢占;preempt 是同一 Queue 内的优先级抢占;reclaim 才是跨 Queue 的资源回收,且要求&quot;被回收方超额使用、回收方有缺口&quot;。三者真正的边界是队列而不是 namespace。</strong></p>
+<h4 id="三种-action-的语义对比">三种 action 的语义对比</h4>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>作用域</th>
+<th>触发条件</th>
+<th>关键约束</th>
+<th>是否跨队列</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>backfill</strong></td>
+<td>集群空闲资源</td>
+<td>有 BestEffort / 小任务待调度</td>
+<td>不能触发任何抢占,只吃真正空闲的部分</td>
+<td><strong>否</strong>——它根本不抢资源</td>
+</tr>
+<tr>
+<td><strong>preempt</strong></td>
+<td><strong>同一 Queue 内</strong></td>
+<td>高优先级作业资源不足</td>
+<td>victim 必须是同队列、优先级更低、标记 preemptable</td>
+<td><strong>否</strong>——队列内</td>
+</tr>
+<tr>
+<td><strong>reclaim</strong></td>
+<td><strong>跨 Queue</strong></td>
+<td>目标队列 allocated &gt; deserved 且回收方 allocated ≤ deserved</td>
+<td>victim 标记 preemptable,尊重 reclaimable 字段</td>
+<td><strong>是</strong>——队列间</td>
+</tr>
+<tr>
+<td>这是最容易混淆的三个概念。<strong>Volcano 的 preempt 是队列内抢占,reclaim 才是队列间回收</strong>——很多面试者会把 preempt 说成跨队列,这是典型错误。</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="为什么说边界是队列而不是-namespace">为什么说边界是队列而不是 namespace</h4>
+<p>Volcano 的 Queue 是<strong>全局资源池</strong>,PodGroup 通过 <code>spec.queue</code> 字段挂到指定队列,而 PodGroup 本身可以来自任何 namespace。所以:</p>
+<ul>
+<li>同一个 Queue 里可以混着 namespace-A 和 namespace-B 的 PodGroup;</li>
+<li>preempt 抢的是&quot;同队列内优先级更低的 Pod&quot;,无论它在哪个 namespace;</li>
+<li>reclaim 收的是&quot;队列超额的部分&quot;,无论那些超额的 Pod 来自哪个 namespace。<br>
+<strong>namespace 在这里只是 K8s 的对象隔离边界,不是调度公平的边界</strong>。如果想做 ns 级隔离,得把 Queue 与 ns 一一对应,这是治理层的决定,不是机制层的。</li>
+</ul>
+<h4 id="reclaim-的精确语义-借出-归还">reclaim 的精确语义:借出-归还</h4>
+<p>reclaim 的判断条件是双向的:<br>
+<strong>回收方(要去抢资源的队列)必须满足</strong>:</p>
+<ul>
+<li>自己的 allocated ≤ 自己的 deserved(它应得但没拿到)</li>
+<li>存在 pending 的 PodGroup 作业<br>
+<strong>出借方(被抢资源的队列)必须满足</strong>:</li>
+<li>自己的 allocated &gt; 自己的 deserved(<strong>超额使用</strong>)</li>
+<li>超额部分足以覆盖回收方的缺口</li>
+<li>目标 Pod 标记 <code>preemptable: true</code></li>
+<li>队列的 <code>reclaimable: true</code>(默认就是 true)<br>
+反例验证一下:队列 first 配置 deserved=20 核,实际 allocated=40 核(超额借了 20 核);队列 second 配置相同。当 first 想再去抢资源时,日志显示:</li>
+</ul>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Queue &lt;first&gt; can not reclaim, deserved &lt;cpu 20000.00&gt;, allocated &lt;cpu 40000.00&gt;</span><br></pre></td></tr></table></figure>
+<p><strong>first 自己已经超额了,它没有资格去 reclaim 其他队列的资源</strong>——这是&quot;借出去要先还回来&quot;的语义。</p>
+<h4 id="层级队列下的-reclaim-顺序">层级队列下的 reclaim 顺序</h4>
+<p>从 Volcano 的 Hierarchical Queue 设计看,reclaim/preempt 有明确的&quot;<strong>就近优先</strong>&quot;原则:</p>
+<ol>
+<li><strong>优先从同父队列</strong>的兄弟队列里找 victim;</li>
+<li><strong>再按层级自底向上</strong>考虑更远的祖先下的其他队列;</li>
+<li>由 <code>ancestorReclaimLevel</code> 控制回收层级深度。<br>
+这个设计的动机是业务上的亲和——同一团队内的资源争夺最接近真实需求,跨部门回收会带来更大的政治成本。</li>
+</ol>
+<h4 id="Statement-推演机制-所有驱逐先在内存里彩排">Statement 推演机制:所有驱逐先在内存里彩排</h4>
+<p>Volcano 在执行 preempt/reclaim 时用 <strong>Statement 对象</strong>做推演:</p>
+<ol>
+<li>在当前调度 session 的内存快照里&quot;假设性地&quot;驱逐 victim,更新队列/节点的资源账目;</li>
+<li>验证抢占方 Pod 能否真的放下(gang、节点约束、亲和性等重新检查一遍);</li>
+<li>只有推演通过,才 commit 真正的删除请求;</li>
+<li><strong>驱逐后资源不是立即可用</strong>——要等 victim 优雅退出(terminationGracePeriodSeconds)+ 缓存观察到变化后,才能给新 Pod 用。<br>
+一个容易被忽略的坑:<strong>驱逐 Ray/AI 训练 worker 的代价远不止资源回收本身</strong>——worker 上的任务、actor、内存对象可能无法无损恢复,要依赖 Ray 的重试和 checkpoint 机制。这也是为什么生产上经常把 AI 训练队列的 <code>reclaimable</code> 设为 false。</li>
+</ol>
+<h4 id="常见错误认知清单">常见错误认知清单</h4>
+<table>
+<thead>
+<tr>
+<th>错误认知</th>
+<th>正确理解</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>“preempt 是跨队列的”</td>
+<td>preempt 是队列内,reclaim 才是队列间</td>
+</tr>
+<tr>
+<td>“allocated = 实时 CPU/内存利用率”</td>
+<td>allocated 是 Pod 请求的记账值,业务空闲但 Pod 存在就算占用</td>
+</tr>
+<tr>
+<td>“deserved 变化会立即改变运行中的 Pod”</td>
+<td>需要等资源释放或 reclaim 触发,Pod 不会自动迁移</td>
+</tr>
+<tr>
+<td>“reclaim 驱逐后资源立即可用”</td>
+<td>要等 victim 优雅退出,这期间新 Pod 仍然 Pending</td>
+</tr>
+<tr>
+<td>“backfill 会触发抢占”</td>
+<td>backfill 只吃空闲部分,绝不驱逐任何人</td>
+</tr>
+<tr>
+<td>“DRF 能替代 quota”</td>
+<td>DRF 只做作业排序,队列级配额仍需要 proportion/capacity</td>
+</tr>
+</tbody>
+</table>
+<h3 id="6-8-多调度器共存与-AI-场景落地">6.8 多调度器共存与 AI 场景落地</h3>
+<h4 id="为什么需要多个调度器">为什么需要多个调度器</h4>
+<p>kube-scheduler 的设计假设是&quot;每个 Pod 独立、随时可调度&quot;,这与 AI/批处理负载的诉求根本冲突:</p>
+<ul>
+<li><strong>Gang Scheduling 冲突</strong>:8 卡训练作业被逐个调度,前 5 个占资源、后 3 个永远放不下,形成死锁;</li>
+<li><strong>装箱偏好冲突</strong>:原生调度器默认 LeastAllocated(打散),对 Web 合理,对 GPU 是灾难——会人为制造资源碎片;</li>
+<li><strong>公平性缺失</strong>:没有 DRF、没有队列配额、没有&quot;长期占用回收&quot;。<br>
+Kubernetes 通过 <strong>schedulerName 字段</strong>原生支持多调度器共存:Pod 的 <code>spec.schedulerName</code> 指定由哪个调度器调度,不指定就用 default-scheduler。不同调度器通过 <strong>watch 同一个 Pod 资源</strong>、只认自己名字的 Pod 来避免冲突。</li>
+</ul>
+<h4 id="三大批处理调度器的选型决策">三大批处理调度器的选型决策</h4>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>推荐</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>大规模 AI 训练 + HPC 混部</td>
+<td><strong>Volcano</strong></td>
+<td>生态最成熟,CNCF 项目,与 Training Operator 深度集成</td>
+</tr>
+<tr>
+<td>追求作业排队与配额治理、不想换调度器</td>
+<td><strong>Kueue</strong></td>
+<td>官方项目,用 Admission 机制在 kube-scheduler 之上叠加排队</td>
+</tr>
+<tr>
+<td>YARN 迁移、强层级队列治理、多用户 ACL</td>
+<td><strong>YuniKorn</strong></td>
+<td>最接近 YARN 语义,层级队列和 placement rule 最强</td>
+</tr>
+<tr>
+<td>商业化平台(fractional GPU、fair-share)</td>
+<td><strong>NVIDIA Run:ai / KAI Scheduler</strong></td>
+<td>支持显存切片、动态借出、闭环治理</td>
+</tr>
+<tr>
+<td><strong>三者的架构差异很本质</strong>:Volcano 是<strong>替换调度器</strong>(自己的 scheduler 二进制,自己的 action/plugin 流水线);Kueue 是<strong>调度器之上的排队层</strong>(不改 kube-scheduler,只做 Admission,Pod 被准入后才被 kube-scheduler 调度);YuniKorn 是<strong>独立调度器 + 层级队列治理</strong>。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="GPU-感知调度-gang、拓扑、亲和的三重叠加">GPU 感知调度:gang、拓扑、亲和的三重叠加</h4>
+<p>AI 场景下,调度器还需要理解 GPU 的物理特性,三重约束叠加后才能做到&quot;把 8 卡训练放到正确的 8 张卡上&quot;:<br>
+<strong>① Gang 约束</strong>:PodGroup 的 minAvailable 必须一起满足,避免部分启动死锁。<br>
+<strong>② 拓扑约束</strong>:TP 组必须落在同一 NVLink 域内,DP 组可跨节点但要走 IB。<strong>实测显示 TP 跨 IB 比域内 NVLink 慢 7-50 倍,小消息场景接近 50 倍</strong>——调度器如果不感知拓扑,等于让法拉利跑乡道。GB200 NVL72 这种机架级系统更是把拓扑约束推到极致:一个作业段最多跨 18 个节点,但必须整体对齐 NVL72 域边界。<br>
+<strong>③ 亲和与反亲和</strong>:同一个 PodGroup 的 Pod 之间用 podAntiAffinity 打散到不同故障域;跨作业用 podAffinity 聚合到同一拓扑域复用 NCCL 通信组。这些约束都要进入 Filter 插件,在预选阶段就淘汰不合规节点。</p>
+<h4 id="从-Ai2-案例看调度器治理的边界">从 Ai2 案例看调度器治理的边界</h4>
+<p>Ai2 在数千张 H100 上的改造经验给出了三个清醒的判断:</p>
+<ul>
+<li><strong>调度器解决不了组织博弈</strong>:优先级通胀、占座空转、挂机霸卡,本质都是激励问题,必须在调度之外叠加预算和审计;</li>
+<li><strong>高出租率不等于高吞吐</strong>:频繁抢占触发大规模 checkpoint 读写,SSD 打满、计算等待,&quot;账面 98% 出租率&quot;背后真实计算效率可能只有 70%;</li>
+<li><strong>拓扑碎片化是隐性代价</strong>:频繁抢占重排后,原本对齐的 NVLink 域被拆散,通信带宽骤降,模型越大损失越大。<br>
+这三条是 AI Infra 面试里区分&quot;会用调度器&quot;和&quot;理解调度器局限&quot;的分水岭。</li>
+</ul>
+<hr>
+<h2 id="七、面试答题套路速查">七、面试答题套路速查</h2>
+<h2 id="GPU-性能类-讲清-nsys-时间线-→-NVTX-打标-→-ncu-kernel-深挖-三步定位法-并给一个-compute-bound-memory-bound-latency-bound-的具体判断例子。分布式训练类-按-切什么-→-怎么通信-→-省多少显存-→-对拓扑什么要求-逐个展开-给一个-TP-PP-DP-ZeRO-的组合案例。弹性伸缩类-三层弹性-actor-Ray-节点-K8s-节点-扩缩时机-pending-demand-idle-timeout-夜间缩容的业务逻辑-流量低谷让卡给离线任务-。混部类-资源共享层级-→-隔离方式-MIG-MPS-时间片-→-优先级与回收-→-关键负载保障-四段缺一不可。扩容可行性类-额度-≠-容量-≠-放置三层拆开-→-Quota-是-Admission-层-→-DryRun-不创建-Pod-→-Gang-拓扑-碎片-卡型四类约束-→-状态变化的-reconcile-处理。抢占类-PriorityClass-四字段-→-kube-scheduler-四步抢占流程-→-PDB-是-best-effort-→-抢占-回收-驱逐三形态-→-AI-场景的时间预算治理。队列类-kube-scheduler-三队列-两个后台协程-事件驱动迁移-→-QueueSort-自定义-→-Volcano-的-guarantee-deserved-capability-三级模型。DRF-类-max-min-为什么不够-→-dominant-share-计算-→-Volcano-的-JobOrderFn-PreemptableFn-→-四大数学性质。解耦类-读路径-Informer-本地缓存-写路径-乐观绑定-兜底-kubelet-Admit-三层。多调度器冲突类-schedulerName-路由隔离-→-真正冲突在节点资源-→-ResourceVersion-kubelet-Admit-cache-回流三层兜底-→-节点池物理隔离的工程解法。backfill-preempt-reclaim-类-作用域三层对齐→-队列而非-namespace-是边界-→-reclaim-的双向条件-→-Statement-推演-就近优先。"><strong>GPU 性能类</strong>:讲清 nsys(时间线)→ NVTX 打标 → ncu(kernel 深挖)三步定位法,并给一个 compute-bound / memory-bound / latency-bound 的具体判断例子。<br>
+<strong>分布式训练类</strong>:按&quot;切什么 → 怎么通信 → 省多少显存 → 对拓扑什么要求&quot;逐个展开,给一个 TP+PP+DP+ZeRO 的组合案例。<br>
+<strong>弹性伸缩类</strong>:三层弹性(actor / Ray 节点 / K8s 节点)+ 扩缩时机(pending demand / idle timeout)+ 夜间缩容的业务逻辑(流量低谷让卡给离线任务)。<br>
+<strong>混部类</strong>:资源共享层级 → 隔离方式(MIG/MPS/时间片)→ 优先级与回收 → 关键负载保障,四段缺一不可。<br>
+<strong>扩容可行性类</strong>:额度 ≠ 容量 ≠ 放置三层拆开 → Quota 是 Admission 层 → DryRun 不创建 Pod → Gang + 拓扑 + 碎片 + 卡型四类约束 → 状态变化的 reconcile 处理。<br>
+<strong>抢占类</strong>:PriorityClass 四字段 → kube-scheduler 四步抢占流程 → PDB 是 best-effort → 抢占/回收/驱逐三形态 → AI 场景的时间预算治理。<br>
+<strong>队列类</strong>:kube-scheduler 三队列 + 两个后台协程 + 事件驱动迁移 → QueueSort 自定义 → Volcano 的 guarantee/deserved/capability 三级模型。<br>
+<strong>DRF 类</strong>:max-min 为什么不够 → dominant share 计算 → Volcano 的 JobOrderFn/PreemptableFn → 四大数学性质。<br>
+<strong>解耦类</strong>:读路径(Informer 本地缓存)+ 写路径(乐观绑定)+ 兜底(kubelet Admit)三层。<br>
+<strong>多调度器冲突类</strong>:schedulerName 路由隔离 → 真正冲突在节点资源 → ResourceVersion + kubelet Admit + cache 回流三层兜底 → 节点池物理隔离的工程解法。<br>
+<strong>backfill/preempt/reclaim 类</strong>:作用域三层对齐→ 队列而非 namespace 是边界 → reclaim 的双向条件 → Statement 推演 + 就近优先。</h2>
+<h2 id="八、结语">八、结语</h2>
+<p>把所有这些问题串起来看,AI Infra 岗位考察的能力模型其实很清晰:</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>考察点</th>
+<th>底层能力</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU 性能</td>
+<td>Nsight + 并行策略</td>
+<td>瓶颈定位 + 系统性建模</td>
+</tr>
+<tr>
+<td>弹性伸缩</td>
+<td>RayJob + 业务权衡</td>
+<td>技术机制 + 成本意识</td>
+</tr>
+<tr>
+<td>混部</td>
+<td>隔离 + 优先级 + 回收</td>
+<td>多目标约束下的工程取舍</td>
+</tr>
+<tr>
+<td>扩容可行性</td>
+<td>Quota + DryRun + 亲和</td>
+<td>概念分层 + 状态机思维</td>
+</tr>
+<tr>
+<td>检查成本</td>
+<td>覆盖 + 耗时 + 并行</td>
+<td>系统化拆解 + 量化意识</td>
+</tr>
+<tr>
+<td>调度层</td>
+<td>抢占 + 队列 + DRF + 解耦</td>
+<td>分布式一致性 + 资源效率权衡</td>
+</tr>
+<tr>
+<td>这些问题的共同规律是:<strong>没有非黑即白的答案,全都在&quot;保障关键负载&quot;和&quot;提升整体效率&quot;之间找平衡点</strong>。调度层尤其如此——DRF 用份额算法换多维公平,调度器用本地快照换吞吐,多调度器用路由隔离换扩展性,preempt/reclaim 用语义分层换治理灵活性。</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>准备 Infra 面试时,与其背名词,不如把每个问题都按&quot;是什么 → 为什么 → 怎么做 → 有哪些权衡 → 实际踩过什么坑&quot;的框架练一遍,这条链路能完整走下来的候选人,在任何一轮技术面里都很难被问倒。</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/10/15/2026-10-09-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/">https://roger-lv.github.io/2026/10/15/2026-10-09-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/AI-Infra/">AI Infra</a><a class="post-meta__tags" href="/tags/GPU/">GPU</a><a class="post-meta__tags" href="/tags/Volcano/">Volcano</a><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83/">分布式训练</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E8%B0%83%E5%BA%A6%E5%99%A8/">调度器</a><a class="post-meta__tags" href="/tags/Kueue/">Kueue</a><a class="post-meta__tags" href="/tags/%E6%8A%A2%E5%8D%A0/">抢占</a><a class="post-meta__tags" href="/tags/Nsight/">Nsight</a><a class="post-meta__tags" href="/tags/RayJob/">RayJob</a><a class="post-meta__tags" href="/tags/%E6%B7%B7%E9%83%A8/">混部</a><a class="post-meta__tags" href="/tags/kube-scheduler/">kube-scheduler</a><a class="post-meta__tags" href="/tags/DRF/">DRF</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</div></div><div class="info-2"><div class="info-item-1">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析 本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill/preempt/reclaim 的跨队列语义,一次讲透。 核心观点先抛出来:Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。 一、GPU 性能与分布式训练:Nsight 与并行策略 1.1 Nsight 是什么、怎么用 Nsight 是 NVIDIA 提供的 GPU 性能分析工具套件,其中最核心的是两把&quot;不同倍率的放大镜&quot;:    工具 定位 分析粒度 典型命令     Nsight Systems (nsys) 全系统时间...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-15</div><div class="info-item-2">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</div></div><div class="info-2"><div class="info-item-1">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析 本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill/preempt/reclaim 的跨队列语义,一次讲透。 核心观点先抛出来:Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。 一、GPU 性能与分布式训练:Nsight 与并行策略 1.1 Nsight 是什么、怎么用 Nsight 是 NVIDIA 提供的 GPU 性能分析工具套件,其中最核心的是两把&quot;不同倍率的放大镜&quot;:    工具 定位 分析粒度 典型命令     Nsight Systems (nsys) 全系统时间...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/" title="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</div></div><div class="info-2"><div class="info-item-1">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器 把一个千卡训练任务调度好,比把一百个 Web 服务调度好难得多。难点不在&quot;算力够不够&quot;,而在三件 Web 服务从不操心的事:  通信拓扑要聚拢:TP/PP 切出来的通信组,必须落在同一片 RDMA 交换机域里,跨机架一跳,AllReduce 延迟能差好几倍。 资源要&quot;留得住&quot;:训练任务动辄跑几小时几天,中途被别的任务抢占、重启就要从头来;但集群又要混部在线/离线,不能不让抢。 同卡型才好比:A100 节点和 H100 节点不能混进同一个通信组,不然快的等慢的,贵的卡当便宜的用。  通用调度器(kube-scheduler)对这三件事基本无解,Volcano 解决了 Gang 但也没碰拓扑。Sky-Scheduler 就是冲着这三件事来的——一个 Volcano 衍生的 Kubernetes 调度器,在 Volcano 的 session 框架上做了几处关键改造:把&quot;Pod→Node 一跳&quot;改成 “Task→Quota→Node 两跳”,引入...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/" title="Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价</div></div><div class="info-2"><div class="info-item-1">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价  论文:Anchor: Mitigating GPU Shallow Disruptions with Decoupled Memory 作者:Haoyi Ma、Shiwei Gao、Youmin Chen、Junrong Huang、Youyou Lu、Jiwu Shu(清华大学 &amp; 上海交通大学) 发表:SOSP '26(ACM SIGOPS 第 32 届操作系统原理研讨会)  TL;DR 大规模 LLM 集群中的绝大多数故障其实是&quot;浅层中断&quot;——进程崩了,但 GPU 硬件和 OS 内核毫发无损。现有恢复机制对此一视同仁:checkpoint → 重启 → 全量重载,哪怕数据本来就还完好在显存里。 Anchor 的核心主张是:内存所有权不应与进程生命周期绑定。它用一个 daemon 进程持有 GPU 内存,worker 通过 GPU IPC 机制零开销地映射访问;worker 崩溃后,新 worker 直接把同一块物理显存重新映射回来,数据从...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">283</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">373</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%AC%E6%96%87%E4%BB%A5%E4%B8%80%E6%AC%A1-AI-Infra-%E5%B2%97%E4%BD%8D%E4%B8%80%E9%9D%A2%E4%B8%BA%E7%BA%BF%E7%B4%A2-%E5%9B%B4%E7%BB%95-GPU-%E6%80%A7%E8%83%BD%E5%88%86%E6%9E%90%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E3%80%81RayJob-%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E3%80%81GPU-%E6%B7%B7%E9%83%A8%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%8F%AF%E8%A1%8C%E6%80%A7%E5%88%A4%E6%96%AD%E4%BA%94%E5%A4%A7%E6%A8%A1%E5%9D%97%E5%B1%95%E5%BC%80-%E5%86%8D%E6%8A%8A%E9%9D%A2%E8%AF%95%E4%B8%AD%E7%BB%8F%E5%B8%B8%E8%A2%AB%E8%BF%BD%E9%97%AE%E7%9A%84%E8%B0%83%E5%BA%A6%E5%B1%82%E4%BD%9C%E4%B8%BA%E7%8B%AC%E7%AB%8B%E7%AB%A0%E8%8A%82%E8%A1%A5%E9%BD%90%E2%80%94%E2%80%94%E6%8A%A2%E5%8D%A0%E3%80%81%E9%98%9F%E5%88%97%E3%80%81%E8%B0%83%E5%BA%A6%E5%99%A8%E6%A1%86%E6%9E%B6%E3%80%81DRF%E3%80%81%E8%B0%83%E5%BA%A6%E5%99%A8%E4%B8%8E-Node-%E7%9A%84%E8%A7%A3%E8%80%A6%E5%85%B3%E7%B3%BB%E3%80%81%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%86%B2%E7%AA%81%E3%80%81backfill-preempt-reclaim-%E7%9A%84%E8%B7%A8%E9%98%9F%E5%88%97%E8%AF%AD%E4%B9%89-%E4%B8%80%E6%AC%A1%E8%AE%B2%E9%80%8F%E3%80%82%E6%A0%B8%E5%BF%83%E8%A7%82%E7%82%B9%E5%85%88%E6%8A%9B%E5%87%BA%E6%9D%A5-Infra-%E9%9D%A2%E8%AF%95%E8%80%83%E7%9A%84%E4%B8%8D%E6%98%AF%E5%90%8D%E8%AF%8D%E8%83%8C%E8%AF%B5-%E8%80%8C%E6%98%AF-%E7%93%B6%E9%A2%88%E5%AE%9A%E4%BD%8D-%E2%86%92-%E5%86%B3%E7%AD%96%E4%BE%9D%E6%8D%AE-%E2%86%92-%E5%B7%A5%E7%A8%8B%E6%9D%83%E8%A1%A1-%E8%BF%99%E6%9D%A1%E5%AE%8C%E6%95%B4%E9%93%BE%E8%B7%AF%E7%9A%84%E6%8E%A8%E7%90%86%E8%83%BD%E5%8A%9B%E3%80%82%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E6%89%80%E6%9C%89%E6%9C%BA%E5%88%B6-%E6%9C%AC%E8%B4%A8%E4%B8%8A%E9%83%BD%E5%9C%A8-%E5%88%86%E5%B8%83%E5%BC%8F%E4%B8%80%E8%87%B4%E6%80%A7-%E5%92%8C-%E8%B5%84%E6%BA%90%E6%95%88%E7%8E%87-%E4%B9%8B%E9%97%B4%E5%81%9A%E6%9D%83%E8%A1%A1%E3%80%82"><span class="toc-number">1.1.</span> <span class="toc-text">本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill&#x2F;preempt&#x2F;reclaim 的跨队列语义,一次讲透。
+核心观点先抛出来:Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81GPU-%E6%80%A7%E8%83%BD%E4%B8%8E%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83-Nsight-%E4%B8%8E%E5%B9%B6%E8%A1%8C%E7%AD%96%E7%95%A5"><span class="toc-number">1.2.</span> <span class="toc-text">一、GPU 性能与分布式训练:Nsight 与并行策略</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-Nsight-%E6%98%AF%E4%BB%80%E4%B9%88%E3%80%81%E6%80%8E%E4%B9%88%E7%94%A8"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 Nsight 是什么、怎么用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83-%E6%98%BE%E5%AD%98%E3%80%81%E9%80%9A%E4%BF%A1%E4%B8%8E%E6%8B%93%E6%89%91%E7%9A%84%E4%B8%89%E8%A7%92%E5%85%B3%E7%B3%BB"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 分布式训练:显存、通信与拓扑的三角关系</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%BC%B9%E6%80%A7%E6%89%A9%E7%BC%A9%E5%AE%B9-RayJob-%E5%BC%B9%E6%80%A7%E7%9A%84%E5%8E%9F%E7%90%86%E4%B8%8E%E4%B8%9A%E5%8A%A1%E6%9D%83%E8%A1%A1"><span class="toc-number">1.3.</span> <span class="toc-text">二、弹性扩缩容:RayJob 弹性的原理与业务权衡</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%94%AF%E6%8C%81-RayJob-%E5%BC%B9%E6%80%A7"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 为什么支持 RayJob 弹性</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E6%89%A9%E3%80%81%E4%BB%80%E4%B9%88%E6%97%B6%E5%80%99%E7%BC%A9"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 什么时候扩、什么时候缩</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%B7%B7%E9%83%A8-%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E7%9A%84%E5%B1%82%E7%BA%A7%E3%80%81%E9%9A%94%E7%A6%BB%E4%B8%8E%E5%9B%9E%E6%94%B6"><span class="toc-number">1.4.</span> <span class="toc-text">三、混部:资源共享的层级、隔离与回收</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E5%85%B1%E4%BA%AB%E8%B5%84%E6%BA%90%E7%9A%84%E5%B1%82%E7%BA%A7"><span class="toc-number">1.4.1.</span> <span class="toc-text">3.1 共享资源的层级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E9%9A%94%E7%A6%BB%E6%96%B9%E5%BC%8F"><span class="toc-number">1.4.2.</span> <span class="toc-text">3.2 隔离方式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E4%BC%98%E5%85%88%E7%BA%A7%E4%B8%8E%E5%9B%9E%E6%94%B6%E7%AD%96%E7%95%A5"><span class="toc-number">1.4.3.</span> <span class="toc-text">3.3 优先级与回收策略</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%89%A9%E5%AE%B9%E5%8F%AF%E8%A1%8C%E6%80%A7-Quota%E3%80%81DryRun-%E4%B8%8E%E6%94%BE%E7%BD%AE%E7%BA%A6%E6%9D%9F"><span class="toc-number">1.5.</span> <span class="toc-text">四、扩容可行性:Quota、DryRun 与放置约束</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-Quota-%E6%A0%A1%E9%AA%8C%E5%81%9A%E4%BB%80%E4%B9%88"><span class="toc-number">1.5.1.</span> <span class="toc-text">4.1 Quota 校验做什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-DryRun-%E5%81%9A%E4%BB%80%E4%B9%88"><span class="toc-number">1.5.2.</span> <span class="toc-text">4.2 DryRun 做什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-RayJob-%E6%98%AF%E5%90%A6%E6%9C%89%E4%BA%B2%E5%92%8C%E7%BA%A6%E6%9D%9F"><span class="toc-number">1.5.3.</span> <span class="toc-text">4.3 RayJob 是否有亲和约束</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E8%B5%84%E6%BA%90%E7%8A%B6%E6%80%81%E5%8F%98%E5%8C%96%E6%80%8E%E4%B9%88%E5%8A%9E"><span class="toc-number">1.5.4.</span> <span class="toc-text">4.4 资源状态变化怎么办</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E6%A3%80%E6%9F%A5%E6%88%90%E6%9C%AC-%E6%A3%80%E6%9F%A5%E4%B8%80%E5%A4%A7%E5%A0%86%E4%BC%9A%E4%B8%8D%E4%BC%9A%E5%BE%88%E6%85%A2"><span class="toc-number">1.6.</span> <span class="toc-text">五、检查成本:检查一大堆会不会很慢?</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E6%A3%80%E6%9F%A5%E4%BC%9A%E8%A6%86%E7%9B%96%E4%BB%80%E4%B9%88"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 检查会覆盖什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E8%80%97%E6%97%B6%E4%B8%8E%E8%B6%85%E6%97%B6%E6%80%8E%E4%B9%88%E5%AE%9A"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 耗时与超时怎么定</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E5%B9%B6%E8%A1%8C%E4%B8%8E%E4%BC%98%E5%8C%96%E6%89%8B%E6%AE%B5"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 并行与优化手段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E6%95%85%E9%9A%9C%E5%BD%92%E5%9B%A0%E4%B8%8E%E5%85%9C%E5%BA%95"><span class="toc-number">1.6.4.</span> <span class="toc-text">5.4 故障归因与兜底</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A3%80%E6%9F%A5%E5%A4%B1%E8%B4%A5%E8%A6%81%E6%9C%89%E6%B8%85%E6%99%B0%E7%9A%84%E5%BD%92%E5%9B%A0-%E6%98%AF-Quota-%E4%B8%8D%E8%B6%B3%E3%80%81%E6%97%A0%E5%8F%AF%E7%94%A8%E8%8A%82%E7%82%B9%E3%80%81%E4%BA%B2%E5%92%8C%E6%80%A7%E5%86%B2%E7%AA%81%E8%BF%98%E6%98%AF-Webhook-%E6%8B%92%E7%BB%9D-%E6%AF%8F%E7%A7%8D%E5%8E%9F%E5%9B%A0%E5%AF%B9%E5%BA%94%E4%B8%8D%E5%90%8C%E5%A4%84%E7%BD%AE-%E6%89%A9-Quota%E3%80%81%E6%89%A9%E8%8A%82%E7%82%B9%E6%B1%A0%E3%80%81%E8%B0%83%E6%95%B4%E4%BD%9C%E4%B8%9A%E8%A7%84%E6%A0%BC%E3%80%81%E4%BF%AE-Webhook-%E3%80%82%E6%A3%80%E6%9F%A5%E9%80%9A%E8%BF%87%E5%90%8E%E8%BF%98%E8%A6%81%E6%9C%89%E4%BA%8B%E5%90%8E%E8%A7%82%E6%B5%8B%E2%80%94%E2%80%94%E5%A6%82%E6%9E%9C%E5%AE%9E%E9%99%85%E6%94%BE%E7%BD%AE%E4%BB%8D%E7%84%B6%E5%A4%B1%E8%B4%A5-%E8%A6%81%E6%9C%89%E4%BA%8B%E4%BB%B6%E4%B8%8E%E6%8C%87%E6%A0%87%E8%83%BD%E5%BF%AB%E9%80%9F%E5%AE%9A%E4%BD%8D%E5%88%B0%E6%98%AF%E5%93%AA%E4%B8%AA-plugin-%E5%9C%A8%E5%93%AA%E4%B8%AA%E6%89%A9%E5%B1%95%E7%82%B9%E6%8B%92%E7%BB%9D%E7%9A%84%E3%80%82%E5%9B%9E%E7%AD%94%E5%A5%97%E8%B7%AF-%E6%8C%89-%E8%A6%86%E7%9B%96%E8%8C%83%E5%9B%B4-%E2%86%92-%E5%8D%95%E9%A1%B9%E8%80%97%E6%97%B6-%E2%86%92-%E6%80%BB%E4%BD%93%E9%A2%84%E7%AE%97-%E2%86%92-%E5%B9%B6%E8%A1%8C%E6%89%8B%E6%AE%B5-%E2%86%92-%E6%95%85%E9%9A%9C%E5%BD%92%E5%9B%A0-%E2%86%92-%E6%9D%83%E8%A1%A1-%E6%8F%90%E5%89%8D%E5%8F%91%E7%8E%B0-vs-%E5%90%AF%E5%8A%A8%E5%BB%B6%E8%BF%9F-%E2%80%9C%E8%BF%99%E6%9D%A1%E9%93%BE%E8%B7%AF%E5%B1%95%E5%BC%80-%E6%9C%80%E5%90%8E%E7%BB%99%E4%B8%80%E4%B8%AA%E5%85%B7%E4%BD%93%E6%95%B0%E5%AD%97-%E4%BE%8B%E5%A6%82-%E4%B8%80%E6%AC%A1%E5%AE%8C%E6%95%B4%E7%9A%84%E6%89%A9%E5%AE%B9%E9%A2%84%E6%A3%80%E6%8E%A7%E5%88%B6%E5%9C%A8-3-%E7%A7%92%E5%86%85-%E9%95%9C%E5%83%8F%E9%A2%84%E7%83%AD%E8%B5%B0%E5%BC%82%E6%AD%A5%E2%80%9D-%E4%BC%9A%E6%98%BE%E5%BE%97%E9%9D%9E%E5%B8%B8%E6%89%8E%E5%AE%9E%E3%80%82"><span class="toc-number">1.7.</span> <span class="toc-text">检查失败要有清晰的归因:是 Quota 不足、无可用节点、亲和性冲突还是 Webhook 拒绝?每种原因对应不同处置(扩 Quota、扩节点池、调整作业规格、修 Webhook)。检查通过后还要有事后观测——如果实际放置仍然失败,要有事件与指标能快速定位到是哪个 plugin 在哪个扩展点拒绝的。
+回答套路:按&quot;覆盖范围 → 单项耗时 → 总体预算 → 并行手段 → 故障归因 → 权衡(提前发现 vs 启动延迟)“这条链路展开,最后给一个具体数字(例如&quot;一次完整的扩容预检控制在 3 秒内,镜像预热走异步”)会显得非常扎实。</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E6%BD%9C-%E6%8A%A2%E5%8D%A0%E3%80%81%E9%98%9F%E5%88%97%E3%80%81%E8%B0%83%E5%BA%A6%E5%99%A8%E3%80%81DRF-%E4%B8%8E%E8%B7%A8%E9%98%9F%E5%88%97%E8%AF%AD%E4%B9%89"><span class="toc-number">1.8.</span> <span class="toc-text">六、调度层深潜:抢占、队列、调度器、DRF 与跨队列语义</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E6%8A%A2%E5%8D%A0%E6%9C%BA%E5%88%B6-%E8%B0%81%E8%AE%A9%E8%B7%AF%E3%80%81%E6%80%8E%E4%B9%88%E8%AE%A9%E3%80%81%E4%BB%A3%E4%BB%B7%E8%B0%81%E4%BB%98"><span class="toc-number">1.8.1.</span> <span class="toc-text">6.1 抢占机制:谁让路、怎么让、代价谁付</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#PriorityClass-%E6%8A%A2%E5%8D%A0%E7%9A%84%E8%AF%AD%E8%A8%80%E5%9F%BA%E7%A1%80"><span class="toc-number">1.8.1.1.</span> <span class="toc-text">PriorityClass:抢占的语言基础</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#kube-scheduler-%E7%9A%84%E6%8A%A2%E5%8D%A0%E6%B5%81%E7%A8%8B"><span class="toc-number">1.8.1.2.</span> <span class="toc-text">kube-scheduler 的抢占流程</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E6%8A%A2%E5%8D%A0%E7%9A%84%E4%B8%89%E7%A7%8D%E5%BD%A2%E6%80%81-%E6%8A%A2%E5%8D%A0-vs-%E5%9B%9E%E6%94%B6-vs-%E9%A9%B1%E9%80%90"><span class="toc-number">1.8.1.3.</span> <span class="toc-text">抢占的三种形态:抢占 vs 回收 vs 驱逐</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#AI-%E5%9C%BA%E6%99%AF%E7%9A%84%E6%8A%A2%E5%8D%A0%E6%B2%BB%E7%90%86-%E6%AF%94%E6%9C%BA%E5%88%B6%E6%9B%B4%E9%87%8D%E8%A6%81%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">1.8.1.4.</span> <span class="toc-text">AI 场景的抢占治理:比机制更重要的问题</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E9%98%9F%E5%88%97%E6%9C%BA%E5%88%B6-Pod-%E6%8E%92%E9%98%9F%E4%B8%8E%E4%BD%9C%E4%B8%9A%E6%8E%92%E9%98%9F%E7%9A%84%E4%B8%A4%E5%B1%82%E4%B8%96%E7%95%8C"><span class="toc-number">1.8.2.</span> <span class="toc-text">6.2 队列机制:Pod 排队与作业排队的两层世界</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#kube-scheduler-%E7%9A%84%E4%B8%89%E9%98%9F%E5%88%97%E6%A8%A1%E5%9E%8B"><span class="toc-number">1.8.2.1.</span> <span class="toc-text">kube-scheduler 的三队列模型</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#QueueSort-%E9%98%9F%E5%88%97%E7%9A%84%E6%8E%92%E5%BA%8F%E8%A7%84%E5%88%99"><span class="toc-number">1.8.2.2.</span> <span class="toc-text">QueueSort:队列的排序规则</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BB%8E-Pod-%E9%98%9F%E5%88%97%E5%88%B0%E4%BD%9C%E4%B8%9A%E9%98%9F%E5%88%97-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E5%8D%87%E7%BA%A7"><span class="toc-number">1.8.2.3.</span> <span class="toc-text">从 Pod 队列到作业队列:为什么要升级</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Volcano-%E7%9A%84%E8%B0%83%E5%BA%A6%E5%8A%A8%E4%BD%9C%E6%B5%81%E6%B0%B4%E7%BA%BF"><span class="toc-number">1.8.2.4.</span> <span class="toc-text">Volcano 的调度动作流水线</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E8%B0%83%E5%BA%A6%E5%99%A8%E6%A1%86%E6%9E%B6-%E4%B8%80%E4%B8%AA-Pod-%E7%9A%84%E4%B8%80%E7%94%9F"><span class="toc-number">1.8.3.</span> <span class="toc-text">6.3 调度器框架:一个 Pod 的一生</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%B0%83%E5%BA%A6%E5%91%A8%E6%9C%9F-vs-%E7%BB%91%E5%AE%9A%E5%91%A8%E6%9C%9F"><span class="toc-number">1.8.3.1.</span> <span class="toc-text">调度周期 vs 绑定周期</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%8D%81%E4%B8%89%E4%B8%AA%E6%89%A9%E5%B1%95%E7%82%B9-%E5%AE%8C%E6%95%B4%E6%B5%81%E6%B0%B4%E7%BA%BF"><span class="toc-number">1.8.3.2.</span> <span class="toc-text">十三个扩展点:完整流水线</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Filter-%E4%B8%8E-Score-%E7%9A%84%E9%BB%98%E8%AE%A4%E6%8F%92%E4%BB%B6"><span class="toc-number">1.8.3.3.</span> <span class="toc-text">Filter 与 Score 的默认插件</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%B0%83%E5%BA%A6%E5%99%A8%E6%80%A7%E8%83%BD-%E5%A4%A7%E8%A7%84%E6%A8%A1%E9%9B%86%E7%BE%A4%E7%9A%84%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7"><span class="toc-number">1.8.3.4.</span> <span class="toc-text">调度器性能:大规模集群的调优三板斧</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-DRF-%E5%A4%9A%E8%B5%84%E6%BA%90%E7%BB%B4%E5%BA%A6%E7%9A%84%E5%85%AC%E5%B9%B3%E7%AE%97%E6%B3%95"><span class="toc-number">1.8.4.</span> <span class="toc-text">6.4 DRF:多资源维度的公平算法</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88-max-min-fairness-%E4%B8%8D%E5%A4%9F%E7%94%A8"><span class="toc-number">1.8.4.1.</span> <span class="toc-text">为什么 max-min fairness 不够用</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#DRF-%E7%9A%84%E7%AE%97%E6%B3%95%E6%A0%B8%E5%BF%83"><span class="toc-number">1.8.4.2.</span> <span class="toc-text">DRF 的算法核心</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Volcano-DRF-%E6%8F%92%E4%BB%B6%E7%9A%84%E5%AE%9E%E7%8E%B0"><span class="toc-number">1.8.4.3.</span> <span class="toc-text">Volcano DRF 插件的实现</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#DRF-%E7%9A%84%E5%9B%9B%E5%A4%A7%E6%95%B0%E5%AD%A6%E6%80%A7%E8%B4%A8"><span class="toc-number">1.8.4.4.</span> <span class="toc-text">DRF 的四大数学性质</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B8%B8%E8%A7%81%E8%AF%AF%E5%8C%BA"><span class="toc-number">1.8.4.5.</span> <span class="toc-text">常见误区</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-5-%E8%B0%83%E5%BA%A6%E5%99%A8%E8%B7%9F-Node-%E7%9A%84%E8%B5%84%E6%BA%90%E6%98%AF%E8%A7%A3%E8%80%A6%E7%9A%84%E5%90%97"><span class="toc-number">1.8.5.</span> <span class="toc-text">6.5 调度器跟 Node 的资源是解耦的吗?</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%AF%BB%E8%B7%AF%E5%BE%84-Informer-Scheduler-Cache"><span class="toc-number">1.8.5.1.</span> <span class="toc-text">读路径:Informer + Scheduler Cache</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%86%99%E8%B7%AF%E5%BE%84-%E4%B9%90%E8%A7%82%E7%BB%91%E5%AE%9A"><span class="toc-number">1.8.5.2.</span> <span class="toc-text">写路径:乐观绑定</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E8%BF%99%E5%A5%97%E8%AE%BE%E8%AE%A1%E7%9A%84%E6%9C%AC%E8%B4%A8-%E7%89%BA%E7%89%B2%E5%BC%BA%E4%B8%80%E8%87%B4%E6%80%A7%E6%8D%A2%E5%90%9E%E5%90%90"><span class="toc-number">1.8.5.3.</span> <span class="toc-text">这套设计的本质:牺牲强一致性换吞吐</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-6-%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%90%8C%E6%97%B6%E8%B0%83%E5%BA%A6%E4%BA%A7%E7%94%9F%E5%86%B2%E7%AA%81%E6%80%8E%E4%B9%88%E5%8A%9E"><span class="toc-number">1.8.6.</span> <span class="toc-text">6.6 多调度器同时调度产生冲突怎么办?</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E9%81%93%E9%98%B2%E7%BA%BF-schedulerName-%E8%B7%AF%E7%94%B1%E9%9A%94%E7%A6%BB"><span class="toc-number">1.8.6.1.</span> <span class="toc-text">第一道防线:schedulerName 路由隔离</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E7%9C%9F%E6%AD%A3%E7%9A%84%E5%86%B2%E7%AA%81-%E8%8A%82%E7%82%B9%E8%B5%84%E6%BA%90%E7%9A%84%E5%B9%B6%E5%8F%91%E5%8D%A0%E7%94%A8"><span class="toc-number">1.8.6.2.</span> <span class="toc-text">真正的冲突:节点资源的并发占用</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%89%E5%B1%82%E5%85%9C%E5%BA%95%E6%9C%BA%E5%88%B6"><span class="toc-number">1.8.6.3.</span> <span class="toc-text">三层兜底机制</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B7%A5%E7%A8%8B%E4%B8%8A%E7%9A%84%E4%B8%89%E7%A7%8D%E8%A7%A3%E6%B3%95"><span class="toc-number">1.8.6.4.</span> <span class="toc-text">工程上的三种解法</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-7-backfill%E3%80%81preempt%E3%80%81reclaim-%E6%98%AF%E6%80%8E%E4%B9%88%E8%B7%A8-ns-%E8%B7%A8%E9%98%9F%E5%88%97%E7%9A%84"><span class="toc-number">1.8.7.</span> <span class="toc-text">6.7 backfill、preempt、reclaim 是怎么跨 ns 跨队列的?</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%89%E7%A7%8D-action-%E7%9A%84%E8%AF%AD%E4%B9%89%E5%AF%B9%E6%AF%94"><span class="toc-number">1.8.7.1.</span> <span class="toc-text">三种 action 的语义对比</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E8%AF%B4%E8%BE%B9%E7%95%8C%E6%98%AF%E9%98%9F%E5%88%97%E8%80%8C%E4%B8%8D%E6%98%AF-namespace"><span class="toc-number">1.8.7.2.</span> <span class="toc-text">为什么说边界是队列而不是 namespace</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#reclaim-%E7%9A%84%E7%B2%BE%E7%A1%AE%E8%AF%AD%E4%B9%89-%E5%80%9F%E5%87%BA-%E5%BD%92%E8%BF%98"><span class="toc-number">1.8.7.3.</span> <span class="toc-text">reclaim 的精确语义:借出-归还</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B1%82%E7%BA%A7%E9%98%9F%E5%88%97%E4%B8%8B%E7%9A%84-reclaim-%E9%A1%BA%E5%BA%8F"><span class="toc-number">1.8.7.4.</span> <span class="toc-text">层级队列下的 reclaim 顺序</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#Statement-%E6%8E%A8%E6%BC%94%E6%9C%BA%E5%88%B6-%E6%89%80%E6%9C%89%E9%A9%B1%E9%80%90%E5%85%88%E5%9C%A8%E5%86%85%E5%AD%98%E9%87%8C%E5%BD%A9%E6%8E%92"><span class="toc-number">1.8.7.5.</span> <span class="toc-text">Statement 推演机制:所有驱逐先在内存里彩排</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%B8%B8%E8%A7%81%E9%94%99%E8%AF%AF%E8%AE%A4%E7%9F%A5%E6%B8%85%E5%8D%95"><span class="toc-number">1.8.7.6.</span> <span class="toc-text">常见错误认知清单</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-8-%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E4%B8%8E-AI-%E5%9C%BA%E6%99%AF%E8%90%BD%E5%9C%B0"><span class="toc-number">1.8.8.</span> <span class="toc-text">6.8 多调度器共存与 AI 场景落地</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81%E5%A4%9A%E4%B8%AA%E8%B0%83%E5%BA%A6%E5%99%A8"><span class="toc-number">1.8.8.1.</span> <span class="toc-text">为什么需要多个调度器</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%89%E5%A4%A7%E6%89%B9%E5%A4%84%E7%90%86%E8%B0%83%E5%BA%A6%E5%99%A8%E7%9A%84%E9%80%89%E5%9E%8B%E5%86%B3%E7%AD%96"><span class="toc-number">1.8.8.2.</span> <span class="toc-text">三大批处理调度器的选型决策</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#GPU-%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6-gang%E3%80%81%E6%8B%93%E6%89%91%E3%80%81%E4%BA%B2%E5%92%8C%E7%9A%84%E4%B8%89%E9%87%8D%E5%8F%A0%E5%8A%A0"><span class="toc-number">1.8.8.3.</span> <span class="toc-text">GPU 感知调度:gang、拓扑、亲和的三重叠加</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%BB%8E-Ai2-%E6%A1%88%E4%BE%8B%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%99%A8%E6%B2%BB%E7%90%86%E7%9A%84%E8%BE%B9%E7%95%8C"><span class="toc-number">1.8.8.4.</span> <span class="toc-text">从 Ai2 案例看调度器治理的边界</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E9%9D%A2%E8%AF%95%E7%AD%94%E9%A2%98%E5%A5%97%E8%B7%AF%E9%80%9F%E6%9F%A5"><span class="toc-number">1.9.</span> <span class="toc-text">七、面试答题套路速查</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#GPU-%E6%80%A7%E8%83%BD%E7%B1%BB-%E8%AE%B2%E6%B8%85-nsys-%E6%97%B6%E9%97%B4%E7%BA%BF-%E2%86%92-NVTX-%E6%89%93%E6%A0%87-%E2%86%92-ncu-kernel-%E6%B7%B1%E6%8C%96-%E4%B8%89%E6%AD%A5%E5%AE%9A%E4%BD%8D%E6%B3%95-%E5%B9%B6%E7%BB%99%E4%B8%80%E4%B8%AA-compute-bound-memory-bound-latency-bound-%E7%9A%84%E5%85%B7%E4%BD%93%E5%88%A4%E6%96%AD%E4%BE%8B%E5%AD%90%E3%80%82%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E7%B1%BB-%E6%8C%89-%E5%88%87%E4%BB%80%E4%B9%88-%E2%86%92-%E6%80%8E%E4%B9%88%E9%80%9A%E4%BF%A1-%E2%86%92-%E7%9C%81%E5%A4%9A%E5%B0%91%E6%98%BE%E5%AD%98-%E2%86%92-%E5%AF%B9%E6%8B%93%E6%89%91%E4%BB%80%E4%B9%88%E8%A6%81%E6%B1%82-%E9%80%90%E4%B8%AA%E5%B1%95%E5%BC%80-%E7%BB%99%E4%B8%80%E4%B8%AA-TP-PP-DP-ZeRO-%E7%9A%84%E7%BB%84%E5%90%88%E6%A1%88%E4%BE%8B%E3%80%82%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E7%B1%BB-%E4%B8%89%E5%B1%82%E5%BC%B9%E6%80%A7-actor-Ray-%E8%8A%82%E7%82%B9-K8s-%E8%8A%82%E7%82%B9-%E6%89%A9%E7%BC%A9%E6%97%B6%E6%9C%BA-pending-demand-idle-timeout-%E5%A4%9C%E9%97%B4%E7%BC%A9%E5%AE%B9%E7%9A%84%E4%B8%9A%E5%8A%A1%E9%80%BB%E8%BE%91-%E6%B5%81%E9%87%8F%E4%BD%8E%E8%B0%B7%E8%AE%A9%E5%8D%A1%E7%BB%99%E7%A6%BB%E7%BA%BF%E4%BB%BB%E5%8A%A1-%E3%80%82%E6%B7%B7%E9%83%A8%E7%B1%BB-%E8%B5%84%E6%BA%90%E5%85%B1%E4%BA%AB%E5%B1%82%E7%BA%A7-%E2%86%92-%E9%9A%94%E7%A6%BB%E6%96%B9%E5%BC%8F-MIG-MPS-%E6%97%B6%E9%97%B4%E7%89%87-%E2%86%92-%E4%BC%98%E5%85%88%E7%BA%A7%E4%B8%8E%E5%9B%9E%E6%94%B6-%E2%86%92-%E5%85%B3%E9%94%AE%E8%B4%9F%E8%BD%BD%E4%BF%9D%E9%9A%9C-%E5%9B%9B%E6%AE%B5%E7%BC%BA%E4%B8%80%E4%B8%8D%E5%8F%AF%E3%80%82%E6%89%A9%E5%AE%B9%E5%8F%AF%E8%A1%8C%E6%80%A7%E7%B1%BB-%E9%A2%9D%E5%BA%A6-%E2%89%A0-%E5%AE%B9%E9%87%8F-%E2%89%A0-%E6%94%BE%E7%BD%AE%E4%B8%89%E5%B1%82%E6%8B%86%E5%BC%80-%E2%86%92-Quota-%E6%98%AF-Admission-%E5%B1%82-%E2%86%92-DryRun-%E4%B8%8D%E5%88%9B%E5%BB%BA-Pod-%E2%86%92-Gang-%E6%8B%93%E6%89%91-%E7%A2%8E%E7%89%87-%E5%8D%A1%E5%9E%8B%E5%9B%9B%E7%B1%BB%E7%BA%A6%E6%9D%9F-%E2%86%92-%E7%8A%B6%E6%80%81%E5%8F%98%E5%8C%96%E7%9A%84-reconcile-%E5%A4%84%E7%90%86%E3%80%82%E6%8A%A2%E5%8D%A0%E7%B1%BB-PriorityClass-%E5%9B%9B%E5%AD%97%E6%AE%B5-%E2%86%92-kube-scheduler-%E5%9B%9B%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%B5%81%E7%A8%8B-%E2%86%92-PDB-%E6%98%AF-best-effort-%E2%86%92-%E6%8A%A2%E5%8D%A0-%E5%9B%9E%E6%94%B6-%E9%A9%B1%E9%80%90%E4%B8%89%E5%BD%A2%E6%80%81-%E2%86%92-AI-%E5%9C%BA%E6%99%AF%E7%9A%84%E6%97%B6%E9%97%B4%E9%A2%84%E7%AE%97%E6%B2%BB%E7%90%86%E3%80%82%E9%98%9F%E5%88%97%E7%B1%BB-kube-scheduler-%E4%B8%89%E9%98%9F%E5%88%97-%E4%B8%A4%E4%B8%AA%E5%90%8E%E5%8F%B0%E5%8D%8F%E7%A8%8B-%E4%BA%8B%E4%BB%B6%E9%A9%B1%E5%8A%A8%E8%BF%81%E7%A7%BB-%E2%86%92-QueueSort-%E8%87%AA%E5%AE%9A%E4%B9%89-%E2%86%92-Volcano-%E7%9A%84-guarantee-deserved-capability-%E4%B8%89%E7%BA%A7%E6%A8%A1%E5%9E%8B%E3%80%82DRF-%E7%B1%BB-max-min-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E5%A4%9F-%E2%86%92-dominant-share-%E8%AE%A1%E7%AE%97-%E2%86%92-Volcano-%E7%9A%84-JobOrderFn-PreemptableFn-%E2%86%92-%E5%9B%9B%E5%A4%A7%E6%95%B0%E5%AD%A6%E6%80%A7%E8%B4%A8%E3%80%82%E8%A7%A3%E8%80%A6%E7%B1%BB-%E8%AF%BB%E8%B7%AF%E5%BE%84-Informer-%E6%9C%AC%E5%9C%B0%E7%BC%93%E5%AD%98-%E5%86%99%E8%B7%AF%E5%BE%84-%E4%B9%90%E8%A7%82%E7%BB%91%E5%AE%9A-%E5%85%9C%E5%BA%95-kubelet-Admit-%E4%B8%89%E5%B1%82%E3%80%82%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%86%B2%E7%AA%81%E7%B1%BB-schedulerName-%E8%B7%AF%E7%94%B1%E9%9A%94%E7%A6%BB-%E2%86%92-%E7%9C%9F%E6%AD%A3%E5%86%B2%E7%AA%81%E5%9C%A8%E8%8A%82%E7%82%B9%E8%B5%84%E6%BA%90-%E2%86%92-ResourceVersion-kubelet-Admit-cache-%E5%9B%9E%E6%B5%81%E4%B8%89%E5%B1%82%E5%85%9C%E5%BA%95-%E2%86%92-%E8%8A%82%E7%82%B9%E6%B1%A0%E7%89%A9%E7%90%86%E9%9A%94%E7%A6%BB%E7%9A%84%E5%B7%A5%E7%A8%8B%E8%A7%A3%E6%B3%95%E3%80%82backfill-preempt-reclaim-%E7%B1%BB-%E4%BD%9C%E7%94%A8%E5%9F%9F%E4%B8%89%E5%B1%82%E5%AF%B9%E9%BD%90%E2%86%92-%E9%98%9F%E5%88%97%E8%80%8C%E9%9D%9E-namespace-%E6%98%AF%E8%BE%B9%E7%95%8C-%E2%86%92-reclaim-%E7%9A%84%E5%8F%8C%E5%90%91%E6%9D%A1%E4%BB%B6-%E2%86%92-Statement-%E6%8E%A8%E6%BC%94-%E5%B0%B1%E8%BF%91%E4%BC%98%E5%85%88%E3%80%82"><span class="toc-number">1.10.</span> <span class="toc-text">GPU 性能类:讲清 nsys(时间线)→ NVTX 打标 → ncu(kernel 深挖)三步定位法,并给一个 compute-bound &#x2F; memory-bound &#x2F; latency-bound 的具体判断例子。
+分布式训练类:按&quot;切什么 → 怎么通信 → 省多少显存 → 对拓扑什么要求&quot;逐个展开,给一个 TP+PP+DP+ZeRO 的组合案例。
+弹性伸缩类:三层弹性(actor &#x2F; Ray 节点 &#x2F; K8s 节点)+ 扩缩时机(pending demand &#x2F; idle timeout)+ 夜间缩容的业务逻辑(流量低谷让卡给离线任务)。
+混部类:资源共享层级 → 隔离方式(MIG&#x2F;MPS&#x2F;时间片)→ 优先级与回收 → 关键负载保障,四段缺一不可。
+扩容可行性类:额度 ≠ 容量 ≠ 放置三层拆开 → Quota 是 Admission 层 → DryRun 不创建 Pod → Gang + 拓扑 + 碎片 + 卡型四类约束 → 状态变化的 reconcile 处理。
+抢占类:PriorityClass 四字段 → kube-scheduler 四步抢占流程 → PDB 是 best-effort → 抢占&#x2F;回收&#x2F;驱逐三形态 → AI 场景的时间预算治理。
+队列类:kube-scheduler 三队列 + 两个后台协程 + 事件驱动迁移 → QueueSort 自定义 → Volcano 的 guarantee&#x2F;deserved&#x2F;capability 三级模型。
+DRF 类:max-min 为什么不够 → dominant share 计算 → Volcano 的 JobOrderFn&#x2F;PreemptableFn → 四大数学性质。
+解耦类:读路径(Informer 本地缓存)+ 写路径(乐观绑定)+ 兜底(kubelet Admit)三层。
+多调度器冲突类:schedulerName 路由隔离 → 真正冲突在节点资源 → ResourceVersion + kubelet Admit + cache 回流三层兜底 → 节点池物理隔离的工程解法。
+backfill&#x2F;preempt&#x2F;reclaim 类:作用域三层对齐→ 队列而非 namespace 是边界 → reclaim 的双向条件 → Statement 推演 + 就近优先。</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E7%BB%93%E8%AF%AD"><span class="toc-number">1.11.</span> <span class="toc-text">八、结语</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</a><time datetime="2026-10-14T16:00:00.000Z" title="发表于 2026-10-15 00:00:00">2026-10-15</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/15/2026-10-09-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</a><time datetime="2026-10-14T16:00:00.000Z" title="发表于 2026-10-15 00:00:00">2026-10-15</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-%EF%BF%BD%EF%BF%BD11.9%25-'%EF%BF%BD!%EF%BF%BD%EF%BF%BD%C6%A4%EF%BF%BD%1F%EF%BF%BD%EF%BF%BD_1%EF%BF%BD%EF%BF%BD%0E%EF%BF%BD%16%EF%BF%BD%06/" title="拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理">拆解那 11.9%:大规模训练集群的生产力损失度量与自动化治理</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/12/2026-10-12-VPC%E4%B8%8ECiliumClusterMesh%E5%A4%9A%E9%9B%86%E7%BE%A4%E7%BB%84%E7%BD%91%E7%9A%84%E5%9C%B0%E5%9F%BA%E4%B8%8E%E4%B8%8A%E5%B1%82%E5%BB%BA%E7%AD%91/" title="VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑</a><time datetime="2026-10-11T16:00:00.000Z" title="发表于 2026-10-12 00:00:00">2026-10-12</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
