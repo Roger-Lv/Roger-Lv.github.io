@@ -1,0 +1,864 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>mmap 能映射什么：一张全景图 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="mmap 能映射什么：一张全景图 引言 mmap 本质上是一种**&quot;把任意字节序列对象映射进进程虚拟地址空间&quot;的通用机制**——它的作用域取决于 fd 指向什么。 fd 可以是普通文件、tmpfs 文件、字符设备、GPU 节点、VFIO 组，甚至完全不要 fd（MAP_ANONYMOUS）。内核为每次 mmap 创建一个 vm_area_struct（VMA），并绑定对应的文件">
+<meta property="og:type" content="article">
+<meta property="og:title" content="mmap 能映射什么：一张全景图">
+<meta property="og:url" content="https://roger-lv.github.io/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="mmap 能映射什么：一张全景图 引言 mmap 本质上是一种**&quot;把任意字节序列对象映射进进程虚拟地址空间&quot;的通用机制**——它的作用域取决于 fd 指向什么。 fd 可以是普通文件、tmpfs 文件、字符设备、GPU 节点、VFIO 组，甚至完全不要 fd（MAP_ANONYMOUS）。内核为每次 mmap 创建一个 vm_area_struct（VMA），并绑定对应的文件">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-10-22T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-10-23T10:32:33.675Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Linux">
+<meta property="article:tag" content="内核">
+<meta property="article:tag" content="mmap">
+<meta property="article:tag" content="虚拟内存">
+<meta property="article:tag" content="零拷贝">
+<meta property="article:tag" content="驱动">
+<meta property="article:tag" content="ublk">
+<meta property="article:tag" content="overlaybd">
+<meta property="article:tag" content="bio">
+<meta property="article:tag" content="块层">
+<meta property="article:tag" content="page cache">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "mmap 能映射什么：一张全景图",
+  "url": "https://roger-lv.github.io/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-10-22T16:00:00.000Z",
+  "dateModified": "2026-10-23T10:32:33.675Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'mmap 能映射什么：一张全景图',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">286</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">395</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">mmap 能映射什么：一张全景图</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">mmap 能映射什么：一张全景图</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-22T16:00:00.000Z" title="发表于 2026-10-23 00:00:00">2026-10-23</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-23T10:32:33.675Z" title="更新于 2026-10-23 18:32:33">2026-10-23</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F/">操作系统</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/" data-flag-title="mmap 能映射什么：一张全景图"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>mmap 能映射什么：一张全景图</h1>
+<h2 id="引言">引言</h2>
+<p><code>mmap</code> 本质上是一种**&quot;把任意字节序列对象映射进进程虚拟地址空间&quot;的通用机制**——它的作用域取决于 fd 指向什么。</p>
+<p>fd 可以是普通文件、tmpfs 文件、字符设备、GPU 节点、VFIO 组，甚至完全不要 fd（<code>MAP_ANONYMOUS</code>）。内核为每次 <code>mmap</code> 创建一个 <code>vm_area_struct</code>（VMA），并绑定对应的文件操作表 <code>f_op-&gt;mmap</code>。</p>
+<p>所以真正决定&quot;能不能映射、映射出来是什么&quot;的，从来不是 <code>mmap</code> 这个系统调用本身，而是 <strong>fd 背后的 <code>file_operations</code> 实现</strong>。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">mmap(addr, len, prot, flags, fd, offset)</span><br><span class="line">      │</span><br><span class="line">      ├─ 无 fd ──────────────► 匿名内存（零页 + COW）</span><br><span class="line">      └─ 有 fd</span><br><span class="line">            │</span><br><span class="line">            ├─ 通用路径 do_mmap() → 新建 VMA</span><br><span class="line">            └─ f_op-&gt;mmap(file, vma)   ← 语义在这里被定义</span><br><span class="line">                     │</span><br><span class="line">                     └─ 缺页时 vm_ops-&gt;fault() 真正取数据</span><br></pre></td></tr></table></figure>
+<p>一句话记住这套心智模型：<strong><code>mmap</code> 负责&quot;登记一段地址区间&quot;，驱动/文件系统负责&quot;这段区间背后是什么、缺页时去哪儿取&quot;</strong>。</p>
+<hr>
+<h2 id="一、按映射对象分类：mmap-的完整作用域">一、按映射对象分类：mmap 的完整作用域</h2>
+<h3 id="1-1-匿名内存（无-fd，fd-1）">1.1 匿名内存（无 fd，fd = -1）</h3>
+<p>最基础也最常用的形式：进程向内核申请一段零初始化的虚拟内存，不关联任何文件。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">void</span> *p = mmap(<span class="literal">NULL</span>, len, PROT_READ | PROT_WRITE,</span><br><span class="line">               MAP_PRIVATE | MAP_ANONYMOUS, <span class="number">-1</span>, <span class="number">0</span>);</span><br></pre></td></tr></table></figure>
+<ul>
+<li><code>MAP_PRIVATE | MAP_ANONYMOUS</code>：私有匿名页，<code>malloc</code>/glibc 堆、线程栈都是这么来的；</li>
+<li><code>MAP_SHARED | MAP_ANONYMOUS</code>：共享匿名页，<code>fork</code> 后父子进程可共享（Linux 2.4+），是 memfd 出现之前唯一的&quot;匿名共享&quot;手段；</li>
+<li>典型用途：动态内存分配、大块 scratch buffer、COW fork 的栈空间。</li>
+</ul>
+<p>注意匿名映射背后并不是&quot;凭空一块内存&quot;——内核挂的是 <code>anon_vma</code>，首次写入触发缺页时分配零页并建立 COW 关系。</p>
+<h3 id="1-2-普通文件（regular-file）">1.2 普通文件（regular file）</h3>
+<p>把文件内容当作内存访问，绕开 <code>read</code>/<code>write</code> 的系统调用开销和缓冲区拷贝：</p>
+<ul>
+<li><strong>Page cache 共享</strong>：<code>MAP_SHARED</code> 时多个进程映射同一文件，通过 page cache 天然共享；</li>
+<li><strong>COW 优化</strong>：<code>MAP_PRIVATE</code> 是进程加载可执行文件的标配——同一段代码的 <code>.text</code> 在物理内存只存在一份；</li>
+<li><strong>随机访问大文件</strong>：数据库、搜索引擎、NumPy 的 <code>np.memmap</code>、PyTorch 加载超大权重；</li>
+<li><strong>启动加速</strong>：配合 <code>MADV_WILLNEED</code>、<code>MAP_POPULATE</code> 做预读，或者反过来用 <code>userfaultfd</code> 做 lazy-load（Nydus 的镜像按需加载就是这一思想）。</li>
+</ul>
+<p>文件映射的缺页路径走的是通用 <code>filemap_fault()</code>：从 page cache 找页，找不到就发起 IO 并睡眠等待——<strong>这也是 mmap 文件时&quot;卡住&quot;的地方，延迟从 syscall 转移到了缺页</strong>。</p>
+<h3 id="1-3-tmpfs-shmem-memfd：内存里的-文件">1.3 tmpfs / shmem / memfd：内存里的&quot;文件&quot;</h3>
+<p>这类对象看起来是文件，但数据只在 RAM/swap 里，是 Linux IPC 的主力：</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>创建方式</th>
+<th>典型用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/dev/shm</code> 下的文件</td>
+<td><code>shm_open</code> / 直接 <code>open</code></td>
+<td>POSIX 共享内存，进程间 IPC</td>
+</tr>
+<tr>
+<td>System V shm</td>
+<td><code>shmget</code> + <code>shmat</code></td>
+<td>老式 IPC，依然广泛使用</td>
+</tr>
+<tr>
+<td>memfd</td>
+<td><code>memfd_create</code></td>
+<td>匿名但可通过 fd 传递的共享内存，Android 从 ashmem 迁移到 memfd 的目标形态</td>
+</tr>
+<tr>
+<td>ashmem (Android)</td>
+<td><code>/dev/ashmem</code> ioctl</td>
+<td>Android 特有，支持&quot;按 name 共享 + 内存压力下丢弃&quot;</td>
+</tr>
+<tr>
+<td>overlay 文件</td>
+<td><code>open</code> + <code>O_TMPFILE</code></td>
+<td>构建临时文件</td>
+</tr>
+</tbody>
+</table>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> fd = memfd_create(<span class="string">&quot;shm&quot;</span>, MFD_CLOEXEC);</span><br><span class="line">ftruncate(fd, size);</span><br><span class="line"><span class="type">void</span> *p = mmap(<span class="literal">NULL</span>, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, <span class="number">0</span>);</span><br><span class="line"><span class="comment">// fd 可以经 SCM_RIGHTS 通过 Unix socket 送给另一个进程</span></span><br></pre></td></tr></table></figure>
+<p>这类映射的核心特征：<strong>有 fd、能被 <code>SCM_RIGHTS</code> 通过 Unix socket 传给另一个进程</strong>——这是 binder、Wayland、CUDA IPC 等高级机制的基础。</p>
+<h3 id="1-4-字符设备：用户态驱动的基石">1.4 字符设备：用户态驱动的基石</h3>
+<p>fd 是字符设备时，<code>mmap</code> 就进入&quot;设备访问&quot;领域。内核会调用该驱动注册的 <code>f_op-&gt;mmap</code> 回调，由驱动决定把什么映射给用户空间：</p>
+<table>
+<thead>
+<tr>
+<th>设备节点</th>
+<th>映射出来的东西</th>
+<th>典型用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/dev/zero</code></td>
+<td>零页（COW）</td>
+<td>匿名内存的老派写法，<code>MAP_ANON</code> 的兼容路径</td>
+</tr>
+<tr>
+<td><code>/dev/mem</code></td>
+<td>物理地址空间（需要 root + <code>STRICT_DEVMEM</code> 限制）</td>
+<td>嵌入式 bare-metal、SoC 寄存器访问</td>
+</tr>
+<tr>
+<td><code>/dev/kmem</code></td>
+<td>内核虚拟地址空间</td>
+<td>已基本废弃</td>
+</tr>
+<tr>
+<td><code>/dev/dax</code>（device-dax）</td>
+<td>字节可寻址持久内存</td>
+<td>PMDK / LMCache 等 DAX 应用</td>
+</tr>
+<tr>
+<td><code>/dev/pmem*</code></td>
+<td>持久内存命名空间</td>
+<td>fsdax/devdax 访问 Optane</td>
+</tr>
+<tr>
+<td><code>/dev/nvidia*</code></td>
+<td>GPU 显存、寄存器</td>
+<td>CUDA 用户态驱动</td>
+</tr>
+<tr>
+<td><code>/dev/nvidia-uvm</code></td>
+<td>GPU 统一虚拟内存</td>
+<td>CUDA UVM，CPU/GPU 共享 VA 空间</td>
+</tr>
+<tr>
+<td><code>/dev/vfio/N</code></td>
+<td>VFIO 组下所有设备的 MMIO BAR</td>
+<td>VFIO 直通、DPDK 用户态驱动</td>
+</tr>
+<tr>
+<td><code>/dev/fb0</code></td>
+<td>framebuffer 显存</td>
+<td>简单图形绘制</td>
+</tr>
+<tr>
+<td><code>/dev/dri/renderD*</code></td>
+<td>GPU buffer object (GEM)</td>
+<td>DRM 图形栈，dumb buffer + mmap</td>
+</tr>
+<tr>
+<td><code>/dev/video*</code></td>
+<td>V4L2 缓冲区</td>
+<td>摄像头零拷贝捕获</td>
+</tr>
+<tr>
+<td><code>/dev/uio*</code></td>
+<td>简单设备的寄存器/内存</td>
+<td>用户态驱动原型</td>
+</tr>
+<tr>
+<td><code>/dev/binder</code></td>
+<td>binder 共享缓冲区</td>
+<td>Android IPC，一次拷贝</td>
+</tr>
+</tbody>
+</table>
+<p>字符设备 mmap 的关键在于<strong>驱动自己实现了 mmap 回调</strong>——它可以通过 <code>remap_pfn_range()</code> 把物理地址（如 PCI BAR、设备 MMIO）映射进用户空间，也可以通过 <code>vm_insert_page()</code> 把内核已分配的 page 塞进用户 VMA。</p>
+<p>这两条路径的差别值得单独记一句：</p>
+<ul>
+<li><code>remap_pfn_range()</code>：<strong>绕过 page cache，直接建 PTE 指向物理页</strong>。设备寄存器、显存、BAR 都走这条路。代价是这些页不参与内核的页回收与 COW，<code>fork</code> 之后父子进程共享的是同一块物理内存。</li>
+<li><code>vm_insert_page()</code>：把内核已经分配好的 <code>struct page</code> 插进 VMA，仍然受内核内存管理约束，适合&quot;内核分配、用户读写&quot;的缓冲区（如 V4L2 的 <code>VIDIOC_REQBUFS</code> + <code>mmap</code> 组合）。</li>
+</ul>
+<h3 id="1-5-特殊机制：内核-用户共享的-环形结构">1.5 特殊机制：内核/用户共享的&quot;环形结构&quot;</h3>
+<p>这类场景里 mmap 的价值是<strong>零拷贝 + 零系统调用的数据通道</strong>：</p>
+<ul>
+<li><strong>io_uring</strong>：SQ/CQ 两个环形缓冲区都通过 mmap 暴露给用户态，SQE/CQE 由用户和内核同时读写，用内存屏障保证一致性；</li>
+<li><strong>AF_XDP / UMEM</strong>：网卡 DMA 到一块用户态和内核共享的 UMEM 内存，用户态直接读写包，绕开整个内核网络栈，性能接近 DPDK；</li>
+<li><strong>eBPF ring buffer</strong>：用户态 mmap 读取 BPF 程序产生的事件；</li>
+<li><strong>vDSO</strong>：内核把一小段代码 + 数据（如 <code>clock_gettime</code> 使用的 vvar 页）映射到每个进程的地址空间，让高频 syscall 变成纯用户态函数调用；</li>
+<li><strong>futex</strong>：底层依赖共享内存做用户态 fast path；</li>
+<li><strong>通用内核环形缓冲区</strong>（LWN 2024 提案）：把&quot;fd + mmap&quot;的环形缓冲区范式泛化成内核接口。</li>
+</ul>
+<p>io_uring 是最能说明问题的例子——用户态初始化时对<strong>同一个 fd 做三次 mmap</strong>，用 offset 区分映射对象：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// 三个魔法 offset，都是 mmap 的 offset 参数</span></span><br><span class="line">mmap(<span class="literal">NULL</span>, sq_ring_sz, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE,</span><br><span class="line">     ring_fd, IORING_OFF_SQ_RING);   <span class="comment">// 提交队列环</span></span><br><span class="line">mmap(<span class="literal">NULL</span>, cq_ring_sz, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE,</span><br><span class="line">     ring_fd, IORING_OFF_CQ_RING);   <span class="comment">// 完成队列环</span></span><br><span class="line">mmap(<span class="literal">NULL</span>, sqes_sz,    PROT_READ|PROT_WRITE, MAP_SHARED|MAP_POPULATE,</span><br><span class="line">     ring_fd, IORING_OFF_SQES);      <span class="comment">// SQE 数组本体</span></span><br></pre></td></tr></table></figure>
+<p><strong>同一个 fd、不同的 offset、映射出三块语义完全不同的内存</strong>——这正是&quot;<code>mmap</code> 的语义由 <code>f_op-&gt;mmap</code> 定义&quot;最直白的证据。</p>
+<h3 id="1-6-一些-语义边界-之外的用法">1.6 一些&quot;语义边界&quot;之外的用法</h3>
+<ul>
+<li><code>mmap</code> 一个 socket/pipe：不支持（<code>ENODEV</code>）；</li>
+<li><code>mmap</code> 一个目录：不支持（<code>EACCES</code>，fd 是非普通文件）；</li>
+<li><code>mmap</code> 块设备：可以，但受块大小限制，不常用于业务代码；</li>
+<li><code>mmap</code> <code>/proc/kcore</code>：可作为 ELF core dump 读取内核虚拟地址空间（需要 root，用于调试/取证）；</li>
+<li><code>mmap</code> overlay 文件系统上的文件：受 overlayfs 特性影响，某些场景下会有私有副本而非共享页（典型的 CVE-2023-0386 相关）。</li>
+</ul>
+<hr>
+<h2 id="二、按-flags-分类：映射行为的多维组合">二、按 flags 分类：映射行为的多维组合</h2>
+<p><code>mmap</code> 的 flags 由&quot;必选一&quot;的三种共享语义 + 可选修饰位组成。</p>
+<h3 id="2-1-共享语义（必选一）">2.1 共享语义（必选一）</h3>
+<table>
+<thead>
+<tr>
+<th>flag</th>
+<th>语义</th>
+<th>修改是否回写文件</th>
+<th>是否对其他映射者可见</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MAP_SHARED</code></td>
+<td>共享映射</td>
+<td><code>msync</code>/<code>munmap</code> 时回写</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>MAP_PRIVATE</code></td>
+<td>COW 私有</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td><code>MAP_SHARED_VALIDATE</code> (4.15+)</td>
+<td>共享 + 严格校验</td>
+<td>同 <code>SHARED</code></td>
+<td>✅，<code>MAP_SYNC</code> 只能配合它使用</td>
+</tr>
+</tbody>
+</table>
+<p><code>MAP_SHARED_VALIDATE</code> 的存在感很低但含义很关键：普通的 <code>MAP_SHARED</code> 会<strong>静默忽略</strong>内核不认识的 flag 位，而 <code>MAP_SHARED_VALIDATE</code> 会对未知位直接返回 <code>EOPNOTSUPP</code>。<code>MAP_SYNC</code> 之所以必须配它，就是为了防止&quot;在老内核上以为开了持久化、其实被静默忽略&quot;。</p>
+<h3 id="2-2-对象来源（可选，二选一）">2.2 对象来源（可选，二选一）</h3>
+<ul>
+<li><code>MAP_ANONYMOUS</code>：无 fd、零初始化；</li>
+<li>无此 flag：fd 必须有效，offset 需页对齐。</li>
+</ul>
+<h3 id="2-3-修饰位">2.3 修饰位</h3>
+<table>
+<thead>
+<tr>
+<th>flag</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MAP_FIXED</code></td>
+<td>强制使用 <code>addr</code>，覆盖已有映射</td>
+</tr>
+<tr>
+<td><code>MAP_FIXED_NOREPLACE</code> (4.17+)</td>
+<td>强制使用 <code>addr</code>，冲突时报 <code>EEXIST</code>（比 <code>FIXED</code> 安全）</td>
+</tr>
+<tr>
+<td><code>MAP_HUGETLB</code> / <code>MAP_HUGE_2MB</code> / <code>MAP_HUGE_1GB</code></td>
+<td>用大页分配（TLB 命中率、内存密集负载优化）</td>
+</tr>
+<tr>
+<td><code>MAP_LOCKED</code></td>
+<td>映射页立即锁定（类似 <code>mlock</code>，但失败不报错）</td>
+</tr>
+<tr>
+<td><code>MAP_POPULATE</code></td>
+<td>预先填满页表，避免后续 page fault</td>
+</tr>
+<tr>
+<td><code>MAP_NONBLOCK</code></td>
+<td>配合 <code>POPULATE</code>，只填已在内存的页</td>
+</tr>
+<tr>
+<td><code>MAP_NORESERVE</code></td>
+<td>不预留 swap 空间，允许 overcommit</td>
+</tr>
+<tr>
+<td><code>MAP_GROWSDOWN</code></td>
+<td>栈式向下增长（配合 guard page）</td>
+</tr>
+<tr>
+<td><code>MAP_STACK</code></td>
+<td>提示用于线程栈（Linux 上是 no-op，glibc 仍用）</td>
+</tr>
+<tr>
+<td><code>MAP_SYNC</code> (4.15+)</td>
+<td>仅 DAX 文件支持：写入在断电/崩溃后仍持久可见</td>
+</tr>
+<tr>
+<td><code>MAP_UNINITIALIZED</code></td>
+<td>匿名页不清零（嵌入式专用，默认关闭）</td>
+</tr>
+<tr>
+<td><code>MAP_32BIT</code></td>
+<td>x86-64 上把映射放在低 2GB</td>
+</tr>
+</tbody>
+</table>
+<p><code>MAP_FIXED</code> 是其中最危险的一位：它<strong>不会报错，而是直接 unmap 掉覆盖区域里已有的任何映射</strong>。历史上无数安全漏洞与诡异崩溃都源于此——<code>MAP_FIXED_NOREPLACE</code> 就是为了给它上保险。</p>
+<h3 id="2-4-prot-参数">2.4 prot 参数</h3>
+<ul>
+<li><code>PROT_NONE</code>：完全不可访问（用作 guard page）；</li>
+<li><code>PROT_READ</code> / <code>PROT_WRITE</code> / <code>PROT_EXEC</code>：组合位；</li>
+<li><strong>架构差异</strong>：某些架构上 <code>PROT_WRITE</code> 隐含 <code>PROT_READ</code>，<code>PROT_READ</code> 是否隐含 <code>PROT_EXEC</code> 取决于架构（RISC-V / x86 的某些配置要求显式声明 <code>EXEC</code>）。</li>
+</ul>
+<hr>
+<h2 id="三、换个维度看：什么不能映射">三、换个维度看：什么不能映射</h2>
+<p>理解 mmap 的边界同样重要：</p>
+<ul>
+<li>无法映射<strong>内核动态分配的任意对象</strong>（如某个 <code>task_struct</code>）——除非驱动通过某种 fd（如 debugfs）暴露出来；</li>
+<li>无法映射<strong>另一个进程的 VA 空间</strong>——<code>process_vm_readv</code> 是另一套接口；</li>
+<li>无法映射<strong>非页对齐的地址</strong>——offset 必须是 <code>PAGE_SIZE</code> 的倍数；</li>
+<li>无法映射<strong>没有实现 <code>f_op-&gt;mmap</code> 的文件</strong>——比如大多数 procfs/sysfs 文件会返回 <code>ENODEV</code> 或 <code>ENOSYS</code>；</li>
+<li>无法映射<strong>超过 <code>RLIMIT_DATA</code> / overcommit 限制的长度</strong>；</li>
+<li>不能在映射后<strong>动态改大小</strong>——改大小要用 <code>mremap()</code>，这不是 mmap 的职责。</li>
+</ul>
+<p>把这些&quot;不能&quot;反过来读，就是 mmap 的能力边界：<strong>它映射的永远是&quot;页对齐的、有明确 fault 处理者的地址区间&quot;，而不是&quot;任意一块内存&quot;</strong>。</p>
+<hr>
+<h2 id="四、放在之前讨论的坐标系里">四、放在之前讨论的坐标系里</h2>
+<p><code>mmap</code> 这个话题串起了前面几轮讨论的很多底层细节：</p>
+<ul>
+<li><strong>Firecracker 快照恢复</strong>：microVM 的 guest 物理内存是以一个大文件（或 memfd）的形式被 mmap 进 VMM 的，恢复时零拷贝；</li>
+<li><strong>EROFS / FSCache 按需加载</strong>：RAFS 镜像本质是&quot;mmap 一个特殊文件，缺页时通知用户态 daemon 拉取&quot;；</li>
+<li><strong>VFIO 直通</strong>：QEMU 对 GPU BAR 的访问就是 mmap VFIO 设备 fd 的特定偏移（BAR 对应的 region）；</li>
+<li><strong>CUDA UVM</strong>：CPU 进程 mmap <code>/dev/nvidia-uvm</code>，让 GPU 和 CPU 共享虚拟地址空间；</li>
+<li><strong>Agent sandbox 的进程间通信</strong>：gVisor / Firecracker 内部大量使用 memfd + mmap 共享内存做 IPC；</li>
+<li><strong>vDSO 加速 syscall</strong>：Firecracker 快照恢复的毫秒级性能背后，guest 的 <code>clock_gettime</code> 也通过 vDSO 免去了真实 syscall 开销。</li>
+</ul>
+<p>可以看到，这些系统虽然分属快照、镜像、直通、GPU、沙盒五个完全不同的领域，但它们共享同一个原语：<strong>“一个 fd + 一次 mmap + 缺页时由谁负责填充”</strong>。理解了这一点，再看这些系统的实现会顺畅很多。</p>
+<hr>
+<h2 id="五、往下走一层：mmap-的页究竟从哪儿来">五、往下走一层：mmap 的页究竟从哪儿来</h2>
+<p>前面把 mmap &quot;能映射什么&quot;讲完了，但还有一半问题没回答：<strong>那些页是谁填进去的？</strong> 这一节顺着 page fault 往下走，走到块设备驱动为止。</p>
+<h3 id="5-1-page-cache-和-ublk-的层级关系">5.1 page cache 和 ublk 的层级关系</h3>
+<p>拿 overlaybd 的 <code>/dev/ublk</code> 做例子——它和 mmap page cache 常被放在一起讨论，但<strong>两者处在 I/O 栈的两个不同层级，不是竞争关系，而是上下游关系</strong>：page cache 在文件系统之上，<code>/dev/ublk</code> 在文件系统之下。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line">┌─────────────────────────────────────────────┐</span><br><span class="line">│  应用：mmap(file) MAP_SHARED                │</span><br><span class="line">└──────────────────┬──────────────────────────┘</span><br><span class="line">                   ↓ page fault</span><br><span class="line">┌─────────────────────────────────────────────┐</span><br><span class="line">│  Page Cache（per-inode 的 address_space）   │  ← mmap 的页住在这里</span><br><span class="line">└──────────────────┬──────────────────────────┘</span><br><span class="line">                   ↓ filemap_fault / readahead</span><br><span class="line">┌─────────────────────────────────────────────┐</span><br><span class="line">│  文件系统（ext4 / xfs / overlayfs）          │</span><br><span class="line">└──────────────────┬──────────────────────────┘</span><br><span class="line">                   ↓ bio（block I/O 请求）</span><br><span class="line">┌─────────────────────────────────────────────┐</span><br><span class="line">│  Block Layer                                │</span><br><span class="line">└──────────────────┬──────────────────────────┘</span><br><span class="line">                   │</span><br><span class="line">     ┌─────────────┴─────────────┐</span><br><span class="line">     ↓                           ↓</span><br><span class="line">┌─────────────┐        ┌──────────────────────┐</span><br><span class="line">│ NVMe/SSD    │        │ /dev/ublkb0 (ublk)   │  ← overlaybd 挂在这里</span><br><span class="line">│ (本地盘)    │        │ io_uring cmd         │</span><br><span class="line">└─────────────┘        └──────────┬───────────┘</span><br><span class="line">                                  ↓ SQE/CQE</span><br><span class="line">                       ┌──────────────────────┐</span><br><span class="line">                       │ overlaybd-turbo-io   │  ← 用户态 daemon</span><br><span class="line">                       │ · LBA B+ tree 索引   │</span><br><span class="line">                       │ · Zfile 在线解压     │</span><br><span class="line">                       │ · 本地 cache         │</span><br><span class="line">                       └──────────┬───────────┘</span><br><span class="line">                                  ↓ HTTPS</span><br><span class="line">                       ┌──────────────────────┐</span><br><span class="line">                       │ Registry / OSS / P2P │</span><br><span class="line">                       └──────────────────────┘</span><br></pre></td></tr></table></figure>
+<ul>
+<li><strong>Page cache</strong>：在文件系统<strong>之上</strong>，per-inode，mmap 的 <code>MAP_SHARED</code> 页就住在这里，dirty 页通过 <code>writepage</code> 回写；</li>
+<li><strong>ublk</strong>：在文件系统<strong>之下</strong>，块层之后，内核把 bio 转成 io_uring command 发给用户态 daemon，daemon 决定数据从哪来（本地 cache、Zfile 解压、远端拉取）。</li>
+</ul>
+<p><strong>关键事实：page cache 不知道下面是 NVMe 还是 ublk，它只跟&quot;文件系统给我 bio&quot;这件事打交道</strong>；反过来 ublk daemon 只看到 bio（LBA + 长度 + buffer），看不到上面的 page cache。<strong>两者解耦，靠文件系统做中介。</strong></p>
+<p>所以答案是：<strong>mmap 一个由 overlaybd 块设备支撑的文件时，page cache 依然照常工作，只是底层&quot;填 page cache 的那一步 bio&quot;被换成了走 ublk 到用户态 daemon 的路径。</strong></p>
+<h3 id="5-2-mmap-一个-overlaybd-支撑的文件，实际发生什么">5.2 mmap 一个 overlaybd 支撑的文件，实际发生什么</h3>
+<p>假设容器里有个文件 <code>/data/weights.bin</code>，它是 overlaybd 块设备上 ext4 文件系统里的一个文件：</p>
+<ol>
+<li>应用调 <code>mmap(fd, MAP_SHARED)</code>，内核建立 file-backed VMA；</li>
+<li>首次访问触发 <strong>page fault</strong> → <code>filemap_fault()</code> 查 page cache；</li>
+<li><strong>miss</strong> → 文件系统发 readahead/read bio → block layer → ublk driver；</li>
+<li><strong>ublk driver 把 bio 封装成 io_uring command</strong>（<code>IORING_OP_URING_CMD</code>）通过共享 cmd buffer 通知用户态 daemon；</li>
+<li>overlaybd-turbo-io 收到请求，按 LBA 查 B+ tree 索引，找到数据在哪个 layer / 哪个 blob / 是否需要 Zfile 解压 / 是否要远端拉取；</li>
+<li>数据填回 bio → page cache 填上这页 → mmap 的用户 VA 就能读到了。</li>
+</ol>
+<p><strong>整个过程 mmap 完全无感知</strong>——它以为自己在 mmap 一个&quot;普通的 ext4 文件&quot;，只是 page fault 的响应时间比本地盘长（冷访问要走网络），热访问会命中 overlaybd 的本地 cache。</p>
+<h3 id="5-3-overlaybd-为什么选块级而不是文件级">5.3 overlaybd 为什么选块级而不是文件级</h3>
+<p>这是理解这个问题的关键对比。同为&quot;镜像按需加载&quot;，Nydus RAFS 走的是<strong>文件级</strong>（自己实现一个文件系统），overlaybd 走的是<strong>块级</strong>（把镜像变成一个块设备）：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>RAFS / EROFS（文件级）</th>
+<th>overlaybd / ublk（块级）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>实现层</td>
+<td>自己的文件系统</td>
+<td>虚拟块设备 + 上层任意文件系统</td>
+</tr>
+<tr>
+<td>Page cache 的角色</td>
+<td>由 RAFS/EROFS <strong>自己填 page cache</strong>（filemap_ops 实现）</td>
+<td><strong>完全复用</strong>上层文件系统的 page cache</td>
+</tr>
+<tr>
+<td>上层兼容性</td>
+<td>必须用 RAFS-aware 工具</td>
+<td><strong>任何文件系统</strong>都能挂在它上面（ext4/xfs/overlayfs）</td>
+</tr>
+<tr>
+<td>POSIX 兼容</td>
+<td>需要自己保证</td>
+<td>天然兼容（就是块设备上的普通文件系统）</td>
+</tr>
+<tr>
+<td>VM 场景</td>
+<td>不适用（VM 需要块设备）</td>
+<td><strong>VM 可以直接当磁盘用</strong></td>
+</tr>
+<tr>
+<td>按需加载粒度</td>
+<td>chunk 级（更细）</td>
+<td>LBA 块级（更粗但通用）</td>
+</tr>
+</tbody>
+</table>
+<p>overlaybd 的 README 直接写明这个定位：“applicable to virtual machine” 和 “all forms of containers, virtual machines, and sandboxes”。<strong>块级方案换来的通用性代价，是把按需加载逻辑从&quot;实现一个 FS&quot;变成&quot;实现一个用户态块设备&quot;——ublk 的出现让这件事的成本大幅降低</strong>（TCMU 时代要绕 iSCSI/TCMU，ublk 时代直接 io_uring，性能和延迟都更好）。</p>
+<h3 id="5-4-一个容易混淆的点：块设备文件自己也有-page-cache">5.4 一个容易混淆的点：块设备文件自己也有 page cache</h3>
+<p>严格说 Linux 里其实存在<strong>两种和块设备相关的 page cache</strong>：</p>
+<ol>
+<li><strong>块设备 inode 自己的 page cache</strong>（bdev inode 的 <code>address_space</code>）——当你 <code>dd if=/dev/ublkb0</code> 或直接 <code>mmap /dev/ublkb0</code> 时用的是这个；</li>
+<li><strong>挂载其上的文件系统里文件的 page cache</strong>——当你 mmap 一个 ext4 文件时用的是这个。</li>
+</ol>
+<p><strong>业务代码 mmap 文件用的是第 2 种</strong>，它和 ublk 的关系是&quot;隔着文件系统 + bio&quot;的间接关系。第 1 种主要用于裸设备访问（备份、格式化工具），通常不在业务路径上。</p>
+<h3 id="5-5-完整的缓存层级">5.5 完整的缓存层级</h3>
+<p>在 overlaybd 场景下，一个 mmap 文件的实际缓存层级是五层：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">① 应用 CPU cache</span><br><span class="line">        ↓</span><br><span class="line">② Page cache（内核，per-file inode）         ← mmap 的页在这里</span><br><span class="line">        ↓</span><br><span class="line">③ 文件系统元数据缓存（也在 page cache 里）</span><br><span class="line">        ↓</span><br><span class="line">④ overlaybd 本地 cache（用户态，本地盘）      ← ublk daemon 管理</span><br><span class="line">        ↓</span><br><span class="line">⑤ 远端 Registry / OSS / P2P                  ← 最慢但最大</span><br></pre></td></tr></table></figure>
+<p><strong>每层的角色不同</strong>：</p>
+<ul>
+<li>② 让 mmap 的重复访问接近内存速度；</li>
+<li>④ 让重复启动同一镜像的容器不用再走网络；</li>
+<li>⑤ 是冷启动时的数据源。</li>
+</ul>
+<p>ublk 的价值就在于把 ④⑤ 两层挂到了标准块设备接口之下，让 ②③ 完全不用改。</p>
+<h3 id="5-6-性能上的实际影响">5.6 性能上的实际影响</h3>
+<p>这个设计带来的几个实际观察：</p>
+<ul>
+<li><strong>冷访问延迟</strong>：首次 page fault 要经过 page cache miss → bio → ublk → 用户态 → 网络 → 回填，可能几百 ms；<strong><code>MAP_POPULATE</code> 在这种场景下会串行触发大量 page fault</strong>，不适合 overlaybd 冷启动场景；</li>
+<li><strong>Readahead 有帮助</strong>：<code>filemap_fault</code> 会预读相邻页，产生更大的 bio，ublk daemon 可以一次拉更大块的远端数据，摊薄网络 RTT；</li>
+<li><strong>热访问几乎无损耗</strong>：第二次访问同一页时，mmap 命中 page cache，<strong>完全感知不到下面是 ublk</strong>——这就是块级方案的优势，“第一次慢，之后和本地盘没区别”；</li>
+<li><strong>io_uring 通信成本可控</strong>：ublk 用 per-queue 共享 cmd buffer + SQPOLL，用户态通信的开销远小于 TCMU 时代的 iSCSI loopback。</li>
+</ul>
+<p>这也解释了为什么 RAFS 和 overlaybd 是互补的生态位置：<strong>前者做文件级极致优化，后者做块级通用性。</strong></p>
+<hr>
+<h2 id="六、bio：块层的-最小-I-O-请求描述符">六、bio：块层的&quot;最小 I/O 请求描述符&quot;</h2>
+<p>上一节反复提到 bio，它是 page cache 和块设备之间真正流动的对象，值得单独讲清楚。</p>
+<p><strong>bio（Block I/O）是 Linux 块层（block layer）的基本 I/O 描述符——文件系统向块设备提交 I/O 的最小单位</strong>，一个 bio 描述&quot;对某个块设备的某段连续扇区，做某种操作（读/写/flush/discard），数据来自/去往内存中某些散列的页&quot;。它是把上层（page cache / 文件系统）和下层（设备驱动 / NVMe / ublk）连接起来的通用语言。</p>
+<p>LWN 的经典描述是：<strong>bio is a wish</strong>——“Read these 4 KiB, from this spot on the disk, into this page of memory”。它是文件系统递给块层的&quot;愿望单&quot;，块层和驱动负责把它变成硬件命令并执行。</p>
+<h3 id="6-1-一个-bio-回答四个问题">6.1 一个 bio 回答四个问题</h3>
+<p>每个 bio 是对<strong>一段连续磁盘区域</strong>的一次操作的完整描述：</p>
+<table>
+<thead>
+<tr>
+<th>问题</th>
+<th>字段</th>
+<th>举例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>哪个设备？</strong></td>
+<td><code>bi_bdev</code>（<code>bi_bdev-&gt;bd_disk</code> 得到磁盘）+ 分区偏移</td>
+<td><code>/dev/nvme0n1</code> 上的第 2 分区</td>
+</tr>
+<tr>
+<td><strong>什么操作？</strong></td>
+<td><code>bi_opf</code>（op + flags）</td>
+<td><code>REQ_OP_READ</code>、<code>REQ_OP_WRITE</code>、<code>REQ_OP_FLUSH</code>、<code>REQ_OP_DISCARD</code></td>
+</tr>
+<tr>
+<td><strong>磁盘哪里？</strong></td>
+<td><code>bi_iter.bi_sector</code></td>
+<td>从扇区 67489624 开始（1 扇区 = 512B）</td>
+</tr>
+<tr>
+<td><strong>内存哪里？</strong></td>
+<td><code>bi_io_vec</code> 散列列表</td>
+<td>3 个不在物理内存连续位置的 page</td>
+</tr>
+</tbody>
+</table>
+<p>再加上两个关键元数据：</p>
+<ul>
+<li><strong><code>bi_end_io</code></strong>：完成回调——I/O 完成后块层调它，这是发起者的&quot;返回地址&quot;；</li>
+<li><strong><code>bi_status</code></strong>：完成时填入成功/失败状态。</li>
+</ul>
+<p><strong>关键特性：磁盘侧连续，内存侧可以散列。</strong> 一个 bio 对应磁盘上<strong>一段连续</strong>的扇区，但对应内存里<strong>多个不连续</strong>的 page——这就是 scatter-gather I/O，设备通过 DMA 直接在多个 page 之间搬数据，不需要 CPU 拷贝。</p>
+<h3 id="6-2-struct-bio-与-bio-vec：数据结构的实际样子">6.2 struct bio 与 bio_vec：数据结构的实际样子</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* include/linux/blk_types.h */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">bio</span> &#123;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">block_device</span> *<span class="title">bi_bdev</span>;</span>    <span class="comment">/* 目标块设备 */</span></span><br><span class="line">    <span class="type">blk_opf_t</span>            bi_opf;     <span class="comment">/* 操作 + flags */</span></span><br><span class="line">    <span class="type">blk_status_t</span>         bi_status;  <span class="comment">/* 完成状态 */</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">bio_vec</span>      *<span class="title">bi_io_vec</span>;</span>  <span class="comment">/* 散列列表数组 */</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">bvec_iter</span>     <span class="title">bi_iter</span>;</span>    <span class="comment">/* 当前迭代位置（用于 split / 部分完成） */</span></span><br><span class="line">    <span class="type">bio_end_io_t</span>        *bi_end_io;  <span class="comment">/* 完成回调 */</span></span><br><span class="line">    <span class="type">void</span>                *bi_private; <span class="comment">/* 发起者的私有数据 */</span></span><br><span class="line">    <span class="comment">/* ... */</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">/* 一个 scatter-gather 段：一个 page 里的一段连续区域 */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">bio_vec</span> &#123;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">page</span>  *<span class="title">bv_page</span>;</span>    <span class="comment">/* 哪个物理页 */</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">int</span>  bv_len;     <span class="comment">/* 多少字节 */</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">int</span>  bv_offset;  <span class="comment">/* 页内偏移 */</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<p><strong>为什么用 <code>struct page *</code> 而不是虚拟地址</strong>？因为：</p>
+<ul>
+<li>数据 buffer 可以在内核空间、用户空间（比如 mmap 的 page）、甚至高端内存；</li>
+<li>驱动不用关心 buffer 的&quot;最终归属&quot;，只看 page 指针就能 DMA；</li>
+<li><strong>mmap 一个文件时 page cache 里那页就是 <code>struct page</code>，bio 直接引用它，零拷贝。</strong></li>
+</ul>
+<p><strong>bio 可以 split</strong>：如果 bio 超过设备单次 I/O 上限（<code>bio_max_segs</code>、队列的 <code>max_sectors</code>），块层用 <code>bio_split()</code> + <code>bio_chain()</code> 把它拆成多个子 bio，每个继承原 <code>bi_end_io</code>，全部完成后回调一次。</p>
+<h3 id="6-3-bio-和-request-的区别：容易混淆但本质不同">6.3 bio 和 request 的区别：容易混淆但本质不同</h3>
+<p>这是理解块层最容易踩的坑。<strong>bio 和 request 是两个不同的对象，处在不同的层</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th><strong>bio</strong></th>
+<th><strong>request</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>是什么</td>
+<td>上层递下来的&quot;愿望单&quot;</td>
+<td>驱动看到的&quot;待执行命令&quot;</td>
+</tr>
+<tr>
+<td>谁创建</td>
+<td>文件系统 / page cache / upper layer</td>
+<td>块层（从预分配的 tag 池里取）</td>
+</tr>
+<tr>
+<td>包含关系</td>
+<td>一个 bio = 一次操作</td>
+<td>一个 request = <strong>多个 bio 合并</strong>（相邻扇区）</td>
+</tr>
+<tr>
+<td>有无 tag</td>
+<td>无</td>
+<td>有（slot index，就是 queue depth 的基本单位）</td>
+</tr>
+<tr>
+<td>经过调度器？</td>
+<td>不经过</td>
+<td>经过 I/O scheduler（elevator）</td>
+</tr>
+<tr>
+<td>典型场景</td>
+<td>提交给 dm/md/LVM 等虚拟设备</td>
+<td>提交给 NVMe/SCSI 等物理设备</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键设计：虚拟设备绕过 request 层，直接消费 bio。</strong> LVM、software RAID (md)、dm-crypt、<strong>overlaybd 的 ublk 驱动</strong>都是 <code>make_request_fn</code> 消费 bio、然后<strong>生成新的 bio</strong> 发给下一层设备——不参与 request 合并和调度。</p>
+<p>物理设备（NVMe/SATA）才走 request 层，才能享受 I/O scheduler 的合并与排序。这也是为什么 NVMe 有 poll queues、SATA 只有一条 queue——<strong>请求池大小 = queue depth</strong>，tag 就是 in-flight I/O 的计数器和完成 ID。</p>
+<h3 id="6-4-一个-bio-的完整生命周期">6.4 一个 bio 的完整生命周期</h3>
+<p>从 page fault 到数据落内存：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">mmap page fault</span><br><span class="line">   ↓</span><br><span class="line">filemap_fault() 查 page cache</span><br><span class="line">   ↓ miss</span><br><span class="line">文件系统分配 page → submit_bio(bio)</span><br><span class="line">   ↓</span><br><span class="line">submit_bio_noacct()（旧名 generic_make_request()）</span><br><span class="line">   ↓ （递归保护：current-&gt;bio_list，防止 LVM/RAID 叠栈撑爆内核栈）</span><br><span class="line">make_request_fn()</span><br><span class="line">   ├─ 虚拟设备路径：直接改 bio，生成新 bio 给下一层</span><br><span class="line">   └─ 物理设备路径：blk-mq 分配 request，合并相邻 bio，进 I/O scheduler</span><br><span class="line">        ↓</span><br><span class="line">驱动（NVMe/ublk）从 hctx 取 request，转成硬件命令</span><br><span class="line">   ↓</span><br><span class="line">DMA 搬运数据（绕开 CPU）</span><br><span class="line">   ↓</span><br><span class="line">设备中断完成 / ublk daemon 回写结果</span><br><span class="line">   ↓</span><br><span class="line">blk_mq_end_request() → bio_endio(bio)</span><br><span class="line">   ↓</span><br><span class="line">bi_end_io() 被调用 → 文件系统把 page 填入 page cache</span><br><span class="line">   ↓</span><br><span class="line">mmap 的用户 VA 就能读到数据了</span><br></pre></td></tr></table></figure>
+<p><strong>一个重要细节：<code>submit_bio()</code> 通常不等待完成</strong>——它只是把 bio 排进队列就返回，真正等待要靠 <code>bi_end_io</code> 回调或 <code>submit_bio_wait()</code>（同步版本）。这是 Linux 异步 I/O 的基石。</p>
+<h3 id="6-5-bio-不止是读写：块层的-控制操作">6.5 bio 不止是读写：块层的&quot;控制操作&quot;</h3>
+<p>bio 的 <code>bi_opf</code> 除了 READ/WRITE，还能携带多种控制请求：</p>
+<ul>
+<li><strong><code>REQ_OP_FLUSH</code></strong>：刷设备内部 cache（FUA、barrier 的底层实现）；</li>
+<li><strong><code>REQ_OP_DISCARD</code></strong>：告知设备某段 LBA 不再使用（SSD TRIM 的基础）；</li>
+<li><strong><code>REQ_OP_WRITE_ZEROES</code></strong>：硬件直接填零（比写零页更快）；</li>
+<li><strong><code>REQ_OP_ZONE_*</code></strong>：ZNS zoned device 的 zone 管理；</li>
+<li><strong><code>REQ_OP_SECURE_ERASE</code></strong>：安全擦除；</li>
+<li><strong><code>REQ_OP_ZONE_APPEND</code></strong>：zoned device 的原子追加写。</li>
+</ul>
+<p>这让 bio 成为<strong>块层统一的命令通道</strong>，不只是数据搬运。</p>
+<h3 id="6-6-递归保护：bio-层一个精妙的设计">6.6 递归保护：bio 层一个精妙的设计</h3>
+<p>虚拟块设备可以叠栈（LVM on md on dm-crypt on NVMe），一个 bio 沿栈传递理论上会无限递归、撑爆内核栈。Linux 2.6.22 后的解法是：</p>
+<p><code>submit_bio_noacct()</code> 检测到<strong>递归调用</strong>时不继续下传，而是把 bio 挂到 <code>current-&gt;bio_list</code>，等当前 bio 处理完再从队列取出继续——<strong>把递归变成迭代</strong>。</p>
+<p>这个设计带来的副作用是：如果虚拟设备在 <code>make_request_fn</code> 里<strong>等待一个还在 bio_list 里排队的 bio</strong>，会死锁。经典死锁场景是 mempool 分配 bio 时等待前一个 bio 释放——内核为此引入了 <strong>bioset 进程</strong>（<code>ps</code> 里能看到），给每个 mempool 配一个 rescuer 线程解这种依赖。</p>
+<h3 id="6-7-回到-mmap：bio-在-ublk-链路里的位置">6.7 回到 mmap：bio 在 ublk 链路里的位置</h3>
+<p>把 bio 放回 5.1 节的栈图里，它的位置就更清晰了：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">mmap page fault</span><br><span class="line">   ↓</span><br><span class="line">page cache miss → 文件系统发 bio</span><br><span class="line">   ↓</span><br><span class="line">ext4 (on /dev/ublkb0)</span><br><span class="line">   ↓</span><br><span class="line">ublk 驱动（消费 bio，不走 request 层）</span><br><span class="line">   ↓ bio 转成 io_uring command (IORING_OP_URING_CMD)</span><br><span class="line">overlaybd-turbo-io 用户态 daemon</span><br><span class="line">   ↓ LBA → B+ tree → 本地 cache / Zfile 解压 / 远端拉取</span><br><span class="line">数据回填 bio 的 page</span><br><span class="line">   ↓</span><br><span class="line">bio_endio → page cache 填好 → mmap 可读</span><br></pre></td></tr></table></figure>
+<p><strong>ublk 驱动本质上就是一个&quot;bio 到用户态的桥&quot;</strong>——它作为一个虚拟块设备驱动，注册了 <code>make_request_fn</code> 消费 bio，把每个 bio 的扇区/长度/内存 page 翻译成 io_uring command 通过共享 buffer 递给用户态 daemon，daemon 决定数据从哪来。这个设计绕过了 request 层、绕过了 I/O scheduler，<strong>让&quot;用用户态代码实现一个块设备&quot;的成本降到最低</strong>——这正是 overlaybd 选它而不是 TCMU/NBD 的原因。</p>
+<hr>
+<h2 id="结语">结语</h2>
+<p><strong>mmap 能映射的是&quot;一切实现了 <code>f_op-&gt;mmap</code> 的 fd 对象 + 匿名内存&quot;</strong>——从普通文件、tmpfs、memfd、各种字符设备（<code>/dev/zero</code>、<code>/dev/mem</code>、<code>/dev/dax</code>、GPU/VFIO/DRM/V4L2 节点）到 io_uring/AF_XDP/vDSO 这类内核环形结构，几乎覆盖了 Linux 中所有&quot;可以按字节访问的数据源&quot;；flags 的组合决定映射是共享还是私有、是否用大页、是否要预填充、是否要 DAX 持久化。</p>
+<p>它是 Linux 用户态和内核/设备/其他进程之间<strong>最重要的零拷贝通道</strong>——而这条通道的宽度、语义和延迟特性，全部由那个不起眼的 <code>f_op-&gt;mmap</code> 决定。</p>
+<p>把视角再往下拉一层，这条通道的另一半在块层：<strong>mmap 在文件系统之上承载页，bio 在文件系统之下描述&quot;这些页的数据从哪来&quot;，ublk 则把块设备本身搬到了用户态</strong>。三者串起来就是：</p>
+<blockquote>
+<p><strong>mmap（登记地址区间）→ page cache（缓存页）→ bio（描述一次块 I/O）→ ublk（把 bio 转成 io_uring command 交给用户态）→ overlaybd daemon（决定数据从本地 cache、Zfile 还是远端来）</strong></p>
+</blockquote>
+<p>理解了这个链条，mmap、page cache、块层、NVMe、VFIO 直通、ublk 这些话题就在同一个心智模型下串起来了。</p>
+<h3 id="附：快速自查表">附：快速自查表</h3>
+<table>
+<thead>
+<tr>
+<th>你想做的事</th>
+<th>该用的 fd / flags</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>分配一块私有内存</td>
+<td><code>MAP_PRIVATE | MAP_ANONYMOUS</code>, fd = -1</td>
+</tr>
+<tr>
+<td>父子进程共享一块匿名内存</td>
+<td><code>MAP_SHARED | MAP_ANONYMOUS</code>，或 memfd</td>
+</tr>
+<tr>
+<td>跨进程传递共享内存</td>
+<td>memfd + <code>SCM_RIGHTS</code></td>
+</tr>
+<tr>
+<td>把大文件当数组随机访问</td>
+<td><code>MAP_SHARED</code>，普通文件 fd</td>
+</tr>
+<tr>
+<td>加载可执行文件 / 只读共享代码</td>
+<td><code>MAP_PRIVATE</code></td>
+</tr>
+<tr>
+<td>访问设备寄存器 / PCI BAR</td>
+<td><code>MAP_SHARED</code>，对应字符设备 fd</td>
+</tr>
+<tr>
+<td>持久内存、掉电不丢</td>
+<td><code>MAP_SHARED_VALIDATE | MAP_SYNC</code>，DAX 文件</td>
+</tr>
+<tr>
+<td>想要大页降低 TLB miss</td>
+<td><code>MAP_HUGETLB</code> / <code>MAP_HUGE_2MB</code> / <code>MAP_HUGE_1GB</code></td>
+</tr>
+<tr>
+<td>避免运行时缺页抖动</td>
+<td><code>MAP_POPULATE</code>（+ <code>MADV_WILLNEED</code> 预读）</td>
+</tr>
+<tr>
+<td>需要延迟加载 / 按需拉取</td>
+<td>不用 <code>POPULATE</code>，配合 <code>userfaultfd</code></td>
+</tr>
+<tr>
+<td>改映射大小</td>
+<td><code>mremap()</code>，不是 mmap</td>
+</tr>
+<tr>
+<td>镜像按需加载（文件级）</td>
+<td>RAFS / EROFS + FSCache</td>
+</tr>
+<tr>
+<td>镜像按需加载（块级，兼容 VM）</td>
+<td>overlaybd + ublk，上层挂任意文件系统</td>
+</tr>
+</tbody>
+</table>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/">https://roger-lv.github.io/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Linux/">Linux</a><a class="post-meta__tags" href="/tags/%E5%86%85%E6%A0%B8/">内核</a><a class="post-meta__tags" href="/tags/mmap/">mmap</a><a class="post-meta__tags" href="/tags/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98/">虚拟内存</a><a class="post-meta__tags" href="/tags/%E9%9B%B6%E6%8B%B7%E8%B4%9D/">零拷贝</a><a class="post-meta__tags" href="/tags/%E9%A9%B1%E5%8A%A8/">驱动</a><a class="post-meta__tags" href="/tags/ublk/">ublk</a><a class="post-meta__tags" href="/tags/overlaybd/">overlaybd</a><a class="post-meta__tags" href="/tags/bio/">bio</a><a class="post-meta__tags" href="/tags/%E5%9D%97%E5%B1%82/">块层</a><a class="post-meta__tags" href="/tags/page-cache/">page cache</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/" title="Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</div></div><div class="info-2"><div class="info-item-1">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地 引言 随着 Agentic RL 训练规模的爆发，如何为成千上万个并行 Agent 提供隔离、可复用、可快速调度的沙盒执行环境，已经成为基础设施团队绕不开的课题。 团队调度侧近期的工作重心正是这个方向——目标是对齐 DeepSeek 的 DSec 论文（arXiv:2609.22978）所描述的&quot;调度层支持 FnCall、Container、VM 等多级运行时应对异构工作负载&quot;的能力。目前我们的路径是：镜像分发加速在做，运行时已经落成了一套四模板形态（见 §3.12），网络和内核隔离在规划中。 平台的形态是：控制面统一编排云上 GPU 训练集群与边缘侧的机器人、传感器、摄像头，从 RL/LLM 训练一路打通到边缘部署。边缘侧通过 Kubernetes Device Plugin 把机械臂、摄像头暴露成可调度资源（资源名形如 rlinf.io/device-franka），让训练任务里的仿真环境和真机环境能用同一套声明式抽象描述。 &quot;具身&quot;这个定语给沙盒基...</div></div></div></a><a class="pagination-related" href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/" title="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</div></div><div class="info-2"><div class="info-item-1">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践 具身智能的存储问题,难点不在&quot;存得下&quot;,而在&quot;读得随机、写得突发、流得动&quot;——一段双臂叠衣 episode 里藏着 3 路 30Hz 相机视频、100Hz 关节状态、未来 50 步的 action chunk,训练时 DataLoader 要从数万条 episode 里随机抽 timestep 并把这几路异频流对齐成同一行。 招商局狮岩 AI Lab 的实测给出了量化答案:用 Lance 把长视频切成 GOP 尺度 blob 后,随机读吞吐相对 LeRobot 提升 1.7–6×、存储降低 42%;而地瓜机器人的集群数据则验证了另一端:JuiceFS 多云 + 分布式缓存把训练任务启动从 20 分钟压到 3 分钟、缓存命中率从 45% 提到 92%。本文把这两套栈拼成具身训练的完整存储底座。  一、具身训练的 I/O 画像:与 LLM/CV 根本不是一回事 先明确负载形态,后面所有选型推理都从这里出发。 具身数据的最小单元是 episode,不是 token,也不是单张图...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/07/22/2026-07-22-insmod%E5%AE%9E%E6%93%8D%E6%8C%87%E5%8D%97/" title="insmod 实操指南——从写一个内核模块到加载运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-22</div><div class="info-item-2">insmod 实操指南——从写一个内核模块到加载运行</div></div><div class="info-2"><div class="info-item-1">insmod 实操指南——从写一个内核模块到加载运行  本文讲清 insmod：它干什么、内核模块（.ko）是什么、insmod 与 modprobe 的区别、模块签名这个最常见的坑，并给一个可直接照抄跑通的 hello world 模块从编写→编译→加载→验证→卸载全流程。 前置：ring0/ring3、内核态概念见本人《x86 体系结构基础》篇。内核模块就是跑在 ring0、和内核同地址空间的代码。   一、insmod 是什么、内核模块又是什么 **内核模块（Loadable Kernel Module, LKM）**是一段可动态加载到内核地址空间、跑在 ring0 的代码，扩展内核功能而不需重启、不需重编内核。文件后缀 .ko（kernel object）。典型用途：设备驱动、文件系统、网络协议、安全 hook（如 alcor-chaos 的 libnvml-hijack/libixml-hijack 就是劫持库的内核态配合件）。 insmod（insert module）是用户态命令，把一个 .ko 文件加载进内核。它本质是调一次 init_module(2) / fi...</div></div></div></a><a class="pagination-related" href="/2024/07/19/2024-07-19-Linux%E7%B3%BB%E7%BB%9F%E4%B8%AD%E5%8D%B8%E8%BD%BDanaconda/" title="Linux系统中卸载anaconda"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Linux.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-19</div><div class="info-item-2">Linux系统中卸载anaconda</div></div><div class="info-2"><div class="info-item-1">Linux系统中卸载anaconda 要在Linux系统中卸载Anaconda，你需要执行一系列的命令。这里是一个通用的步骤指南：   找到Anaconda安装脚本： 在安装Anaconda时，它会在你的主目录中创建一个名为anaconda3的文件夹（默认情况下，如果你在安装时选择了不同的名称或位置，请确保使用正确的路径）。   运行Anaconda卸载程序： Anaconda提供了一个卸载程序anaconda-clean，可以帮助你删除Anaconda的配置文件。在终端中运行以下命令： 12conda install anaconda-cleananaconda-clean --yes 这个命令将删除Anaconda的配置文件，并且可以选择创建一个备份。使用–yes选项可以避免在删除每个项目时都要求确认。   删除Anaconda安装目录： 接下来，你需要手动删除Anaconda的安装目录。如果你的安装目录是默认的~/anaconda3，你可以使用以下命令： 1rm -rf ~/anaconda3 如果你的安装目录不是默认的，请确保使用正确的路径。   编辑.bashrc或其他...</div></div></div></a><a class="pagination-related" href="/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/" title="Linux 云服务器根分区扩容流程(ext4 示例)"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/df.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-01</div><div class="info-item-2">Linux 云服务器根分区扩容流程(ext4 示例)</div></div><div class="info-2"><div class="info-item-1">Linux 云服务器根分区扩容流程（ext4 示例） 1. 云厂商控制台扩容磁盘  登录云服务商（AWS、阿里云、腾讯云等） 找到对应实例的 系统盘 / 数据盘 修改磁盘大小，例如从 40G → 80G 这一步完成后，虚拟磁盘 /dev/vda 就会变大，但分区和文件系统不会自动变大   2. 确认磁盘和分区情况 12lsblkdf -h  lsblk 会显示磁盘和分区大小 df -h 会显示文件系统挂载的空间大小  例子： 12vda    80G└─vda1 40G   / 👉 说明磁盘是 80G，但分区还只有 40G  3. 安装扩容工具 （Ubuntu/Debian） 12sudo apt updatesudo apt install -y cloud-guest-utils （CentOS/RHEL） 1sudo yum install -y cloud-utils-growpart  4. 扩展分区 1sudo growpart /dev/vda 1  /dev/vda → 磁盘名 1 → 分区号（即 /dev/vda1）  执行后再看： 1lsblk 应该变成： ...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">k8s informer通俗易懂详解</div></div><div class="info-2"><div class="info-item-1">Kubernetes Informer 机制详解 核心概念 Informer 是 Kubernetes 中用于监听和缓存资源对象的核心机制，它通过 ListAndWatch 机制实现高效的资源监控。 核心组件及作用 1. Reflector（反射器）  作用：负责从 Kubernetes API Server 获取资源对象 功能：  List：获取资源的全量数据 Watch：监听资源的增量变化 将数据放入 Delta FIFO 队列    2. Delta FIFO Queue（增量队列）  作用：存储资源对象的变化（增删改） 特点：  保持操作顺序 存储对象的增量变化（Delta） 线程安全    3. Informer（通知器）  作用：从 Delta FIFO 队列中取出对象并处理 功能：  调用 Indexer 更新本地缓存 触发注册的事件处理器    4. Indexer（索引器）  作用：本地缓存，提供快速查询 功能：  存储资源对象的本地副本 提供基于索引的快速查找 线程安全的读写操作    5. Resource Event Handlers（资源事件处理器）  ...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">如何通过Pod进入到宿主机?</div></div><div class="info-2"><div class="info-item-1">如何通过Pod进入到宿主机? nsenter -a -t 1 bash 命令的作用是让你在一个新的 shell 会话中，进入 PID 为 1 的进程所在的全部命名空间（Namespace）。 通过这种方式，可以从pod中进入到宿主机（全部的namespace都跟宿主机一样） breakdown 如下：  nsenter: 这是一个 Linux 命令行工具，用于将当前进程“进入”到指定进程的一个或多个命名空间中。 -t 1: 这个选项指定了目标进程的 PID (Process ID)。在这里，1 是 Linux 系统中第一个启动的进程（通常是 init 或 systemd）的 PID。所有其他进程都是由它或它的子进程派生出来的。 -a: 这个选项是 “all namespaces” 的缩写。它告诉 nsenter 将当前进程加入到目标进程（PID 1）所属于的所有类型的命名空间中，包括但不限于：  Mount (mnt) UTS (主机名和域名) IPC (进程间通信) Network PID (进程 ID) User ID Cgroup   bash: 这是要在新加入的命名空间环...</div></div></div></a><a class="pagination-related" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/k8s.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-16</div><div class="info-item-2">容器运行时扩展方案技术解析</div></div><div class="info-2"><div class="info-item-1">容器运行时扩展方案技术解析 基于对某容器运行时扩展项目的代码分析，现从架构层面提炼其核心技术实现，聚焦三大核心能力：运行时接入机制、容器根文件系统云端持久化、Docker-in-Docker 安全实现方案。  1. 如何接入 Containerd 运行时生态 项目通过 Containerd Proxy Plugin 机制 实现与容器运行时的无缝集成，架构清晰、扩展性强。 ▶ 配置层接入  在 containerd 配置中注册名为 custom-snapshotter 的代理插件，通过 Unix Domain Socket 与本地 Agent 通信； 同时注册自定义 Runtime，指向特定二进制执行程序，实现容器生命周期的定制化控制。  ▶ 运行时层实现  Agent 侧：实现标准 gRPC 服务，响应来自 Containerd 的 Snapshotter 接口调用（如 Prepare、Mount、Remove）； 存储层封装：采用 Wrapper 模式封装原生 OverlayFS Snapshotter，在不破坏原有逻辑的前提下注入自定义行为（如镜像预处理、元数据记录等）； 通...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">286</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">395</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">mmap 能映射什么：一张全景图</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BC%95%E8%A8%80"><span class="toc-number">1.1.</span> <span class="toc-text">引言</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E6%8C%89%E6%98%A0%E5%B0%84%E5%AF%B9%E8%B1%A1%E5%88%86%E7%B1%BB%EF%BC%9Ammap-%E7%9A%84%E5%AE%8C%E6%95%B4%E4%BD%9C%E7%94%A8%E5%9F%9F"><span class="toc-number">1.2.</span> <span class="toc-text">一、按映射对象分类：mmap 的完整作用域</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E5%8C%BF%E5%90%8D%E5%86%85%E5%AD%98%EF%BC%88%E6%97%A0-fd%EF%BC%8Cfd-1%EF%BC%89"><span class="toc-number">1.2.1.</span> <span class="toc-text">1.1 匿名内存（无 fd，fd &#x3D; -1）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E6%99%AE%E9%80%9A%E6%96%87%E4%BB%B6%EF%BC%88regular-file%EF%BC%89"><span class="toc-number">1.2.2.</span> <span class="toc-text">1.2 普通文件（regular file）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-tmpfs-shmem-memfd%EF%BC%9A%E5%86%85%E5%AD%98%E9%87%8C%E7%9A%84-%E6%96%87%E4%BB%B6"><span class="toc-number">1.2.3.</span> <span class="toc-text">1.3 tmpfs &#x2F; shmem &#x2F; memfd：内存里的&quot;文件&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-4-%E5%AD%97%E7%AC%A6%E8%AE%BE%E5%A4%87%EF%BC%9A%E7%94%A8%E6%88%B7%E6%80%81%E9%A9%B1%E5%8A%A8%E7%9A%84%E5%9F%BA%E7%9F%B3"><span class="toc-number">1.2.4.</span> <span class="toc-text">1.4 字符设备：用户态驱动的基石</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-5-%E7%89%B9%E6%AE%8A%E6%9C%BA%E5%88%B6%EF%BC%9A%E5%86%85%E6%A0%B8-%E7%94%A8%E6%88%B7%E5%85%B1%E4%BA%AB%E7%9A%84-%E7%8E%AF%E5%BD%A2%E7%BB%93%E6%9E%84"><span class="toc-number">1.2.5.</span> <span class="toc-text">1.5 特殊机制：内核&#x2F;用户共享的&quot;环形结构&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-6-%E4%B8%80%E4%BA%9B-%E8%AF%AD%E4%B9%89%E8%BE%B9%E7%95%8C-%E4%B9%8B%E5%A4%96%E7%9A%84%E7%94%A8%E6%B3%95"><span class="toc-number">1.2.6.</span> <span class="toc-text">1.6 一些&quot;语义边界&quot;之外的用法</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%8C%89-flags-%E5%88%86%E7%B1%BB%EF%BC%9A%E6%98%A0%E5%B0%84%E8%A1%8C%E4%B8%BA%E7%9A%84%E5%A4%9A%E7%BB%B4%E7%BB%84%E5%90%88"><span class="toc-number">1.3.</span> <span class="toc-text">二、按 flags 分类：映射行为的多维组合</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E5%85%B1%E4%BA%AB%E8%AF%AD%E4%B9%89%EF%BC%88%E5%BF%85%E9%80%89%E4%B8%80%EF%BC%89"><span class="toc-number">1.3.1.</span> <span class="toc-text">2.1 共享语义（必选一）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E5%AF%B9%E8%B1%A1%E6%9D%A5%E6%BA%90%EF%BC%88%E5%8F%AF%E9%80%89%EF%BC%8C%E4%BA%8C%E9%80%89%E4%B8%80%EF%BC%89"><span class="toc-number">1.3.2.</span> <span class="toc-text">2.2 对象来源（可选，二选一）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E4%BF%AE%E9%A5%B0%E4%BD%8D"><span class="toc-number">1.3.3.</span> <span class="toc-text">2.3 修饰位</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-prot-%E5%8F%82%E6%95%B0"><span class="toc-number">1.3.4.</span> <span class="toc-text">2.4 prot 参数</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%8D%A2%E4%B8%AA%E7%BB%B4%E5%BA%A6%E7%9C%8B%EF%BC%9A%E4%BB%80%E4%B9%88%E4%B8%8D%E8%83%BD%E6%98%A0%E5%B0%84"><span class="toc-number">1.4.</span> <span class="toc-text">三、换个维度看：什么不能映射</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%94%BE%E5%9C%A8%E4%B9%8B%E5%89%8D%E8%AE%A8%E8%AE%BA%E7%9A%84%E5%9D%90%E6%A0%87%E7%B3%BB%E9%87%8C"><span class="toc-number">1.5.</span> <span class="toc-text">四、放在之前讨论的坐标系里</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%BE%80%E4%B8%8B%E8%B5%B0%E4%B8%80%E5%B1%82%EF%BC%9Ammap-%E7%9A%84%E9%A1%B5%E7%A9%B6%E7%AB%9F%E4%BB%8E%E5%93%AA%E5%84%BF%E6%9D%A5"><span class="toc-number">1.6.</span> <span class="toc-text">五、往下走一层：mmap 的页究竟从哪儿来</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-page-cache-%E5%92%8C-ublk-%E7%9A%84%E5%B1%82%E7%BA%A7%E5%85%B3%E7%B3%BB"><span class="toc-number">1.6.1.</span> <span class="toc-text">5.1 page cache 和 ublk 的层级关系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-mmap-%E4%B8%80%E4%B8%AA-overlaybd-%E6%94%AF%E6%92%91%E7%9A%84%E6%96%87%E4%BB%B6%EF%BC%8C%E5%AE%9E%E9%99%85%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88"><span class="toc-number">1.6.2.</span> <span class="toc-text">5.2 mmap 一个 overlaybd 支撑的文件，实际发生什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-overlaybd-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%80%89%E5%9D%97%E7%BA%A7%E8%80%8C%E4%B8%8D%E6%98%AF%E6%96%87%E4%BB%B6%E7%BA%A7"><span class="toc-number">1.6.3.</span> <span class="toc-text">5.3 overlaybd 为什么选块级而不是文件级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E4%B8%80%E4%B8%AA%E5%AE%B9%E6%98%93%E6%B7%B7%E6%B7%86%E7%9A%84%E7%82%B9%EF%BC%9A%E5%9D%97%E8%AE%BE%E5%A4%87%E6%96%87%E4%BB%B6%E8%87%AA%E5%B7%B1%E4%B9%9F%E6%9C%89-page-cache"><span class="toc-number">1.6.4.</span> <span class="toc-text">5.4 一个容易混淆的点：块设备文件自己也有 page cache</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-%E5%AE%8C%E6%95%B4%E7%9A%84%E7%BC%93%E5%AD%98%E5%B1%82%E7%BA%A7"><span class="toc-number">1.6.5.</span> <span class="toc-text">5.5 完整的缓存层级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-6-%E6%80%A7%E8%83%BD%E4%B8%8A%E7%9A%84%E5%AE%9E%E9%99%85%E5%BD%B1%E5%93%8D"><span class="toc-number">1.6.6.</span> <span class="toc-text">5.6 性能上的实际影响</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81bio%EF%BC%9A%E5%9D%97%E5%B1%82%E7%9A%84-%E6%9C%80%E5%B0%8F-I-O-%E8%AF%B7%E6%B1%82%E6%8F%8F%E8%BF%B0%E7%AC%A6"><span class="toc-number">1.7.</span> <span class="toc-text">六、bio：块层的&quot;最小 I&#x2F;O 请求描述符&quot;</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E4%B8%80%E4%B8%AA-bio-%E5%9B%9E%E7%AD%94%E5%9B%9B%E4%B8%AA%E9%97%AE%E9%A2%98"><span class="toc-number">1.7.1.</span> <span class="toc-text">6.1 一个 bio 回答四个问题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-struct-bio-%E4%B8%8E-bio-vec%EF%BC%9A%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84%E7%9A%84%E5%AE%9E%E9%99%85%E6%A0%B7%E5%AD%90"><span class="toc-number">1.7.2.</span> <span class="toc-text">6.2 struct bio 与 bio_vec：数据结构的实际样子</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-bio-%E5%92%8C-request-%E7%9A%84%E5%8C%BA%E5%88%AB%EF%BC%9A%E5%AE%B9%E6%98%93%E6%B7%B7%E6%B7%86%E4%BD%86%E6%9C%AC%E8%B4%A8%E4%B8%8D%E5%90%8C"><span class="toc-number">1.7.3.</span> <span class="toc-text">6.3 bio 和 request 的区别：容易混淆但本质不同</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-%E4%B8%80%E4%B8%AA-bio-%E7%9A%84%E5%AE%8C%E6%95%B4%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F"><span class="toc-number">1.7.4.</span> <span class="toc-text">6.4 一个 bio 的完整生命周期</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-5-bio-%E4%B8%8D%E6%AD%A2%E6%98%AF%E8%AF%BB%E5%86%99%EF%BC%9A%E5%9D%97%E5%B1%82%E7%9A%84-%E6%8E%A7%E5%88%B6%E6%93%8D%E4%BD%9C"><span class="toc-number">1.7.5.</span> <span class="toc-text">6.5 bio 不止是读写：块层的&quot;控制操作&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-6-%E9%80%92%E5%BD%92%E4%BF%9D%E6%8A%A4%EF%BC%9Abio-%E5%B1%82%E4%B8%80%E4%B8%AA%E7%B2%BE%E5%A6%99%E7%9A%84%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.7.6.</span> <span class="toc-text">6.6 递归保护：bio 层一个精妙的设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-7-%E5%9B%9E%E5%88%B0-mmap%EF%BC%9Abio-%E5%9C%A8-ublk-%E9%93%BE%E8%B7%AF%E9%87%8C%E7%9A%84%E4%BD%8D%E7%BD%AE"><span class="toc-number">1.7.7.</span> <span class="toc-text">6.7 回到 mmap：bio 在 ublk 链路里的位置</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%BB%93%E8%AF%AD"><span class="toc-number">1.8.</span> <span class="toc-text">结语</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%99%84%EF%BC%9A%E5%BF%AB%E9%80%9F%E8%87%AA%E6%9F%A5%E8%A1%A8"><span class="toc-number">1.8.1.</span> <span class="toc-text">附：快速自查表</span></a></li></ol></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/" title="mmap 能映射什么：一张全景图">mmap 能映射什么：一张全景图</a><time datetime="2026-10-22T16:00:00.000Z" title="发表于 2026-10-23 00:00:00">2026-10-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/" title="Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</a><time datetime="2026-10-22T16:00:00.000Z" title="发表于 2026-10-23 00:00:00">2026-10-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/" title="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</a><time datetime="2026-10-21T16:00:00.000Z" title="发表于 2026-10-22 00:00:00">2026-10-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/19/2026-10-19-QueueQuota%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%E4%BB%8EVolcano%E4%B8%89%E7%BA%A7%E6%A8%A1%E5%9E%8B%E5%88%B0MiniMax%E7%BA%A7AI%E9%9B%86%E7%BE%A4%E7%9A%84%E8%B0%83%E5%BA%A6%E6%B2%BB%E7%90%86%E5%AE%9E%E8%B7%B5/" title="Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践</a><time datetime="2026-10-18T16:00:00.000Z" title="发表于 2026-10-19 00:00:00">2026-10-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</a><time datetime="2026-10-14T16:00:00.000Z" title="发表于 2026-10-15 00:00:00">2026-10-15</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

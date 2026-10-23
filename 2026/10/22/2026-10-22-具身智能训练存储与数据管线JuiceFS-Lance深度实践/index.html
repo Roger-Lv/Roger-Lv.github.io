@@ -1,0 +1,697 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>具身智能训练存储与数据管线:JuiceFS + Lance 深度实践 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="具身智能的存储难点不在&quot;存得下&quot;,而在&quot;读得随机、写得突发、流得动&quot;。从具身训练特有的四个 I&#x2F;O 特征讲起,拆解 JuiceFS 的三平面分离与 Chunk&#x2F;Slice&#x2F;Block 机制、五级缓存与分布式缓存组、writeback 取舍、Mount Pod vs Sidecar;再深入 Lance 的 Blob 列 + 行级引用设计、GOP 尺度受控布局与结构编码,以及 GOP&#x3D;8 甜蜜点的实测">
+<meta property="og:type" content="article">
+<meta property="og:title" content="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践">
+<meta property="og:url" content="https://roger-lv.github.io/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="具身智能的存储难点不在&quot;存得下&quot;,而在&quot;读得随机、写得突发、流得动&quot;。从具身训练特有的四个 I&#x2F;O 特征讲起,拆解 JuiceFS 的三平面分离与 Chunk&#x2F;Slice&#x2F;Block 机制、五级缓存与分布式缓存组、writeback 取舍、Mount Pod vs Sidecar;再深入 Lance 的 Blob 列 + 行级引用设计、GOP 尺度受控布局与结构编码,以及 GOP&#x3D;8 甜蜜点的实测">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-10-21T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-10-22T08:53:02.372Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="AI Infra">
+<meta property="article:tag" content="存储">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="VLA">
+<meta property="article:tag" content="具身智能">
+<meta property="article:tag" content="数据管线">
+<meta property="article:tag" content="JuiceFS">
+<meta property="article:tag" content="Lance">
+<meta property="article:tag" content="LeRobot">
+<meta property="article:tag" content="多云">
+<meta property="article:tag" content="对象存储">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "具身智能训练存储与数据管线:JuiceFS + Lance 深度实践",
+  "url": "https://roger-lv.github.io/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-10-21T16:00:00.000Z",
+  "dateModified": "2026-10-22T08:53:02.372Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '具身智能训练存储与数据管线:JuiceFS + Lance 深度实践',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">286</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">395</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-21T16:00:00.000Z" title="发表于 2026-10-22 00:00:00">2026-10-22</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-22T08:53:02.372Z" title="更新于 2026-10-22 16:53:02">2026-10-22</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%91%E5%8E%9F%E7%94%9F/">云原生</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/" data-flag-title="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><h1>具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</h1>
+<p>具身智能的存储问题,难点不在&quot;存得下&quot;,而在&quot;<strong>读得随机、写得突发、流得动</strong>&quot;——一段双臂叠衣 episode 里藏着 3 路 30Hz 相机视频、100Hz 关节状态、未来 50 步的 action chunk,训练时 DataLoader 要从数万条 episode 里随机抽 timestep 并把这几路异频流对齐成同一行。</p>
+<p>招商局狮岩 AI Lab 的实测给出了量化答案:<strong>用 Lance 把长视频切成 GOP 尺度 blob 后,随机读吞吐相对 LeRobot 提升 1.7–6×、存储降低 42%</strong>;而地瓜机器人的集群数据则验证了另一端:<strong>JuiceFS 多云 + 分布式缓存把训练任务启动从 20 分钟压到 3 分钟、缓存命中率从 45% 提到 92%</strong>。本文把这两套栈拼成具身训练的完整存储底座。</p>
+<hr>
+<h2 id="一、具身训练的-I-O-画像-与-LLM-CV-根本不是一回事">一、具身训练的 I/O 画像:与 LLM/CV 根本不是一回事</h2>
+<p>先明确负载形态,后面所有选型推理都从这里出发。</p>
+<p><strong>具身数据的最小单元是 episode,不是 token,也不是单张图。</strong> 一条 episode = 一个完整轨迹:初始状态 → 连续交互 → 任务结束,内部是多路异频传感器流的时序对齐。这带来四个 LLM 训练没有的 I/O 特征:</p>
+<p><strong>1. 一次样本构造 = 多路异频并发随机读。</strong> VLA/ACT/Diffusion Policy 训练时,DataLoader 要同时取出:3 个相机在该 timestep 的帧、30+ 维关节位置与速度、夹爪状态、语言指令,并按时间戳对齐。相机 30Hz、控制 100Hz,频率不同就必须做映射。传统方案(LeRobot 把状态放 Parquet、视频放 MP4、元数据放 JSON)导致每次采样都触发&quot;打开视频 → seek → 解码 → 跨文件按时间戳对齐&quot;的链路,文件打开次数随 episode 数线性爆炸。</p>
+<p><strong>2. 视频帧随机解码受 GOP 机制惩罚。</strong> 视频压缩靠帧间预测:解码 GOP 内任意一个 P 帧,必须从该 GOP 的 I 帧开始逐帧解。GOP 越大压缩越好,但随机取一帧的解码代价越大;HuggingFace 的实测是 GOP=1(纯 I 帧)存储反而比逐帧 JPEG 更大 4%,而 GOP=128 时随机读吞吐跌到 1/12。</p>
+<p><strong>3. Checkpoint 是突发大写。</strong> VLA 模型(π0 级别数 B 参数)多机训练时各 rank 并发写分片,单次几十 GB,要求同步写吞吐 ≥15 GB/s 且不阻塞训练 step;同时采集端还在持续回流新 episode,读写双向流。</p>
+<p><strong>4. 数据闭环跨多云。</strong> 采集车在边缘、研发在本地、训练在云上,数据集需要&quot;同一套目录结构、同一套读写接口&quot;地在云孤岛间增量同步。</p>
+<p>对这四个特征,&quot;存储不成为瓶颈&quot;的量化指标就具体了:<strong>随机采样 P99 延迟(含解码)&lt; 50ms、缓存命中率 &gt; 90%、Checkpoint 落盘不阻塞 step、跨云同步延迟分钟级</strong>。</p>
+<hr>
+<h2 id="二、JuiceFS-架构-为这种-I-O-画像定制的分离式设计">二、JuiceFS 架构:为这种 I/O 画像定制的分离式设计</h2>
+<h3 id="2-1-三平面分离与-Chunk-Slice-Block">2.1 三平面分离与 Chunk/Slice/Block</h3>
+<p>JuiceFS 把一个文件系统拆成三个可独立扩展的平面:</p>
+<pre class="mermaid">flowchart TB
+    subgraph App["应用平面"]
+        FUSE["FUSE POSIX 挂载"]
+        SDK["Hadoop SDK / K8s CSI"]
+        S3G["S3 Gateway"]
+    end
+    subgraph Control["控制平面:元数据引擎"]
+        Redis["Redis"]
+        SQL["MySQL/PG/SQLite"]
+        TKV["TiKV/BadgerDB"]
+    end
+    subgraph Data["数据平面:对象存储"]
+        Obj["S3/OSS/COS/MinIO<br/>4MiB Block 对象"]
+    end
+    Client["JuiceFS Client(rich client)<br/>所有 I/O/压缩/compaction 都在这里"]
+    FUSE --> Client
+    SDK --> Client
+    S3G --> Client
+    Client <-->|"元数据事务"| Redis
+    Client <-->|"元数据事务"| SQL
+    Client <-->|"元数据事务"| TKV
+    Client <-->|"数据读写"| Obj</pre>
+<p>文件数据的三级组织是 JuiceFS 最核心、也最容易被误解的机制:</p>
+<ul>
+<li><strong>Chunk</strong>:文件内的逻辑分段,<strong>固定 64 MiB</strong>。只要文件总长不变,chunk 划分就保持不变,与文件被改写过多少次无关。chunk 是纯逻辑概念,对象存储里<strong>没有 chunk 实体</strong>;</li>
+<li><strong>Slice</strong>:chunk 内的一次<strong>连续写</strong>,变长、不能跨 chunk 边界。顺序写每个 chunk 只产生 1 个 slice;append 写每次触发 flush 就多一个 slice;对同一位置反复覆盖写会产生<strong>交叠的 slice</strong>,读取时&quot;从上到下&quot;取最新,这是文件碎片化的来源,客户端会异步做 compaction 合并;</li>
+<li><strong>Block</strong>:<strong>物理存储与缓存的最小单位,默认 4 MiB</strong>,一个 slice flush 时被切成若干 Block 并发上传,每个 Block 对应对象存储里的一个对象,对象 key 格式为 <code>chunks/&#123;slice_id/10^6&#125;/&#123;slice_id/1000&#125;/&#123;slice_id&#125;_&#123;block_id&#125;_&#123;size&#125;</code>。</li>
+</ul>
+<p>对具身训练的具体含义:一段 160 MiB 的 episode 视频顺序写入 = 3 个 chunk、每个 chunk 1 个 slice、约 40 个 4 MiB Block 对象;训练时随机读第 100 MiB 处的一帧,客户端只需 Range GET 该位置所在的 Block,不拖整个视频。<strong>Block 是 4 MiB 而不是 64 MiB,正是为了随机读延迟与顺序吞吐的平衡</strong>——块越小随机读越轻,但对象数和元数据事务越多。</p>
+<h3 id="2-2-POSIX-兼容与一致性">2.2 POSIX 兼容与一致性</h3>
+<p>JuiceFS 提供接近完整的 POSIX 语义(mmap、flock、原子 rename、硬链接),LeRobot 数据集、rosbag、PyTorch DataLoader 可直接挂载使用无需改代码。一致性是 <strong>close-to-open</strong>:写端 <code>close()</code> 后读端 <code>open()</code> 保证看到最新数据——这解决了具身采集回流&quot;边采边训&quot;时对象存储最终一致性的脏读问题。元数据内存占用方面,企业版单进程 30 GiB 内存管理 3 亿文件、P99 延迟 ~100µs。</p>
+<h3 id="2-3-多级缓存体系-团队正在做的适配重点">2.3 多级缓存体系:团队正在做的适配重点</h3>
+<p>完整的缓存层级:</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">L1 Kernel Page Cache(读)</span><br><span class="line">  L2 Client 内存缓冲 --buffer-size(默认 300MiB,读写共享,超阈值降速/暂停的背压)</span><br><span class="line">    L3 本地磁盘缓存 --cache-dir/--cache-size(存 4MiB Block 原始字节)</span><br><span class="line">      L4 分布式缓存集群 --cache-group(一致性哈希环 + IORPC,企业版 5.3+ 支持 RDMA)</span><br><span class="line">        L5 对象存储(最终回源)</span><br></pre></td></tr></table></figure>
+<p><strong>分布式缓存组</strong>是具身多机训练的关键:多个客户端用相同 <code>--cache-group</code> 组成一致性哈希环,每个 Block 按 ID 哈希到固定成员节点,读请求直接向持有数据的 peer 拉取,元数据引擎兼任服务发现。故障容忍机制要特别记住:peer 失败只重试一次、连续 31 次失败后从该消费者的成员列表中移除(但不影响其他消费者)、成员变更后等 10 分钟才触发数据迁移以避免抖动。生产调优建议 <code>--remote-timeout</code> 从默认 65 秒降到 1 秒(高内网带宽场景),让请求更快回源而非堆积在拥塞的 peer 上。</p>
+<p><strong>Writeback 模式</strong>的取舍必须说透:开启后 flush 只写本地 staging 目录即返回,数据<strong>异步上传</strong>——写吞吐大幅提升,但本地盘损坏或进程异常退出时数据会<strong>永久丢失</strong>,且未上传期间其他客户端不可见。具身采集端的 episode 如果可重新采集、可容忍丢失,writeback 能极大提升回流吞吐;训练端 Checkpoint 这种<strong>不可再生</strong>数据<strong>严禁开 writeback</strong>。商业版 4.9.22+ 的 <code>--fill-group-cache</code> 可让 staging 数据也异步进分布式缓存组,缓解可见性问题,但仍不解决本地盘损坏风险。</p>
+<h3 id="2-4-JuiceFS-on-K8s-Mount-Pod-vs-Sidecar">2.4 JuiceFS on K8s:Mount Pod vs Sidecar</h3>
+<p>CSI Driver 两种模式:</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Mount Pod 模式(默认)</th>
+<th>Sidecar 模式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>架构</td>
+<td>每个 PV 一个独立 Mount Pod,由 CSI Node Service 管理,应用 Pod 通过 CSI 标准协议挂载</td>
+<td>mount 进程作为 sidecar 容器直接注入应用 Pod</td>
+</tr>
+<tr>
+<td>生命周期</td>
+<td>与 PV 一致,应用 Pod 重建不丢 Mount Pod</td>
+<td>与应用 Pod 同生共死</td>
+</tr>
+<tr>
+<td>缓存持久性</td>
+<td>缓存目录可放宿主机 hostPath 或独立卷,<strong>应用重建不丢缓存</strong></td>
+<td>应用销毁即缓存丢失,除非 <code>--cache-dir</code> 指向 hostPath</td>
+</tr>
+<tr>
+<td>资源开销</td>
+<td>多个应用 Pod 共享同一 Mount Pod,连接数省</td>
+<td>每个 Pod 一份 mount 进程内存</td>
+</tr>
+<tr>
+<td>适用场景</td>
+<td><strong>具身训练 GPU 集群(推荐)</strong>——epoch 重复采样,本地缓存命中率极高</td>
+<td>Serverless K8s、强隔离、快速弹性伸缩场景</td>
+</tr>
+</tbody>
+</table>
+<p><strong>对具身训练集群的实践结论</strong>:用 Mount Pod 模式 + 宿主机 NVMe 盘做缓存目录 + 专用缓存组(应用客户端加 <code>--no-sharing</code> 只取不给,缓存集群用 DaemonSet 部署稳定节点,避免计算 Pod 调度销毁导致缓存组频繁重平衡)。</p>
+<h3 id="2-5-为什么具身团队从-CPFS-迁往-JuiceFS">2.5 为什么具身团队从 CPFS 迁往 JuiceFS</h3>
+<p>CPFS/GPFS/Lustre 这类并行文件系统的吞吐与购买的容量<strong>强耦合</strong>——要 100 GB/s 的读吞吐往往要预置 PB 级全闪容量;JuiceFS 把数据面下沉到对象存储后,每 TB 成本是全闪 PFS 的 1/5~1/10,且容量跟随对象存储按量弹性伸缩,而 CPFS <strong>只能扩不能缩</strong>。</p>
+<p>地瓜机器人在尝试了私有 MinIO、百度云 BOS、阿里云 CPFS 后最终选 JuiceFS,核心动因就是<strong>性能-成本-运维的不可能三角被解耦架构解开</strong>:对象存储承担容量与成本,独立元数据引擎承担事务性能(亿级文件目录深分页查询从 3.8s 优化到 210ms),分布式缓存承担聚合吞吐。另一个 CPFS 做不到的是<strong>多云</strong>:JuiceFS 同一文件系统可跨 OSS/COS/S3 部署,<code>juicefs sync</code> 做增量同步,支持具身&quot;采集端(边缘)→ 研发集群 → 多云训练集群&quot;的数据闭环。</p>
+<p>诚实的取舍:超低延迟强一致同步写、极高并发随机写这两个维度 GPFS/CPFS 仍占优,但具身负载(读多写少 + 异步可容忍 Checkpoint + 采集回流可异步)恰好避开这个弱点。</p>
+<h3 id="2-6-Checkpoint-存储落地">2.6 Checkpoint 存储落地</h3>
+<p>具身 VLA 的 Checkpoint 写入模式:<strong>数十亿参数 × 多机 DDP/ZeRO 分片 → 单次几十 GB 的并发顺序大写</strong>。JuiceFS 的应对:4 MiB Block + <code>--max-uploads</code>(默认 20)并发上传把大文件切分为海量并发 PUT,充分利用对象存储横向扩展;客户端 <code>--buffer-size</code> 背压防止 OOM。</p>
+<p>关键纪律:<strong>Checkpoint 场景必须关 writeback,确保 flush 返回 = 数据已在对象存储持久化</strong>,配合 <code>--trash-days</code> 保留被覆盖版本做回滚。如果训练框架支持异步 offload(如 FastPersist 类方案),则把 Checkpoint 写移出关键路径,只需保证全局落盘速率不低于约 15–50 GB/s 即可不阻塞训练。</p>
+<hr>
+<h2 id="三、存储类型全景-具身场景下的定位对照">三、存储类型全景:具身场景下的定位对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>OSS/S3</th>
+<th>CPFS/GPFS</th>
+<th>NFS</th>
+<th>JuiceFS</th>
+<th>Longhorn</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>协议</td>
+<td>S3/HTTP</td>
+<td>POSIX 内核态</td>
+<td>NFS</td>
+<td><strong>POSIX via FUSE</strong></td>
+<td>iSCSI 块</td>
+</tr>
+<tr>
+<td>元数据性能</td>
+<td>弱(无目录语义、重命名≈重写)</td>
+<td>强</td>
+<td>弱</td>
+<td><strong>强(独立事务引擎)</strong></td>
+<td>弱</td>
+</tr>
+<tr>
+<td>吞吐模型</td>
+<td>随客户端并发线性扩展</td>
+<td>容量绑定</td>
+<td>单 server 瓶颈</td>
+<td><strong>客户端并发+分布式缓存</strong></td>
+<td>副本网络限制</td>
+</tr>
+<tr>
+<td>单 TB 成本</td>
+<td>极低</td>
+<td>极高(全闪)</td>
+<td>高</td>
+<td><strong>≈对象存储+元数据节点</strong></td>
+<td>中</td>
+</tr>
+<tr>
+<td>容量弹性</td>
+<td>极好</td>
+<td>只扩不缩</td>
+<td>弱</td>
+<td><strong>继承对象存储</strong></td>
+<td>K8s 卷级</td>
+</tr>
+<tr>
+<td>多云</td>
+<td>原生</td>
+<td>单可用区</td>
+<td>弱</td>
+<td><strong>同一 FS 跨云后端</strong></td>
+<td>单集群</td>
+</tr>
+<tr>
+<td>POSIX</td>
+<td>无</td>
+<td>有</td>
+<td>有</td>
+<td><strong>有(含 mmap/flock)</strong></td>
+<td>无</td>
+</tr>
+<tr>
+<td>具身角色</td>
+<td>冷归档/原始 episode</td>
+<td>高并发强一致写</td>
+<td>小团队过渡</td>
+<td><strong>训练主力</strong></td>
+<td>K8s 有状态应用</td>
+</tr>
+</tbody>
+</table>
+<p>数据湖表格式一层的对比放在 Lance 章节展开,因为 Lance 与 Iceberg/Delta/Hudi 的差异不是增量改进而是<strong>设计目标不同</strong>。</p>
+<hr>
+<h2 id="四、Lance-深度-为具身多模态随机访问而生">四、Lance 深度:为具身多模态随机访问而生</h2>
+<h3 id="4-1-与-Arrow-Parquet-Iceberg-的关系定位">4.1 与 Arrow/Parquet/Iceberg 的关系定位</h3>
+<p><strong>Arrow 是内存列式标准</strong>(进程内零拷贝消费);<strong>Parquet 是磁盘列式压缩格式</strong>(为整行组扫描优化);<strong>Lance 是磁盘列式 + 向量 + Blob 格式兼表格式</strong>(为 ML 随机访问和迭代更新优化)。Lance 同时覆盖三层:文件格式(类似 Parquet)、表格式(类似 Iceberg,版本化 manifest + fragment + MVCC)、catalog 规范。</p>
+<h3 id="4-2-为什么-Parquet-在具身负载下失守-结构编码与页索引的墙">4.2 为什么 Parquet 在具身负载下失守:结构编码与页索引的墙</h3>
+<p>Lance 团队对 Parquet 做过深入测量,结论非常硬核:</p>
+<ul>
+<li>把 Parquet 页调小到 8KB、关字典编码和页统计,随机访问能快 60×,全扫描不减速——<strong>默认参数就是错的</strong>;</li>
+<li>但有一堵配置翻不过去的墙:Parquet 在内存里维护<strong>页偏移索引</strong>(~20 字节/页),页越小页越多。存 10 亿行 3KB embedding:1MB 页 → 300 万页 → 60MB 索引、单行读放大 341×;8KB 页 → 10 亿页 → <strong>20GB 索引</strong>、读放大 2.7×。<strong>小页救随机读毁内存,大页救内存毁随机读</strong>。</li>
+</ul>
+<p>Lance 的解法:<strong>对大值干脆不维护页索引</strong>,同一行的同列数据物理上连续存放,定位退化为一次乘法;配合<strong>结构编码</strong>(把一个逻辑列如 <code>List&lt;String&gt;</code> 拆成 5 个物理数组,null 位图、偏移、内容分离)——Lance 论文指出几乎所有压缩研究都在做 compressive encoding,但决定单行读成本的是被忽视的 <strong>structural encoding</strong>。这就是 Lance v2.2 相对 Parquet <strong>压缩率减半、随机 Blob 读快 68 倍</strong>的来源。</p>
+<h3 id="4-3-Lance-表格式的物理布局">4.3 Lance 表格式的物理布局</h3>
+<p>表格式层的核心概念:</p>
+<ul>
+<li><strong>Manifest(不可变)</strong>:每个版本一个 manifest,含 schema、fragment 列表、版本号、索引引用;版本演进 = 新 manifest,支持 time travel 和 MVCC;</li>
+<li><strong>Fragment</strong>:行的分区;每个 fragment 可含多个 data file,每个 data file 提供一列或多列——<strong>二维存储</strong>让加列/回填列只需给已有 fragment 挂新 data file,不用重写全表;</li>
+<li><strong>Deletion File</strong>:删除不物理重写,只追加删除标记;</li>
+<li><strong>多 base path</strong>:数据文件可在表目录之外(shallow clone、分层存储),企业版特性;</li>
+<li><strong>索引是表格式生命周期的一等公民</strong>:BTree、倒排(FTS)、向量(IVF/HNSW)由表元数据统一发现和事务协调。</li>
+</ul>
+<h3 id="4-4-具身多模态-schema-GOP-尺度-Blob-行级引用">4.4 具身多模态 schema:GOP 尺度 Blob + 行级引用</h3>
+<p>这是全文最核心的设计,直接给招商狮岩在叠衣任务上验证过的 PyArrow schema(可直接抄):</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> pyarrow <span class="keyword">as</span> pa</span><br><span class="line">schema = pa.schema([</span><br><span class="line">    <span class="comment"># 身份与时间</span></span><br><span class="line">    pa.field(<span class="string">&quot;episode_index&quot;</span>, pa.int64()),</span><br><span class="line">    pa.field(<span class="string">&quot;frame_index&quot;</span>, pa.int64()),   <span class="comment"># 训练样本索引,非原始相机帧号</span></span><br><span class="line">    pa.field(<span class="string">&quot;timestamp_ns&quot;</span>, pa.int64()),</span><br><span class="line">    pa.field(<span class="string">&quot;task&quot;</span>, pa.string()),</span><br><span class="line">    pa.field(<span class="string">&quot;split&quot;</span>, pa.string()),</span><br><span class="line">    <span class="comment"># 机器人状态/动作,双臂 14DoF,100Hz 原生频率</span></span><br><span class="line">    pa.field(<span class="string">&quot;observation_state&quot;</span>, pa.list_(pa.float32(), <span class="number">14</span>)),</span><br><span class="line">    pa.field(<span class="string">&quot;action&quot;</span>, pa.list_(pa.float32(), <span class="number">14</span>)),</span><br><span class="line">    <span class="comment"># 多相机视频:Lance Blob 列 + 行级引用三件套</span></span><br><span class="line">    <span class="comment"># 逻辑上 pa.binary(),物理上是 blob 引用;同 GOP 多行经 ref_id 共享字节</span></span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_env&quot;</span>, pa.binary()),</span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_env_ref_id&quot;</span>, pa.uint64()),</span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_env_gop_index&quot;</span>, pa.int32()),</span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_env_frame_index_in_gop&quot;</span>, pa.int16()),</span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_left&quot;</span>, pa.binary()),</span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_left_ref_id&quot;</span>, pa.uint64()),</span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_left_gop_index&quot;</span>, pa.int32()),</span><br><span class="line">    pa.field(<span class="string">&quot;observation_images_cam_left_frame_index_in_gop&quot;</span>, pa.int16()),</span><br><span class="line">    <span class="comment"># 语言/标注</span></span><br><span class="line">    pa.field(<span class="string">&quot;language_instruction&quot;</span>, pa.string()),</span><br><span class="line">    pa.field(<span class="string">&quot;source&quot;</span>, pa.string()),      <span class="comment"># human / policy / intervention</span></span><br><span class="line">    pa.field(<span class="string">&quot;is_intervention&quot;</span>, pa.bool_()),</span><br><span class="line">], metadata=&#123;</span><br><span class="line">    <span class="string">b&quot;camera_fps&quot;</span>: <span class="string">b&quot;30&quot;</span>,</span><br><span class="line">    <span class="string">b&quot;control_hz&quot;</span>: <span class="string">b&quot;100&quot;</span>,   <span class="comment"># 行按此频率构建,高频动作零丢失</span></span><br><span class="line">    <span class="string">b&quot;gop_size&quot;</span>: <span class="string">b&quot;8&quot;</span>,</span><br><span class="line">    <span class="string">b&quot;joint_names&quot;</span>: <span class="string">b&quot;left_0,...,right_6&quot;</span>,</span><br><span class="line">&#125;)</span><br></pre></td></tr></table></figure>
+<p>这套设计的精髓在三个&quot;多对一&quot;:</p>
+<p><strong>1. 多行共享一个 GOP blob。</strong> 行存 <code>ref_id + gop_index + frame_index_in_gop</code> 三元组,不存帧本身;同 GOP 的多个帧通过 <code>ref_id</code> 共享同一份压缩字节,<strong>零冗余</strong>。控制 100Hz、相机 30Hz,行按 100Hz 构建使每个动作样本都保留,视频按 GOP 压缩一次、多行引用——<strong>打破了&quot;要么丢高频动作、要么重复存视频&quot;的传统 trade-off</strong>。</p>
+<p><strong>2. 受控 GOP 四不变量</strong>(让&quot;取一帧&quot;变成&quot;一次 Range GET + 解一个短 GOP&quot;):</p>
+<ul>
+<li>单帧只读一个对象、只发一次连续 Range GET;</li>
+<li>解码放大 ≤ MAX_GOP(可调,实测对比 4/8/16);</li>
+<li>每个 GOP 从 IDR 帧开始、<strong>closed GOP</strong>、Annex B 对齐、自包含 SPS/PPS,可独立解码,空 DPB 起解,不依赖前一 GOP 的解码器状态;</li>
+<li>帧定位走显式索引,不线性扫描视频文件。</li>
+</ul>
+<p>编码侧的配套约束:<code>keyint = min-keyint = GOP 长度</code>、<strong>禁 scene cut</strong>、每 episode 重启编码器(边界确定)、<code>bframes=0 + zerolatency</code>(显示序=解码序,免重排)。D2E 论文独立验证了同样的发现:默认 x264 的 keyframe 间隔在 1.35s~12.5s 间随机波动导致随机访问性能不可预测,固定 keyint=30、禁 B 帧后得到可预测的 I-P-P-P-…-P-I 结构。</p>
+<p><strong>3. 多模态同表对齐。</strong> 视频/状态/动作/指令进同一行,替代 LeRobot 的&quot;Parquet 状态 + MP4 视频 + JSON 元数据 + 时间戳隐式对齐&quot;三分离——后者每次采样都要做跨文件 join,标注散在外部 JSON 里,glue code 与对齐 bug 源头。</p>
+<h3 id="4-5-实验数据与-GOP-8-的甜蜜点">4.5 实验数据与 GOP=8 的甜蜜点</h3>
+<p><strong>实验 1(GOP 尺寸 sweep,叠衣数据集 xvla-soft-fold)</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>GOP</th>
+<th>存储节省</th>
+<th>单帧随机读吞吐</th>
+<th>批量随机读吞吐</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1(退化为逐帧)</td>
+<td><strong>-4%(反而更大)</strong></td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>4</td>
+<td>36%</td>
+<td>683 fps</td>
+<td>2650 fps</td>
+</tr>
+<tr>
+<td><strong>8</strong></td>
+<td><strong>42%</strong></td>
+<td><strong>453 fps</strong></td>
+<td><strong>2134 fps</strong></td>
+</tr>
+<tr>
+<td>16</td>
+<td>~44%</td>
+<td>258 fps</td>
+<td>—</td>
+</tr>
+<tr>
+<td>128</td>
+<td>49%</td>
+<td>37 fps(1/12)</td>
+<td>280 fps</td>
+</tr>
+</tbody>
+</table>
+<p>解读:GOP 从 8 加到 128(16 倍长)只多省 7 个百分点,随机读却跌到 1/12;GOP=1 纯帧内编码存储不降反升 4%,证明纯 I 帧无意义。<strong>GOP≈8 是当前数据集与访问模式下的甜蜜点</strong>。作者特别强调:绝对数值依数据集与硬件而变,但&quot;存储可降、随机读能跟上、batch 越大加速越明显&quot;的趋势来自数据结构设计本身。</p>
+<p><strong>实验 2(Lance vs LeRobot,同数据同硬件)</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>访问模式</th>
+<th>加速比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A(最保守单点)</td>
+<td><code>dataset[i]</code> 逐条读;LeRobot ~81ms/样本(几乎全在视频解码),Lance ~48ms(Range 读 8ms + 解码 40ms,解码本身快 2×)</td>
+<td><strong>1.7×</strong></td>
+</tr>
+<tr>
+<td>B</td>
+<td>批量并行 <code>take_blobs_decoded</code>,I/O 与解码下沉 Rust 并行执行</td>
+<td><strong>6.0×</strong></td>
+</tr>
+<tr>
+<td>C(视觉-语言训练常见)</td>
+<td>取连续 N 帧时间窗,一次 Range 读整窗、同 GOP 帧共享解码 vs LeRobot 逐帧 seek-decode</td>
+<td><strong>4.8×</strong></td>
+</tr>
+</tbody>
+</table>
+<p>规律:<strong>访问模式越接近真实 DataLoader(batch、多相机、时间窗),Lance 相对优势越大</strong>。批量读接口的用法(狮岩在 Lance Rust 源码里定制,现已合入主线):</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 高性能批量随机读:一次调用完成 Range 读 + Rust 侧并行解码 + 返回张量</span></span><br><span class="line">frames = ds.take_blobs_decoded(</span><br><span class="line">    <span class="string">&quot;observation_images_cam_env&quot;</span>,   <span class="comment"># 一个或多个 blob 列名</span></span><br><span class="line">    indices=batch_indices,          <span class="comment"># 0-based 行索引</span></span><br><span class="line">    concurrency=<span class="number">32</span>,                 <span class="comment"># 并行解码参数</span></span><br><span class="line">    zero_copy=<span class="literal">False</span>,                <span class="comment"># True 返回复用 Rust 内存的 numpy,须即用即弃</span></span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+<p><code>zero_copy=True</code> 省一次 PyO3 跨语言拷贝,但返回数组复用 Rust 内存,下游持有会内存泄漏。</p>
+<h3 id="4-6-修改成本与单一数据源">4.6 修改成本与单一数据源</h3>
+<p>具身数据迭代极频繁:标注修正、异常 episode 剔除、数据集组合调整。LeRobot 工作流是&quot;采集端打包 HDF5 → 上传 → 训练端下载解包 → 修改 → 再上传&quot;,一个数据集数百 GB 反复搬运。Lance 的答案:<strong>append-only + 版本快照</strong>——修改 = 追加新 data file + 新 manifest,物理不重写旧数据;数据在 S3 只存一份,采集/处理/训练读写同一份,没有&quot;打包-搬运&quot;循环;<code>lance.dataset(uri, version=42)</code> 可回溯任一版本并追溯&quot;哪个数据集版本训出了哪个模型&quot;。再叠加 JuiceFS 的元数据级 clone,数据集分叉实验做到近零拷贝。</p>
+<h3 id="4-7-与-Iceberg-Delta-Hudi-RLDS-LeRobot-全景对比">4.7 与 Iceberg/Delta/Hudi/RLDS/LeRobot 全景对比</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Parquet</th>
+<th>Iceberg/Delta/Hudi</th>
+<th>Lance</th>
+<th>LeRobot v3</th>
+<th>RLDS/TFRecord</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>设计目标</td>
+<td>分析扫描(行组级)</td>
+<td>数据湖事务/时间旅行</td>
+<td><strong>ML 随机访问+迭代更新</strong></td>
+<td>机器人数据交换</td>
+<td>TF 生态流式</td>
+</tr>
+<tr>
+<td>随机读单行</td>
+<td>行组解码放大</td>
+<td>依赖底层文件(通常 Parquet)</td>
+<td><strong>无页索引,乘法定位</strong></td>
+<td>seek+GOP 解码</td>
+<td>顺序流</td>
+</tr>
+<tr>
+<td>大二进制/视频</td>
+<td>无原生 Blob(外存或塞 cell)</td>
+<td>无原生 Blob</td>
+<td><strong>Blob 列+行级引用(共享)</strong></td>
+<td>MP4 外挂</td>
+<td>内嵌</td>
+</tr>
+<tr>
+<td>加列</td>
+<td>重写</td>
+<td>快(metadata-only)</td>
+<td><strong>快(挂新 data file 到 fragment)</strong></td>
+<td>重导出</td>
+<td>重写</td>
+</tr>
+<tr>
+<td>删除行</td>
+<td>重写</td>
+<td>deletion file(Iceberg/Hudi)</td>
+<td><strong>deletion file</strong></td>
+<td>重导出</td>
+<td>重写</td>
+</tr>
+<tr>
+<td>向量索引</td>
+<td>无</td>
+<td>无</td>
+<td><strong>IVF_PQ/HNSW 原生</strong></td>
+<td>无</td>
+<td>无</td>
+</tr>
+<tr>
+<td>表格式的演进方向</td>
+<td>—</td>
+<td>Iceberg V3 加 VARIANT</td>
+<td>Blob V2 四存储语义</td>
+<td>Streaming from Hub</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Lance 与 Iceberg 系的关系不是替代而是互补——Iceberg 解决数据湖的事务与治理,Lance 解决 AI 负载的随机访问与多模态;Lance Namespace 已支持把 Lance 表挂到 Hive/Glue/Unity Catalog 统一管理。</p>
+<hr>
+<h2 id="五、动手实践-搭一套具身训练存储最小闭环">五、动手实践:搭一套具身训练存储最小闭环</h2>
+<h3 id="5-1-本地起-JuiceFS-社区版-Redis-MinIO">5.1 本地起 JuiceFS 社区版(Redis + MinIO)</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. 元数据引擎 + 对象存储</span></span><br><span class="line">docker run -d --name jfs-meta -p 6379:6379 redis:7</span><br><span class="line">docker run -d --name jfs-obj -p 9000:9000 -p 9001:9001 \</span><br><span class="line">  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \</span><br><span class="line">  minio/minio server /data --console-address <span class="string">&quot;:9001&quot;</span></span><br><span class="line"><span class="comment"># MinIO 里先建桶 embodied-ds</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 初始化文件系统</span></span><br><span class="line">juicefs format \</span><br><span class="line">  --storage minio \</span><br><span class="line">  --bucket http://127.0.0.1:9000/embodied-ds \</span><br><span class="line">  --access-key minioadmin --secret-key minioadmin \</span><br><span class="line">  redis://127.0.0.1:6379/1 \</span><br><span class="line">  embodied-fs</span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 挂载(训练读模式:大本地缓存 + 元数据缓存 + 关预取避免稀疏随机读放大)</span></span><br><span class="line">juicefs mount \</span><br><span class="line">  --cache-dir /nvme0/jfsCache \</span><br><span class="line">  --cache-size 204800 \</span><br><span class="line">  --metacache \</span><br><span class="line">  --prefetch=0 \</span><br><span class="line">  redis://127.0.0.1:6379/1 \</span><br><span class="line">  /mnt/jfs</span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. POSIX 验证</span></span><br><span class="line"><span class="built_in">cd</span> /mnt/jfs &amp;&amp; <span class="built_in">touch</span> t.txt &amp;&amp; <span class="built_in">echo</span> embodied &gt; t.txt &amp;&amp; <span class="built_in">cat</span> t.txt</span><br></pre></td></tr></table></figure>
+<p>观察指标用 <code>juicefs stats</code>,重点盯 <code>blockcache.hit/miss</code>(缓存命中)、<code>object.get/put</code>(回源压力)、<code>meta.txn</code>(元数据 QPS)、<code>usage.buf</code>(缓冲水位)。</p>
+<h3 id="5-2-用受控-x264-编码-episode-写入-Lance-多模态数据集">5.2 用受控 x264 编码 episode + 写入 Lance 多模态数据集</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 受控 GOP 编码:固定 keyint、禁 scene cut、禁 B 帧、zerolatency</span></span><br><span class="line"><span class="comment"># GOP=8, 每个文件一个 episode,SPS/PPS 自包含</span></span><br><span class="line">ffmpeg -i episode_raw.mp4 \</span><br><span class="line">  -c:v libx264 -g 8 -keyint_min 8 -sc_threshold 0 \</span><br><span class="line">  -bf 0 -tune zerolatency \</span><br><span class="line">  -f h264 /mnt/jfs/episodes/ep_0000.h264</span><br></pre></td></tr></table></figure>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> lance, pyarrow <span class="keyword">as</span> pa, numpy <span class="keyword">as</span> np, subprocess</span><br><span class="line"><span class="comment"># 用上面的 schema(§4.4),行按 100Hz 控制 frequency 构建</span></span><br><span class="line"><span class="comment"># 视频列只存 ref_id + gop_index + frame_index_in_gop,blob 由编码后文件写入</span></span><br><span class="line">rows = []</span><br><span class="line"><span class="keyword">for</span> ep <span class="keyword">in</span> <span class="built_in">range</span>(<span class="number">100</span>):</span><br><span class="line">    n_gops = <span class="number">60</span>                       <span class="comment"># 假设每 episode 60 个 GOP × 8 帧</span></span><br><span class="line">    <span class="keyword">for</span> g <span class="keyword">in</span> <span class="built_in">range</span>(n_gops):</span><br><span class="line">        <span class="keyword">for</span> f <span class="keyword">in</span> <span class="built_in">range</span>(<span class="number">8</span>):            <span class="comment"># GOP 内帧号</span></span><br><span class="line">            rows.append(&#123;</span><br><span class="line">                <span class="string">&quot;episode_index&quot;</span>: ep,</span><br><span class="line">                <span class="string">&quot;frame_index&quot;</span>: g*<span class="number">8</span> + f,</span><br><span class="line">                <span class="string">&quot;timestamp_ns&quot;</span>: (g*<span class="number">8</span>+f) * <span class="number">10_000_000</span>,   <span class="comment"># 100Hz</span></span><br><span class="line">                <span class="string">&quot;observation_state&quot;</span>: np.random.randn(<span class="number">14</span>).astype(np.float32),</span><br><span class="line">                <span class="string">&quot;action&quot;</span>: np.random.randn(<span class="number">14</span>).astype(np.float32),</span><br><span class="line">                <span class="string">&quot;observation_images_cam_env&quot;</span>: read_gop_bytes(ep, g),  <span class="comment"># 同 GOP 的 8 行共享同一 blob</span></span><br><span class="line">                <span class="string">&quot;observation_images_cam_env_ref_id&quot;</span>: gop_blob_id(ep, g),</span><br><span class="line">                <span class="string">&quot;observation_images_cam_env_gop_index&quot;</span>: g,</span><br><span class="line">                <span class="string">&quot;observation_images_cam_env_frame_index_in_gop&quot;</span>: f,</span><br><span class="line">                <span class="string">&quot;language_instruction&quot;</span>: <span class="string">&quot;fold the shirt&quot;</span>,</span><br><span class="line">                <span class="string">&quot;source&quot;</span>: <span class="string">&quot;human&quot;</span>, <span class="string">&quot;is_intervention&quot;</span>: <span class="literal">False</span>,</span><br><span class="line">            &#125;)</span><br><span class="line">ds = lance.write_dataset(</span><br><span class="line">    pa.Table.from_pylist(rows, schema=schema),</span><br><span class="line">    <span class="string">&quot;/mnt/jfs/embodied_ds.lance&quot;</span>,</span><br><span class="line">)</span><br><span class="line"><span class="comment"># 训练前的批量随机读,走 Rust 并行解码快路径</span></span><br><span class="line">frames = ds.take_blobs_decoded(</span><br><span class="line">    <span class="string">&quot;observation_images_cam_env&quot;</span>, indices=[<span class="number">123</span>, <span class="number">456</span>, <span class="number">7890</span>], concurrency=<span class="number">32</span></span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+<h3 id="5-3-对比实验-DataLoader-吞吐与-GPU-饥饿">5.3 对比实验:DataLoader 吞吐与 GPU 饥饿</h3>
+<p>两种方案在同一 JuiceFS 挂载上跑随机抽样(batch=64、num_workers=8、1000 个 batch):</p>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>读路径</th>
+<th>观察</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A. 散文件 + PyAV 逐帧</td>
+<td>open(MP4)→ seek 到 keyframe → 逐帧解码</td>
+<td>首 batch 延迟高,worker 间重复打开同一文件,D2E 实测朴素并行下每个视频文件平均被打开 ~45 次</td>
+</tr>
+<tr>
+<td>B. Lance + take_blobs_decoded</td>
+<td>一次 Range GET 整 GOP + Rust 并行解码</td>
+<td>吞吐 1.7–6×,batch 越大加速越明显</td>
+</tr>
+</tbody>
+</table>
+<p>度量指标建议:<code>samples/s</code>(DataLoader 吞吐)、GPU util(NVIDIA DCGM)、首 batch 延迟、<code>juicefs stats</code> 的 blockcache 命中率。预期结论:方案 B 在命中分布式缓存后第二个 epoch 几乎零回源,GPU 利用率显著抬升。</p>
+<hr>
+<h2 id="六、自测问题解答-具身视角">六、自测问题解答(具身视角)</h2>
+<p><strong>Q1:为什么团队从 CPFS 迁往 JuiceFS?</strong></p>
+<p>成本 + 架构弹性 + 运维解耦。CPFS 吞吐与容量强绑定,为峰值训练吞吐预置 PB 级全闪的成本是 JuiceFS(对象存储底座)的 5–10 倍,且 CPFS 只能扩不能缩、为早期规划失误付出长期代价;具身数据集从 TB 向 PB 演进时,JuiceFS 容量跟随对象存储弹性伸缩、聚合吞吐随客户端数线性扩展,扩训练集群不动存储集群;JuiceFS 把控制面交给托管数据库、数据面交给对象存储,没有存储集群要专业运维,还天然支持跨云数据回流(采集端→训练端)——CPFS 单可用区架构做不到。代价是超低延迟同步写不如 CPFS,但具身负载(读多写少 + 异步可容忍 Checkpoint)恰好避开。</p>
+<p><strong>Q2:训练时&quot;存储不成为瓶颈&quot;具体指哪些指标?</strong></p>
+<p>对具身训练的量化口径:聚合读吞吐 ≥ DataLoader 需求(batch×分辨率×采样率);随机采样 P99 延迟(含视频解码)&lt; 50ms——其中元数据 lookup 延迟(JuiceFS 元数据引擎可压到 ~100µs,对象存储原生是 10–30ms 级)、Range GET RTT、首帧解码延迟是三个分量;缓存命中率 &gt; 90%(地瓜实测 45%→92%,训练启动 20min→3min);Checkpoint 落盘不阻塞 step,异步落盘速率 ≥ 15 GB/s。</p>
+<p><strong>Q3:为什么具身数据(视频、点云、动作序列)适合 Lance 而不是 Parquet?</strong></p>
+<p>三个结构性原因:</p>
+<ol>
+<li>Parquet 按行组读取、无原生 Blob 语义,取单帧要解码整个行组,大视频块要么外存造成跨文件 join、要么塞 cell 造成读放大;Lance 的 Blob 列 + GOP 尺度受控布局把&quot;取一帧&quot;变成&quot;一次 Range GET + 解一个 ≤8 帧短 GOP&quot;;</li>
+<li>Parquet 的页偏移索引在内存里随页数爆炸(10 亿行 3KB embedding、8KB 页 = 20GB 索引),小页救随机读毁内存的墙翻不过去;Lance 对大值不建页索引,定位退化为乘法,v2.2 相对 Parquet 压缩减半、随机 Blob 读快 68×;</li>
+<li>具身数据多频率流需要 schema 层对齐(相机 30Hz、控制 100Hz、action chunk 异长),Parquet+MP4+JSON 的物理三分离每次采样都触发跨文件对齐;Lance 把它们放进同一行的不同列,行按最高频控制信号构建、视频经 ref_id 多行共享,高频动作零丢失、视频零冗余。实测随机读 1.7–6×、存储 -42%。</li>
+</ol>
+<hr>
+<h2 id="七、收束-具身训练存储的完整拼图">七、收束:具身训练存储的完整拼图</h2>
+<p><strong>JuiceFS(文件系统层)+ Lance(数据格式层)+ S3 兼容对象存储(物理底座)</strong> 三层各司其职:对象存储提供容量与成本的弹性底座;JuiceFS 在其上叠加 POSIX 语义、事务级元数据性能、多级缓存与多云同步,让&quot;亿级小文件 + 多机随机读 + 突发大写&quot;的具身负载不受对象存储原生限制;Lance 在文件系统之上重新组织多模态数据的空间布局,把视频压缩与随机访问这对天然矛盾工程化为 GOP 尺度的受控 trade-off,并让数据集版本管理变成近零成本的 append。</p>
+<p>这套组合已在招商狮岩(叠衣任务)、地瓜机器人(具身基座模型)等生产环境验证——<strong>当具身数据的 scaling law 开始生效,存储层每一次延迟优化、每一份缓存命中、每一次零拷贝版本快照,都会被乘以 epoch 数和 GPU 小时数,这是数据层税的复利,也是选对存储栈的复利。</strong></p>
+<hr>
+<h2 id="延伸资源">延伸资源</h2>
+<ul>
+<li>相关阅读:<a href="/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E7%9A%84%E6%95%B0%E6%8D%AE%E5%9C%B0%E5%9F%BA%E4%BB%8E%E4%BC%A0%E6%84%9F%E5%99%A8%E5%88%B0%E6%B9%96%E4%BB%93%E4%B8%8E%E5%9B%9E%E6%B5%81%E9%97%AD%E7%8E%AF/">《具身智能的数据地基:从传感器到湖仓与回流闭环》</a>——本文的上一层:数据从采集到回流的完整链路,本文深入到它底下的存储栈</li>
+<li>相关阅读:<a href="/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%95%B0%E6%8D%AE%E5%B9%B3%E5%8F%B0%E4%B8%89%E5%A4%A7%E4%BB%B6%E6%B8%85%E6%B4%97%E6%95%B0%E6%8D%AE%E9%9B%86%E7%AE%A1%E7%90%86%E4%B8%8E%E8%AF%84%E6%B5%8B%E5%88%86%E6%9E%90/">《具身数据平台三大件:清洗、数据集管理与评测分析》</a>——Lance 版本化数据集在数据管理环节的落点</li>
+<li>相关阅读:<a href="/2026/09/03/2026-09-03-RLark%E8%B7%A8%E9%9B%86%E7%BE%A4%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BA%91%E5%8E%9F%E7%94%9F%E5%B9%B3%E5%8F%B0%E5%85%A8%E6%A0%88%E6%9E%B6%E6%9E%84/">《RLark:跨集群具身智能云原生平台全栈架构》</a>——多云存储与跨集群训练的编排层</li>
+<li>相关阅读:<a href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/">《从 LLM Infra 到具身智能 Infra》</a>——两类负载的 I/O 画像差异全景</li>
+<li>JuiceFS 官方文档:<a target="_blank" rel="noopener" href="https://juicefs.com/docs/zh/community/introduction/">https://juicefs.com/docs/zh/community/introduction/</a></li>
+<li>Lance 格式与文档:<a target="_blank" rel="noopener" href="https://lancedb.github.io/lance/">https://lancedb.github.io/lance/</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/">https://roger-lv.github.io/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/AI-Infra/">AI Infra</a><a class="post-meta__tags" href="/tags/%E5%AD%98%E5%82%A8/">存储</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/VLA/">VLA</a><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a><a class="post-meta__tags" href="/tags/%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BF/">数据管线</a><a class="post-meta__tags" href="/tags/JuiceFS/">JuiceFS</a><a class="post-meta__tags" href="/tags/Lance/">Lance</a><a class="post-meta__tags" href="/tags/LeRobot/">LeRobot</a><a class="post-meta__tags" href="/tags/%E5%A4%9A%E4%BA%91/">多云</a><a class="post-meta__tags" href="/tags/%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8/">对象存储</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/" title="mmap 能映射什么：一张全景图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">mmap 能映射什么：一张全景图</div></div><div class="info-2"><div class="info-item-1">mmap 能映射什么：一张全景图 引言 mmap 本质上是一种**&quot;把任意字节序列对象映射进进程虚拟地址空间&quot;的通用机制**——它的作用域取决于 fd 指向什么。 fd 可以是普通文件、tmpfs 文件、字符设备、GPU 节点、VFIO 组，甚至完全不要 fd（MAP_ANONYMOUS）。内核为每次 mmap 创建一个 vm_area_struct（VMA），并绑定对应的文件操作表 f_op-&gt;mmap。 所以真正决定&quot;能不能映射、映射出来是什么&quot;的，从来不是 mmap 这个系统调用本身，而是 fd 背后的 file_operations 实现。 123456789mmap(addr, len, prot, flags, fd, offset)      │      ├─ 无 fd ──────────────► 匿名内存（零页 + COW）      └─ 有 fd            │            ├─ 通用路径 do_mmap() → 新建 VMA            └─ f_op-&gt;mmap(fil...</div></div></div></a><a class="pagination-related" href="/2026/10/19/2026-10-19-QueueQuota%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%E4%BB%8EVolcano%E4%B8%89%E7%BA%A7%E6%A8%A1%E5%9E%8B%E5%88%B0MiniMax%E7%BA%A7AI%E9%9B%86%E7%BE%A4%E7%9A%84%E8%B0%83%E5%BA%A6%E6%B2%BB%E7%90%86%E5%AE%9E%E8%B7%B5/" title="Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践</div></div><div class="info-2"><div class="info-item-1">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践 Queue Quota 的本质一句话就能说清:它是队列级别的资源记账单元,声明&quot;这个队列能用多少资源、必须保多少资源、最多借多少资源、愿意借出多少资源&quot;——区别于 namespace 级的 ResourceQuota,它的作用域是队列而不是命名空间,并且支持跨队列的借用与回收。 而 MiniMax 这类大模型公司的实际做法,是基于 Volcano 二次开发批调度器,把 Quota 建模从单纯的 CPU/内存扩展到 GPU 卡数、卡型、NVLink 域、IB 域、CPU 沙盒等多个维度,队列树直接对齐业务组织结构,配合夜间潮汐复用把 ETTR(有效训练时间比例)做到 97% 这个业界最高档位。 以下分两个层面展开:先把 Queue Quota 的理论语义讲透,再切到一线调度器研发的真实工作。  一、Queue Quota 的完整语义 1.1 为什么不能只用 ResourceQuota 原生 Kubernetes 的 ResourceQuota 工作在 ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</div></div><div class="info-2"><div class="info-item-1">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 写给一位即将从大模型 Infra 转向具身智能 Infra 的工程师,也写给所有关注这个方向的人。  引言:一次心智模型的切换 过去三年做大模型 Infra 的人,心智模型基本是稳定的:海量文本 token 进、GPU 集群算、ckpt 出、推理服务化。但具身智能完全不同——它训练的不是&quot;下一个 token&quot;,而是&quot;机器人在物理世界里的下一步动作&quot;;它的数据不是从互联网爬来的,而是真机遥操作、仿真合成、人类视频多源混合出来的;它的基础设施不仅要支撑训练,还要支撑大规模并行仿真和真机数据回流这两个 LLM 时代从未存在过的环节。 如果你从 LLM Infra 背景切入这个领域,大约 60-70% 的工程经验可以直接平移,剩下 30-40% 需要新建心智模型。本文拆解其中三个最核心的新模块:仿真集群的算力形态、VLA 训练栈的真实结构、以及数据管线的工程全貌。  一、仿真集群:GPU 上的&quot;平行世界&quot; 1.1 它到底是什么 具身智能训...</div></div></div></a><a class="pagination-related" href="/2026/07/09/2026-07-09-GPFS-Fileset-%E8%AF%A6%E8%A7%A3%EF%BC%9A%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%AD%E7%9A%84%E7%B2%BE%E7%BB%86%E5%8C%96%E8%BF%90%E8%90%A5%E4%B9%8B%E9%81%93/" title="GPFS Fileset 详解：并行文件系统中的精细化运营之道"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/GPFS.jpg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-09</div><div class="info-item-2">GPFS Fileset 详解：并行文件系统中的精细化运营之道</div></div><div class="info-2"><div class="info-item-1">GPFS Fileset 详解：并行文件系统中的精细化运营之道 在AI大模型训练和高性能计算（HPC）场景中，数据存储系统往往面临着前所未有的压力。成百上千个计算节点同时读写海量小文件或超大文件，对文件系统的性能和可管理性提出了苛刻要求。 IBM GPFS（通用并行文件系统，现称 IBM Storage Scale） 凭借其出色的横向扩展能力和并行访问性能，成为了这一领域的基石。但在日常运维中，一个大麻烦始终困扰着管理员：如何对庞大的共享存储空间进行精细化管理？ 答案，就藏在 GPFS 的 Fileset 功能里。 什么是 Fileset？ 从用户视角看，Fileset 可能只是一个普通目录。但从管理员视角看，Fileset 是 GPFS 文件系统命名空间中的一个逻辑子树，但在很多方面，它表现得像一个独立的文件系统。 你可以把它形象地理解为一个大型存储池里，可以被独立&quot;关照&quot;和&quot;管理&quot;的容器。 为什么需要 Fileset？ 传统文件系统缺乏细粒度的管理手段。当数百个用户或项目共享一个巨大的 GPFS 文件系统时，以下痛点尤为突出：  配额管...</div></div></div></a><a class="pagination-related" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-15</div><div class="info-item-2">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</div></div><div class="info-2"><div class="info-item-1">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析 本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill/preempt/reclaim 的跨队列语义,一次讲透。 核心观点先抛出来:Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。 一、GPU 性能与分布式训练:Nsight 与并行策略 1.1 Nsight 是什么、怎么用 Nsight 是 NVIDIA 提供的 GPU 性能分析工具套件,其中最核心的是两把&quot;不同倍率的放大镜&quot;:    工具 定位 分析粒度 典型命令     Nsight Systems (nsys) 全系统时间...</div></div></div></a><a class="pagination-related" href="/2026/10/19/2026-10-19-QueueQuota%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%E4%BB%8EVolcano%E4%B8%89%E7%BA%A7%E6%A8%A1%E5%9E%8B%E5%88%B0MiniMax%E7%BA%A7AI%E9%9B%86%E7%BE%A4%E7%9A%84%E8%B0%83%E5%BA%A6%E6%B2%BB%E7%90%86%E5%AE%9E%E8%B7%B5/" title="Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-19</div><div class="info-item-2">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践</div></div><div class="info-2"><div class="info-item-1">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践 Queue Quota 的本质一句话就能说清:它是队列级别的资源记账单元,声明&quot;这个队列能用多少资源、必须保多少资源、最多借多少资源、愿意借出多少资源&quot;——区别于 namespace 级的 ResourceQuota,它的作用域是队列而不是命名空间,并且支持跨队列的借用与回收。 而 MiniMax 这类大模型公司的实际做法,是基于 Volcano 二次开发批调度器,把 Quota 建模从单纯的 CPU/内存扩展到 GPU 卡数、卡型、NVLink 域、IB 域、CPU 沙盒等多个维度,队列树直接对齐业务组织结构,配合夜间潮汐复用把 ETTR(有效训练时间比例)做到 97% 这个业界最高档位。 以下分两个层面展开:先把 Queue Quota 的理论语义讲透,再切到一线调度器研发的真实工作。  一、Queue Quota 的完整语义 1.1 为什么不能只用 ResourceQuota 原生 Kubernetes 的 ResourceQuota 工作在 ...</div></div></div></a><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</div></div><div class="info-2"><div class="info-item-1">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立  本文是 从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 的姊妹篇——那篇给出了&quot;VLA 训练用 FSDP 而非 Megatron&quot;的结论,这篇把背后的逻辑彻底拆透。  核心原因一句话:VLA 模型的参数规模(1B-34B)刚好落在 FSDP 的&quot;甜点区&quot;,加上它基于 HuggingFace 生态的异构多模态结构让 Megatron 类框架难以适配,而科研社区主导的开源生态天然偏向 PyTorch 原生方案。下面把逻辑拆开讲。  一、先看 VLA 训练的真实规模和场景 VLA 训练的参数量和你熟悉的 LLM 预训练完全不是一个量级:    场景 参数规模 典型硬件 训练方式     VLA 预训练 7B(OpenVLA)/ 3B(π0) 64 张 A100 × 15 天 全量   VLA 微调(主流场景) 7B 单节点 8 张 A100 LoRA 或全量   VLA-RL 后训练 7B 单节点到多节点 FSDP 管理  ...</div></div></div></a><a class="pagination-related" href="/2024/09/20/2024-09-20-AI%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/" title="AI资源调度"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/aiinfra.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-20</div><div class="info-item-2">AI资源调度</div></div><div class="info-2"><div class="info-item-1">AI资源调度 100道k8s面试题：https://zhuanlan.zhihu.com/p/721588398 [云原生 AI 的资源调度和 AI 工作流引擎设计分享_paddleflow-CSDN博客](https://blog.csdn.net/lihui49/article/details/129260286?ops_request_misc={&quot;request_id&quot;%3A&quot;81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&quot;%2C&quot;scm&quot;%3A&quot;20140713.130102334..&quot;}&amp;request_id=81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-3-129260286-null-null.142^v100^pc_search_re...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">286</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">395</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%B7%E8%BA%AB%E8%AE%AD%E7%BB%83%E7%9A%84-I-O-%E7%94%BB%E5%83%8F-%E4%B8%8E-LLM-CV-%E6%A0%B9%E6%9C%AC%E4%B8%8D%E6%98%AF%E4%B8%80%E5%9B%9E%E4%BA%8B"><span class="toc-number">1.1.</span> <span class="toc-text">一、具身训练的 I&#x2F;O 画像:与 LLM&#x2F;CV 根本不是一回事</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81JuiceFS-%E6%9E%B6%E6%9E%84-%E4%B8%BA%E8%BF%99%E7%A7%8D-I-O-%E7%94%BB%E5%83%8F%E5%AE%9A%E5%88%B6%E7%9A%84%E5%88%86%E7%A6%BB%E5%BC%8F%E8%AE%BE%E8%AE%A1"><span class="toc-number">1.2.</span> <span class="toc-text">二、JuiceFS 架构:为这种 I&#x2F;O 画像定制的分离式设计</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E4%B8%89%E5%B9%B3%E9%9D%A2%E5%88%86%E7%A6%BB%E4%B8%8E-Chunk-Slice-Block"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 三平面分离与 Chunk&#x2F;Slice&#x2F;Block</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-POSIX-%E5%85%BC%E5%AE%B9%E4%B8%8E%E4%B8%80%E8%87%B4%E6%80%A7"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 POSIX 兼容与一致性</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E5%A4%9A%E7%BA%A7%E7%BC%93%E5%AD%98%E4%BD%93%E7%B3%BB-%E5%9B%A2%E9%98%9F%E6%AD%A3%E5%9C%A8%E5%81%9A%E7%9A%84%E9%80%82%E9%85%8D%E9%87%8D%E7%82%B9"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 多级缓存体系:团队正在做的适配重点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-JuiceFS-on-K8s-Mount-Pod-vs-Sidecar"><span class="toc-number">1.2.4.</span> <span class="toc-text">2.4 JuiceFS on K8s:Mount Pod vs Sidecar</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E4%B8%BA%E4%BB%80%E4%B9%88%E5%85%B7%E8%BA%AB%E5%9B%A2%E9%98%9F%E4%BB%8E-CPFS-%E8%BF%81%E5%BE%80-JuiceFS"><span class="toc-number">1.2.5.</span> <span class="toc-text">2.5 为什么具身团队从 CPFS 迁往 JuiceFS</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-6-Checkpoint-%E5%AD%98%E5%82%A8%E8%90%BD%E5%9C%B0"><span class="toc-number">1.2.6.</span> <span class="toc-text">2.6 Checkpoint 存储落地</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%AD%98%E5%82%A8%E7%B1%BB%E5%9E%8B%E5%85%A8%E6%99%AF-%E5%85%B7%E8%BA%AB%E5%9C%BA%E6%99%AF%E4%B8%8B%E7%9A%84%E5%AE%9A%E4%BD%8D%E5%AF%B9%E7%85%A7"><span class="toc-number">1.3.</span> <span class="toc-text">三、存储类型全景:具身场景下的定位对照</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81Lance-%E6%B7%B1%E5%BA%A6-%E4%B8%BA%E5%85%B7%E8%BA%AB%E5%A4%9A%E6%A8%A1%E6%80%81%E9%9A%8F%E6%9C%BA%E8%AE%BF%E9%97%AE%E8%80%8C%E7%94%9F"><span class="toc-number">1.4.</span> <span class="toc-text">四、Lance 深度:为具身多模态随机访问而生</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E4%B8%8E-Arrow-Parquet-Iceberg-%E7%9A%84%E5%85%B3%E7%B3%BB%E5%AE%9A%E4%BD%8D"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 与 Arrow&#x2F;Parquet&#x2F;Iceberg 的关系定位</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E4%B8%BA%E4%BB%80%E4%B9%88-Parquet-%E5%9C%A8%E5%85%B7%E8%BA%AB%E8%B4%9F%E8%BD%BD%E4%B8%8B%E5%A4%B1%E5%AE%88-%E7%BB%93%E6%9E%84%E7%BC%96%E7%A0%81%E4%B8%8E%E9%A1%B5%E7%B4%A2%E5%BC%95%E7%9A%84%E5%A2%99"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 为什么 Parquet 在具身负载下失守:结构编码与页索引的墙</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-Lance-%E8%A1%A8%E6%A0%BC%E5%BC%8F%E7%9A%84%E7%89%A9%E7%90%86%E5%B8%83%E5%B1%80"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 Lance 表格式的物理布局</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E5%85%B7%E8%BA%AB%E5%A4%9A%E6%A8%A1%E6%80%81-schema-GOP-%E5%B0%BA%E5%BA%A6-Blob-%E8%A1%8C%E7%BA%A7%E5%BC%95%E7%94%A8"><span class="toc-number">1.4.4.</span> <span class="toc-text">4.4 具身多模态 schema:GOP 尺度 Blob + 行级引用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E5%AE%9E%E9%AA%8C%E6%95%B0%E6%8D%AE%E4%B8%8E-GOP-8-%E7%9A%84%E7%94%9C%E8%9C%9C%E7%82%B9"><span class="toc-number">1.4.5.</span> <span class="toc-text">4.5 实验数据与 GOP&#x3D;8 的甜蜜点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-6-%E4%BF%AE%E6%94%B9%E6%88%90%E6%9C%AC%E4%B8%8E%E5%8D%95%E4%B8%80%E6%95%B0%E6%8D%AE%E6%BA%90"><span class="toc-number">1.4.6.</span> <span class="toc-text">4.6 修改成本与单一数据源</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-7-%E4%B8%8E-Iceberg-Delta-Hudi-RLDS-LeRobot-%E5%85%A8%E6%99%AF%E5%AF%B9%E6%AF%94"><span class="toc-number">1.4.7.</span> <span class="toc-text">4.7 与 Iceberg&#x2F;Delta&#x2F;Hudi&#x2F;RLDS&#x2F;LeRobot 全景对比</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%8A%A8%E6%89%8B%E5%AE%9E%E8%B7%B5-%E6%90%AD%E4%B8%80%E5%A5%97%E5%85%B7%E8%BA%AB%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E6%9C%80%E5%B0%8F%E9%97%AD%E7%8E%AF"><span class="toc-number">1.5.</span> <span class="toc-text">五、动手实践:搭一套具身训练存储最小闭环</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E6%9C%AC%E5%9C%B0%E8%B5%B7-JuiceFS-%E7%A4%BE%E5%8C%BA%E7%89%88-Redis-MinIO"><span class="toc-number">1.5.1.</span> <span class="toc-text">5.1 本地起 JuiceFS 社区版(Redis + MinIO)</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E7%94%A8%E5%8F%97%E6%8E%A7-x264-%E7%BC%96%E7%A0%81-episode-%E5%86%99%E5%85%A5-Lance-%E5%A4%9A%E6%A8%A1%E6%80%81%E6%95%B0%E6%8D%AE%E9%9B%86"><span class="toc-number">1.5.2.</span> <span class="toc-text">5.2 用受控 x264 编码 episode + 写入 Lance 多模态数据集</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E5%AF%B9%E6%AF%94%E5%AE%9E%E9%AA%8C-DataLoader-%E5%90%9E%E5%90%90%E4%B8%8E-GPU-%E9%A5%A5%E9%A5%BF"><span class="toc-number">1.5.3.</span> <span class="toc-text">5.3 对比实验:DataLoader 吞吐与 GPU 饥饿</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E8%87%AA%E6%B5%8B%E9%97%AE%E9%A2%98%E8%A7%A3%E7%AD%94-%E5%85%B7%E8%BA%AB%E8%A7%86%E8%A7%92"><span class="toc-number">1.6.</span> <span class="toc-text">六、自测问题解答(具身视角)</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E6%94%B6%E6%9D%9F-%E5%85%B7%E8%BA%AB%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E7%9A%84%E5%AE%8C%E6%95%B4%E6%8B%BC%E5%9B%BE"><span class="toc-number">1.7.</span> <span class="toc-text">七、收束:具身训练存储的完整拼图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BB%B6%E4%BC%B8%E8%B5%84%E6%BA%90"><span class="toc-number">1.8.</span> <span class="toc-text">延伸资源</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/23/2026-10-23-mmap%E8%83%BD%E6%98%A0%E5%B0%84%E4%BB%80%E4%B9%88%EF%BC%9A%E4%B8%80%E5%BC%A0%E5%85%A8%E6%99%AF%E5%9B%BE/" title="mmap 能映射什么：一张全景图">mmap 能映射什么：一张全景图</a><time datetime="2026-10-22T16:00:00.000Z" title="发表于 2026-10-23 00:00:00">2026-10-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/" title="Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</a><time datetime="2026-10-22T16:00:00.000Z" title="发表于 2026-10-23 00:00:00">2026-10-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/" title="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</a><time datetime="2026-10-21T16:00:00.000Z" title="发表于 2026-10-22 00:00:00">2026-10-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/19/2026-10-19-QueueQuota%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%E4%BB%8EVolcano%E4%B8%89%E7%BA%A7%E6%A8%A1%E5%9E%8B%E5%88%B0MiniMax%E7%BA%A7AI%E9%9B%86%E7%BE%A4%E7%9A%84%E8%B0%83%E5%BA%A6%E6%B2%BB%E7%90%86%E5%AE%9E%E8%B7%B5/" title="Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践</a><time datetime="2026-10-18T16:00:00.000Z" title="发表于 2026-10-19 00:00:00">2026-10-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</a><time datetime="2026-10-14T16:00:00.000Z" title="发表于 2026-10-15 00:00:00">2026-10-15</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
