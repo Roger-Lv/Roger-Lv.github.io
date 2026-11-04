@@ -1,0 +1,772 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="逐文件核对 agentgateway v1.7.0 的实现后写的深度拆解——它为什么不用 Envoy 的 xDS 资源类型、MCP 会话状态怎么做到跨副本可恢复、passthrough 优先的 LLM 设计为什么能跟上 provider 的 API 变化，以及官方宣传里对不上代码的几处说法（语义缓存、虚拟 Key、GPU 感知推理路由、JWKS 刷新）。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="逐文件核对 agentgateway v1.7.0 的实现后写的深度拆解——它为什么不用 Envoy 的 xDS 资源类型、MCP 会话状态怎么做到跨副本可恢复、passthrough 优先的 LLM 设计为什么能跟上 provider 的 API 变化，以及官方宣传里对不上代码的几处说法（语义缓存、虚拟 Key、GPU 感知推理路由、JWKS 刷新）。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-03T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-04T07:36:26.690Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Rust">
+<meta property="article:tag" content="MCP">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="AI网关">
+<meta property="article:tag" content="A2A">
+<meta property="article:tag" content="Agent基础设施">
+<meta property="article:tag" content="LLM网关">
+<meta property="article:tag" content="xDS">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差",
+  "url": "https://roger-lv.github.io/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-03T16:00:00.000Z",
+  "dateModified": "2026-11-04T07:36:26.690Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">294</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">428</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-04T07:36:26.690Z" title="更新于 2026-11-04 15:36:26">2026-11-04</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/" data-flag-title="agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：agentgateway 的对外说法是「一个进程统一 HTTP/gRPC、LLM、MCP、A2A」。但逐文件读完 <code>v1.7.0</code> 的实现后，我认为它真正值得学的有两点，都不在营销词里：<strong>一是它清楚自己不该做什么</strong>（推理端点选择委托给 EPP、语义缓存委托给 vSR），<strong>二是它把 Agent 的会话与身份当成一等公民</strong>（会话状态塞进自包含加密令牌、身份栈深到 SPIFFE 和 ID-JAG）。至于「AI 原生」，代码层面的含义比宣传语具体得多。</p>
+</blockquote>
+<p>这篇文章基于对本地仓库（<code>git describe</code> = <code>v1.7.0-71-g134897e1</code>）的逐文件核对写成。凡是能验的我都验了，验不了的会明确标注来源。文末单列一节讲<strong>宣传与实现对不上的地方</strong>——这不是挑刺，而是因为一个正在快速迭代的项目，官方口径与实际行为的差距本身就是选型时要评估的风险项。</p>
+<hr>
+<h2 id="一、问题背景：传统网关为什么接不住-Agent-流量">一、问题背景：传统网关为什么接不住 Agent 流量</h2>
+<p>传统 API 网关（Envoy、Kong、Nginx）的底层假设是<strong>短生命周期、无状态、一问一答</strong>。这套模型在微服务时代运转良好，但 Agent 流量有三个地方对不上：</p>
+<p><strong>MCP 是有状态的长会话协议。</strong> 客户端打开连接后服务端可以异步回推消息；一次 <code>tools/list</code> 可能要扇出到多个后端 MCP 服务器，再按会话权限合并结果。这和传统网关的 listener/cluster 模型根本不是一个形状。</p>
+<p><strong>LLM 请求需要深度解析请求体。</strong> 按模型名、token 数、prompt 内容做路由、限流和审计——只匹配 URL 和 Header 完全不够。</p>
+<p><strong>A2A 引入了 Agent 间特有的语义</strong>：能力发现、模态协商、任务协作。传统网关对此一无所知。</p>
+<p>业界的普遍补丁是给 Envoy 挂一个 Go 写的 <code>ext_proc</code> sidecar 来补会话逻辑。<a target="_blank" rel="noopener" href="http://Solo.io">Solo.io</a> 的工程团队最后选择了另一条路：用 Rust 从零写一个数据平面。这个决定的可信度部分来自人——<code>git shortlog</code> 显示提交数第一的是 John Howard（1335 次，断层第一），他是 Istio/ztunnel 的核心作者，而 ztunnel 正是 Istio Ambient Mesh 的 Rust 节点代理。</p>
+<blockquote>
+<p>需要说明：<strong>「为什么选 Rust」这件事在仓库里找不到出处。</strong> 我在 <code>README.md</code>、<code>CHARTER.md</code>、<code>DEVELOPMENT.md</code>、<code>architecture/</code> 全量 grep 过 <code>zero-cost</code> / <code>no GC</code> / <code>garbage collector</code> / <code>memory safe</code>，零命中。「无 GC、内存安全、零成本抽象」是外部宣传语，仓库内没有对应的设计文档佐证。这一点在选型时值得注意——它意味着这个技术判断的依据不在代码库里。</p>
+</blockquote>
+<hr>
+<h2 id="二、项目概况">二、项目概况</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>值</th>
+<th>依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>首次提交</td>
+<td>2025-03-18</td>
+<td><code>git log --reverse</code></td>
+</tr>
+<tr>
+<td>当前版本</td>
+<td>v1.7.0（2026-10-27）；上一版 v1.6.0（2026-10-02）</td>
+<td>git tag</td>
+</tr>
+<tr>
+<td>许可证</td>
+<td>Apache-2.0</td>
+<td><code>LICENSE</code></td>
+</tr>
+<tr>
+<td>治理</td>
+<td>LF Projects, LLC 的 Series，TSC 制</td>
+<td><code>CHARTER.md</code></td>
+</tr>
+<tr>
+<td>提交集中度</td>
+<td>John Howard 1335 / Eitan Yarmush 205 / Nina Polshakova 111</td>
+<td><code>git shortlog -sn</code></td>
+</tr>
+</tbody>
+</table>
+<p>迭代节奏值得单独说一句：v1.6.0 到 v1.7.0 只隔了 25 天。这是典型的早期高速迭代项目——好处是问题修得快，代价是本文后面会讲到的文档滞后。</p>
+<p>关于与 kgateway 的关系：代码里还留着一批 legacy 注解，<code>kgateway.dev/a2a</code>、<code>kgateway.dev/mcp-path</code>，xDS 的 TLS secret 名直接叫 <code>kgateway-xds-cert</code>。这些残留佐证了两者是同源演进而非并列的两个项目。</p>
+<hr>
+<h2 id="三、架构：一个刻意不复用-Envoy-类型的数据平面">三、架构：一个刻意不复用 Envoy 类型的数据平面</h2>
+<h3 id="3-1-自研-xDS-资源类型，以及为什么">3.1 自研 xDS 资源类型，以及为什么</h3>
+<p>这是整个设计里最有信息量的一条。<code>architecture/configuration.md</code> 写得很直白：</p>
+<blockquote>
+<p>We use the XDS Transport Protocol, but do not use the Envoy types (Listener, Cluster, etc), and instead use purpose-built types.</p>
+</blockquote>
+<p><strong>注意区分传输与资源</strong>：传输层复用了 Envoy 的 discovery service proto（<code>crates/xds/src/types.rs</code> 里 <code>pub use protos::envoy::service::discovery::v3</code>），workload/service 复用 Istio 的 <code>istio.workload</code>。不复用的是<strong>资源类型</strong>本身。</p>
+<p>自研的类型定义在 <code>crates/protos/proto/resource.proto</code>：</p>
+<figure class="highlight protobuf"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">message </span><span class="title class_">Resource</span> &#123;</span><br><span class="line">  <span class="keyword">oneof</span> kind &#123;</span><br><span class="line">    Bind bind = <span class="number">1</span>;</span><br><span class="line">    Listener listener = <span class="number">2</span>;</span><br><span class="line">    Route route = <span class="number">3</span>;</span><br><span class="line">    Backend backend = <span class="number">4</span>;</span><br><span class="line">    Policy policy = <span class="number">5</span>;</span><br><span class="line">    TCPRoute tcp_route = <span class="number">6</span>;</span><br><span class="line">    istio.workload.Workload workload = <span class="number">7</span>;</span><br><span class="line">    istio.workload.Service service = <span class="number">8</span>;</span><br><span class="line">    RouteGroup route_group = <span class="number">9</span>;</span><br><span class="line">    ModelRoute model_route = <span class="number">10</span>;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>这里有个细节值得记下来</strong>：正式类型名是<strong>单数</strong>，而且是十个不是五个。很多二手资料（包括一些对比文章）写成 <code>Binds / Listeners / Routes / Backends / Policies</code> 的复数形式——那是 Go 控制平面里 krt collection 的字段名（<code>controller/pkg/agentgateway/plugins/interfaces.go</code>），不是 xDS 资源类型名。</p>
+<p>那么为什么要自研？答案是<strong>避免 fanout</strong>。同文档给出的设计原则是：</p>
+<blockquote>
+<p>A critical design philosophy for the APIs is to maintain a nearly direct mapping of user facing APIs to XDS to IR.</p>
+</blockquote>
+<p>反例讲得很具体：在 Envoy 模型里，改一个 TLS 密码套件字段，可能要向所有 Cluster 重新推送配置；而 agentgateway 的资源是<strong>指向父级</strong>而非父级包含子列表（<code>Route.listener_key</code> 就是一个指针），所以只改一个小 protobuf。这个理由在大规模部署里是真实的运维痛点——不是纸上谈兵。</p>
+<h3 id="3-2-IR-不是原子替换，是写锁下逐条应用">3.2 IR 不是原子替换，是写锁下逐条应用</h3>
+<p>架构文档说配置统一翻译成「shared internal representation (IR)」。这句话容易让人以为是一个 ArcSwap 整块替换。<strong>实际上不是。</strong></p>
+<p>运行时 IR 是 <code>Store</code>，由 <code>Stores</code> 聚合（<code>crates/agentgateway/src/store/mod.rs</code>）：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">struct</span> <span class="title class_">Stores</span> &#123;</span><br><span class="line">    <span class="keyword">pub</span> discovery: discovery::StoreUpdater,  <span class="comment">// workload / service</span></span><br><span class="line">    <span class="keyword">pub</span> binds: binds::StoreUpdater,          <span class="comment">// 路由 / 监听 / 策略 / 后端</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>StoreUpdater</code> 内部是 <code>Arc&lt;RwLock&lt;Store&gt;&gt;</code>。xDS handler 拿到写锁后，对每个 <code>XdsUpdate</code> 逐条调 <code>insert_xds(...)</code> / <code>remove_resource(...)</code>。本地文件 reload 走的也是 diff 式增量（<code>sync_local</code> 接收 <code>prev: PreviousState</code>）。</p>
+<p><code>arc_swap</code> 这个 crate <strong>确实在用</strong>（<code>crates/core/src/arc.rs</code> 定义了 <code>Atomic&lt;T&gt; = Arc&lt;ArcSwap&lt;T&gt;&gt;</code>），但只服务于局部子结构：负载均衡端点、模型成本目录、日志字段、DNS 缓存。<strong>整个 IR 没有做快照级原子替换。</strong></p>
+<p>这个区别对使用者有意义：增量应用意味着大批量配置变更不是「一瞬间全切」，而是逐条生效——排查配置问题时的心智模型不一样。</p>
+<h3 id="3-3-控制平面：krt-是-Istio-的，不是自研的">3.3 控制平面：krt 是 Istio 的，不是自研的</h3>
+<p>Go 控制平面用了响应式集合库 <strong>krt</strong>。这里要纠正一个常见误解：<strong>krt 不是 agentgateway 自研的，是 Istio 的第三方库</strong>（<code>istio.io/istio/pkg/kube/krt</code>），仓库里有 85 个 Go 文件引用它。</p>
+<p>「某个被 watch 的资源变化时，只有依赖它的集合会被重新计算」这个特性是 krt 固有的响应式依赖图语义，归功于 Istio 的设计而非本项目。</p>
+<p>其余两块：</p>
+<ul>
+<li><strong>xDS server</strong>（<code>controller/pkg/syncer/krtxds/xds.go</code>）：流式 gRPC ADS + <code>DeltaAggregatedResources</code> 增量推送，全部资源走单一 type URL（<code>type.googleapis.com/agentgateway.dev.resource.Resource</code>）。认证用 Kubernetes ServiceAccount Token（<code>tokenreview.ValidateK8sJwt</code>，audience 固定为 <code>agentgateway</code>），TLS 自签 CA + 自动轮换。</li>
+<li><strong>Deployer</strong>（<code>controller/pkg/deployer/</code>）：watch 使用 <code>agentgateway</code> GatewayClass 的 Gateway，自动 provision 代理工作负载。默认 Deployment，可通过 <code>AgentgatewayParameters.spec.workload.kind</code> 切成 <strong>DaemonSet</strong>。</li>
+</ul>
+<h3 id="3-4-三种配置来源">3.4 三种配置来源</h3>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>用途</th>
+<th>是否动态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Static</td>
+<td>进程级全局参数（日志、端口）</td>
+<td>启动时一次</td>
+</tr>
+<tr>
+<td>Local</td>
+<td>YAML/JSON 文件，定义完整功能集</td>
+<td><strong>file watch 动态 reload</strong></td>
+</tr>
+<tr>
+<td>xDS</td>
+<td>控制平面下发</td>
+<td>流式增量</td>
+</tr>
+</tbody>
+</table>
+<p>Local 模式让 agentgateway 可以脱离控制平面独立跑——这对本地开发和边缘部署很实用，也是它能在非 K8s 环境用的原因。</p>
+<hr>
+<h2 id="四、LLM-Gateway：passthrough-优先，这是它能跟上-provider-的原因">四、LLM Gateway：passthrough 优先，这是它能跟上 provider 的原因</h2>
+<h3 id="4-1-Provider-覆盖">4.1 Provider 覆盖</h3>
+<p>权威枚举在 <code>crates/agentgateway/src/llm/mod.rs</code>：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">AIProvider</span> &#123;</span><br><span class="line">    <span class="title function_ invoke__">OpenAI</span>(openai::Provider),</span><br><span class="line">    <span class="title function_ invoke__">Gemini</span>(gemini::Provider),</span><br><span class="line">    <span class="title function_ invoke__">Vertex</span>(vertex::Provider),</span><br><span class="line">    <span class="title function_ invoke__">Anthropic</span>(anthropic::Provider),</span><br><span class="line">    <span class="title function_ invoke__">Bedrock</span>(BedrockProvider),</span><br><span class="line">    <span class="title function_ invoke__">Azure</span>(AzureProvider),</span><br><span class="line">    <span class="title function_ invoke__">Copilot</span>(copilot::Provider),</span><br><span class="line">    <span class="title function_ invoke__">Custom</span>(custom::Provider),</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>7 家内置 + <code>custom</code>。比常见说法多出来的两个：<strong>GitHub Copilot</strong> 和 <strong>custom</strong>。而 <code>custom</code> 还带 <strong>17 个命名预设</strong>（<code>crates/llm/src/custom.rs</code>）：Cohere、Ollama、Baseten、Cerebras、Deepinfra、Deepseek、Groq、Huggingface、Mistral、Openrouter、Togetherai、XAI、Fireworks、Meta、Perplexity、Typesafe、Nebius——每个预设内置 <code>base_url()</code> 和声明的 wire format。</p>
+<p><strong>接入自托管模型（vLLM 等）的实际路径就是 <code>custom</code></strong>，指向 OpenAI 兼容端点。代码里没有 vLLM/TGI/Triton 的专用后端支持。</p>
+<h3 id="4-2-端点：既收-OpenAI，也收各家原生">4.2 端点：既收 OpenAI，也收各家原生</h3>
+<p><code>crates/agentgateway/src/llm/model_router.rs</code> 的 <code>SERVING_ENDPOINTS</code> 里同时挂着：</p>
+<ul>
+<li>OpenAI 兼容：<code>/v1/chat/completions</code>、<code>/v1/responses</code>、<code>/v1/embeddings</code>、<code>/v1/models</code>、<code>/v1/images/*</code>、<code>/v1/audio/*</code></li>
+<li><strong>Anthropic 原生</strong>：<code>/v1/messages</code>、<code>/v1/messages/count_tokens</code></li>
+<li><strong>Gemini 原生</strong>：<code>/v1beta/models/&#123;model&#125;:generateContent</code> 等</li>
+<li><strong>Bedrock 原生</strong>：<code>/model/&#123;model&#125;/converse</code> 等</li>
+</ul>
+<p>内部用 <code>ChatFormat</code>（<code>OpenAICompletions / OpenAIResponses / AnthropicMessages / BedrockConverse / VertexGemini</code>）做跨格式翻译。所以「客户端用 Anthropic 格式进来、上游是 Bedrock」这种组合是能转的。</p>
+<h3 id="4-3-passthrough-设计：为什么它跟得上-provider-的-API-变化">4.3 passthrough 设计：为什么它跟得上 provider 的 API 变化</h3>
+<p>这是我认为最值得学的工程决策。看请求类型定义（<code>crates/llm/src/types/completions.rs</code>）：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">struct</span> <span class="title class_">Request</span> &#123;</span><br><span class="line">    <span class="keyword">pub</span> messages: ...,</span><br><span class="line">    <span class="keyword">pub</span> model: ...,</span><br><span class="line">    <span class="comment">// ... 显式列出的十几个字段</span></span><br><span class="line">    <span class="meta">#[serde(flatten, default)]</span></span><br><span class="line">    <span class="keyword">pub</span> rest: serde_json::Value,   <span class="comment">// ← 其余全部原样透传</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>设计原则写在 <code>crates/agentgateway/src/llm/README.md</code>：</p>
+<blockquote>
+<p>passthrough approach… Only fields we specifically operate on need to be included.</p>
+</blockquote>
+<p><strong>含义是：provider 加一个新参数，网关不需要改代码就能转发。</strong> 对比之下，一个把所有字段都建模成 typed struct 的网关，每次上游 API 变动都要发版。对于一个要罩住二十多个 provider 的项目，这个选择几乎是唯一可行的——但它需要克制：只有网关真正要读要改的字段才允许进 typed 部分。</p>
+<h3 id="4-4-CacheTokenConvention：一个小而典型的「网关做归一化」">4.4 CacheTokenConvention：一个小而典型的「网关做归一化」</h3>
+<p>这是最能体现网关价值的一个细节，值得单独讲。</p>
+<p>问题：<strong>不同 provider 对 <code>input_tokens</code> 的口径不一致。</strong> Anthropic 报告的 input tokens <strong>不含</strong>缓存命中的部分；OpenAI 含。如果直接拿来记账，跨 provider 的成本和限流就不可比。</p>
+<p>agentgateway 的解法（<code>crates/llm/src/lib.rs</code>）：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">CacheTokenConvention</span> &#123; InputIncludesCache, InputExcludesCache &#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">pub</span> <span class="keyword">fn</span> <span class="title function_">include_cache_tokens</span>(<span class="keyword">self</span>, input_tokens, cached_input_tokens, cache_creation_input_tokens) <span class="punctuation">-&gt;</span> <span class="type">u64</span> &#123;</span><br><span class="line">    <span class="keyword">match</span> <span class="keyword">self</span> &#123;</span><br><span class="line">        <span class="keyword">Self</span>::InputIncludesCache =&gt; input_tokens,</span><br><span class="line">        <span class="keyword">Self</span>::InputExcludesCache =&gt; input_tokens</span><br><span class="line">            .<span class="title function_ invoke__">saturating_add</span>(cached_input_tokens.<span class="title function_ invoke__">unwrap_or_default</span>())</span><br><span class="line">            .<span class="title function_ invoke__">saturating_add</span>(cache_creation_input_tokens.<span class="title function_ invoke__">unwrap_or_default</span>()),</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>cache_convention_for()</code>（<code>crates/agentgateway/src/llm/mod.rs</code>）把 Anthropic / Bedrock 判为 <code>InputExcludesCache</code>，OpenAI / Gemini 判为 <code>InputIncludesCache</code>。</p>
+<p>归一化后的值被<strong>三个消费点共用</strong>：CEL 的 <code>llm.inputTokens</code>、遥测的 <code>gen_ai.usage.input_tokens</code>、以及限流的 token 结算。同时保留了未归一化的 <code>llm.providerInputTokens</code> 供需要原始值的场景。</p>
+<p>测试里有直接断言：<code>llm_span_uses_cache_inclusive_input_tokens</code> 构造 input=50 / cached=40 / creation=10，断言 span 值为 <strong>100</strong>。</p>
+<p>两个补充：一是归一化是 <strong>provider 相关</strong>的，不是无条件相加；二是<strong>上游没回 usage 时会回退到网关侧 tokenizer 估算</strong>。</p>
+<p>这类「把 provider 差异在网关层抹平」的工作，恰恰是单点网关相对「每个应用自己接 SDK」的核心价值——但它不性感，很少被写进宣传材料。</p>
+<h3 id="4-5-成本控制：内置定价库-按-Key-的预算">4.5 成本控制：内置定价库 + 按 Key 的预算</h3>
+<p><strong>内置成本目录</strong>（<code>catalog/model-catalog.json</code>，<code>crates/agentgateway/src/llm/catalog/mod.rs</code> 用 <code>include_str!</code> 编进二进制）覆盖 <strong>22 个 provider、2116 条模型定价</strong>——bedrock 260 条、azure 95、huggingface 82、deepinfra 77、openai 65、vertex 61。有独立的 overrides 文件可以打补丁。</p>
+<p>每请求的真实美元成本由 token 用量投影出来，进 CEL 的 <code>llm.cost</code>、遥测 metric、以及日志库的 <code>cost</code> 字段。</p>
+<p><strong>预算机制</strong>（<code>crates/agentgateway/src/http/budget/mod.rs</code>）：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">BudgetLimitUnit</span> &#123; Usd, Tokens &#125;</span><br><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">BudgetExceededAction</span> &#123; Audit, Block &#125;</span><br></pre></td></tr></table></figure>
+<p>配置形如 <code>apiKey.keys[].budgets[].&#123;name, limit.unit, limit.amount, window.rolling, onBudgetExceeded&#125;</code>，在响应完成后按真实 token/成本 <code>settle()</code>。</p>
+<p><strong>这里要纠正一处宣传口径</strong>：预算<strong>绑定在 API key 维度</strong>，代码里没有独立于 API key 的「团队级」预算对象。API key 可以带任意 <code>metadata</code>（JSON），你把 team/app/user 塞进去再用 CEL 做限流 key 是可以的，但那是你自己组织的约定，不是网关强制的三级模型。</p>
+<hr>
+<h2 id="五、MCP-Gateway：把会话状态塞进令牌里">五、MCP Gateway：把会话状态塞进令牌里</h2>
+<h3 id="5-1-传输：四种上游-target">5.1 传输：四种上游 target</h3>
+<p>代码里上游 target 由 <code>McpTargetSpec</code> 枚举定义，共四种（<code>crates/agentgateway/src/types/agent.rs</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>target 类型</th>
+<th>对应实现文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Mcp</code>（Streamable HTTP）</td>
+<td><code>mcp/upstream/streamablehttp.rs</code></td>
+</tr>
+<tr>
+<td><code>Sse</code></td>
+<td><code>mcp/upstream/sse.rs</code></td>
+</tr>
+<tr>
+<td><code>Stdio</code></td>
+<td><code>mcp/upstream/stdio.rs</code></td>
+</tr>
+<tr>
+<td><code>OpenAPI</code></td>
+<td><code>mcp/upstream/openapi/mod.rs</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>注意</strong>：根 README 写的「stdio/HTTP/SSE/Streamable HTTP transports」这四个词，和代码里的四种 target <strong>不能一一对应</strong>——「HTTP」和「Streamable HTTP」在实现里是同一个东西，真正的第四种是 <strong>OpenAPI</strong>。</p>
+<h3 id="5-2-工具联邦与命名">5.2 工具联邦与命名</h3>
+<p><code>tools/list</code> 会扇出到所有后端（<code>handler.rs</code> 的 <code>send_list</code> → <code>send_fanout_to</code> → <code>fanout_open_streams</code>，遍历全部 target 并发调用）。</p>
+<p>命名重写规则是 <strong><code>$&#123;target&#125;_$&#123;tool&#125;</code>，分隔符是下划线</strong>：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">const</span> DELIMITER: &amp;<span class="type">str</span> = <span class="string">&quot;_&quot;</span>;</span><br><span class="line"><span class="keyword">fn</span> <span class="title function_">resource_name</span>(prefix_names: <span class="type">bool</span>, target: &amp;<span class="type">str</span>, name: &amp;<span class="type">str</span>) <span class="punctuation">-&gt;</span> <span class="type">String</span> &#123;</span><br><span class="line">    <span class="keyword">if</span> prefix_names &#123; <span class="built_in">format!</span>(<span class="string">&quot;&#123;target&#125;&#123;DELIMITER&#125;&#123;name&#125;&quot;</span>) &#125; <span class="keyword">else</span> &#123; name.<span class="title function_ invoke__">to_string</span>() &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>但资源 URI 和 task id 用的是加号</strong>，不是下划线（<code>handler.rs</code> 的 <code>resource_uri</code> / <code>task_id</code>）：<code>service+http://...</code>、<code>&#123;target&#125;+&#123;task_id&#125;</code>。这个区分很容易被笼统说成一种，实际是两种。</p>
+<p>前缀行为由 <code>McpPrefixMode</code> 控制：<code>Conditional</code>（默认，多 target 时才加）、<code>Always</code>、<code>Never</code>。</p>
+<h3 id="5-3-会话：一个把问题溶解掉的设计">5.3 会话：一个把问题溶解掉的设计</h3>
+<p>这是全文我认为最值得讲的一点。</p>
+<p>常见的批评是「MCP 有状态会话在多实例网关下有粘性问题」。但 agentgateway 的解法不是 consistent hash 路由，而是<strong>让会话状态随会话 ID 一起走</strong>。</p>
+<p><code>SessionManager</code>（<code>mcp/session.rs</code>）确实是进程内存储：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">struct</span> <span class="title class_">SessionManager</span> &#123;</span><br><span class="line">    encoder: http::sessionpersistence::Encoder,</span><br><span class="line">    sessions: Arc&lt;RwLock&lt;HashMap&lt;<span class="type">String</span>, SessionEntry&gt;&gt;&gt;,</span><br><span class="line">    idle_reaper: OnceLock&lt;tokio::task::AbortHandle&gt;,</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>内存 HashMap、进程内单例、30 分钟默认空闲 TTL 加后台 reaper。全仓库搜 <code>redis</code> 在 MCP 路径下零命中——<strong>没有外部存储后端配置</strong>。</p>
+<p>但关键在于：<strong>会话 ID 本身是一个自包含的加密令牌</strong>，携带上游会话状态（<code>http/sessionpersistence.rs</code> 的 <code>MCPSessionState</code>，AES-256-GCM 加密后 base64）。<code>get_or_resume_session</code> 会先 <code>decode(id)</code>，然后<strong>重建连接</strong>。</p>
+<p>结果就是：<strong>任意副本拿到这个 ID 都能恢复会话</strong>。粘性问题不是被 consistent hash 缓解的，是被这个设计从根上绕开了——网关不需要记住你，令牌记得。</p>
+<p>这个设计的代价是令牌体积和加解密开销，收益是网关可以完全无状态地水平扩展。对多副本部署来说这是更干净的答案。</p>
+<h3 id="5-4-无状态模式已经是配置项">5.4 无状态模式已经是配置项</h3>
+<p>同样需要纠正一处：「团队后续计划把 MCP 改为无状态」——<strong>这已经是现成配置了</strong>（<code>crates/agentgateway/src/types/local.rs</code>）：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">McpStatefulMode</span> &#123; Stateless, Stateful &#125;  <span class="comment">// Stateful 为默认</span></span><br></pre></td></tr></table></figure>
+<p>配置字段 <code>statefulMode</code>，proto 里对应 <code>MCPBackend.StatefulMode &#123; STATEFUL, STATELESS &#125;</code>。代码路径 <code>serve_stateless</code> / <code>create_stateless_session</code>（注释明写 “not registered in session manager”）。</p>
+<p>另外，MCP 现代协议（2026-07-28+）本身就没有会话概念，代码里有 <code>uses_sessions</code> 判断和 <code>REMOVED_METHODS_2026_07_28</code> 常量在跟进这个变化。</p>
+<h3 id="5-5-OAuth：比「支持-OAuth」深得多">5.5 OAuth：比「支持 OAuth」深得多</h3>
+<p><code>mcp/auth.rs</code> 有 1546 行，实现的不是一个 OAuth 客户端，而是一整套授权服务器代理：</p>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>规范</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Protected Resource Metadata</td>
+<td>RFC 9728</td>
+</tr>
+<tr>
+<td>Authorization Server Metadata</td>
+<td>RFC 8414</td>
+</tr>
+<tr>
+<td>动态客户端注册（DCR）</td>
+<td>RFC 7591</td>
+</tr>
+<tr>
+<td>PKCE</td>
+<td><code>code_challenge_methods_supported: [&quot;S256&quot;]</code></td>
+</tr>
+<tr>
+<td>Resource indicator</td>
+<td>RFC 8707</td>
+</tr>
+</tbody>
+</table>
+<p>支持 <code>authorization_code</code> 和 <code>refresh_token</code> 两种授权类型，<strong>明确不支持 <code>client_credentials</code></strong>（代码注释直接写明）。</p>
+<p>内置六个 IDP 的适配：Auth0、Keycloak、Okta、Descope、Authentik、Entra——每个带自己的 audience 变通和 JWKS URL 推导规则。没有 DCR 能力的 IDP（Entra、Authentik）会短路返回一个 mock 注册响应。</p>
+<p>令牌校验模式三档：<code>Strict</code>（默认）/ <code>Optional</code> / <code>Permissive</code>。</p>
+<h3 id="5-6-OpenAPI-→-MCP：三条常见「限制」有两条不成立">5.6 OpenAPI → MCP：三条常见「限制」有两条不成立</h3>
+<p>这个功能是把 OpenAPI spec 的每个 operation 转成 MCP tool。我核对了流传较广的三条限制：</p>
+<table>
+<thead>
+<tr>
+<th>说法</th>
+<th>核实结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>请求体只支持 <code>application/json</code></td>
+<td><strong>部分属实</strong>——还支持 <code>application/octet-stream</code>（base64 编码）</td>
+</tr>
+<tr>
+<td>不支持 HTTPS 上游</td>
+<td><strong>不属实</strong>——<code>http</code>/<code>https</code> 都支持，example 里就是 <code>host: https://example.com/api</code></td>
+</tr>
+<tr>
+<td>不支持结构化输出</td>
+<td><strong>不属实</strong>——<code>CallToolResult::structured(...)</code> 已实现，测试里有 <code>structured_content</code> 断言</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="六、A2A-Gateway：一个空结构体撑起的协议感知">六、A2A Gateway：一个空结构体撑起的协议感知</h2>
+<p>A2A 的启用方式很简洁——给路由打一个空标记：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">policies:</span></span><br><span class="line">  <span class="attr">a2a:</span> &#123;&#125;</span><br></pre></td></tr></table></figure>
+<p>对应 <code>crates/agentgateway/src/types/agent.rs</code> 里一个<strong>空结构体</strong>：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">struct</span> <span class="title class_">A2aPolicy</span> &#123;&#125;</span><br></pre></td></tr></table></figure>
+<p>空不代表没做事。启用后网关会：</p>
+<p><strong>重写 Agent Card</strong>（<code>crates/a2a/mod.rs</code> 的 <code>rewrite_agent_card</code>）。识别 <code>GET /.well-known/agent.json</code>（旧版）与 <code>/.well-known/agent-card.json</code>（v0.3.0+），把响应体里的 URL 改写成指向网关自身——v1.0 改 <code>supportedInterfaces[].url</code>，v0.3 改顶层 <code>url</code>。这是让 Agent 能力发现经由网关的关键一步。</p>
+<p><strong>解析 JSON-RPC 用于可观测</strong>。请求侧取 <code>method</code>；响应侧解析出 outcome（success/error）、<code>error.code</code>、<code>result.kind</code>、<code>task_state</code>、<code>context_id</code>，并且同时兼容 A2A v0.3 的扁平结构和 v1.0 的嵌套结构。</p>
+<p>控制平面也能自动识别：Service 上打 <code>agentgateway.dev/a2a</code> 的 AppProtocol 就会生成对应策略。</p>
+<hr>
+<h2 id="七、被低估的一节：Agent-的身份与授权">七、被低估的一节：Agent 的身份与授权</h2>
+<p>如果只看「LLM/MCP/A2A 三合一」的宣传，会漏掉这个项目投入最重的一块。<code>examples/</code> 里授权与身份相关的例子排了一整列：</p>
+<table>
+<thead>
+<tr>
+<th>例子</th>
+<th>做的事</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>traffic-spiffe</code></td>
+<td>从本地 SPIFFE Workload API 取网关的 mTLS 身份</td>
+</tr>
+<tr>
+<td><code>traffic-token-exchange</code></td>
+<td>RFC 8693 令牌交换 / RFC 7523 JWT bearer 授权</td>
+</tr>
+<tr>
+<td><code>traffic-cross-app-access</code></td>
+<td>OAuth ID-JAG，把用户身份换成后端作用域的访问令牌</td>
+</tr>
+<tr>
+<td><code>mcp-authzen</code></td>
+<td>按 OpenID <strong>AuthZEN</strong> 标准授权 MCP 工具调用</td>
+</tr>
+<tr>
+<td><code>traffic-tailscale-auth</code></td>
+<td>用 Tailscale 身份头做认证</td>
+</tr>
+<tr>
+<td><code>traffic-jwt-sign</code></td>
+<td>每次后端请求签一个短时效 JWT（替代静态凭据）</td>
+</tr>
+<tr>
+<td><code>microsoft-intune</code></td>
+<td>校验 Intune 纳管的 Codex / Claude Desktop 配置，上报合规状态</td>
+</tr>
+</tbody>
+</table>
+<p>再加上 CEL 策略引擎——而 CEL 这块有个细节：<code>crates/cel-fork/</code> 是 <strong>cel-rust 的 vendored fork</strong>（<code>crates/cel-fork/README.md</code> 明说 “a vendored fork of cel-rust”），<code>crates/celx/</code> 在其上追加扩展函数（<code>general</code> / <code>strings</code> / <code>math</code> / <code>cidr</code> / <code>optimize</code> / <code>flatten</code>，分别对齐 cel-go 的 ext 库和 Kubernetes 的 CIDR 库）。<strong>CEL 不是拿来即用，是 fork 了语言本体再扩。</strong></p>
+<p>我认为这才是 agentgateway 区别于 LiteLLM 类方案的分水岭。LLM 网关解决的是「一个 API 罩住 N 个 provider」；而 Agent 场景真正难的是**「这个 Agent 以什么身份、代表谁、能调哪些工具」**——这是授权问题不是路由问题。项目在这上面投入的深度（SPIFFE、令牌交换、ID-JAG、AuthZEN）说明它的定位确实偏基础设施而非 SDK 封装。</p>
+<hr>
+<h2 id="八、性能：数字是厂商自测，方向性可信">八、性能：数字是厂商自测，方向性可信</h2>
+<p><a target="_blank" rel="noopener" href="http://Solo.io">Solo.io</a> 官方做过一次代理开销基准（mock 后端剥离模型推理时间，32 并发、1KB 载荷）：</p>
+<table>
+<thead>
+<tr>
+<th>网关</th>
+<th>吞吐</th>
+<th>P50</th>
+<th>P99</th>
+<th>峰值内存</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>agentgateway</td>
+<td>36,933 QPS</td>
+<td>0.831 ms</td>
+<td>1.970 ms</td>
+<td>29 MB</td>
+</tr>
+<tr>
+<td>LiteLLM</td>
+<td>3,198 QPS</td>
+<td>7.076 ms</td>
+<td>32.192 ms</td>
+<td>11.8 GB</td>
+</tr>
+</tbody>
+</table>
+<p>约 11.5 倍吞吐、约 10 倍延迟、约 500 倍内存。</p>
+<p><strong>必须标注：这组数字不在仓库里</strong>（我 grep 过全仓的 <code>LiteLLM</code> / <code>QPS</code>，只有一处无关注释），是 <a target="_blank" rel="noopener" href="http://Solo.io">Solo.io</a> 官方博客的厂商自测。我在仓库里也没有找到对应的基准脚本可供复现。</p>
+<p>即便打折扣，有一点是独立评测也认同的：<strong>Python 网关在高并发下的资源开销会失控</strong>。500 倍内存差距里，运行时本身（解释器 + GC + 框架栈）占了大头，这部分差距是结构性的，不是调优能抹平的。</p>
+<hr>
+<h2 id="九、横向对比与选型">九、横向对比与选型</h2>
+<p>2026 年的 AI 网关大致两条路线：<strong>LLM-request-first</strong>（从「一个 API 罩住 100+ provider」起步）和 <strong>traffic-infrastructure-first</strong>（从 L7 代理向 AI 流量扩展）。</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>agentgateway</th>
+<th>LiteLLM</th>
+<th>Kong AI Gateway</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>核心抽象</td>
+<td>统一代理 HTTP/gRPC/LLM/MCP/A2A</td>
+<td>LLM 补全请求</td>
+<td>API 请求 + AI 插件</td>
+</tr>
+<tr>
+<td>数据平面</td>
+<td>Rust，自研（ztunnel 血统）</td>
+<td>Python</td>
+<td>Nginx + Lua</td>
+</tr>
+<tr>
+<td>MCP 成熟度</td>
+<td>原生，会话/联邦/授权齐全</td>
+<td>存在但非设计中心</td>
+<td>插件式（Enterprise）</td>
+</tr>
+<tr>
+<td>身份与授权深度</td>
+<td>高（SPIFFE / 令牌交换 / ID-JAG / AuthZEN）</td>
+<td>中</td>
+<td>中高</td>
+</tr>
+<tr>
+<td>许可证</td>
+<td>Apache-2.0</td>
+<td>MIT</td>
+<td>核心开源，高级 AI 插件 Enterprise</td>
+</tr>
+</tbody>
+</table>
+<p>选型上我的判断：</p>
+<ul>
+<li><strong>场景是「N 个 provider 归一化 + 预算 + fallback」，MCP/A2A 是次要流量</strong> → LiteLLM 仍是最快路径，生态和教程最厚。</li>
+<li><strong>已经在 K8s/Envoy/Istio 世界，MCP 工具与 Agent 间流量是架构核心，且对 Agent 身份授权有真实要求</strong> → agentgateway 是当前最贴合的工程选择。要接受它更年轻、文档有滞后、自研 xDS 模型有学习曲线。</li>
+<li><strong>想要产品化仪表盘和开箱 Guardrails</strong> → Kong AI Gateway 或 Portkey。</li>
+</ul>
+<hr>
+<h2 id="十、宣传与实现的落差">十、宣传与实现的落差</h2>
+<p>这一节单独列，因为对早期项目来说，官方口径与实际行为的差距是真实的选型风险。</p>
+<table>
+<thead>
+<tr>
+<th>宣传/常见说法</th>
+<th>代码实际情况</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>语义缓存</strong></td>
+<td><strong>本项目没有。</strong> <code>crates/agentgateway/src/llm/</code> 下 grep <code>semantic</code> 零命中。<code>examples/llm-semantic-routing/</code> 是把语义路由和响应缓存<strong>外包给外部 vLLM Semantic Router</strong>，经 ext_proc 接入，缓存键和相似度匹配都在 vSR 侧。本体只有 prompt caching（缓存点标记）和 callout 的精确匹配缓存</td>
+</tr>
+<tr>
+<td><strong>虚拟 Key（virtual key）</strong></td>
+<td><strong>没有这个功能。</strong> 全仓唯一命中是迁移工具 <code>controller/pkg/cli/migrate/virtualkeys_to_configmap.go</code>，把旧的 Secret 式 API key 迁移成 ConfigMap。现行机制是 API Key 策略 + 预算</td>
+</tr>
+<tr>
+<td><strong>推理路由基于 GPU 利用率 / KV cache / LoRA / 队列深度</strong></td>
+<td><strong>agentgateway 自己不读这些指标。</strong> 它通过 gRPC ext_proc 调用外部 <strong>Endpoint Picker (EPP)</strong>，EPP 返回一个 <code>ip:port</code>，网关直连（<code>http/ext_proc.rs</code> 的 <code>InferenceRequestResult</code> 只含 <code>destination</code>）。GPU/KV/LoRA/队列深度是 <strong>EPP 侧</strong>（Kubernetes Gateway API Inference Extension）的能力</td>
+</tr>
+<tr>
+<td><strong>对接 vLLM / TGI / Triton</strong></td>
+<td><strong>没有专用后端支持</strong>（<code>tgi</code>/<code>triton</code> 全仓零命中）。接 vLLM 的实际路径是 <code>custom</code> provider 指向 OpenAI 兼容端点</td>
+</tr>
+<tr>
+<td><strong>Rust 因为无 GC / 内存安全 / 零成本抽象</strong></td>
+<td>仓库内<strong>无任何出处</strong>，是外部宣传语</td>
+</tr>
+<tr>
+<td><strong>krt collections 是控制平面的心脏</strong></td>
+<td>属实，但 <strong>krt 是 Istio 的第三方库</strong>（<code>istio.io/istio/pkg/kube/krt</code>），不是自研</td>
+</tr>
+<tr>
+<td><strong>xDS 资源类型是 Binds/Listeners/Routes/Backends/Policies</strong></td>
+<td>proto 里的正式类型名是<strong>单数</strong> <code>Bind/Listener/Route/Backend/Policy</code>，且共<strong>十个</strong>（另有 TCPRoute/RouteGroup/ModelRoute/Workload/Service）。复数形式是 Go 侧 krt 字段名</td>
+</tr>
+<tr>
+<td><strong>收到 xDS 更新后原子化应用</strong></td>
+<td>不是快照替换。<code>Arc&lt;RwLock&lt;Store&gt;&gt;</code> 写锁下<strong>逐条增量应用</strong></td>
+</tr>
+<tr>
+<td><strong>MCP 默认将改为无状态（未来计划）</strong></td>
+<td><strong>已是现成配置</strong>：<code>statefulMode: Stateless</code></td>
+</tr>
+<tr>
+<td><strong>JWKS 公钥只在配置解析时拉取一次</strong></td>
+<td><strong>不属实</strong>。<code>resource_manager.rs</code> 有 <code>JWKS_TTL = 15min</code> 周期刷新</td>
+</tr>
+<tr>
+<td><strong>支持 LangChain / CrewAI / Google ADK</strong></td>
+<td>依据薄弱。CrewAI/ADK 只出现在架构图 <code>img/architecture.svg</code> 作为客户端示例；LangChain 仅在两处测试注释里；<strong>没有正式支持声明</strong></td>
+</tr>
+<tr>
+<td>指标 <code>list_calls_total</code> 存在于文档</td>
+<td>主指标文档 <code>schema/metrics.md</code> 是准的；错的是 <code>examples/mcp-telemetry/README.md</code> 的示例输出——<code>tool_calls_total</code> 和 <code>list_calls_total</code> 在 <code>*.rs</code> 里零命中，代码实际注册的是 <code>agentgateway_mcp_requests_total</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>这组落差本身是有信息量的</strong>，不是简单的「文档写得差」：</p>
+<ul>
+<li>语义缓存和推理路由这两条，反映的是<strong>项目边界</strong>——它选择委托而不是自建。这其实是好设计（见下文），但宣传语把它们算成了自己的功能。</li>
+<li><code>virtual key</code> 和「MCP 改无状态」这两条，是<strong>版本演进造成的口径滞后</strong>——功能变了或早就有，对外材料没跟上。</li>
+<li>JWKS 和指标名这两条，说明<strong>示例和边角文档的维护滞后于主干代码</strong>。25 天一版的迭代速度下这是必然代价。</li>
+</ul>
+<p>一个务实的读法：<strong>主干的架构设计（xDS 类型、IR、MCP 会话、授权栈）是可信的，边角的宣传描述需要回代码核对。</strong></p>
+<hr>
+<h2 id="十一、结语：它真正的取舍">十一、结语：它真正的取舍</h2>
+<p>回到开头那个判断。agentgateway 最值得学的不是「一个进程做四件事」，而是两件更朴素的事。</p>
+<p><strong>第一，它清楚自己不该做什么。</strong></p>
+<p>推理端点选择委托给 EPP，语义缓存委托给 vSR，两者都通过标准协议（gRPC ext_proc）接入。网关只消费结果——EPP 返回 <code>ip:port</code> 它就直连，不试图自己算 GPU 利用率。</p>
+<p>这不是能力不足，是<strong>架构纪律</strong>。一个网关如果既要做路由、又要做向量检索、还要做调度，最后会变成谁都不好用的缝合体。agentgateway 把「AI 流量治理」的边界划在<strong>策略、观测、身份</strong>三件事上，其余交给专业组件。这个边界感，比它多支持几个协议更有参考价值。</p>
+<p><strong>第二，它把 Agent 的会话与身份当成一等公民。</strong></p>
+<p>会话状态塞进自包含加密令牌——粘性问题被溶解而不是缓解；身份栈深到 SPIFFE 工作负载身份、RFC 8693 令牌交换、ID-JAG 跨应用访问、AuthZEN 授权。这些不是「顺便支持」，是专门投入。</p>
+<p>原因是清楚的：<strong>Agent 场景的核心难题从来不是路由，是「这个 Agent 以什么身份、代表谁、能调哪些工具」。</strong> 一个只解决路由的网关，在 Agent 架构里会很快遇到天花板。</p>
+<p>对正在评估 AI 网关的团队，我的建议是：如果你的 MCP 工具调用和 Agent 间协作已经是核心流量形态，值得在非关键链路上跑一个 PoC，重点验证三件事——<strong>多副本下的 MCP 会话恢复</strong>（用自包含令牌方案，不要指望 consistent hash）、<strong>Guardrails 的实际覆盖度</strong>（六种后端里挑你需要的验一遍）、<strong>与现有 K8s Gateway API 的集成体验</strong>。如果场景仍以 LLM 补全为主，LiteLLM 的成熟生态仍是更稳的起点。</p>
+<p>两条路线最终可能在「Agent 网关」这一层汇合。而 agentgateway 目前在这个汇合点上走得最远——但它走的是一条<strong>主动划边界</strong>的路线，这一点在选型时比功能清单更值得看。</p>
+<hr>
+<p><strong>参考链接</strong></p>
+<ul>
+<li>项目官网与文档：<a target="_blank" rel="noopener" href="https://agentgateway.dev">https://agentgateway.dev</a></li>
+<li>GitHub 仓库：<a target="_blank" rel="noopener" href="https://github.com/agentgateway/agentgateway">https://github.com/agentgateway/agentgateway</a></li>
+<li>Linux Foundation 加入公告：<a target="_blank" rel="noopener" href="https://www.linuxfoundation.org/press/linux-foundation-welcomes-agentgateway-project-to-accelerate-ai-agent-adoption-while-maintaining-security-observability-and-governance">https://www.linuxfoundation.org/press/linux-foundation-welcomes-agentgateway-project-to-accelerate-ai-agent-adoption-while-maintaining-security-observability-and-governance</a></li>
+<li>独立评测（<a target="_blank" rel="noopener" href="http://dev.to/spacewander%EF%BC%89%EF%BC%9A">dev.to/spacewander）：</a><a target="_blank" rel="noopener" href="https://dev.to/spacewander/agentgateway-review-a-feature-rich-new-ai-gateway-53lm">https://dev.to/spacewander/agentgateway-review-a-feature-rich-new-ai-gateway-53lm</a></li>
+<li>网关选型对比（<a target="_blank" rel="noopener" href="http://liquidreply.net">liquidreply.net</a>）：<a target="_blank" rel="noopener" href="https://liquidreply.net/blog/the-ai-gateway-landscape-agentgateway-litellm">https://liquidreply.net/blog/the-ai-gateway-landscape-agentgateway-litellm</a></li>
+</ul>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/08/13/MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/">MCP 沙箱路由框架分析</a>——Agent 工具调用的另一层：沙箱侧的控制面/数据面与句柄机制</li>
+<li><a href="/2026/08/27/%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/">从冯诺依曼到 Agent 沙箱：虚拟化隔离技术栈拆解</a>——隔离谱系（容器 &lt; MicroVM &lt; VM）与选型依据</li>
+<li><a href="/2025/07/21/MCP%E5%AE%89%E5%85%A8%E4%B8%8EPromptInjection%E6%94%BB%E9%98%B2%E5%AE%9E%E6%88%98/">MCP 安全与 Prompt Injection 攻防实战</a>——工具调用的威胁模型，与本文的授权栈互为补充</li>
+<li><a href="/2026/10/23/Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</a>——调度层视角的 Agent 执行底座</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文所有代码级结论基于本地仓库 <code>v1.7.0-71-g134897e1</code>（HEAD <code>134897e1</code>），核对时间为 2026-11-04。项目迭代很快，具体行为请以你手上的版本为准。性能数据为厂商自测，已在正文标注。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/">https://roger-lv.github.io/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Rust/">Rust</a><a class="post-meta__tags" href="/tags/MCP/">MCP</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/AI%E7%BD%91%E5%85%B3/">AI网关</a><a class="post-meta__tags" href="/tags/A2A/">A2A</a><a class="post-meta__tags" href="/tags/Agent%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD/">Agent基础设施</a><a class="post-meta__tags" href="/tags/LLM%E7%BD%91%E5%85%B3/">LLM网关</a><a class="post-meta__tags" href="/tags/xDS/">xDS</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/04/2026-11-04-%E4%B8%BA%E6%9C%AC%E7%A7%91%E7%94%9F%E8%AE%BE%E8%AE%A1%E4%B8%80%E9%97%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83Infra%E8%AF%BE/" title="为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：这门课不教学生训大模型，教学生在大模型训练系统里做工程判断——用一个 4—8 卡的小集群，完整走一遍万卡规模下的工程决策链，并且每一步都要留下可复核的证据。  最近受老师邀请，给北大本科生排一门面向大模型 Infra 的课，方向偏训练。从零设计到成稿改了几轮，中间被问得最多的是「32 学时塞得下吗」「算力从哪来」这两个问题。这篇文章把整套设计摊开讲，包括 16 周结构、大作业形态、以及几个我认为值得复用的具体做法，希望能给准备开同类课的老师省点事。  一、定位：本科阶段教不了「训大模型」，但教得了「做工程判断」 第一个要回答的问题是：本科生不可能真的训一个千亿模型，那这门课到底教什么？ 我的答案是——教决策链，不教规模。一次大规模训练里真正难的从来不是「按下启动键」，而是一连串判断：  这个模型在这几张卡上，显存够不够？不够的话该切什么？ 切完之后通信代价是多少？瓶颈在计算、通信还是显存？ 换个框架、换个并行度，结论会不会变？ 训练挂了，怎么知道是数据、通信、存储还是代码的问题？  这些判断的形状在小集群和万卡集群上是同一套，只是量级不同。所以课程把「规模」当作可控...</div></div></div></a><a class="pagination-related" href="/2026/11/02/2026-11-02-%E7%BA%BF%E6%80%A7%E6%B3%A8%E6%84%8F%E5%8A%9B-%E7%A8%80%E7%96%8F%E6%B3%A8%E6%84%8F%E5%8A%9B%E4%B8%8E%E6%B7%B7%E5%90%88%E6%B3%A8%E6%84%8F%E5%8A%9B%E7%9A%84%E6%8A%80%E6%9C%AF%E6%BC%94%E8%BF%9B/" title="从 O(n²) 到 O(n)：线性注意力、稀疏注意力与混合注意力的技术演进"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从 O(n²) 到 O(n)：线性注意力、稀疏注意力与混合注意力的技术演进</div></div><div class="info-2"><div class="info-item-1">从 O(n²) 到 O(n)：线性注意力、稀疏注意力与混合注意力的技术演进  一句话结论：三种机制都是对标准 Transformer 中 O(n2)O(n^2)O(n2) 复杂度的 Softmax 全注意力瓶颈的改进方案——线性注意力通过核函数分解把复杂度降到 O(n)O(n)O(n)；稀疏注意力通过结构化掩码只计算部分 token 对的交互，复杂度降至 O(n)O(n)O(n) 或 O(nlog⁡n)O(n\log n)O(nlogn)；混合注意力则将不同注意力范式（或 Mamba/SSM）分层组合，在效率与精度之间取得平衡。  自 2017 年 Transformer 问世以来，注意力机制的核心公式几乎没有变过：每个 token 要与序列中所有其他 token 计算相似度，再加权聚合 value。这一设计赋予了模型强大的全局建模能力，但代价是计算量与序列长度的平方成正比。当上下文从 2K 扩展到 128K、再到 1M，O(n2)O(n^2)O(n2) 成为了绕不开的墙。过去五年，学术界与工业界从三个不同方向突破这堵墙，本文将逐一拆解其数学原理、典型实现与工程取舍。  一、问题...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">一个 MCP 沙箱路由调度框架的架构分析</div></div><div class="info-2"><div class="info-item-1">一个 MCP 沙箱路由调度框架的架构分析 本文分析一个用 Go 实现、面向 MCP(Model Context Protocol)的沙箱路由与调度框架。它把&quot;给 agent 起一个隔离环境跑工具&quot;这件事标准化、规模化、多引擎化。 一、它是什么 一句话:一个面向 MCP 的沙箱路由与调度框架,用 Go 写成,直接基于官方 modelcontextprotocol/go-sdk,把沙箱的创建、路由、调度、生命周期、计量都做成了一套基础设施。 它跟&quot;控制面 Python + 数据面 Go、协议优先的通用沙箱平台&quot;是两种不同路线:本框架全 Go、MCP 原生(直接用官方 SDK),更强调调度(快照+Epoch 的确定性调度)和路由(二层网络高可用网格)。它的&quot;沙箱&quot;抽象本质是一个 http.RoundTripper——工具调用就是 HTTP,没有单独的执行协议。 核心能力:  沙箱路由:按沙箱类型分发、MCP 会话生命周期管理、按下游负载动态调整、二层网络高可用。 沙箱引擎:Echo / FileServer / Git / P...</div></div></div></a><a class="pagination-related" href="/2024/07/08/2024-07-08-Rust%E5%AD%A6%E4%B9%A0/" title="Rust基础学习"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/rust.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-08</div><div class="info-item-2">Rust基础学习</div></div><div class="info-2"><div class="info-item-1">Rust基础学习 Learn Rust - Rust Programming Language (rust-lang.org) 【一起学Rust】Rust介绍与开发环境搭建_rust开发-CSDN博客 包管理工具：cargo 命令行：  cargo new [name]：创建一个新的Rust项目 cargo build：构建项目 cargo run：运行项目 cargo test：运行测试 cargo doc：生成文档 cargo update：更新依赖项 cargo clean：清除构建输出 cargo publish：将软件包发布到crates.io上 cargo install [package]: 安装指定软件包 cargo uninstall [package]: 卸载指定软件包  Rust 全面指南：从基础到高级，一网打尽 Rust 的编程知识_rust语言-CSDN博客 语法 变量声明 1234567//定义变量可以使用let关键字，例如：let x = 10; //会被自动推断为i32类型let y: i32 = 20;//上述默认为不可变变量,若要可变变量需要加...</div></div></div></a><a class="pagination-related" href="/2024/07/17/2024-07-17-Rust%E6%9E%84%E5%BB%BA%E8%87%AA%E5%B7%B1%E7%9A%84%E7%AC%AC%E4%B8%80%E4%B8%AA%E9%A1%B9%E7%9B%AE/" title="Rust构建自己的第一个项目"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/rust.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-17</div><div class="info-item-2">Rust构建自己的第一个项目</div></div><div class="info-2"><div class="info-item-1">Rust构建自己的第一个项目 几个核心命令： cargo new xxx：用于新建项目 cargo build：用于在Cargo.toml中添加dependencies进行依赖的下载和编译 cargo run：用于运行 新建项目 在目录下输入下列指令，例如要构建一个叫做hello-rust的项目 1cargo new hello-rust  Cargo 已经帮我们创建好默认项目了，还创建了个git的本地仓库，还有一些配置文件， src/main.rs 为编写应用代码的地方。 运行项目 使用cargo run命令运行 1cargo run  可以看到会经历一个编译的过程后，打印出Hello,world！信息 编写Hello-Rust Cargo.toml文件是一个管理项目配置的文件，包括项目依赖等相关配置 添加配置在dependencies中：  在命令行中运行： 1cargo build  可以看到除了我们自定义添加的ferris-say版本的依赖，还会自动添加好依赖的依赖 接下来就在 src/main.rs 中写入以下内容: 123456789101112use ferris_...</div></div></div></a><a class="pagination-related" href="/2024/07/18/2024-07-18-Rust%E4%B8%AD%E7%9A%84%E9%94%99%E8%AF%AF%E5%A4%84%E7%90%86/" title="Rust中的错误处理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/rust.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-18</div><div class="info-item-2">Rust中的错误处理</div></div><div class="info-2"><div class="info-item-1">Rust中的错误处理 如果你使用过其他编程语言，那么就会知道Rust中的错误处理是完全不同的方法。像Java,JS,Python等你常常会使用throw处理异常，以及return成功的值。但在Rust中，你会返回给调用者一个Result Result&lt;T, E&gt;是一个拥有两个值的枚举类型，其中Ok(T)用来返回成功值，Err(E)用来返回错误值 1234enum Result&lt;T, E&gt; &#123;    Ok(T),    Err(E),&#125; 返回错误而不是抛出错误,这是一种编程习惯的转变。所以如果你是Rust的初学者，可能刚开始学习起来觉得很麻烦，因为这需要你用去思考在不同的场景，应该使用什么样的方法去处理错误。 在这篇博客中会有错误处理的一些范式，以及它们在Rust中是如何体现的：  忽略错误 直接结束程序 使用默认值处理 传递错误 传递多个错误 模式匹配Boxed错误 使用库 or 应用 创建自定义错误 传递自定义错误 模式匹配自定义错误  忽略错误(unwrap()) （如果出现错误会触发panic，让该线程退出） 最简单的处理方法就是...</div></div></div></a><a class="pagination-related" href="/2024/07/09/2024-07-09-Rust%E5%BC%82%E6%AD%A5%E7%BC%96%E7%A8%8B/" title="Rust异步编程"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/rust.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-09</div><div class="info-item-2">Rust异步编程</div></div><div class="info-2"><div class="info-item-1">Rust异步编程 123456789101112let mut handles = Vec::new();for index in 1..=100 &#123;    let handle = tokio::spawn(        async_http_client.get(format!(&quot;www.example.com/items/&#123;&#125;&quot;, index))    );    handles.push(handle);&#125;for handle in handles &#123;    let result = handle.await;&#125; 比较使用异步编写的示例与同步编写的相同示例 - 对于大量并发 Web 请求，异步版本比同步请求快约 60% </div></div></div></a><a class="pagination-related" href="/2026/07/21/2025-07-21-MCP%E5%AE%89%E5%85%A8%E4%B8%8EPromptInjection%E6%94%BB%E9%98%B2%E5%AE%9E%E6%88%98/" title="MCP 安全与 Prompt Injection 攻防实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-21</div><div class="info-item-2">MCP 安全与 Prompt Injection 攻防实战</div></div><div class="info-2"><div class="info-item-1">MCP 安全与 Prompt Injection 攻防实战  本文是《LLM Agent 安全》篇的补充实战篇，聚焦两个最该会落地的子题：MCP（Model Context Protocol）生态的 tool poisoning 风险与防护、以及 Prompt Injection 的真实 payload 案例 + 防御代码级落地（Spotlighting / Instruction Hierarchy / 参数校验 / human-in-the-loop）。读完你能回答&quot;MCP 工具描述怎么藏毒&quot;“Rug pulling 是什么”“spotlighting 代码怎么写”“为什么 base64 编码也能防一阵”。   前置：攻击面分类、indirect PI、无银弹根因见《LLM Agent 安全》篇。本文不重复理论，只讲实战形态与落地。   一、MCP 为什么是新的高危攻击面 MCP（Model Context Protocol）让 agent 能像装浏览器扩展一样接外部工具/数据源——stdio、HTTP、SSE 本地或远程 server 暴露 tools/...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">294</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">428</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E9%97%AE%E9%A2%98%E8%83%8C%E6%99%AF%EF%BC%9A%E4%BC%A0%E7%BB%9F%E7%BD%91%E5%85%B3%E4%B8%BA%E4%BB%80%E4%B9%88%E6%8E%A5%E4%B8%8D%E4%BD%8F-Agent-%E6%B5%81%E9%87%8F"><span class="toc-number">1.</span> <span class="toc-text">一、问题背景：传统网关为什么接不住 Agent 流量</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E9%A1%B9%E7%9B%AE%E6%A6%82%E5%86%B5"><span class="toc-number">2.</span> <span class="toc-text">二、项目概况</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%9E%B6%E6%9E%84%EF%BC%9A%E4%B8%80%E4%B8%AA%E5%88%BB%E6%84%8F%E4%B8%8D%E5%A4%8D%E7%94%A8-Envoy-%E7%B1%BB%E5%9E%8B%E7%9A%84%E6%95%B0%E6%8D%AE%E5%B9%B3%E9%9D%A2"><span class="toc-number">3.</span> <span class="toc-text">三、架构：一个刻意不复用 Envoy 类型的数据平面</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E8%87%AA%E7%A0%94-xDS-%E8%B5%84%E6%BA%90%E7%B1%BB%E5%9E%8B%EF%BC%8C%E4%BB%A5%E5%8F%8A%E4%B8%BA%E4%BB%80%E4%B9%88"><span class="toc-number">3.1.</span> <span class="toc-text">3.1 自研 xDS 资源类型，以及为什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-IR-%E4%B8%8D%E6%98%AF%E5%8E%9F%E5%AD%90%E6%9B%BF%E6%8D%A2%EF%BC%8C%E6%98%AF%E5%86%99%E9%94%81%E4%B8%8B%E9%80%90%E6%9D%A1%E5%BA%94%E7%94%A8"><span class="toc-number">3.2.</span> <span class="toc-text">3.2 IR 不是原子替换，是写锁下逐条应用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2%EF%BC%9Akrt-%E6%98%AF-Istio-%E7%9A%84%EF%BC%8C%E4%B8%8D%E6%98%AF%E8%87%AA%E7%A0%94%E7%9A%84"><span class="toc-number">3.3.</span> <span class="toc-text">3.3 控制平面：krt 是 Istio 的，不是自研的</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E4%B8%89%E7%A7%8D%E9%85%8D%E7%BD%AE%E6%9D%A5%E6%BA%90"><span class="toc-number">3.4.</span> <span class="toc-text">3.4 三种配置来源</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81LLM-Gateway%EF%BC%9Apassthrough-%E4%BC%98%E5%85%88%EF%BC%8C%E8%BF%99%E6%98%AF%E5%AE%83%E8%83%BD%E8%B7%9F%E4%B8%8A-provider-%E7%9A%84%E5%8E%9F%E5%9B%A0"><span class="toc-number">4.</span> <span class="toc-text">四、LLM Gateway：passthrough 优先，这是它能跟上 provider 的原因</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-Provider-%E8%A6%86%E7%9B%96"><span class="toc-number">4.1.</span> <span class="toc-text">4.1 Provider 覆盖</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E7%AB%AF%E7%82%B9%EF%BC%9A%E6%97%A2%E6%94%B6-OpenAI%EF%BC%8C%E4%B9%9F%E6%94%B6%E5%90%84%E5%AE%B6%E5%8E%9F%E7%94%9F"><span class="toc-number">4.2.</span> <span class="toc-text">4.2 端点：既收 OpenAI，也收各家原生</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-passthrough-%E8%AE%BE%E8%AE%A1%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E5%AE%83%E8%B7%9F%E5%BE%97%E4%B8%8A-provider-%E7%9A%84-API-%E5%8F%98%E5%8C%96"><span class="toc-number">4.3.</span> <span class="toc-text">4.3 passthrough 设计：为什么它跟得上 provider 的 API 变化</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-CacheTokenConvention%EF%BC%9A%E4%B8%80%E4%B8%AA%E5%B0%8F%E8%80%8C%E5%85%B8%E5%9E%8B%E7%9A%84%E3%80%8C%E7%BD%91%E5%85%B3%E5%81%9A%E5%BD%92%E4%B8%80%E5%8C%96%E3%80%8D"><span class="toc-number">4.4.</span> <span class="toc-text">4.4 CacheTokenConvention：一个小而典型的「网关做归一化」</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E6%88%90%E6%9C%AC%E6%8E%A7%E5%88%B6%EF%BC%9A%E5%86%85%E7%BD%AE%E5%AE%9A%E4%BB%B7%E5%BA%93-%E6%8C%89-Key-%E7%9A%84%E9%A2%84%E7%AE%97"><span class="toc-number">4.5.</span> <span class="toc-text">4.5 成本控制：内置定价库 + 按 Key 的预算</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81MCP-Gateway%EF%BC%9A%E6%8A%8A%E4%BC%9A%E8%AF%9D%E7%8A%B6%E6%80%81%E5%A1%9E%E8%BF%9B%E4%BB%A4%E7%89%8C%E9%87%8C"><span class="toc-number">5.</span> <span class="toc-text">五、MCP Gateway：把会话状态塞进令牌里</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E4%BC%A0%E8%BE%93%EF%BC%9A%E5%9B%9B%E7%A7%8D%E4%B8%8A%E6%B8%B8-target"><span class="toc-number">5.1.</span> <span class="toc-text">5.1 传输：四种上游 target</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E5%B7%A5%E5%85%B7%E8%81%94%E9%82%A6%E4%B8%8E%E5%91%BD%E5%90%8D"><span class="toc-number">5.2.</span> <span class="toc-text">5.2 工具联邦与命名</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E4%BC%9A%E8%AF%9D%EF%BC%9A%E4%B8%80%E4%B8%AA%E6%8A%8A%E9%97%AE%E9%A2%98%E6%BA%B6%E8%A7%A3%E6%8E%89%E7%9A%84%E8%AE%BE%E8%AE%A1"><span class="toc-number">5.3.</span> <span class="toc-text">5.3 会话：一个把问题溶解掉的设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E6%97%A0%E7%8A%B6%E6%80%81%E6%A8%A1%E5%BC%8F%E5%B7%B2%E7%BB%8F%E6%98%AF%E9%85%8D%E7%BD%AE%E9%A1%B9"><span class="toc-number">5.4.</span> <span class="toc-text">5.4 无状态模式已经是配置项</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-OAuth%EF%BC%9A%E6%AF%94%E3%80%8C%E6%94%AF%E6%8C%81-OAuth%E3%80%8D%E6%B7%B1%E5%BE%97%E5%A4%9A"><span class="toc-number">5.5.</span> <span class="toc-text">5.5 OAuth：比「支持 OAuth」深得多</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-6-OpenAPI-%E2%86%92-MCP%EF%BC%9A%E4%B8%89%E6%9D%A1%E5%B8%B8%E8%A7%81%E3%80%8C%E9%99%90%E5%88%B6%E3%80%8D%E6%9C%89%E4%B8%A4%E6%9D%A1%E4%B8%8D%E6%88%90%E7%AB%8B"><span class="toc-number">5.6.</span> <span class="toc-text">5.6 OpenAPI → MCP：三条常见「限制」有两条不成立</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81A2A-Gateway%EF%BC%9A%E4%B8%80%E4%B8%AA%E7%A9%BA%E7%BB%93%E6%9E%84%E4%BD%93%E6%92%91%E8%B5%B7%E7%9A%84%E5%8D%8F%E8%AE%AE%E6%84%9F%E7%9F%A5"><span class="toc-number">6.</span> <span class="toc-text">六、A2A Gateway：一个空结构体撑起的协议感知</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E8%A2%AB%E4%BD%8E%E4%BC%B0%E7%9A%84%E4%B8%80%E8%8A%82%EF%BC%9AAgent-%E7%9A%84%E8%BA%AB%E4%BB%BD%E4%B8%8E%E6%8E%88%E6%9D%83"><span class="toc-number">7.</span> <span class="toc-text">七、被低估的一节：Agent 的身份与授权</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E6%80%A7%E8%83%BD%EF%BC%9A%E6%95%B0%E5%AD%97%E6%98%AF%E5%8E%82%E5%95%86%E8%87%AA%E6%B5%8B%EF%BC%8C%E6%96%B9%E5%90%91%E6%80%A7%E5%8F%AF%E4%BF%A1"><span class="toc-number">8.</span> <span class="toc-text">八、性能：数字是厂商自测，方向性可信</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E6%A8%AA%E5%90%91%E5%AF%B9%E6%AF%94%E4%B8%8E%E9%80%89%E5%9E%8B"><span class="toc-number">9.</span> <span class="toc-text">九、横向对比与选型</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E5%AE%A3%E4%BC%A0%E4%B8%8E%E5%AE%9E%E7%8E%B0%E7%9A%84%E8%90%BD%E5%B7%AE"><span class="toc-number">10.</span> <span class="toc-text">十、宣传与实现的落差</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E7%BB%93%E8%AF%AD%EF%BC%9A%E5%AE%83%E7%9C%9F%E6%AD%A3%E7%9A%84%E5%8F%96%E8%88%8D"><span class="toc-number">11.</span> <span class="toc-text">十一、结语：它真正的取舍</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/" title="agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差">agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-%E4%B8%BA%E6%9C%AC%E7%A7%91%E7%94%9F%E8%AE%BE%E8%AE%A1%E4%B8%80%E9%97%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83Infra%E8%AF%BE/" title="为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单">为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/02/2026-11-02-%E4%BB%8ELLM%E5%88%B0%E5%85%B7%E8%BA%AB-%E6%B3%A8%E6%84%8F%E5%8A%9B%E6%9E%B6%E6%9E%84VLA%E4%B8%96%E7%95%8C%E6%A8%A1%E5%9E%8B%E4%B8%8E%E4%BA%91Infra%E5%85%A8%E6%99%AF%E8%B0%83%E7%A0%94/" title="从 LLM 到具身：注意力架构、VLA/世界模型与云 Infra 的全景调研">从 LLM 到具身：注意力架构、VLA/世界模型与云 Infra 的全景调研</a><time datetime="2026-11-01T16:00:00.000Z" title="发表于 2026-11-02 00:00:00">2026-11-02</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/02/2026-11-02-%E7%BA%BF%E6%80%A7%E6%B3%A8%E6%84%8F%E5%8A%9B-%E7%A8%80%E7%96%8F%E6%B3%A8%E6%84%8F%E5%8A%9B%E4%B8%8E%E6%B7%B7%E5%90%88%E6%B3%A8%E6%84%8F%E5%8A%9B%E7%9A%84%E6%8A%80%E6%9C%AF%E6%BC%94%E8%BF%9B/" title="从 O(n²) 到 O(n)：线性注意力、稀疏注意力与混合注意力的技术演进">从 O(n²) 到 O(n)：线性注意力、稀疏注意力与混合注意力的技术演进</a><time datetime="2026-11-01T16:00:00.000Z" title="发表于 2026-11-02 00:00:00">2026-11-02</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/01/2026-11-01-Super-agent%E8%AE%BE%E8%AE%A1%E6%8E%A2%E7%B4%A2%EF%BC%9A%E4%BB%8E%E6%9E%B6%E6%9E%84%E7%90%86%E5%BF%B5%E5%88%B0dsh-superagent%E5%8E%9F%E5%9E%8B%E5%AE%9E%E7%8E%B0/" title="Super-agent 设计探索：从架构理念到 dsh-superagent 原型实现">Super-agent 设计探索：从架构理念到 dsh-superagent 原型实现</a><time datetime="2026-10-31T16:00:00.000Z" title="发表于 2026-11-01 00:00:00">2026-11-01</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
