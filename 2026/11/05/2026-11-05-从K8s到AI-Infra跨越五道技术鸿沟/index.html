@@ -1,0 +1,846 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从 K8s 到 AI Infra：跨越五道技术鸿沟 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="上一讲讲了「怎么看」——nvidia-smi topo 矩阵与 NCCL 日志；这一讲讲「怎么修」。逐层拆解调度、网络、存储、虚拟化、可观测性五道鸿沟的技术本质与工程解法，附 Volcano Gang 调度配置、NCCL 环境变量清单、JuiceFS 缓存调优、MIG 切分对照表，以及 cgroup 为什么管不住 GPU 的三层回答。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从 K8s 到 AI Infra：跨越五道技术鸿沟">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="上一讲讲了「怎么看」——nvidia-smi topo 矩阵与 NCCL 日志；这一讲讲「怎么修」。逐层拆解调度、网络、存储、虚拟化、可观测性五道鸿沟的技术本质与工程解法，附 Volcano Gang 调度配置、NCCL 环境变量清单、JuiceFS 缓存调优、MIG 切分对照表，以及 cgroup 为什么管不住 GPU 的三层回答。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-04T16:57:56.722Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Volcano">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="AI基础设施">
+<meta property="article:tag" content="Gang调度">
+<meta property="article:tag" content="JuiceFS">
+<meta property="article:tag" content="MIG">
+<meta property="article:tag" content="DCGM">
+<meta property="article:tag" content="MFU">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从 K8s 到 AI Infra：跨越五道技术鸿沟",
+  "url": "https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-04T16:00:00.000Z",
+  "dateModified": "2026-11-04T16:57:56.722Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从 K8s 到 AI Infra：跨越五道技术鸿沟',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从 K8s 到 AI Infra：跨越五道技术鸿沟</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">从 K8s 到 AI Infra：跨越五道技术鸿沟</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-04T16:57:56.722Z" title="更新于 2026-11-05 00:57:56">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" data-flag-title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：K8s 把 GPU 当作 <code>nvidia.com/gpu: 8</code> 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「<strong>只分配、不感知</strong>」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。</p>
+</blockquote>
+<p>上一讲（<a href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/">K8s 很熟，为什么月薪卡在三万</a>）讲的是<strong>怎么看</strong>——<code>nvidia-smi topo -m</code> 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲<strong>怎么修</strong>：五道鸿沟各自的工程解法。</p>
+<p>本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。<strong>核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="五道鸿沟总览">五道鸿沟总览</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>K8s 原生方案</th>
+<th>AI 训练瓶颈</th>
+<th>生产级方案</th>
+<th>核心工具链</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>调度</strong></td>
+<td>kube-scheduler 逐 Pod 打分</td>
+<td>部分 Pod 无法调度导致整组死锁</td>
+<td>Gang 整组调度 + 多维配比</td>
+<td>Volcano PodGroup</td>
+</tr>
+<tr>
+<td><strong>网络</strong></td>
+<td>TCP Socket + 默认网卡</td>
+<td>AllReduce 延迟放大数十倍</td>
+<td>RDMA 直通 + 拓扑亲和</td>
+<td>NCCL + InfiniBand/RoCE</td>
+</tr>
+<tr>
+<td><strong>存储</strong></td>
+<td>直挂 NFS/S3</td>
+<td>冷启动打满源站带宽</td>
+<td>分布式缓存 + 预热</td>
+<td>JuiceFS + NVMe 二级缓存</td>
+</tr>
+<tr>
+<td><strong>虚拟化</strong></td>
+<td>Device Plugin 整卡分配</td>
+<td>资源浪费、拓扑错配</td>
+<td>MIG 硬件切分 + 拓扑感知</td>
+<td>NVIDIA MIG + GPU Feature Discovery</td>
+</tr>
+<tr>
+<td><strong>可观测性</strong></td>
+<td>cAdvisor + <code>kubectl top</code></td>
+<td>GPU「利用率 100% 却在空等」</td>
+<td>端到端数据面指标</td>
+<td>DCGM + NCCL 日志 + MFU</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="一、调度鸿沟：别把-GPU-当-CPU-调度">一、调度鸿沟：别把 GPU 当 CPU 调度</h2>
+<h3 id="1-1-传统-K8s-调度的致命问题">1.1 传统 K8s 调度的致命问题</h3>
+<p>kube-scheduler 的 Filter + Score 机制是「<strong>逐 Pod 逐节点</strong>」的贪心算法：每个 Pod 独立参与调度，与其他 Pod 没有「整组」概念。微服务场景下任意副本可独立服务，这套机制没问题；但 AI 训练的 Worker 之间存在<strong>强同步语义</strong>——所有 Rank 必须同时进入 <code>init_process_group</code>，任何一个 Worker 没到位，先启动的 Worker 会一直阻塞在 barrier，<strong>持有 GPU 却不做任何有效计算</strong>。</p>
+<p>具体场景：8 卡训练任务需要 4 个 Worker，每 Worker 占 2 张 GPU，集群剩余 5 张卡分散在 3 台机器（2+2+1）。默认调度器会先把 2 个 Worker 调度到 4 张卡上，剩下 2 个 Worker 因凑不齐 2 张卡而 Pending。最终 <strong>4 张 GPU 被两个「半启动」的 Worker 长期占用，集群 GPU 利用率显示 80%，但训练吞吐为 0</strong>。</p>
+<h3 id="1-2-解决思路：Gang-调度-Volcano">1.2 解决思路：Gang 调度 + Volcano</h3>
+<p>Gang 调度的核心语义是「<strong>All or Nothing</strong>」：一组 Pod 要么全部成功调度，要么全部等待。Volcano 通过 <code>PodGroup</code> CRD 实现，关键字段是 <code>minAvailable</code>：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">batch.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Job</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">distributed-training</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">minAvailable:</span> <span class="number">4</span>              <span class="comment"># 4 个 Worker 必须整组启动</span></span><br><span class="line">  <span class="attr">queue:</span> <span class="string">training-queue</span></span><br><span class="line">  <span class="attr">policies:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">event:</span> <span class="string">PodEvicted</span></span><br><span class="line">    <span class="attr">action:</span> <span class="string">RestartJob</span>         <span class="comment"># 任意 Worker 被驱逐则整组重启</span></span><br><span class="line">  <span class="attr">tasks:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">replicas:</span> <span class="number">4</span></span><br><span class="line">    <span class="attr">name:</span> <span class="string">worker</span></span><br><span class="line">    <span class="attr">template:</span></span><br><span class="line">      <span class="attr">spec:</span></span><br><span class="line">        <span class="attr">containers:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">trainer</span></span><br><span class="line">          <span class="attr">resources:</span></span><br><span class="line">            <span class="attr">limits:</span></span><br><span class="line">              <span class="attr">nvidia.com/gpu:</span> <span class="number">2</span></span><br><span class="line">              <span class="attr">rdma/hca:</span> <span class="number">1</span>      <span class="comment"># 随 Pod 申请 RDMA 网卡资源</span></span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>更正（这条原稿说反了，而且反过来更有用）</strong></p>
+<p>原稿写「<code>schedulerName</code> 必须显式声明为 <code>volcano</code>，否则 Job 会静默回落到默认调度器」。<strong>实际是相反的</strong>：Volcano 有一个 <strong>mutating admission webhook</strong>，当 <code>spec.schedulerName</code> 为空时会自动补成 <code>volcano</code>——源码 <code>patchDefaultScheduler</code>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> job.Spec.SchedulerName == <span class="string">&quot;&quot;</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> &amp;patchOperation&#123;Op: <span class="string">&quot;add&quot;</span>, Path: <span class="string">&quot;/spec/schedulerName&quot;</span>,</span><br><span class="line">        Value: commonutil.GenerateSchedulerName(config.SchedulerNames)&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>所以<strong>不写也没关系</strong>。而 K8s 的行为是：<strong>完全不写</strong> <code>schedulerName</code> 才落到 default-scheduler；<strong>写了一个不存在的名字，Pod 会永久 Pending，不会回落</strong>（官方文档原文：“remains in <strong>Pending</strong> state forever”）。</p>
+<p><strong>这意味着自检信号要反过来看</strong>：如果 Pod 一直 Pending、且 <code>kubectl describe</code> 里 <code>schedulerName</code> 指向一个不存在的调度器，说明<strong>那个调度器没起来</strong>——不是「Gang 语义静默失效」。</p>
+</blockquote>
+<p><code>minAvailable</code> 的语义<strong>属实</strong>：它表示作业被视为 Running 所需的最少 Running Pod 数，<strong>默认值 = 各 task 的 <code>replicas</code> 之和</strong>（webhook 里 <code>patchDefaultMinAvailable</code> 累加）。设成小于总 replicas 就等于允许部分启动。</p>
+<p><strong>YAML 字段名与层级也全部核实无误</strong>。一个惯用性提示：官方 vcjob 示例把 <code>PodEvicted</code> + <code>RestartJob</code> 放在 <strong>job 级 <code>spec.policies</code></strong>（如上），放 task 级虽然合法但非常规。</p>
+<h3 id="1-3-进阶：多维配比与拓扑感知">1.3 进阶：多维配比与拓扑感知</h3>
+<p><strong>Queue 与公平分享</strong>。Volcano Queue 的字段（<code>weight</code> / <code>reclaimable</code> / <code>capability</code> / <code>deserved</code> / <code>priority</code> / <code>parent</code>）核实无误：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">scheduling.volcano.sh/v1beta1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Queue</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">training-queue</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">weight:</span> <span class="number">4</span>            <span class="comment"># 仅在 proportion 插件下生效</span></span><br><span class="line">  <span class="attr">reclaimable:</span> <span class="literal">true</span>    <span class="comment"># 允许空闲时被其他 Queue 回收</span></span><br><span class="line">  <span class="attr">capability:</span></span><br><span class="line">    <span class="attr">cpu:</span> <span class="number">64</span></span><br><span class="line">    <span class="attr">memory:</span> <span class="string">512Gi</span></span><br><span class="line">    <span class="attr">nvidia.com/gpu:</span> <span class="number">32</span></span><br></pre></td></tr></table></figure>
+<p><code>proportion</code> 插件做 Queue 级资源比例划分、<code>drf</code> 插件做 Dominant Resource Fairness（多维资源公平）——两个插件名与职责<strong>都属实</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正两处</strong></p>
+<ol>
+<li>原稿写「Volcano 配合 <code>gpu-topology-aware</code> 插件」——<strong>Volcano 没有这个插件</strong>。它是 <strong>DaoCloud 的独立开源项目</strong>（<code>DaoCloud-OpenSource/gpu-topology-aware</code>），不是 Volcano 内置、也不是 NVIDIA 官方。Volcano 内置的拓扑相关插件是 <code>numaaware</code>、<code>task-topology</code>、<code>network-topology-aware</code>、<code>group-topology-affinity</code>。</li>
+<li>原稿提到「Queue 的 <code>overengineering</code> 因子」——<strong>没有这个字段</strong>。相近的是 <strong><code>overcommit</code> 插件的 <code>overcommit-factor</code> 参数</strong>（默认 1.2），那是插件参数，不是 Queue 字段。</li>
+</ol>
+</blockquote>
+<h3 id="1-4-实战复现：在-Kind-上验证死锁">1.4 实战复现：在 Kind 上验证死锁</h3>
+<p>没有 GPU 的笔记本也能复现 Gang 语义差异。用 Kind 搭 3 节点集群，用扩展资源模拟 GPU：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. 创建 Kind 集群</span></span><br><span class="line">kind create cluster --config kind-gang.yaml</span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 给两个 Worker 节点打上扩展资源（注意 / 要转义成 ~1）</span></span><br><span class="line">kubectl patch node kind-worker --subresource=<span class="string">&#x27;status&#x27;</span> --<span class="built_in">type</span>=<span class="string">&#x27;json&#x27;</span> \</span><br><span class="line">  -p=<span class="string">&#x27;[&#123;&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/status/capacity/nvidia.com~1gpu&quot;,&quot;value&quot;:&quot;2&quot;&#125;]&#x27;</span></span><br><span class="line">kubectl patch node kind-worker2 --subresource=<span class="string">&#x27;status&#x27;</span> --<span class="built_in">type</span>=<span class="string">&#x27;json&#x27;</span> \</span><br><span class="line">  -p=<span class="string">&#x27;[&#123;&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/status/capacity/nvidia.com~1gpu&quot;,&quot;value&quot;:&quot;2&quot;&#125;]&#x27;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 用默认调度器提交 4 副本 Job（每副本 2 卡，共需 8 卡，实际只有 4 卡）</span></span><br><span class="line">kubectl apply -f default-scheduler-job.yaml</span><br><span class="line"><span class="comment"># 观察：2 个 Running、2 个 Pending，前者持有资源但不退出</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. 装 Volcano 后提交相同 Job</span></span><br><span class="line">helm install volcano volcano-sh/volcano -n volcano-system --create-namespace</span><br><span class="line">kubectl apply -f volcano-gang-job.yaml</span><br><span class="line"><span class="comment"># 观察：4 个 Pod 全部 Pending，0 个 Running——GPU 没有被浪费</span></span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>补充说明：<code>kubectl patch --subresource</code> <strong>确实存在</strong>，而且 <strong>patch node 的 <code>/status</code> 正是 K8s 官方文档推荐的「手动宣告扩展资源」做法</strong>。注意两点：资源名必须带域名前缀（<code>nvidia.com/gpu</code> 合法）；手改的 status 可能被 kubelet 后续刷新覆盖，<strong>这只是模拟手段，正规途径是设备插件</strong>。</p>
+</blockquote>
+<h3 id="1-5-调度层面高频踩坑">1.5 调度层面高频踩坑</h3>
+<ul>
+<li><strong>把 <code>rdma/hca</code> 当成通用资源名</strong>：它来自 <strong>Mellanox 的 RDMA 设备插件</strong>（k8s-rdma-shared-dev-plugin 的 HCA 模式），<strong>不是 SR-IOV Network Device Plugin 的资源名</strong>——后者的资源名是用户自定义前缀的（如 <code>mellanox.com/mlnx_sriov_rdma</code>）。用哪个插件就按哪个插件的文档写。</li>
+<li><strong>MIG 模式下 Device Plugin 未正确上报</strong>：需要给 device plugin 传 <code>--mig-strategy</code>，取值是 <strong><code>none | single | mixed</code>，默认 <code>none</code></strong>（原稿只写了 single/mixed，漏了 <code>none</code> 和默认值）。为 <code>none</code> 时节点只上报整卡。</li>
+<li><strong>节点驱动与 K8s 版本错配</strong>：内核升级后 <code>/dev/nvidia*</code> 消失，Device Plugin 报错但 DaemonSet 仍显示 Running。</li>
+</ul>
+<hr>
+<h2 id="二、网络鸿沟：TCP-扛不住集合通信">二、网络鸿沟：TCP 扛不住集合通信</h2>
+<h3 id="2-1-为什么-AllReduce-对网络如此敏感">2.1 为什么 AllReduce 对网络如此敏感</h3>
+<p>数据并行训练的每个 step 都会对所有参数做一次 AllReduce。<strong>先把数学写对</strong>：</p>
+<blockquote>
+<p>⚠️ <strong>更正（这条是原稿的硬伤）</strong></p>
+<p>原稿写「通信复杂度为 <code>O(2(N-1))</code> 步，<strong>每步数据量</strong>为 <code>2(N-1)/N × |M|</code>」。<strong>这是把「每卡累计发送量」当成了「每步数据量」。</strong></p>
+<p>正确的三组数：</p>
+<table>
+<thead>
+<tr>
+<th>量</th>
+<th>公式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>总步数</td>
+<td><strong>2(N−1)</strong>（ReduceScatter 阶段 N−1 步 + AllGather 阶段 N−1 步）</td>
+</tr>
+<tr>
+<td><strong>每步</strong>每卡发送量</td>
+<td><strong>|M| / N</strong>（张量切成 N 个 chunk，每步收发一个）</td>
+</tr>
+<tr>
+<td><strong>每卡累计</strong>发送量</td>
+<td><strong>2(N−1)/N × |M|</strong></td>
+</tr>
+</tbody>
+</table>
+<p>验算一下原稿的公式：代入 N=64，每步就是 1.97×|M|——<strong>比整个张量还大</strong>，显然不可能。</p>
+</blockquote>
+<p>代入具体数字：70B 模型 FP32 梯度 = 70×10⁹ × 4 B = <strong>280 GB</strong>；<code>2(N−1)/N</code>（N=64）= 126/64 ≈ 1.969。</p>
+<blockquote>
+<p>⚠️ <strong>口径必须写清楚</strong>：280 GB × 1.969 = <strong>551 GB ≈ 550 GB</strong>，这是<strong>每张卡的发送量</strong>（接收量相同），<strong>不是集群总流量</strong>。</p>
+<p>集群聚合总流量 = N × 每卡发送量 = 64 × 551 GB = <strong>约 35.3 TB</strong>。两者差了 64 倍，混淆会让人误判网络压力。</p>
+</blockquote>
+<p><strong>为什么 TCP 扛不住</strong>——三个原因：</p>
+<ul>
+<li><strong>CPU 协议栈瓶颈</strong>：每收发一个包都要内核中断、协议栈处理、拷贝，CPU 占用极高，与训练任务抢核；</li>
+<li><strong>滑动窗口限制</strong>：TCP 拥塞窗口在长肥管道上利用率不足；</li>
+<li><strong>丢包放大</strong>：AllReduce 强同步，任何一个 Rank 丢包重传，所有 GPU 都要等它。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>一处数字要改</strong>：原稿写「1% 的丢包率可能放大为 50% 以上的端到端延迟」。<strong>这个说法找不到权威出处。</strong> 检索到的最接近来源是厂商博客的「1% 丢包率会导致计算集群约 50% 的<strong>性能</strong>损失」——那是<strong>吞吐</strong>结论，不是<strong>延迟</strong>。业界常引的小丢包→RDMA 劣化原始研究是 Microsoft SIGCOMM 2016《RDMA over Commodity Ethernet at Scale》，同样是吞吐口径。建议按机制描述（丢包触发大粒度重传 → 强同步放大），不套用具体的百分比。</p>
+</blockquote>
+<p>按「每卡 550 GB、单卡 TCP 1—2 Gbps」核算，单次 AllReduce 需 <strong>37—73 分钟</strong>，「超过 30 分钟」在该假设下成立。但要注明这个吞吐假设<strong>非常悲观</strong>——常规 10/25/100 GbE 的 TCP 实测远高于此。</p>
+<h3 id="2-2-RDMA-NCCL：绕过内核">2.2 RDMA + NCCL：绕过内核</h3>
+<p>RDMA 的核心是<strong>网卡（HCA）直接读写对端内存，绕过双方内核协议栈</strong>。配合 GPUDirect RDMA，网卡还能直接访问 GPU 显存：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">TCP 路径:  GPU → PCIe → 主机内存 → 内核协议栈 → 网卡 → 网络 → 对端网卡 → 内核 → 主机内存 → PCIe → GPU</span><br><span class="line">RDMA 路径: GPU → PCIe → 网卡 → 网络 → 对端网卡 → PCIe → GPU</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>带宽</th>
+<th>延迟量级</th>
+<th>成本</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>InfiniBand（NDR 400G）</td>
+<td>400 Gbps</td>
+<td>亚微秒级</td>
+<td>高</td>
+<td>大规模预训练集群</td>
+</tr>
+<tr>
+<td>RoCEv2（以太网）</td>
+<td>100—400 Gbps</td>
+<td>微秒级</td>
+<td>中</td>
+<td>中小集群，可复用以太网</td>
+</tr>
+<tr>
+<td>TCP（fallback）</td>
+<td>10—100 Gbps</td>
+<td>数十 µs</td>
+<td>低</td>
+<td>单机或调试</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ 延迟这一列的精确数字（0.5 µs / 1.4 µs）<strong>找不到 NVIDIA 官方一手来源</strong>，且原稿没区分「交换机 port-to-port」与「端到端 MPI 延迟」。上表已改为量级表述。引用精确数字前请自行核实口径。</p>
+</blockquote>
+<p>NCCL 在底层自动选择 Ring / Tree / CollNet 算法，并按硬件拓扑选路（NVLink 优先，跨机走 IB/RoCE，必要时混合两级环）。</p>
+<h3 id="2-3-K8s-中启用-RDMA">2.3 K8s 中启用 RDMA</h3>
+<ol>
+<li>物理机启用 SR-IOV，把物理网卡切成多个 VF；</li>
+<li>部署 <code>sriov-network-device-plugin</code>（或 Mellanox 的 RDMA device plugin），把 VF 上报为扩展资源；</li>
+<li>Pod 声明该资源，并通过 SR-IOV CNI 把 VF 直通到容器 netns；</li>
+<li>容器内出现 <code>/dev/infiniband/uverbs*</code>，可直接调用 ibverbs API。</li>
+</ol>
+<h3 id="2-4-NCCL-关键环境变量（含官方默认值）">2.4 NCCL 关键环境变量（含官方默认值）</h3>
+<p>NCCL 有一系列环境变量需要精细配置，否则会<strong>静默回退到 Socket，性能下降一个量级</strong>：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">env:</span></span><br><span class="line"><span class="bullet">-</span> <span class="attr">name:</span> <span class="string">NCCL_DEBUG</span></span><br><span class="line">  <span class="attr">value:</span> <span class="string">&quot;INFO&quot;</span>              <span class="comment"># 打印通信路径选择日志</span></span><br><span class="line"><span class="bullet">-</span> <span class="attr">name:</span> <span class="string">NCCL_IB_HCA</span></span><br><span class="line">  <span class="attr">value:</span> <span class="string">&quot;=mlx5_0,mlx5_1&quot;</span>    <span class="comment"># 注意 = 前缀的含义，见下</span></span><br><span class="line"><span class="bullet">-</span> <span class="attr">name:</span> <span class="string">NCCL_SOCKET_IFNAME</span></span><br><span class="line">  <span class="attr">value:</span> <span class="string">&quot;eth0&quot;</span>              <span class="comment"># bootstrap 通道用哪张网卡</span></span><br><span class="line"><span class="bullet">-</span> <span class="attr">name:</span> <span class="string">NCCL_IB_TIMEOUT</span></span><br><span class="line">  <span class="attr">value:</span> <span class="string">&quot;20&quot;</span>                <span class="comment"># 官方默认就是 20</span></span><br><span class="line"><span class="bullet">-</span> <span class="attr">name:</span> <span class="string">NCCL_IB_RETRY_CNT</span></span><br><span class="line">  <span class="attr">value:</span> <span class="string">&quot;7&quot;</span>                 <span class="comment"># 官方默认 7，取值范围 0-7</span></span><br></pre></td></tr></table></figure>
+<p>几个<strong>必须说清的语义</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>变量</th>
+<th>官方默认</th>
+<th>关键点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NCCL_IB_HCA</code></td>
+<td>不设 = <strong>使用全部 ACTIVE 的 IB/RoCE 端口</strong></td>
+<td><strong><code>=</code> 前缀表示精确匹配</strong>，不加则按<strong>前缀</strong>匹配——写 <code>mlx5_1</code> 会同时命中 <code>mlx5_10</code>~<code>mlx5_19</code>。官方明确建议<strong>总是加 <code>=</code></strong></td>
+</tr>
+<tr>
+<td><code>NCCL_IB_TIMEOUT</code></td>
+<td><strong>20</strong>（= 4.3 秒）</td>
+<td>超时公式 <code>4.096 µs × 2^timeout</code>。默认值在 2.23 起是 20，2.14—2.23 是 18，更早是 14</td>
+</tr>
+<tr>
+<td><code>NCCL_IB_RETRY_CNT</code></td>
+<td><strong>7</strong></td>
+<td>与 timeout 相乘 → 默认总等待约 30 秒</td>
+</tr>
+<tr>
+<td><code>NCCL_IB_GID_INDEX</code></td>
+<td><strong>AUTO</strong>（2.32u1+）</td>
+<td>2.21—2.32 默认 <code>-1</code>，≤2.20 默认 <code>0</code>。<strong>NCCL 2.21 起会自动选 GID，官方明确说不要再手动设置</strong></td>
+</tr>
+<tr>
+<td><code>NCCL_SOCKET_IFNAME</code></td>
+<td>无固定值</td>
+<td>自动算法排除 <code>lo</code>/<code>docker*</code>，<strong>优先 <code>ib*</code> 接口</strong></td>
+</tr>
+<tr>
+<td><code>NCCL_IB_DISABLE</code></td>
+<td>不设 = IB 启用</td>
+<td>设 1 才禁用</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写 <code>NCCL_IB_TIMEOUT: &quot;18&quot;</code>。<strong>官方默认值已经是 20</strong>（2.23 起），18 是 2.14—2.23 的旧默认。另外「大规模集群建议调大」这个方向是对的——默认 4.3 秒在大 fabric 上确实偏小。</p>
+</blockquote>
+<p><strong>关于 HCA 选择</strong>：源码 <code>ncclIbInit</code> 里只做两项过滤（端口必须 ACTIVE、链路层必须是 IB 或 Ethernet），<strong>没有任何默认白名单/黑名单，也不按速率或用途过滤</strong>。所以「不设 <code>NCCL_IB_HCA</code> 可能选中存储网卡」这个坑<strong>属实</strong>。</p>
+<h3 id="2-5-验证-RDMA-是否生效">2.5 验证 RDMA 是否生效</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">kubectl logs &lt;training-pod&gt; | grep -E <span class="string">&quot;NET/IB|NET/Socket|Using network&quot;</span></span><br></pre></td></tr></table></figure>
+<p>真实的日志格式（对照 NCCL 源码逐字核实）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"># RDMA 生效（注意 OOB 后缀是日志的一部分）</span><br><span class="line">NCCL INFO NET/IB : Using [0]mlx5_0:1/RoCE ; OOB eth0:10.0.0.1&lt;0&gt;</span><br><span class="line">NCCL INFO Using network IB</span><br><span class="line"></span><br><span class="line"># 回退 Socket</span><br><span class="line">NCCL INFO NET/Socket : Using [0]eth0:10.0.0.1&lt;0&gt;</span><br><span class="line">NCCL INFO Using network Socket</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写 <code>NCCL INFO Using Network IB</code>——<strong>大写 N 是错的</strong>，实际是 <code>Using network IB</code>（小写）。而且 <code>NET/IB : Using ...</code> 那一行后面<strong>还有 <code>; OOB &lt;网卡&gt;:&lt;IP&gt;</code></strong>，grep 时只匹配前半段会漏。</p>
+</blockquote>
+<p><strong>为什么这是「静默」回退</strong>：<code>NCCL_DEBUG</code> 默认级别是 <strong>WARN</strong>，而「IB 初始化失败、改用 Socket」这条消息是 <strong>ATTN 级</strong>（2.32 起；早期为 INFO），<code>Using network Socket</code> 也是 INFO 级——<strong>默认级别下都看不到</strong>。所以原稿「必须开 <code>NCCL_DEBUG=INFO</code> 并主动 grep 确认传输方式」的建议是对的。</p>
+<p>补充工具：<code>show_gids</code>（查 GID 表）、<code>mlxlink</code>（查链路健康）、<code>ibqueryerrors</code>（查端口错误计数）——三个工具名<strong>都属实</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>GID index 映射要改</strong>：原稿写「index 3 = RoCEv1、index 4 = RoCEv2」。按 NVIDIA MLNX_OFED 官方 GID 表例子（mlx5_0），典型映射是 <strong>index 2 = RoCEv1(IPv4)、index 3 = RoCEv2(IPv4)</strong>。而且<strong>这个映射因驱动/固件/网卡而异</strong>（Broadcom 网卡的例子又是另一种），<strong>必须用 <code>show_gids</code> 看自己机器</strong>。再加上 NCCL 2.21+ 已自动选 GID，<strong>这个变量根本不该手动设</strong>。</p>
+</blockquote>
+<h3 id="2-6-网络层面高频踩坑">2.6 网络层面高频踩坑</h3>
+<ul>
+<li><strong>未设 <code>NCCL_IB_HCA</code>，选中错误网卡</strong>：机器上可能同时有存储用 RoCE 卡和计算用 IB 卡；</li>
+<li><strong>未设 <code>NCCL_SOCKET_IFNAME</code>，bootstrap 走了外网网卡</strong>：对端不可达，rank 握手挂起或极慢；</li>
+<li><strong>PFC/ECN 未配置</strong>：以太网承载 RoCE 需要交换机侧配 PFC + ECN，否则拥塞时静默丢包，AllReduce 随机挂起。</li>
+</ul>
+<blockquote>
+<p>⚠️ 关于「CNI 未配 MTU → RoCE 被 VXLAN 封装后超限」：MTU 黑洞机制本身成立（VXLAN 开销 50 字节，Pod MTU = Host MTU − 50），但<strong>RDMA/RoCE 通常绕过 CNI overlay</strong>（走 SR-IOV / macvlan / host network / 独立 RDMA 网段），且 RoCE 用的是 IB 链路 MTU（1024/2048/4096），与内核 TCP MTU 不是一回事。这是<strong>特定部署下才成立</strong>的场景，不宜作为通用结论。</p>
+</blockquote>
+<hr>
+<h2 id="三、存储鸿沟：冷启动打满源站">三、存储鸿沟：冷启动打满源站</h2>
+<h3 id="3-1-痛点量化">3.1 痛点量化</h3>
+<p>70B 模型 FP16 权重约 140 GB。用 S3 CLI 直拉（出口带宽约 110 MB/s）冷启动需要 <strong>约 21 分钟</strong>；集群中 10 个节点同时拉同一份权重，S3 出口带宽被瞬间打满；Pod 被驱逐重建、节点扩容都要重新拉全量，<strong>没有任何缓存复用</strong>。</p>
+<h3 id="3-2-JuiceFS-分布式缓存-预热">3.2 JuiceFS + 分布式缓存 + 预热</h3>
+<p>JuiceFS 把对象存储作为持久层，在计算节点本地维护块级缓存，对外提供 POSIX 接口。核心架构是<strong>元数据服务（Redis/TiKV） + 对象存储 + 本地缓存</strong>三层解耦。</p>
+<p><strong>关键设计差异</strong>：JuiceFS 的缓存是<strong>块级缓存</strong>，落在本地磁盘（推荐 NVMe）。CSI 场景下缓存目录在<strong>节点主机</strong>上，因此 Mount Pod 重建通常不影响缓存——<strong>这是它与 page cache 的关键区别</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>一处需要补全</strong>：原稿把 JuiceFS 一概描述为「磁盘缓存、不随 Pod 消亡」不完整——<strong>JuiceFS 也支持 <code>--cache-dir memory</code>（缓存直接放客户端进程内存）或 <code>/dev/shm</code>，这种模式进程重启就丢</strong>。另外 CSI 有 <code>juicefs-clean-cache: &quot;true&quot;</code> 注解会在 Mount Pod 退出时清理缓存。所以「Pod 增删不影响缓存」是<strong>默认行为，不是绝对保证</strong>。</p>
+</blockquote>
+<p><strong>CSI 挂载参数的正确写法：</strong></p>
+<blockquote>
+<p>⚠️ <strong>更正（这条会让读者照着配置失败）</strong>：原稿写 <code>juicefs/mount-options: &quot;cache-dir=...,cache-size=...&quot;</code>。<strong>JuiceFS CSI 用的是 Kubernetes 标准 <code>mountOptions</code> 字段（YAML 列表）</strong>，不是自定义键：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">storage.k8s.io/v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">StorageClass</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">juicefs-sc</span></span><br><span class="line"><span class="attr">provisioner:</span> <span class="string">csi.juicefs.com</span></span><br><span class="line"><span class="attr">mountOptions:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="string">cache-dir=/var/jfsCache</span></span><br><span class="line">  <span class="bullet">-</span> <span class="string">cache-size=102400</span></span><br><span class="line"><span class="attr">parameters:</span></span><br><span class="line">  <span class="attr">csi.storage.k8s.io/provisioner-secret-name:</span> <span class="string">juicefs-secret</span></span><br><span class="line">  <span class="attr">csi.storage.k8s.io/provisioner-secret-namespace:</span> <span class="string">default</span></span><br></pre></td></tr></table></figure>
+<p>官方说明：<code>mountOptions</code> 同时接受 JuiceFS 挂载选项和 FUSE 选项，但<strong>FUSE 选项不要写 <code>-o</code> 前缀</strong>，每项直接列在 YAML 列表里。</p>
+</blockquote>
+<p><strong><code>cache-size</code> 的单位坑（原稿这条是对的，值得强调）</strong>：官方默认值是 <strong>102400，单位 MiB</strong>（= 100 GiB）。如果误以为是 GiB、写 <code>cache-size=100</code> 想表达 100 GiB，实际只拿到 <strong>100 MiB</strong>。</p>
+<p><strong>分布式缓存组</strong>：<code>--cache-group</code> 让同名客户端组成一个缓存组，内部是一个<strong>一致性哈希环</strong>——每个数据块的归属节点由一致性哈希算出，组内共享。读请求会<strong>直接从负责该块的成员节点取</strong>。所以「任一节点缓存了、其他节点都能拉」方向正确，但机制是「哈希指定归属 + 组内共享」，不是任意节点随意互拉。</p>
+<blockquote>
+<p>⚠️ <code>--cache-priority</code> 和 <code>--cache-group</code> 都是 <strong>企业版/云版特性</strong>，社区版只有 <code>--cache-dir</code>。</p>
+</blockquote>
+<h3 id="3-3-缓存预热">3.3 缓存预热</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 社区版：并发度用 -p / --threads</span></span><br><span class="line">juicefs warmup /jfs/train-data -p 80</span><br><span class="line"></span><br><span class="line"><span class="comment"># 基于文件列表精确预热，后台执行</span></span><br><span class="line">juicefs warmup -f filelist.txt --background</span><br><span class="line"></span><br><span class="line"><span class="comment"># 检查缓存覆盖率</span></span><br><span class="line">juicefs warmup --check /jfs/train-data</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>两处更正</strong>：</p>
+<ol>
+<li><strong><code>-c</code> 是并发度参数只存在于企业版/云版</strong>；社区版源码里是 <strong><code>--threads</code>（别名 <code>-p</code>）</strong>，默认 50。</li>
+<li><code>warmup --check</code> 报的是<strong>缓存覆盖率</strong>（<code>N files checked, X of Y (Z%) cached</code>），<strong>不是运行时 cache hit rate</strong>——它回答「目标路径里多少数据块已经缓存了」。</li>
+</ol>
+</blockquote>
+<p>生产上可以在训练 Job 里加 <code>initContainer</code> 自动预热：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">initContainers:</span></span><br><span class="line"><span class="bullet">-</span> <span class="attr">name:</span> <span class="string">cache-warmup</span></span><br><span class="line">  <span class="attr">image:</span> <span class="string">juicefs/juicefs:latest</span></span><br><span class="line">  <span class="attr">command:</span> [<span class="string">&quot;juicefs&quot;</span>, <span class="string">&quot;warmup&quot;</span>, <span class="string">&quot;/data/training_set&quot;</span>, <span class="string">&quot;-p&quot;</span>, <span class="string">&quot;100&quot;</span>]</span><br><span class="line">  <span class="attr">volumeMounts:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">jfs-volume</span></span><br><span class="line">    <span class="attr">mountPath:</span> <span class="string">/data</span></span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>关于「从 21 分钟到 42 秒」这类实测对比表</strong>：这组数字（S3 CLI 14分20秒 / NFS 8分50秒 / JuiceFS 3分10秒 + 扩容 42 秒 / 3450 MB/s）<strong>来自一篇第三方博客的作者实测，JuiceFS 官方文档中没有这张表，也未见独立复现</strong>。方向性可信（分布式缓存 + 预热确实能大幅缩短冷启动），但<strong>引用具体数字时必须标注来源与未验证状态</strong>。</p>
+</blockquote>
+<h3 id="3-4-存储层面高频踩坑">3.4 存储层面高频踩坑</h3>
+<ul>
+<li><strong><code>cache-dir</code> 设在 emptyDir 或容器可写层</strong>：Pod 删除缓存全丢，命中率恒为 0。<strong>必须指向独立持久卷</strong>（NVMe SSD）；</li>
+<li><strong><code>cache-size</code> 与实际数据集不匹配</strong>：默认 100 GiB 对 TB 级数据集明显不够，会频繁 LRU 淘汰。建议设为数据集大小的 1.2 倍；</li>
+<li><strong>随机读的读放大</strong>：</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>这条原稿归因错了</strong>。JuiceFS 把两个机制分得很清楚：<strong>readahead 面向顺序读</strong>，<strong>prefetch 面向随机读</strong>（“when a block is randomly read by a small offset range, the whole block is scheduled for download asynchronously”）。所以 safetensors 随机读场景该关的是 <strong><code>--prefetch</code>（设 0）</strong>，不是 <code>--readahead</code>。10 倍放大这个量级有官方 troubleshooting 例子佐证（客户端读 200 MiB/s、S3 流量涨到 2 GiB/s），但<strong>机制归因要改</strong>。</p>
+</blockquote>
+<hr>
+<h2 id="四、虚拟化鸿沟：GPU-不是更快的-CPU">四、虚拟化鸿沟：GPU 不是更快的 CPU</h2>
+<h3 id="4-1-三层失效">4.1 三层失效</h3>
+<p><strong>第一层：cgroup 不生效。</strong> cgroup 的 cpu controller 在 CFS 调度器层面限制时间片，memory controller 在内核页分配器层面限制内存。但 GPU 执行路径是 <code>进程 → 用户态 CUDA → NVIDIA 驱动 → GPU 硬件调度器</code>，<strong>旁路 Linux 内核调度</strong>。</p>
+<p><strong>第二层：Device Plugin 只上报整数。</strong> <code>nvidia.com/gpu: 8</code> 只传递设备 ID 列表，<strong>不携带 NVLink 拓扑、PCIe 亲和性、显存水位</strong>。调度器不知道「GPU0 和 GPU1 通过 NVLink 互联」，可能把需要高速互联的进程调度到跨 PCIe root 的卡上。</p>
+<p><strong>第三层：共享 GPU 无隔离。</strong> time-slicing 或 <code>CUDA_VISIBLE_DEVICES</code> 切分本质是<strong>时间片轮转</strong>，多 Pod 争抢 SM、Tensor Core、L2、显存带宽，且任何一个 Pod 触发 OOM 都可能波及其他 Pod。</p>
+<h3 id="4-2-MIG：硬件级切分">4.2 MIG：硬件级切分</h3>
+<p><strong>MIG（Multi-Instance GPU）</strong> 把一张物理 GPU 在硬件层切分为多个独立实例，每个实例有<strong>独立的 SM、L2、显存控制器和故障域</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正（原稿这张表标错了代次）</strong>：原稿写「A100 <strong>80GB</strong> 的典型 MIG 配置」并给出 <code>7g.40gb / 4g.20gb / 2g.10gb / 1g.5gb</code>——<strong>这组 profile 全部是 A100 40GB 的</strong>。NVIDIA MIG User Guide 原文：「For <strong>A100-SXM4-80GB</strong>, the profile names will change according to the memory proportion – for example, <strong>1g.10gb, 1g.20gb, 2g.20gb, 3g.40gb, 4g.40gb, 7g.80gb</strong>」。</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>A100 <strong>40GB</strong></th>
+<th>A100 <strong>80GB</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1g</td>
+<td><code>1g.5gb</code></td>
+<td><code>1g.10gb</code></td>
+</tr>
+<tr>
+<td>2g</td>
+<td><code>2g.10gb</code></td>
+<td><code>2g.20gb</code></td>
+</tr>
+<tr>
+<td>3g</td>
+<td><code>3g.20gb</code></td>
+<td><code>3g.40gb</code></td>
+</tr>
+<tr>
+<td>4g</td>
+<td><code>4g.20gb</code></td>
+<td><code>4g.40gb</code></td>
+</tr>
+<tr>
+<td>7g</td>
+<td><code>7g.40gb</code></td>
+<td><code>7g.80gb</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>SM 比例是对的</strong>（两者都是 7/7、4/7、3/7、2/7、1/7——每片显存取总显存 1/8、每片 SM 取总 SM 1/7），<strong>错的只是显存大小与型号的对应关系</strong>。</p>
+</blockquote>
+<p>MIG 实例在 Device Plugin 层被上报为独立资源，格式是 <code>nvidia.com/mig-&lt;slice&gt;g.&lt;mem&gt;gb</code>（<strong>属实</strong>）——调度器可以直接按实例粒度分配，<strong>硬件本身就完成了隔离</strong>。</p>
+<p>「MIG 最多 7 个实例」对 <strong>A100/H100</strong> 成立，但<strong>不是全平台通例</strong>（例如 RTX PRO 6000 Blackwell 的 1g profile 只有 4 个实例）。</p>
+<h3 id="4-3-拓扑感知">4.3 拓扑感知</h3>
+<p>用 <code>nvidia-smi topo -m</code> 看拓扑（缩写的完整定义见上一讲）。生产中通过 <strong>GPU Feature Discovery</strong> 把拓扑信息以 Node Label 暴露。</p>
+<blockquote>
+<p>⚠️ <strong>更正两个标签名</strong>：正确的标签是 <strong><code>nvidia.com/gpu.product</code></strong>（<strong>点号</strong>，不是连字符 <code>gpu-product</code>），示例值 <code>A100-SXM4-40GB</code>。而 <strong><code>nvidia.com/nvlink</code> 不存在</strong>——与 NVLink/fabric 相关的真实标签是 <code>nvidia.com/gpu.clique</code>（GPUFabric ClusterUUID + CliqueID），另有 <code>nvidia.com/gpu.family</code>、<code>nvidia.com/gpu.memory</code>、<code>nvidia.com/gpu.count</code> 等。</p>
+</blockquote>
+<h3 id="4-4-用-DCGM-看真实利用率">4.4 用 DCGM 看真实利用率</h3>
+<p>核心指标（<strong>这四个名字都是 dcgm-exporter 实际暴露的 Prometheus 指标名，可直接查</strong>）：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DCGM_FI_DEV_GPU_UTIL</code></td>
+<td>GPU 时间片利用率（Busy 或 Idle）</td>
+</tr>
+<tr>
+<td><code>DCGM_FI_PROF_SM_ACTIVE</code></td>
+<td>SM 活跃度</td>
+</tr>
+<tr>
+<td><code>DCGM_FI_PROF_PIPE_TENSOR_ACTIVE</code></td>
+<td>Tensor Core 活跃度</td>
+</tr>
+<tr>
+<td><code>DCGM_FI_PROF_GR_ENGINE_ACTIVE</code></td>
+<td>Graphics Engine 活跃度</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>补一层版本对照</strong>：这四个名字在 DCGM 源码 <code>dcgm_fields.h</code> 里都是<strong>旧名/别名</strong>，规范名已改成 <code>*_UTIL_RATIO</code>：</p>
+<table>
+<thead>
+<tr>
+<th>常用名（dcgm-exporter）</th>
+<th>DCGM 规范名</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DCGM_FI_DEV_GPU_UTIL</code></td>
+<td><code>DCGM_FI_DEV_GPU_UTIL_RATIO</code>（旧名已标 Deprecated）</td>
+</tr>
+<tr>
+<td><code>DCGM_FI_PROF_SM_ACTIVE</code></td>
+<td><code>DCGM_FI_PROF_SM_UTIL_RATIO</code></td>
+</tr>
+<tr>
+<td><code>DCGM_FI_PROF_PIPE_TENSOR_ACTIVE</code></td>
+<td><code>DCGM_FI_PROF_TENSOR_UTIL_RATIO</code></td>
+</tr>
+<tr>
+<td><code>DCGM_FI_PROF_GR_ENGINE_ACTIVE</code></td>
+<td><code>DCGM_FI_PROF_GR_ENGINE_UTIL_RATIO</code></td>
+</tr>
+</tbody>
+</table>
+<p>做 Grafana 面板或跨版本对比时会踩到这个改名。</p>
+</blockquote>
+<p><strong>典型异常模式</strong>：<code>SM_ACTIVE</code> 长期 &gt;80% 但 <code>PIPE_TENSOR_ACTIVE</code> &lt;30%，说明 GPU 在用 CUDA Core 执行本应由 Tensor Core 承担的矩阵运算——<strong>这是模型代码层面的优化信号，不是基础设施问题</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>一处口径要收</strong>：原稿说 <code>DCGM_FI_PROF_*</code> 系列「会影响性能」。官方口径是 <strong>low overhead</strong>，唯一的明确限制是 profiling 计数器资源会与 Nsight 等开发者 profiler <strong>冲突</strong>（需 <code>dcgmi profile --pause</code> 让出）。另外部分 <code>DCGM_FI_PROF_*</code> 在 dcgm-exporter 默认 collector CSV 里是<strong>注释掉的</strong>，需要自行开启。</p>
+</blockquote>
+<hr>
+<h2 id="五、可观测性鸿沟：利用率-100-，却在空等">五、可观测性鸿沟：利用率 100%，却在空等</h2>
+<h3 id="5-1-传统监控的盲区">5.1 传统监控的盲区</h3>
+<p><code>nvidia-smi</code> 显示的「GPU-Util 100%」，官方定义是「<strong>过去一个采样周期内，至少有一个 kernel 在 GPU 上运行</strong>」。</p>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿说采样周期是「1 秒」。官方原文是「<strong>The sample period may be between 1 second and 1/6 second depending on the product</strong>」——<strong>不是固定 1 秒</strong>。</p>
+</blockquote>
+<p>它无法区分：有效矩阵计算、数据搬运（H2D/D2H）、NCCL 通信等待、数据加载等待。一个真实 case：所有 GPU 利用率 100%，但训练吞吐只有理论值的 1/3。Profile 后发现<strong>每个 step 里 75% 的时间 GPU 在等 NCCL 通信完成</strong>——GPU 显示 busy（有等待 kernel 在跑），实际什么有用功都没做。</p>
+<h3 id="5-2-正确指标：MFU-通信占比-Step-分解">5.2 正确指标：MFU + 通信占比 + Step 分解</h3>
+<p><strong>MFU（Model FLOPs Utilization）</strong> 是唯一真正反映硬件有效算力的指标：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">MFU = 实际 FLOPs/s ÷ 硬件峰值 FLOPs/s</span><br><span class="line"></span><br><span class="line">实际 FLOPs = 6 × N_params × Tokens_per_step      （PaLM 估算公式）</span><br><span class="line">             （6N = 2N forward + 4N backward）</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>公式要标注是近似</strong>：PaLM 论文的完整式是 <strong><code>6N + 12LHQT</code></strong>（含 dense self-attention 的额外项），<code>6N</code> 是忽略注意力项的近似。PaLM 自己说明该项对大模型很小，所以工程上常用 6N——但<strong>引用时宜注明是近似</strong>。</p>
+</blockquote>
+<p>三个口径问题必须钉死：</p>
+<ul>
+<li><strong>稠密 vs 稀疏算力</strong>：H100 SXM 的 BF16 官方数字是 <strong>稀疏 1979 TFLOPS、稠密约 989 TFLOPS</strong>，<strong>必须用稠密口径</strong>，否则 MFU 虚高一倍。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>补两处限定</strong>：一是官方 datasheet 把 <strong>989 标注为「TF32 Tensor Core（with sparsity）」</strong>，BF16 列的是 1979（with sparsity）——数值上 BF16 稠密 ≈ 1979/2 ≈ 989 成立，但<strong>引官方表时要注意标注</strong>；二是 <strong>989/1979 是 H100 SXM 的数字</strong>，<strong>H100 PCIe 是 BF16 稀疏 1513 / 稠密约 756</strong>，不加「SXM」限定口径不完整。</p>
+</blockquote>
+<ul>
+<li><strong>是否含通信</strong>：把 AllReduce 算进分母的 MFU 更低但更真实（端到端），只看计算时间的高但掩盖通信瓶颈。<strong>两种都报，先固定定义</strong>；</li>
+<li><strong>精度口径</strong>：BF16 与 FP8 峰值不同，混用会测出两种 MFU。</li>
+</ul>
+<p><strong>参考值</strong>：Llama 3 405B 论文报告的整体 BF16 MFU 是 <strong>38—43%</strong>（三个配置分别 43% / 41% / 38%，<strong>属实</strong>）。</p>
+<blockquote>
+<p>⚠️ <strong>一处来源要改</strong>：原稿写「nanoGPT 多卡约 50%+，单卡约 35-40%」。追到原始出处是 Karpathy nanoGPT 仓库的 <code>transformer_sizing.ipynb</code>：<strong>单卡实测 37.14%</strong>（与「35-40%」吻合），但 <strong>50%+ 是作者写的期望目标</strong>（“we’d prefer to be somewhere around 50%+, and not just for a single GPU but for an entire DDP run”），<strong>不是实测达到的多卡 MFU</strong>。</p>
+<p>另外「MFU 显著低于 30% 时一定存在可优化瓶颈」<strong>没有官方来源</strong>，属社区经验法则。措辞宜改为「经验上低于约 30% 通常意味着存在可排查的瓶颈」，不宜用「一定」。</p>
+</blockquote>
+<p><strong>BusBW 与 algbw 的区别</strong>（nccl-tests）：<code>algbw = S/t</code>；<code>busbw</code> 是对 algbw 乘一个与集合操作和 rank 数相关的修正因子（AllReduce 是 <code>2(n−1)/n</code>），用来反映<strong>互连硬件瓶颈速率</strong>，从而可与硬件峰值带宽直接对比。<strong>看 busbw 列，不看 algbw</strong>。</p>
+<p><strong>Step 时间分解</strong>：把一次迭代拆成 <code>compute / comm / data_load / other</code> 四段。Grafana 面板建议：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Panel 1: MFU 趋势（目标 &gt;40%）</span><br><span class="line">Panel 2: Step 时间分解堆叠图</span><br><span class="line">Panel 3: NCCL BusBW（目标接近网卡理论值）</span><br><span class="line">Panel 4: DCGM SM_ACTIVE vs PIPE_TENSOR_ACTIVE（识别用错 kernel）</span><br></pre></td></tr></table></figure>
+<h3 id="5-3-识别「空等」">5.3 识别「空等」</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"># SM 活跃但 Tensor 活跃低 → 用错 kernel 或大量等待</span><br><span class="line">DCGM_FI_PROF_SM_ACTIVE &gt; 0.8 and DCGM_FI_PROF_PIPE_TENSOR_ACTIVE &lt; 0.3</span><br></pre></td></tr></table></figure>
+<p>对比实验：正常训练任务的 <code>PIPE_TENSOR_ACTIVE</code> 与 <code>SM_ACTIVE</code> <strong>同步波动</strong>；模拟空等任务（<code>sleep</code> + 小 kernel 交替）则 <code>SM_ACTIVE</code> 高、<code>PIPE_TENSOR_ACTIVE</code> 接近 0。</p>
+<hr>
+<h2 id="六、面试深挖：cgroup-为什么管不住-GPU？">六、面试深挖：cgroup 为什么管不住 GPU？</h2>
+<p>分三层回答。</p>
+<p><strong>第一层：机制层——GPU 执行路径旁路内核调度。</strong><br>
+CPU 路径是 <code>进程 → 内核（CFS + cgroup controller）→ CPU 时间片</code>；GPU 路径是 <code>进程 → 用户态 CUDA → NVIDIA 驱动 → GPU 硬件调度器</code>。Linux 内核在这条路径上只是「传话筒」。NVIDIA 驱动注册 <code>/dev/nvidia*</code> 字符设备，用户态通过 <code>ioctl</code> 提交命令——<strong>cgroup 的 device controller 可以允许/禁止访问设备节点，但无法计量、无法限制进程提交的 kernel 数量、显存申请量或 SM 占用时长</strong>（device controller 是纯访问控制，没有计量能力，这一点<strong>核实属实</strong>）。</p>
+<p><strong>第二层：资源模型层——Device Plugin 只有「整数」。</strong><br>
+Kubernetes 的 <code>ResourceName → Quantity</code> 模型里，Device Plugin 上报的是 <code>nvidia.com/gpu: 8</code>，<strong>协议只传设备 ID 列表</strong>。调度器无法回答：GPU0 和 GPU1 之间是 NVLink 还是 PCIe？当前剩余多少显存？某个 Pod 实际用了多少算力？（<code>nvidia-smi</code> 的利用率是设备级全局值，不是 per-process。）</p>
+<p><strong>第三层：补救手段层——四种方案。</strong></p>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>原理</th>
+<th>隔离强度</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MIG</strong></td>
+<td>硬件切分 SM / L2 / 显存控制器</td>
+<td>硬件级强隔离</td>
+<td>A100+ 多租户推理</td>
+</tr>
+<tr>
+<td><strong>Time-slicing</strong></td>
+<td>用户态轮转 kernel 提交</td>
+<td>弱（无隔离）</td>
+<td>开发测试</td>
+</tr>
+<tr>
+<td><strong>MPS</strong></td>
+<td>用户态合并多进程 kernel 提交</td>
+<td>中等</td>
+<td>低延迟推理共享</td>
+</tr>
+<tr>
+<td><strong>拓扑感知调度</strong></td>
+<td>调度器约束 GPU 选择</td>
+<td>不隔离，只优化位置</td>
+<td>单租户训练</td>
+</tr>
+</tbody>
+</table>
+<p>MPS 的隔离强度值得说准：它有<strong>地址空间隔离</strong>（fully isolated GPU address spaces），故障隔离是<strong>有限</strong>的（一个 client 的致命 fault 会波及共享该 GPU 子集的所有 client），SM 是<strong>软限制</strong>（“does not reserve dedicated resources”），显存需要显式配置才有隔离。</p>
+<blockquote>
+<p>⚠️ <strong>一处时效性更正（原稿的结论已经过时）</strong></p>
+<p>原稿的收尾断言是：「只要 NVIDIA 驱动不对 cgroup v2 暴露 <code>nvidia/memory.max</code> 等 controller 接口，K8s 的 Pod 级别细粒度 GPU 资源 QoS 就永远是『尽力而为』，而非『硬保障』。」</p>
+<p><strong>这个结论现在不成立了。</strong> NVIDIA 已通过 <strong>MPS v3 memory partitioning</strong> 提供了 cgroup v2 的 GPU 显存限制，官方原文：</p>
+<blockquote>
+<p>“MPS v3 memory partitioning fractionalizes a GPU’s device memory across cgroups and containers… Unlike the older userspace memory limits, this feature accounts for all device memory and <strong>integrates with the Linux kernel cgroup controllers</strong>.”<br>
+“<strong>Hard limit maps to <code>dmem.max</code></strong>… <strong>Soft limit maps to <code>dmem.min</code></strong>.”<br>
+后端：kernel <strong>6.14+</strong> 有 DMEM controller 时用 <code>dmem</code>；否则回退到驱动内部的 <code>misc</code> 后端做 per-cgroup 记账。需要 <strong>cgroup v2</strong> 且 <strong>CUDA 13.4+</strong>，且不支持 MIG 设备。</p>
+</blockquote>
+<p>接口名是内核标准的 <strong><code>dmem.max</code> / <code>dmem.min</code></strong>，不是 <code>nvidia/memory.max</code>。设置方式：<code>nvidia-smi memory-limits --set -n &lt;cgroup路径&gt; --hard-limit ... </code>。</p>
+<p><strong>所以准确的结论是</strong>：GPU 显存的 cgroup 级硬限制<strong>已经存在</strong>，但很新、对内核版本（≥6.14）与 CUDA 版本（≥13.4）有要求、且不支持 MIG。旧结论不是错，是<strong>过时</strong>。</p>
+</blockquote>
+<hr>
+<h2 id="七、生产避坑清单">七、生产避坑清单</h2>
+<p><strong>调度层</strong></p>
+<ul>
+<li>Gang 语义失效时先看 Pod 是否永久 Pending、<code>schedulerName</code> 是否指向不存在的调度器（<strong>不是</strong>「不写 schedulerName」）；</li>
+<li>MIG 模式下 device plugin 需传 <code>--mig-strategy</code>（<code>none|single|mixed</code>，默认 <code>none</code>）；</li>
+<li>内核升级后 <code>/dev/nvidia*</code> 可能消失，Device Plugin 报错但 DaemonSet 仍 Running。</li>
+</ul>
+<p><strong>网络层</strong></p>
+<ul>
+<li><strong>NCCL 静默回退 Socket</strong> 是最隐蔽的坑——默认 WARN 级别看不到回退消息，<strong>必须开 <code>NCCL_DEBUG=INFO</code> 主动 grep</strong>；</li>
+<li><code>NCCL_IB_HCA</code> 记得加 <code>=</code> 前缀（否则前缀匹配会误命中 <code>mlx5_1x</code>）；</li>
+<li>NCCL 2.21+ <strong>不要再手动设 <code>NCCL_IB_GID_INDEX</code></strong>，让它自动选；</li>
+<li>PFC/ECN 未配 → 拥塞时静默丢包，AllReduce 随机挂起。</li>
+</ul>
+<p><strong>存储层</strong></p>
+<ul>
+<li><code>cache-dir</code> 必须指向<strong>独立持久卷</strong>，不能是 emptyDir；</li>
+<li><code>cache-size</code> 单位是 <strong>MiB</strong>，默认 102400（=100 GiB）；</li>
+<li>CSI 挂载参数写在标准 <strong><code>mountOptions</code></strong> 字段，不是 <code>juicefs/mount-options</code>；</li>
+<li>随机读放大调的是 <strong><code>--prefetch</code></strong>，不是 <code>--readahead</code>；</li>
+<li>预热任务避开训练高峰，或用 <code>-p/--threads</code> 限流。</li>
+</ul>
+<p><strong>可观测性层</strong></p>
+<ul>
+<li>MFU 口径（稠密/稀疏、含不含通信、精度）必须在团队内钉死；</li>
+<li>DCGM 指标名有 <code>*_ACTIVE</code> → <code>*_UTIL_RATIO</code> 的改名史，跨版本做面板要映射；</li>
+<li><code>kubectl top</code> 看不到 GPU——它只采 cgroup 数据。</li>
+</ul>
+<hr>
+<h2 id="八、集群自查速查">八、集群自查速查</h2>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. 调度死锁：大量 Pending 意味着资源错配</span></span><br><span class="line">kubectl get pods -A | grep -E <span class="string">&#x27;Pending|ContainerCreating&#x27;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 是否真正启用 Volcano（看有没有 PodGroup 资源）</span></span><br><span class="line">kubectl get podgroup -A</span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. NCCL 是否走 RDMA（只有 Socket 行说明配置有问题）</span></span><br><span class="line">kubectl logs &lt;training-pod&gt; | grep -E <span class="string">&quot;NET/IB|NET/Socket|Using network&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. 存储缓存层是否启用</span></span><br><span class="line">kubectl get pvc -A | grep juicefs</span><br><span class="line"></span><br><span class="line"><span class="comment"># 5. GPU 拓扑：确认需要高速通信的进程是否在同一 NVLink 域</span></span><br><span class="line">kubectl <span class="built_in">exec</span> -it &lt;gpu-pod&gt; -- nvidia-smi topo -m</span><br><span class="line"></span><br><span class="line"><span class="comment"># 6. GPU 真实利用率：区分 busy 和真正在计算</span></span><br><span class="line">curl http://&lt;dcgm-exporter&gt;:9400/metrics | grep -E <span class="string">&quot;DCGM_FI_PROF_(SM|PIPE_TENSOR)_ACTIVE&quot;</span></span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="九、结语：跨越鸿沟的本质是建立数据面思维">九、结语：跨越鸿沟的本质是建立数据面思维</h2>
+<p>AI Infra 的核心不是「学几个新工具」，而是<strong>从控制面思维转向数据面思维</strong>——关注点从「资源能否被分配」变成「数据能否被高效搬运和计算」。</p>
+<p>五道鸿沟对应五个数据面本质：</p>
+<ul>
+<li><strong>调度</strong>的本质是「同步语义的资源整组性」；</li>
+<li><strong>网络</strong>的本质是「绕过内核的数据直通」；</li>
+<li><strong>存储</strong>的本质是「缓存层与持久层的解耦」；</li>
+<li><strong>虚拟化</strong>的本质是「硬件级隔离与拓扑亲和」；</li>
+<li><strong>可观测性</strong>的本质是「从时间占用到有效算力的度量」。</li>
+</ul>
+<p>当你能从一次训练的 NCCL 日志反推出物理网络拓扑，能从 MFU 的下降趋势定位到具体是通信还是数据加载瓶颈，能解释清楚 cgroup 管不住 GPU 的三层机制（以及它正在被 MPS v3 补齐）——三万薪资天花板，自然就不再是天花板。</p>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</a>——上一讲：<code>nvidia-smi topo -m</code> 的六个缩写、Ring AllReduce 的木桶效应、RDMA 千分之一丢包的连锁反应</li>
+<li><a href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/">AI Infra 全景复盘：GPU 性能、分布式训练与调度层深潜</a>——并行策略、Nsight 剖析流程与调度器对比</li>
+<li><a href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/">RDMA 全链路拆解：从 verbs 到硬件再到训练平台落点</a>——RDMA 的完整分层</li>
+<li><a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">K8s GPU 复用与 HAMi 异构架构全解</a>——GPU 共享与超卖的工程实现</li>
+<li><a href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/">Volcano Queue 全流程拆解</a>——队列、配额与准入的完整链路</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文的技术论断逐条核对自一手来源——Volcano 源码（<code>pkg/webhooks/admission/jobs/mutate/mutate_job.go</code>、<code>pkg/util/util.go</code>、插件目录）与官方文档、Kubernetes 官方文档（扩展资源、多调度器）、NVIDIA MIG User Guide（supported-mig-profiles）、NVIDIA k8s-device-plugin 与 GPU Feature Discovery 文档、NCCL 2.32.3 官方环境变量文档与 master 分支源码（<code>net_ib/init.cc</code>、<code>net_socket/common.cc</code>、<code>plugin/net.cc</code>）、nccl-tests <a target="_blank" rel="noopener" href="http://PERFORMANCE.md">PERFORMANCE.md</a>、PaLM 论文（arXiv:2204.02311）、Llama 3 论文（arXiv:2407.21783）、DCGM 源码 <code>dcgm_fields.h</code> 与 dcgm-exporter 指标文档、JuiceFS 官方命令参考与缓存指南。</p>
+<p><strong>原稿更正汇总</strong>：<code>schedulerName</code> 的 webhook 行为（说反了）、<code>rdma/hca</code> 的插件归属、<code>gpu-topology-aware</code> 不是 Volcano 插件、<code>overengineering</code> 字段不存在、<strong>A100 MIG profile 代次张冠李戴</strong>、<code>--mig-strategy</code> 漏 <code>none</code>、GFD 标签名（点号、<code>nvlink</code> 不存在）、<strong>Ring AllReduce 每步数据量写错</strong>、550GB 的口径（每卡而非集群）、<code>NCCL_IB_TIMEOUT</code> 默认值（20 非 18）、NCCL 日志字符串大小写与 OOB 后缀、GID index 映射、1% 丢包→50% 延迟无出处、<strong>JuiceFS CSI 参数名应为 <code>mountOptions</code></strong>、<code>warmup -c</code> 的版本归属、<code>warmup --check</code> 的语义、随机读放大归因（prefetch 非 readahead）、DCGM 指标名的规范名对照、<code>nvidia-smi</code> 采样周期、MPS v3 已提供 cgroup v2 GPU 内存限制（原结论过时）。另有<strong>一组第三方单来源的实测数字已标注来源与未验证状态</strong>。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/">https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Volcano/">Volcano</a><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/AI%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD/">AI基础设施</a><a class="post-meta__tags" href="/tags/Gang%E8%B0%83%E5%BA%A6/">Gang调度</a><a class="post-meta__tags" href="/tags/JuiceFS/">JuiceFS</a><a class="post-meta__tags" href="/tags/MIG/">MIG</a><a class="post-meta__tags" href="/tags/DCGM/">DCGM</a><a class="post-meta__tags" href="/tags/MFU/">MFU</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：kubelet 不直接创建容器，它只通过 CRI（Container Runtime Interface）下达指令；真正干活的是高级运行时（containerd / CRI-O）和低级运行时（runc / kata-agent / runsc）。沙盒选型的本质，就是在决定「谁来接 kubelet 的 CRI 调用」以及「容器进程最终跑在什么隔离边界里」。对具身智能公司而言，仿真训练、Agent 工具调用、强隔离 VM、真机设备接入这四类负载对应完全不同的运行时组合——不存在一个「万能沙盒」能同时满足。  这篇是 具身智能仿真场景的沙盒选型 的下层视角。上篇回答「该选哪个沙盒」，这篇回答「沙盒插在运行时栈的哪一层、跟 kubelet 怎么耦合」。 本文的架构描述逐条核对自 Kubernetes 官方文档、containerd 源码与文档、Kata/gVisor/Firecracker 官方文档与仓库。核对中发现原稿有十余处需要更正，已在文中以 ⚠️ 标注。  一、先立骨架：kubelet 之下的运行时栈分层 Kubernetes 的容器运行时体系是明确的两层结构，这个...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：Agent 沙盒系统绕过 kubelet，不只是为了隔离——调度本身才是更根本的动机。当沙盒生命周期被压缩到毫秒级、当 pause/resume/fork 成为常规操作而非异常事件、当内存超卖成为设计目标而非运维事故，Kubernetes scheduler 那套为「秒级生命周期 Pod、删除是异常事件」设计的调度路径，就从基础设施变成了瓶颈。 AgentENV（kvcache-ai）和 CubeSandbox（腾讯云）给出了两个不同风格的答案：前者做减法，把调度器简化到只剩资源过滤 + 两种朴素策略；后者做分层，把控制面完全做成无状态、协调状态押在 Redis 上。  这是沙盒系列第三篇。前两篇分别回答「选哪个沙盒」和「沙盒插在运行时栈的哪一层」；这篇回答「为什么这两套系统连调度都要自己写」。 本文的组件名、RPC 清单、状态枚举、调度流程逐条核对自两个项目的源码与官方文档。核对中发现原稿有七处需要更正，其中一条数字查无出处已删除，已在文中以 ⚠️ 标注。  一、问题：Agent 沙盒负载对调度器提出了什么要求 先把矛盾摆清楚。传统 K8s 集群里，schedul...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/" title="K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：控制面决定「能不能跑」，数据面决定「跑多快」。K8s 的功夫全在控制面——把 Pod 调度起来、把副本数维持住；而大模型训练真正的痛点，是 GPU 之间、机器之间的数据流动快不快、堵不堵。kubectl get pods 全绿但 MFU 上不去，是典型的控制面看不见的数据面问题。  本文基于 B 站视频《K8s 很熟，为什么月薪卡在三万？大模型 AI Infra 第一讲：从控制面走到数据面》的内容框架整理，其中的技术细节我对照 NVIDIA 官方文档（nvidia-smi 拓扑定义、NCCL 环境变量文档）与相关论文做了核实与补全。核对过程中发现原稿有四处需要更正的地方，已在文中标注。  一、为什么 K8s 玩得溜，月薪却卡在三万 很多云原生工程师 K8s 炉火纯青：写 YAML、调 Deployment、写 Operator、排 Pod 故障、扩缩集群，整套控制面技术一气呵成，但薪资天花板死死卡在三万上下。而那些看起来「只是会跑 nccl-tests」的 AI Infra 同事，年薪轻松翻倍。 差距不在于会不会写 YAML，而在于是否看懂了 K8s 之下的数据面。...</div></div></div></a><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</div></div><div class="info-2"><div class="info-item-1">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区 2026 年 8 月 17 日,SIGCOMM 2026 在丹佛开会的第一天,第三届 Networks for AI Computing workshop(NAIC '26)上出现了一篇只有 6 页的论文:《RDMATracer: A scalable eBPF-based framework for tracing RDMA syscalls》。作者名单几乎全是 Meta 的生产工程师与网络研究员——Prankur Gupta、Miao Xu、Maxim Samoylov、Prashanth Kannan、Rajiv Krishnamurthy,加上 CMU 的 Theophilus A. Benson。 论文标题很平实,讲的是一个已经在线上连续运行多年的 eBPF 工具。但它要回答的问题一点都不平实:当十万卡规模的 AI 训练集群任务崩溃时,为什么有一类故障在所有现成的监控系统里都看不到? 这篇文章是我读完论文和配套的 LPC 2025、FOSDEM 2026 演讲材料之后的拆解笔记。我最感兴...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/" title="Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</div></div><div class="info-2"><div class="info-item-1">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道 在大模型分布式训练的 Kubernetes 集群里,macvlan 会被用到,但角色非常特定:它作为辅助网络为 Pod 提供访问高性能 RDMA 网络的&quot;共享&quot;通道,而不是承担集群默认网络的职责。 默认网络(控制面通信、Service 访问)通常由 Calico/Cilium/OVN 等标准 CNI 负责,macvlan 网卡通过 Multus 附加,专门承载 GPU 之间的训练数据流。  一、为什么大模型训练需要独立的 RDMA 网络 理解 macvlan 的定位,先要理解训练流量对网络的压力。在 PyTorch FSDP 或 DeepSpeed ZeRO 的分片训练中,每一层前向/反向传播前都要在全量 GPU 间 gather 分片权重,mini-batch 结束后要 all-reduce 梯度——这些集合通信在集群规模上可达数十 Gbit/s 的峰值流量。 如果这些流量走默认的 Overlay 网络(如 OVN-Kubernetes),内核协议栈的封解包、netfilter 处理...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E9%81%93%E9%B8%BF%E6%B2%9F%E6%80%BB%E8%A7%88"><span class="toc-number">1.</span> <span class="toc-text">五道鸿沟总览</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%B0%83%E5%BA%A6%E9%B8%BF%E6%B2%9F%EF%BC%9A%E5%88%AB%E6%8A%8A-GPU-%E5%BD%93-CPU-%E8%B0%83%E5%BA%A6"><span class="toc-number">2.</span> <span class="toc-text">一、调度鸿沟：别把 GPU 当 CPU 调度</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E4%BC%A0%E7%BB%9F-K8s-%E8%B0%83%E5%BA%A6%E7%9A%84%E8%87%B4%E5%91%BD%E9%97%AE%E9%A2%98"><span class="toc-number">2.1.</span> <span class="toc-text">1.1 传统 K8s 调度的致命问题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-%E8%A7%A3%E5%86%B3%E6%80%9D%E8%B7%AF%EF%BC%9AGang-%E8%B0%83%E5%BA%A6-Volcano"><span class="toc-number">2.2.</span> <span class="toc-text">1.2 解决思路：Gang 调度 + Volcano</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-%E8%BF%9B%E9%98%B6%EF%BC%9A%E5%A4%9A%E7%BB%B4%E9%85%8D%E6%AF%94%E4%B8%8E%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5"><span class="toc-number">2.3.</span> <span class="toc-text">1.3 进阶：多维配比与拓扑感知</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-4-%E5%AE%9E%E6%88%98%E5%A4%8D%E7%8E%B0%EF%BC%9A%E5%9C%A8-Kind-%E4%B8%8A%E9%AA%8C%E8%AF%81%E6%AD%BB%E9%94%81"><span class="toc-number">2.4.</span> <span class="toc-text">1.4 实战复现：在 Kind 上验证死锁</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-5-%E8%B0%83%E5%BA%A6%E5%B1%82%E9%9D%A2%E9%AB%98%E9%A2%91%E8%B8%A9%E5%9D%91"><span class="toc-number">2.5.</span> <span class="toc-text">1.5 调度层面高频踩坑</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E7%BD%91%E7%BB%9C%E9%B8%BF%E6%B2%9F%EF%BC%9ATCP-%E6%89%9B%E4%B8%8D%E4%BD%8F%E9%9B%86%E5%90%88%E9%80%9A%E4%BF%A1"><span class="toc-number">3.</span> <span class="toc-text">二、网络鸿沟：TCP 扛不住集合通信</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E4%B8%BA%E4%BB%80%E4%B9%88-AllReduce-%E5%AF%B9%E7%BD%91%E7%BB%9C%E5%A6%82%E6%AD%A4%E6%95%8F%E6%84%9F"><span class="toc-number">3.1.</span> <span class="toc-text">2.1 为什么 AllReduce 对网络如此敏感</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-RDMA-NCCL%EF%BC%9A%E7%BB%95%E8%BF%87%E5%86%85%E6%A0%B8"><span class="toc-number">3.2.</span> <span class="toc-text">2.2 RDMA + NCCL：绕过内核</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-K8s-%E4%B8%AD%E5%90%AF%E7%94%A8-RDMA"><span class="toc-number">3.3.</span> <span class="toc-text">2.3 K8s 中启用 RDMA</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-NCCL-%E5%85%B3%E9%94%AE%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%EF%BC%88%E5%90%AB%E5%AE%98%E6%96%B9%E9%BB%98%E8%AE%A4%E5%80%BC%EF%BC%89"><span class="toc-number">3.4.</span> <span class="toc-text">2.4 NCCL 关键环境变量（含官方默认值）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E9%AA%8C%E8%AF%81-RDMA-%E6%98%AF%E5%90%A6%E7%94%9F%E6%95%88"><span class="toc-number">3.5.</span> <span class="toc-text">2.5 验证 RDMA 是否生效</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-6-%E7%BD%91%E7%BB%9C%E5%B1%82%E9%9D%A2%E9%AB%98%E9%A2%91%E8%B8%A9%E5%9D%91"><span class="toc-number">3.6.</span> <span class="toc-text">2.6 网络层面高频踩坑</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%AD%98%E5%82%A8%E9%B8%BF%E6%B2%9F%EF%BC%9A%E5%86%B7%E5%90%AF%E5%8A%A8%E6%89%93%E6%BB%A1%E6%BA%90%E7%AB%99"><span class="toc-number">4.</span> <span class="toc-text">三、存储鸿沟：冷启动打满源站</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E7%97%9B%E7%82%B9%E9%87%8F%E5%8C%96"><span class="toc-number">4.1.</span> <span class="toc-text">3.1 痛点量化</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-JuiceFS-%E5%88%86%E5%B8%83%E5%BC%8F%E7%BC%93%E5%AD%98-%E9%A2%84%E7%83%AD"><span class="toc-number">4.2.</span> <span class="toc-text">3.2 JuiceFS + 分布式缓存 + 预热</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E7%BC%93%E5%AD%98%E9%A2%84%E7%83%AD"><span class="toc-number">4.3.</span> <span class="toc-text">3.3 缓存预热</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E5%AD%98%E5%82%A8%E5%B1%82%E9%9D%A2%E9%AB%98%E9%A2%91%E8%B8%A9%E5%9D%91"><span class="toc-number">4.4.</span> <span class="toc-text">3.4 存储层面高频踩坑</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E8%99%9A%E6%8B%9F%E5%8C%96%E9%B8%BF%E6%B2%9F%EF%BC%9AGPU-%E4%B8%8D%E6%98%AF%E6%9B%B4%E5%BF%AB%E7%9A%84-CPU"><span class="toc-number">5.</span> <span class="toc-text">四、虚拟化鸿沟：GPU 不是更快的 CPU</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E4%B8%89%E5%B1%82%E5%A4%B1%E6%95%88"><span class="toc-number">5.1.</span> <span class="toc-text">4.1 三层失效</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-MIG%EF%BC%9A%E7%A1%AC%E4%BB%B6%E7%BA%A7%E5%88%87%E5%88%86"><span class="toc-number">5.2.</span> <span class="toc-text">4.2 MIG：硬件级切分</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5"><span class="toc-number">5.3.</span> <span class="toc-text">4.3 拓扑感知</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E7%94%A8-DCGM-%E7%9C%8B%E7%9C%9F%E5%AE%9E%E5%88%A9%E7%94%A8%E7%8E%87"><span class="toc-number">5.4.</span> <span class="toc-text">4.4 用 DCGM 看真实利用率</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%8F%AF%E8%A7%82%E6%B5%8B%E6%80%A7%E9%B8%BF%E6%B2%9F%EF%BC%9A%E5%88%A9%E7%94%A8%E7%8E%87-100-%EF%BC%8C%E5%8D%B4%E5%9C%A8%E7%A9%BA%E7%AD%89"><span class="toc-number">6.</span> <span class="toc-text">五、可观测性鸿沟：利用率 100%，却在空等</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E4%BC%A0%E7%BB%9F%E7%9B%91%E6%8E%A7%E7%9A%84%E7%9B%B2%E5%8C%BA"><span class="toc-number">6.1.</span> <span class="toc-text">5.1 传统监控的盲区</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E6%AD%A3%E7%A1%AE%E6%8C%87%E6%A0%87%EF%BC%9AMFU-%E9%80%9A%E4%BF%A1%E5%8D%A0%E6%AF%94-Step-%E5%88%86%E8%A7%A3"><span class="toc-number">6.2.</span> <span class="toc-text">5.2 正确指标：MFU + 通信占比 + Step 分解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E8%AF%86%E5%88%AB%E3%80%8C%E7%A9%BA%E7%AD%89%E3%80%8D"><span class="toc-number">6.3.</span> <span class="toc-text">5.3 识别「空等」</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E9%9D%A2%E8%AF%95%E6%B7%B1%E6%8C%96%EF%BC%9Acgroup-%E4%B8%BA%E4%BB%80%E4%B9%88%E7%AE%A1%E4%B8%8D%E4%BD%8F-GPU%EF%BC%9F"><span class="toc-number">7.</span> <span class="toc-text">六、面试深挖：cgroup 为什么管不住 GPU？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E7%94%9F%E4%BA%A7%E9%81%BF%E5%9D%91%E6%B8%85%E5%8D%95"><span class="toc-number">8.</span> <span class="toc-text">七、生产避坑清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E9%9B%86%E7%BE%A4%E8%87%AA%E6%9F%A5%E9%80%9F%E6%9F%A5"><span class="toc-number">9.</span> <span class="toc-text">八、集群自查速查</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E7%BB%93%E8%AF%AD%EF%BC%9A%E8%B7%A8%E8%B6%8A%E9%B8%BF%E6%B2%9F%E7%9A%84%E6%9C%AC%E8%B4%A8%E6%98%AF%E5%BB%BA%E7%AB%8B%E6%95%B0%E6%8D%AE%E9%9D%A2%E6%80%9D%E7%BB%B4"><span class="toc-number">10.</span> <span class="toc-text">九、结语：跨越鸿沟的本质是建立数据面思维</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/" title="agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差">agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-%E4%B8%BA%E6%9C%AC%E7%A7%91%E7%94%9F%E8%AE%BE%E8%AE%A1%E4%B8%80%E9%97%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83Infra%E8%AF%BE/" title="为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单">为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,680 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Blackwell 与 Rubin：从路线图到训推优化 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="把 NVIDIA 数据中心 GPU 的路线图、Blackwell&#x2F;Rubin 两代架构细节、以及训练推理两侧的优化主线串成一条因果链——双 die + 微缩放低精度如何让 FP8&#x2F;FP4 成为主线，NVLink 大域如何让机架成为部署单元，HBM 带宽与算力的不对称如何催生出 prefill&#x2F;decode 分离与 Rubin CPX 这样的专用 SKU。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Blackwell 与 Rubin：从路线图到训推优化">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/04/2026-11-04-Blackwell%E4%B8%8ERubin%E4%BB%8E%E8%B7%AF%E7%BA%BF%E5%9B%BE%E5%88%B0%E8%AE%AD%E6%8E%A8%E4%BC%98%E5%8C%96/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="把 NVIDIA 数据中心 GPU 的路线图、Blackwell&#x2F;Rubin 两代架构细节、以及训练推理两侧的优化主线串成一条因果链——双 die + 微缩放低精度如何让 FP8&#x2F;FP4 成为主线，NVLink 大域如何让机架成为部署单元，HBM 带宽与算力的不对称如何催生出 prefill&#x2F;decode 分离与 Rubin CPX 这样的专用 SKU。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-03T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-04T10:38:06.021Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="NVIDIA">
+<meta property="article:tag" content="大模型训练">
+<meta property="article:tag" content="Blackwell">
+<meta property="article:tag" content="Rubin">
+<meta property="article:tag" content="GPU架构">
+<meta property="article:tag" content="FP8">
+<meta property="article:tag" content="NVFP4">
+<meta property="article:tag" content="推理优化">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Blackwell 与 Rubin：从路线图到训推优化",
+  "url": "https://roger-lv.github.io/2026/11/04/2026-11-04-Blackwell%E4%B8%8ERubin%E4%BB%8E%E8%B7%AF%E7%BA%BF%E5%9B%BE%E5%88%B0%E8%AE%AD%E6%8E%A8%E4%BC%98%E5%8C%96/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-03T16:00:00.000Z",
+  "dateModified": "2026-11-04T10:38:06.021Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/04/2026-11-04-Blackwell%E4%B8%8ERubin%E4%BB%8E%E8%B7%AF%E7%BA%BF%E5%9B%BE%E5%88%B0%E8%AE%AD%E6%8E%A8%E4%BC%98%E5%8C%96/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Blackwell 与 Rubin：从路线图到训推优化',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Blackwell 与 Rubin：从路线图到训推优化</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Blackwell 与 Rubin：从路线图到训推优化</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-04T10:38:06.021Z" title="更新于 2026-11-04 18:38:06">2026-11-04</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/04/2026-11-04-Blackwell%E4%B8%8ERubin%E4%BB%8E%E8%B7%AF%E7%BA%BF%E5%9B%BE%E5%88%B0%E8%AE%AD%E6%8E%A8%E4%BC%98%E5%8C%96/" data-flag-title="Blackwell 与 Rubin：从路线图到训推优化"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：Blackwell 和 Rubin 的硬件特性，直接决定了软件侧该往哪优化。<strong>双 die + 微缩放低精度 → FP8/FP4 成为训练推理主线；NVLink 大域 → 机架成为标准部署单元；HBM 带宽与算力的不对称 → prefill/decode 分离与专用 SKU（Rubin CPX）出现。</strong> 看清这三对因果，比记住任何单个规格数字都有用。</p>
+</blockquote>
+<p>本文对照 NVIDIA 官方白皮书、产品页、GTC 主题演讲与相关论文逐条核对过数字。<strong>核对中发现原稿有七处需要更正，其中一处是时效性问题——NVIDIA 在 2026 年下半年下调了 Rubin 的多个规格</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="一、全局视角：NVIDIA-数据中心-GPU-路线图">一、全局视角：NVIDIA 数据中心 GPU 路线图</h2>
+<p>NVIDIA 的数据中心架构以科学家姓氏命名，并且已经从两年一代切换到<strong>一年一代</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>架构</th>
+<th>上市时间</th>
+<th>代表产品</th>
+<th>关键规格特征</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ampere</td>
+<td>2020</td>
+<td>A100</td>
+<td>第一代 MIG、BF16/TF32</td>
+</tr>
+<tr>
+<td>Hopper</td>
+<td>2022（H100）/ 2023（H200）</td>
+<td>H100 / H200</td>
+<td>第一代 Transformer Engine、FP8、NVLink 4</td>
+</tr>
+<tr>
+<td><strong>Blackwell</strong></td>
+<td>2024（B200/GB200）/ <strong>2025（B300/GB300）</strong></td>
+<td>B200、GB200 NVL72、B300</td>
+<td>双 die、NVFP4、NVLink 5、HBM3e</td>
+</tr>
+<tr>
+<td><strong>Rubin</strong></td>
+<td>2026</td>
+<td>Vera Rubin NVL72、Rubin CPX</td>
+<td>HBM4、NVLink 6</td>
+</tr>
+<tr>
+<td>Rubin Ultra</td>
+<td>2027（规划）</td>
+<td>VR300</td>
+<td>100 PFLOPS FP4、1TB HBM4e（规格见 §3.5）</td>
+</tr>
+<tr>
+<td>Feynman</td>
+<td>2028（规划）</td>
+<td>—</td>
+<td>Rosa CPU、NVLink 8、自定义 HBM</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正两处年份</strong>：<strong>H200 是 2023 年</strong>发布，不是 2022（Hopper 代的 2022 指 H100）；<strong>B300 / Blackwell Ultra 是 2025 年</strong>发布，不是 2024。</p>
+</blockquote>
+<p>「一年一代」这个说法有明确官方依据：黄仁勋在 <strong>2024 年 5 月财报电话会</strong>上表示 Blackwell 之后仍会保持一年一次的更新节奏，并在 <strong>Computex 2024 主题演讲</strong>中公开展示了年度架构路线图。此前是两年一代（Ampere 2020 → Hopper 2022 → Blackwell 2024）。</p>
+<hr>
+<h2 id="二、Blackwell：为万亿参数模型而生的「双-die-机架级」">二、Blackwell：为万亿参数模型而生的「双 die + 机架级」</h2>
+<p>相对 Hopper 的跨越主要在四个维度。</p>
+<h3 id="2-1-计算层：双-die-合封-微缩放低精度">2.1 计算层：双 die 合封 + 微缩放低精度</h3>
+<p>每颗 Blackwell 由两块 <strong>reticle 极限的 die</strong> 通过 <strong>NV-HBI</strong>（NVIDIA High-Bandwidth Interface）拼成「逻辑上的单 GPU」。官方白皮书原文：</p>
+<blockquote>
+<p>The two dies are connected and unified with a single <strong>10 terabyte-per-second (TB/s) chip-to-chip NVIDIA High-Bandwidth Interface (NV-HBI)</strong>, providing one fully coherent chip.</p>
+</blockquote>
+<p>总晶体管 <strong>2080 亿</strong>（官方口径：“Built with 208 billion transistors, more than 2.5x the amount of transistors in NVIDIA Hopper GPUs”）。</p>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「总晶体管 208B（每 die 104B）」。<strong>104B/die 在 NVIDIA 官方文本中查无实据</strong>——官方只给 208B 总量与「两颗 reticle 极限 die」。104B 是 208/2 的二手推算，引用时宜标注为推算值。</p>
+</blockquote>
+<p>两颗 die <strong>共享完全一致的 L2、内存访问完全一致</strong>（官方：“Full coherence: Shared L2 cache with fully coherent memory accesses”），对 CUDA 程序员呈现为单一设备。</p>
+<blockquote>
+<p>补充一句边界：<strong>「完全透明」是官方口径，但跨 die 的 NV-HBI 交互并非零成本</strong>。有微基准论文指出其测试&quot;primarily exercised single-die behavior&quot;，跨 die 延迟仍是待研究的开放问题。做极限性能优化时不能默认跨 die 免费。</p>
+</blockquote>
+<h3 id="2-2-微缩放：4bit-能进生产的关键">2.2 微缩放：4bit 能进生产的关键</h3>
+<p>第五代 Tensor Core 引入 <strong>NVFP4 / MXFP8 微缩放格式</strong>——分组浮点，每组元素共享一个 scaling factor。这里有两个数字必须分清：</p>
+<table>
+<thead>
+<tr>
+<th>格式</th>
+<th>block size</th>
+<th>scale 类型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>NVFP4</strong></td>
+<td><strong>16</strong></td>
+<td>E4M3</td>
+</tr>
+<tr>
+<td><strong>MXFP4 / MXFP8 / MXFP6 / MXINT8</strong></td>
+<td><strong>32</strong></td>
+<td>E8M0（幂次）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正（这条影响论证）</strong>：原稿写「NVFP4/MXFP8 微缩放格式，即每 16 个元素共享一个 scaling factor」。<strong>MXFP8 的 block size 是 32，不是 16</strong>——NVIDIA 官方格式表写得很明确（<code>MXFP8 | E5M2/E4M3 | 8 | 32 | E8M0</code>）。只有 <strong>NVFP4 是 16</strong>。</p>
+</blockquote>
+<p>为什么这个区别重要？因为「4bit 能用于生产」的论证正建立在 block 变小的基础上。NVIDIA 官方博客原文：</p>
+<blockquote>
+<p><strong>By reducing the block size from 32 to 16 elements compared to MXFP4, NVFP4 minimizes the influence of outliers and enables more precise scaling. This finer granularity reduces quantization error and improves overall model accuracy.</strong></p>
+</blockquote>
+<p>注意对比对象是 <strong>MXFP4（block 32）</strong>，不是 MXFP8。NVIDIA 的 JAX/MaxText 量化实验给了个具体量级：8B 模型 1T token 训练中，<strong>MXFP4 需要多约 36% 的 token 才能追平 NVFP4 的最终 loss</strong>。</p>
+<h3 id="2-3-互联层：NVLink-5-NVSwitch">2.3 互联层：NVLink 5 + NVSwitch</h3>
+<p>单卡 <strong>NVLink 5 双向 1.8 TB/s</strong>（Hopper 的 2 倍）。72 卡 NVL72 机架内通过 NVLink Switch 形成 <strong>130 TB/s</strong> 的全域带宽，让 72 颗 GPU 表现得像一颗巨型 GPU。</p>
+<p>GB200 Superchip 则用 <strong>NVLink-C2C（900 GB/s）</strong> 把两颗 Blackwell GPU 与一颗 Grace CPU 直连成超级芯片。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处容量口径</strong>：原稿写 Superchip「HBM3e 达 384GB / 16 TB/s」。<strong>官方产品页现列 372 GB</strong>（= 2×186 GB 可用容量）；384 GB 是 2×192 GB 的物理口径。16 TB/s 带宽属实。两者需注明口径差异。</p>
+</blockquote>
+<h3 id="2-4-内存与系统层">2.4 内存与系统层</h3>
+<p>GB200 NVL72 = <strong>72 GPU + 36 Grace CPU + 全液冷</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正（这处是重复计数）</strong>：原稿写「13.5 TB GPU 显存 + 30 TB 系统总内存」。实际官方是 <strong>13.4 TB HBM3e</strong>，而那个 <strong>30 TB 是 NVIDIA 所说的 “fast memory”，= 13.4 TB GPU HBM + 17 TB CPU LPDDR5X 之和</strong>——它不是一个独立于 GPU 显存的「系统内存」。两者并列写会重复计算。</p>
+</blockquote>
+<p><strong>两个性能宣称的基线不同，别混：</strong></p>
+<table>
+<thead>
+<tr>
+<th>宣称</th>
+<th>倍数</th>
+<th>基线</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>万亿参数模型实时推理</td>
+<td><strong>30×</strong></td>
+<td><strong>H100</strong></td>
+</tr>
+<tr>
+<td>MoE 架构</td>
+<td><strong>10×</strong></td>
+<td><strong>H200（HGX H200）</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿把两个都算成对 H100。30× 确实是对 H100（官方：“up to a 30x performance increase compared to the same number of NVIDIA H100 Tensor Core GPUs”）；但 <strong>10× MoE 的基线是 HGX H200</strong>，NVIDIA 的 MoE 专文写得很明确。</p>
+</blockquote>
+<h3 id="2-5-专用引擎">2.5 专用引擎</h3>
+<ul>
+<li><strong>第二代 Transformer Engine</strong>：为 FP8 / FP6 / NVFP4 优化，自动处理分块、动态缩放与低比特矩阵乘；</li>
+<li><strong>800 GB/s 硬件解压引擎</strong>；</li>
+<li><strong>业界首个支持 TEE-I/O 的机密计算 GPU</strong>。</li>
+</ul>
+<hr>
+<h2 id="三、Rubin：延续-Blackwell-体系，物理层大跃迁">三、Rubin：延续 Blackwell 体系，物理层大跃迁</h2>
+<p>Rubin 基本继承 Blackwell 的「微缩放低精度 + NVLink 大域」框架，在物理层做了一次跃迁。</p>
+<h3 id="3-1-核心规格">3.1 核心规格</h3>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>规格</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>晶体管 / 封装</td>
+<td><strong>3360 亿</strong>，2 die 合封，NV-HBI 互连</td>
+</tr>
+<tr>
+<td>制程</td>
+<td>台积电 N3（业界一致报道为 N3P + CoWoS-L）</td>
+</tr>
+<tr>
+<td>SM / Tensor Core</td>
+<td><strong>224 个 SM、896 个 Tensor Core</strong></td>
+</tr>
+<tr>
+<td>显存</td>
+<td><strong>288 GB HBM4</strong></td>
+</tr>
+<tr>
+<td>显存带宽</td>
+<td><strong>19.2 TB/s</strong>（发布时为 22 TB/s，见 §3.4）</td>
+</tr>
+<tr>
+<td>算力</td>
+<td><strong>50 PFLOPS NVFP4 推理（sparse）/ 35 PFLOPS NVFP4 训练（dense）</strong></td>
+</tr>
+<tr>
+<td>互联</td>
+<td><strong>NVLink 6，每 GPU 双向 3 TB/s</strong></td>
+</tr>
+<tr>
+<td>CPU</td>
+<td>Vera CPU，<strong>88 个 NVIDIA 自研 Olympus 核</strong>（Arm 兼容），176 线程</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正两处</strong>：</p>
+<ol>
+<li><strong>50 / 35 PFLOPS 必须区分 sparse 与 dense</strong>。官方产品页脚注写明：推理 50 PFLOPS 是 <strong>sparse specification</strong>，训练 35 PFLOPS 是 <strong>dense specification</strong>。原稿没区分。</li>
+<li><strong>Vera CPU 的核是 NVIDIA 自研的 “Olympus” 核</strong>（官方：“NVIDIA-designed Olympus cores… full Arm compatibility”），不是泛指的「88 个 ARM 核」。写「Arm 兼容的自研核」更准确。</li>
+</ol>
+</blockquote>
+<h3 id="3-2-Vera-Rubin-NVL72">3.2 Vera Rubin NVL72</h3>
+<p><strong>72 Rubin GPU + 36 Vera CPU</strong>，全液冷（进风温度 45°C），机架级 <strong>3.6 EFLOPS NVFP4 推理（sparse）/ 2.5 EFLOPS 训练（dense）</strong>。</p>
+<p>引入 <strong>Intelligent Power Smoothing with energy storage</strong>（智能电源平滑 + 储能）来吸收推理负载的功率尖峰——官方称相比上代电源平滑技术降低约 10% 功耗、把 50ms 尺度的峰值功率削掉约 20%。这是「推理负载功率波动」被硬件化应对的一个信号。</p>
+<h3 id="3-3-Rubin-CPX：为超长上下文-prefill-而生">3.3 Rubin CPX：为超长上下文 prefill 而生</h3>
+<p>Rubin CPX 是 Rubin 家族里一个<strong>定位特殊的 SKU</strong>：</p>
+<ul>
+<li><strong>128 GB GDDR7</strong>（不是 HBM4）、<strong>单片 monolithic die</strong>；</li>
+<li><strong>30 PFLOPS NVFP4</strong>；</li>
+<li>定位是<strong>长上下文（prefill / context 阶段）推理</strong>，走「算力密度 / 成本密度」取向，而非 HBM 带宽取向。</li>
+</ul>
+<p><strong>Vera Rubin NVL144 CPX</strong> 把两相硬件混合：<strong>144 张 Rubin CPX + 144 张 Rubin + 36 颗 Vera CPU</strong>，单机架 <strong>8 EFLOPS NVFP4</strong>（官方称较 GB300 NVL72 提升 <strong>7.5 倍</strong>），配 100 TB 高速内存、1.7 PB/s 内存带宽，专门面向<strong>百万 token 级代码生成与视频生成</strong>。</p>
+<blockquote>
+<p>注意：这个 SKU 的存在本身就是第 5.3 节那个「prefill/decode 硬件分离」论点的<strong>物理证据</strong>——NVIDIA 不是在软件层做分离，而是直接做了两种 GPU。</p>
+</blockquote>
+<h3 id="3-4-⚠️-时效性提醒：Rubin-的规格在-2026-下半年被下调">3.4 ⚠️ 时效性提醒：Rubin 的规格在 2026 下半年被下调</h3>
+<p><strong>这是原稿最需要更新的一处。</strong> NVIDIA 在 2026 年 9—11 月把 Vera Rubin 的多个发布指标下调为量产规格：</p>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>发布值（GTC 2026）</th>
+<th>量产规格（产品页现列）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HBM4 带宽</td>
+<td>22 TB/s</td>
+<td><strong>19.2 TB/s</strong></td>
+</tr>
+<tr>
+<td>NVLink 6 每 GPU</td>
+<td>3.6 TB/s</td>
+<td><strong>3 TB/s</strong></td>
+</tr>
+<tr>
+<td>NVL72 机架 NVLink 总带宽</td>
+<td>260 TB/s</td>
+<td><strong>216 TB/s</strong></td>
+</tr>
+</tbody>
+</table>
+<p>NVIDIA 对媒体的解释是：早期公布的数字属于 “preliminary architectural targets”，量产规格才是最终交付值。</p>
+<p><strong>写硬件文章时这是个通用教训</strong>：发布会的架构目标与产品页的量产规格是两套数字，中间可能隔好几个月才对齐。引用时务必看<strong>产品页的当前值</strong>，而不是主题演讲幻灯片。</p>
+<h3 id="3-5-Rubin-Ultra-与-Feynman">3.5 Rubin Ultra 与 Feynman</h3>
+<p><strong>Rubin Ultra（2027，规划）</strong>：原官方路线图是<strong>四颗 reticle 尺寸核心、100 PFLOPS FP4、1 TB HBM4e（16 接口）、NVL576、约 600 kW</strong>。但 2026 年有多家媒体（TrendForce / Tom’s Hardware 系）报道 NVIDIA <strong>取消了 4-die 设计、改回 2-die</strong>（原因是 CoWoS-L 的翘曲与成本问题）。</p>
+<blockquote>
+<p>⚠️ 这一改动<strong>未经 NVIDIA 官方确认</strong>，属媒体消息。本文标注为「原规划 4 die，2026 年有报道称改为 2 die」，请以最终发布为准。</p>
+</blockquote>
+<p><strong>Feynman（约 2028）</strong>：目前只有路线图方向——搭配 <strong>Rosa CPU</strong>、<strong>NVLink 8</strong>（带 co-packaged optics）、<strong>自定义 HBM</strong>，以及 <strong>LP40 系统内存</strong>。注意 LP40 是<strong>系统内存</strong>，和「GPU 用自定义 HBM」是两个不同部件，原稿把「LP40/自定义 HBM」并写容易混淆。该代<strong>尚无任何容量或性能数字</strong>。</p>
+<hr>
+<h2 id="四、训练侧：围绕低精度与互联的系统级优化">四、训练侧：围绕低精度与互联的系统级优化</h2>
+<p>硬件能力需要软件栈配合才能兑现。</p>
+<h3 id="4-1-FP8-训练已进入生产实践">4.1 FP8 训练已进入生产实践</h3>
+<p>Transformer Engine 的 recipe <strong>不止三种</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Recipe</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DelayedScaling</code></td>
+<td>延迟缩放，最经典的 FP8 方案</td>
+</tr>
+<tr>
+<td><code>Float8CurrentScaling</code></td>
+<td>当前张量缩放</td>
+</tr>
+<tr>
+<td><code>Float8BlockScaling</code></td>
+<td><strong>分块缩放，对应 DeepSeek-V3</strong></td>
+</tr>
+<tr>
+<td><code>MXFP8BlockScaling</code></td>
+<td>MXFP8 分块</td>
+</tr>
+<tr>
+<td><code>NVFP4BlockScaling</code></td>
+<td>NVFP4 分块</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿只列了三种（漏了 <code>MXFP8BlockScaling</code>）。DeepSeek-V3 对应 <code>Float8BlockScaling</code> <strong>属实</strong>——TE 文档原文：“inspired by the quantization scheme used to train the DeepSeek-v3 model, the first open-source large-scale LLM trained entirely in FP8 precision”（block size 128）。</p>
+</blockquote>
+<p>关于「FP8 相比 BF16 提升 30—40%」：</p>
+<blockquote>
+<p>⚠️ <strong>更正归因</strong>：「微软/Meta/Google 已用 FP8 训练、提升 30—40%」这个说法出自二手技术博客，<strong>不是 NVIDIA 官方口径</strong>。NVIDIA 自己的 NeMo 基准（H100，current-scaling）给的是：Llama 3 <strong>8B ≈1.30×、70B 1.43×、405B 1.53×</strong>；DGX B200 上 MXFP8 是 <strong>1.28—1.37×</strong>。区间大致落在 28—53%，比「30—40%」更宽，且 NVIDIA 未点名那三家公司。建议引用官方基准。</p>
+</blockquote>
+<h3 id="4-2-MXFP8-预训练配方">4.2 MXFP8 预训练配方</h3>
+<p>NVIDIA 论文《<strong>Recipes for Pre-training LLMs with MXFP8</strong>》（arXiv:2506.08027）给出了一个明确结论：</p>
+<blockquote>
+<p>MXFP8-E4M3 datatype and a <strong>specific number conversion algorithm</strong> result in training sessions that <strong>match those carried out in BF16</strong>.</p>
+</blockquote>
+<p>这个「特定的数值转换算法」指的是<strong>缩放因子向上取整到正无穷</strong>（区别于 OCP v1 规范的向下取整）。结论是：<strong>MXFP8 配合正确的取整方向，可以做到与 BF16 训练精度对齐</strong>——因为 Blackwell 的微缩放让更窄的数据类型也保住了动态范围。</p>
+<h3 id="4-3-FP4-训练仍在探索期">4.3 FP4 训练仍在探索期</h3>
+<p>推理侧 FP4 已经可用，训练侧还没有：</p>
+<ul>
+<li><strong>SageAttention3</strong>（arXiv:2505.11594）的结论是：<em>“8-bit attention achieves <strong>lossless performance in fine-tuning tasks but exhibits slower convergence in pretraining tasks</strong>”</em>——微调无损，预训练收敛更慢；</li>
+<li><strong>MXFP4 训练发散</strong>有明确出处：论文 <em>Hardware-Aware FP4 FlashAttention-4</em>（arXiv:2609.04105）原文——<em>“<strong>every tested MXFP4 probability/value training trajectory diverges</strong>”</em>。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>两处更正</strong>：</p>
+<ol>
+<li>「FA4 提出把前向量化直接传入反向、在 GB200 上让 8B 模型单卡更新提速 1.14×、报告 MXFP4 发散」——<strong>这组结论出自 arXiv:2609.04105（<em>Hardware-Aware FP4 FlashAttention-4</em>），不是 FA4 主论文（arXiv:2603.05451）</strong>，属张冠李戴。1.14× / GB200 / 8B / MXFP4 发散本身都是真的。</li>
+<li>原文是「前向<strong>量化</strong>（quantization）直接传入反向」，不是「前向量化（vectorization）」——原稿把 quantization 译成了「向量化」。</li>
+</ol>
+</blockquote>
+<p><strong>结论</strong>：FP4 目前主要用于<strong>推理权重</strong>，FP4 训练要等更成熟的数值方案。</p>
+<h3 id="4-4-并行策略围绕-NVLink-大域重设计">4.4 并行策略围绕 NVLink 大域重设计</h3>
+<p>NVLink 5/6 + NVSwitch 让 72 卡进入同一通信域，张量并行可以扩展到 8 卡乃至更多；流水线/专家并行的带宽也大幅受益。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处概念</strong>：原稿写「72 卡共享内存语义（<strong>NVLS, NVLink Shared Memory</strong>）」。<strong>NVLS 的官方含义是 NVLink SHARP</strong>（Scalable Hierarchical Aggregation and Reduction Protocol，网内集合通信卸载），不是 “NVLink Shared Memory”。NCCL 文档原文：<em>“NVLS (stands for NVLink SHARP)”</em>、“NVLS and NVLSTree enable NVLink SHARP offload”。它做的是<strong>把 all-reduce 等集合通信卸载到交换机里做</strong>，这恰恰是「72 卡像一颗 GPU」的机制之一——但名字和含义都得改。</p>
+</blockquote>
+<p>长上下文训练则普遍叠加序列并行/上下文并行与 FlashAttention 系 kernel。</p>
+<hr>
+<h2 id="五、推理侧：低精度量化、专用-kernel-与-prefill-decode-分离">五、推理侧：低精度量化、专用 kernel 与 prefill/decode 分离</h2>
+<h3 id="5-1-NVFP4-量化与部署管线">5.1 NVFP4 量化与部署管线</h3>
+<p>生产路径是 <strong>NVIDIA ModelOpt 做 PTQ 校准 → TensorRT-LLM 原生构建 NVFP4 引擎</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处版本</strong>：TRT-LLM <strong>0.17.0 首加 NVFP4</strong>（Release Notes：“Added NVFP4 Gemm support for Llama and Mixtral models”）<strong>属实</strong>；但<strong>RTX Pro 6000 的支持到 0.20.0 才加上</strong>，不是 0.17。GB200 早期是 “not fully supported”，后续版本才完整支持。</p>
+</blockquote>
+<p><strong>vLLM 也支持 FP4</strong>：</p>
+<blockquote>
+<p>⚠️ <strong>更正一处表述</strong>：原稿写「MoE 走 FlashInfer FP4 kernel，dense 走 llm-compressor 量化」。前半句<strong>属实</strong>（vLLM 有 <code>flashinfer_fp4_moe</code> 模块）；但后半句不严谨——<strong>llm-compressor 是离线量化 checkpoint 的工具，不是 dense 专属的运行时内核</strong>。vLLM 同时支持 LLM Compressor 与 Model Optimizer 两种量化格式，与 dense/MoE 不是一一对应的。</p>
+</blockquote>
+<p>FP4 相比 BF16 省一半权重显存、翻倍有效带宽，直接推高单卡可服务的模型规模。</p>
+<h3 id="5-2-专用-attention-kernel">5.2 专用 attention kernel</h3>
+<ul>
+<li><strong>FlashAttention-3</strong> 针对 Hopper 优化，Blackwell 上进一步结合 FP8/FP4；</li>
+<li><strong>SageAttention3</strong> 用微缩放 FP4 做 attention，<strong>在 RTX 5090 上达到 1038 TOPS，相对 RTX 5090 上最快的 FlashAttention 提速 5×</strong>，论文 Figure 1 用 HunyuanVideo 演示了端到端提速。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「2× 级 kernel 提速」。<strong>官方论文写的是 5×</strong>（<em>“1038 TOPS on RTX5090, which is a 5x speedup over the fastest FlashAttention on RTX5090”</em>）。</p>
+</blockquote>
+<p><strong>关于「同一 B200 跑不同 kernel 差距巨大」的那组数字：</strong></p>
+<blockquote>
+<p>⚠️ <strong>这条建议直接删掉。</strong> 原稿写「同一 B200 跑 GPT-OSS-20B FP4：SGLang 1262 TFLOPS、FlashInfer CuteDSL 1225 TFLOPS、vLLM 1117 TFLOPS」。这组数字<strong>只出现在一篇无引用的第三方聚合文里</strong>，且<strong>原文根本没提 GPT-OSS-20B</strong>（只写「三个 MoE 后端 / Blackwell B200」）。NVIDIA、vLLM、SGLang、FlashInfer 的官方资料都没有这组数。</p>
+<p>论点（kernel 工程决定实际吞吐）本身是对的，但<strong>不该用查不到来源的数字来支撑</strong>。想讲这个论点，可以引用各框架自己的官方 benchmark 页面。</p>
+</blockquote>
+<h3 id="5-3-Prefill-decode-分离与长上下文">5.3 Prefill/decode 分离与长上下文</h3>
+<p>prefill 是<strong>算力受限</strong>（FLOPS 打满），decode 是<strong>带宽受限</strong>（不停从 HBM 抓权重与 KV cache）——两者的硬件需求相反。</p>
+<p>NVIDIA 的应对是<strong>把两相硬件分开</strong>：<strong>GDDR7 的 Rubin CPX 打 prefill，HBM4 的 Rubin 打 decode</strong>，在长 prompt 下同时改善 TTFT 与 TPS（见 §3.3 的 NVL144 CPX）。</p>
+<p>配套手段还有投机解码、KV cache 压缩，以及<strong>把 KV cache 卸载到 host 内存</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「MXFP8 KV cache 压缩」。<strong>主流框架的 KV cache 量化类型里没有 MXFP8</strong>——TRT-LLM 只有 FP8/NVFP4，SGLang 有 fp8/nvfp4/fp4_mx_block16，vLLM 只有 FP8。<strong>MXFP8 是用在权重/激活 GEMM 上的，不是 KV cache 格式。</strong></p>
+<p>「KV cache 溢出到 CPU 内存」<strong>属实</strong>（NVIDIA Dynamo KVBM 的内存层级含 pinned host memory，TRT-LLM 有 host cache offload）；在 Grace 系统上这块 host 内存就是 Grace CPU 内存——但官方<strong>没有把这个组合命名为一个独立特性</strong>，表述时宜按机制描述而非当成产品名。</p>
+</blockquote>
+<hr>
+<h2 id="六、三对因果：硬件特性如何决定优化方向">六、三对因果：硬件特性如何决定优化方向</h2>
+<p>把整条线收束成三对因果：</p>
+<p><strong>第一对：双 die + 微缩放 FP4/FP8 → 低精度训练与推理成为主线。</strong><br>
+FP4 让单位带宽算力翻倍，但动态范围窄，所以必须做 microscaling（NVFP4 的 16 元素块 + E4M3 scale）+ 专门的 Transformer Engine recipe。这也解释了为什么 MXFP8 的 block 是 32 而 NVFP4 是 16——<strong>为了精度，NVIDIA 在 NVFP4 上多付了 scale 存储的代价</strong>。</p>
+<p><strong>第二对：NVLink 5/6 + NVSwitch 大域 → 机架级大模型成为标准部署单元。</strong><br>
+万亿参数推理不再靠单卡硬扛，而是 72 GPU 作为一个统一计算域。<strong>NVLS（NVLink SHARP）把集合通信卸载进交换机</strong>，是「72 卡像一颗 GPU」的关键机制之一。张量并行跨 8 卡以上因此成为常态。</p>
+<p><strong>第三对：HBM 带宽提升 + 算力/带宽不对称 → prefill/decode 分离与专用 SKU 出现。</strong><br>
+Rubin CPX 就是把这一不对称<strong>硬件化</strong>的产物——软件侧的分离式 serving，对应到硬件侧就是两种不同内存子系统的 GPU。</p>
+<hr>
+<h2 id="七、生态与动手路径">七、生态与动手路径</h2>
+<p>目前 Blackwell 上最成熟的组合：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>组件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练</td>
+<td><strong>Transformer Engine</strong>（FP8 / MXFP8 recipe）</td>
+</tr>
+<tr>
+<td>推理</td>
+<td><strong>TensorRT-LLM / vLLM / SGLang</strong>（NVFP4）</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td><strong>FlashAttention-3/4、SageAttention、FlashInfer</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Rubin 沿用同一软件栈，主要新增 HBM4 / NVLink 6 的带宽红利与 Rubin CPX 的专用形态。</p>
+<p><strong>最直接的动手路径</strong>：</p>
+<ol>
+<li><strong>训练侧</strong>在 Transformer Engine 里切到 <strong>MXFP8 recipe</strong>（论文已验证可与 BF16 精度对齐）；</li>
+<li><strong>推理侧</strong>用 <strong>ModelOpt 做 NVFP4 PTQ</strong>；</li>
+<li>交给 <strong>TRT-LLM 或 vLLM / SGLang</strong> 起 serve。</li>
+</ol>
+<p>这三步就能吃到 Blackwell/Rubin 的绝大部分红利——<strong>剩下的差距在 kernel 工程</strong>，那是另一个战场（见姊妹篇）。</p>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/11/04/2026-11-04-GPU%E5%BE%AE%E6%9E%B6%E6%9E%84%E4%BB%8E%E6%99%B6%E4%BD%93%E7%AE%A1%E5%88%B0%E4%B8%80%E6%AC%A1GEMM%E7%9A%84%E5%AE%8C%E6%95%B4%E6%95%B0%E6%8D%AE%E6%B5%81/">GPU 微架构：从晶体管到一次 GEMM 的完整数据流</a>——本文的姊妹篇，拆到 SM 内部与 GEMM 数据流，解释这些规格数字在硬件上意味着什么</li>
+<li><a href="/2026/11/02/2026-11-02-%E4%BB%8ELLM%E5%88%B0%E5%85%B7%E8%BA%AB-%E6%B3%A8%E6%84%8F%E5%8A%9B%E6%9E%B6%E6%9E%84VLA%E4%B8%96%E7%95%8C%E6%A8%A1%E5%9E%8B%E4%B8%8E%E4%BA%91Infra%E5%85%A8%E6%99%AF%E8%B0%83%E7%A0%94/">从 LLM 到具身：注意力架构、VLA 世界模型与云 Infra 全景调研</a>——架构侧的演进全景</li>
+<li><a href="/2026/08/31/2026-08-31-%E4%B8%80%E6%96%87%E6%90%9E%E6%87%82AI%E6%8E%A8%E7%90%86%E9%83%A8%E7%BD%B2%E7%AE%97%E5%AD%90%E8%9E%8D%E5%90%88TVM-TensorRT-ONNXRuntime/">一文搞懂 AI 推理部署算子融合</a>——TensorRT 系的软件栈落点</li>
+<li><a href="/2026/07/31/2026-07-31-Speculator-as-a-Service%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86%E6%9E%B6%E6%9E%84%E7%9A%84%E8%A7%A3%E8%80%A6%E6%BC%94%E8%BF%9B/">Speculator as a Service：大模型推理架构的解耦演进</a>——投机解码与推理架构解耦</li>
+<li><a href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/">AI Infra 全景复盘：GPU 性能、分布式训练与调度层深潜</a>——并行策略与性能剖析</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文规格数字逐条核对自 NVIDIA 官方来源——Blackwell 架构技术简报 V2.1、Blackwell Ultra Datasheet、Vera Rubin NVL72 与 GB200/GB300 产品页、GTC 2026 主题演讲逐字稿、NVIDIA 开发者博客、Transformer Engine 源码与文档、TensorRT-LLM Release Notes、NCCL 文档。论文结论核对自 arXiv:2506.08027（MXFP8 配方）、2505.11594（SageAttention3）、2609.04105（FP4 FlashAttention-4）。</p>
+<p><strong>原稿的更正汇总</strong>：年份（H200 2023 / B300 2025）、MXFP8 的 block size（32 非 16）、GB200 内存口径（13.4 TB 且 30 TB 是合计值）、Superchip HBM（372 GB 官方口径）、10× MoE 的基线（H200 非 H100）、Vera CPU 核名（Olympus）、NVLS 释义（NVLink SHARP 非 Shared Memory）、SageAttention3 提速（5× 非 2×）、Transformer Engine recipe 数量（5 种非 3 种）、TRT-LLM 版本（RTX Pro 6000 在 0.20）、MXFP8 KV cache（不存在）、FA4 结论归属、以及 <strong>Rubin 三个规格的下调</strong>（22→19.2 TB/s、3.6→3 TB/s、260→216 TB/s）。另有<strong>一组查无一手来源的 benchmark 数字已删除</strong>。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/04/2026-11-04-Blackwell%E4%B8%8ERubin%E4%BB%8E%E8%B7%AF%E7%BA%BF%E5%9B%BE%E5%88%B0%E8%AE%AD%E6%8E%A8%E4%BC%98%E5%8C%96/">https://roger-lv.github.io/2026/11/04/2026-11-04-Blackwell%E4%B8%8ERubin%E4%BB%8E%E8%B7%AF%E7%BA%BF%E5%9B%BE%E5%88%B0%E8%AE%AD%E6%8E%A8%E4%BC%98%E5%8C%96/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/NVIDIA/">NVIDIA</a><a class="post-meta__tags" href="/tags/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83/">大模型训练</a><a class="post-meta__tags" href="/tags/Blackwell/">Blackwell</a><a class="post-meta__tags" href="/tags/Rubin/">Rubin</a><a class="post-meta__tags" href="/tags/GPU%E6%9E%B6%E6%9E%84/">GPU架构</a><a class="post-meta__tags" href="/tags/FP8/">FP8</a><a class="post-meta__tags" href="/tags/NVFP4/">NVFP4</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86%E4%BC%98%E5%8C%96/">推理优化</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/04/2026-11-04-GPU%E5%BE%AE%E6%9E%B6%E6%9E%84%E4%BB%8E%E6%99%B6%E4%BD%93%E7%AE%A1%E5%88%B0%E4%B8%80%E6%AC%A1GEMM%E7%9A%84%E5%AE%8C%E6%95%B4%E6%95%B0%E6%8D%AE%E6%B5%81/" title="GPU 微架构：从晶体管到一次 GEMM 的完整数据流"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">GPU 微架构：从晶体管到一次 GEMM 的完整数据流</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：GPU 是一台「用海量小计算单元换并发、用深存储层级换带宽」的吞吐机器。它所有构件——SM 内的调度器/寄存器/Shared Memory/Tensor Core、芯片级的 L2/内存控制器/HBM、系统级的 NVLink/NVSwitch——都在服务同一个目标：让 Tensor Core 永远有数据可吃、让数据永远在路上不空转。  本文以 H100（SXM5）为参考基准，对照 NVIDIA 官方白皮书逐条核对过数字。核对中发现原稿有六处需要更正，其中一处涉及 GEMM 数据流的核心步骤，已在文中以 ⚠️ 标注。  一、全景：从晶体管到集群的层级堆叠 以 H100 SXM5 为参考：8 个 GPC → 66 个 TPC → 132 个 SM（每 TPC 2 个）→ 每 SM 128 个 FP32 CUDA Core + 4 个第四代 Tensor Core，配 5 个 HBM3 堆栈、50 MB L2、3.35 TB/s 显存带宽、80 GB 容量。  ⚠️ SM 数量有三个版本，别混：H100 SXM5 = 132 SM、H100 PCIe = 114 SM、满配...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/" title="具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：具身智能公司的仿真主力沙盒应当是「裸金属容器 + K8s GPU 调度」，而不是 DSec / AgentENV 那套 Firecracker microVM 层。只有轻量 Agent 工具调用和不可信代码执行才下沉到 microVM。这不是对多级运行时架构的否定，而是该框架在具身场景下的正确映射——仿真吃的是 NVIDIA 专有计算栈，而虚拟化层的 GPU 转发方案恰恰覆盖不到这里。  这篇是 Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地 的延伸。那篇里有一节（§3.5）讲具身仿真的 GPU 路线，结论是「虚拟化不是默认选项」；本文把那个结论展开成一份完整的选型依据——为什么 microVM 接不住仿真、虚拟化 GPU 的四条路径各自能到哪、以及三层负载该怎么分别匹配。  一、为什么这不是一个「通用沙盒」问题 讨论的对象是一类典型的具身智能公司：自研端到端具身大模型，部署轮式双臂仿人机器人与高自由度灵巧手，自建数据工厂沉淀了数万小时多模态具身数据集，机器人已规模化进入真实家庭。 这个形态决定了基础设施要同时承载三类性质完全...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/" title="NVIDIA device plugin for Kubernetes原理分析"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-28</div><div class="info-item-2">NVIDIA device plugin for Kubernetes原理分析</div></div><div class="info-2"><div class="info-item-1">NVIDIA device plugin for Kubernetes原理分析 什么是 Device Plugin K8s 原生并没有支持第三方设备厂商的物理设备资源，因此 Device Plugins 给第三方设备厂商提供了相关接口，可以让他们的物理设备资源以 Extended Resources 提供给底层的容器。 当 device plugin 功能启动后，可以令 kubelet 开放 Register 的 gRPC 服务，device plugin 就可以通过这个服务向 kubelet 进行注册，注册成功后 device plugin 就进入了 Serving 模式，提供前面提到的 gRPC 接口调用服务，kubelet 也就可以通过调用 Listandwatch、Allocate 等方法对设备进行操作，可以用下图来描述单一节点上这一过程：  下面以 NVIDIA k8s-device-plugin 为例简单讲讲这一过程。 注册服务 先看 gRPC 注册部分，下面的函数用于启动一个 gRPC 服务器并在 kubelet 中注册 1234567891011121314151...</div></div></div></a><a class="pagination-related" href="/2025/02/16/2025-02-16-k8s%E4%B8%AD%E9%80%9A%E8%BF%87pod%E8%8E%B7%E5%8F%96gpu%E4%BD%BF%E7%94%A8%E8%BF%9B%E7%A8%8B%E5%88%B0pod%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%B3%E7%B3%BB%20-%20%E5%89%AF%E6%9C%AC/" title="k8s中通过pod获取gpu使用进程到pod的映射关系"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-02-16</div><div class="info-item-2">k8s中通过pod获取gpu使用进程到pod的映射关系</div></div><div class="info-2"><div class="info-item-1">k8s中通过pod获取gpu使用进程到pod的映射关系 背景 该任务的pod为daemonset在集群的每一个节点上，controller pod（只有一个）通过grpc的方式进行调用该daemonset pod获取到该节点上gpu的使用进程到pod的映射关系，传递的参数为使用gpu的pod的id。 该需求涉及到几个部分内容：  如何通过pod id定位到具体的节点  通过controller 的cache机制（包含有pod和node cache）获取到daemonset pod id对应的node ip，在daemonset的pod部分新建grpc server端，根据ip:port构建grpc client即可   如何获取到节点上的gpu-&gt;process的映射关系  调用go-nvml即可   如何获取到节点上的process-&gt;container的映射关系  调用taskClient   container-&gt;pod的映射关系？  controller cache机制获取到对应的node，然后可以获取到该node上的pod和container，做一层映...</div></div></div></a><a class="pagination-related" href="/2026/07/31/2026-07-31-2026%E5%B9%B4%E6%98%BE%E5%8D%A1%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97-%E4%BB%8E%E6%B8%B8%E6%88%8F%E5%A4%A9%E6%A2%AF%E5%9B%BE%E5%88%B0AI%E7%AE%97%E5%8A%9B%E5%B7%85%E5%B3%B0/" title="2026年显卡全景指南：从游戏天梯图到AI算力巅峰"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-31</div><div class="info-item-2">2026年显卡全景指南：从游戏天梯图到AI算力巅峰</div></div><div class="info-2"><div class="info-item-1"> 在 2026 年的今天，显卡（GPU）早已不仅仅是“玩游戏”的工具。随着 AI 大模型的爆发，GPU 成为了数字时代的“核心资产”。无论你是追求 4K 光追极致体验的游戏玩家，还是在本地部署大模型的开发者，亦或是构建算力集群的企业架构师，理清当前的显卡格局都至关重要。 本文将综合 NVIDIA、AMD、Intel 三大厂商的最新产品线，从桌面消费级到数据中心计算卡，为您带来一份详尽的显卡分级指南，并深入探讨目前 AI 算力的“天花板”究竟在哪里。  一、桌面显卡分级：玩家的“天梯图” 对于绝大多数个人用户而言，桌面显卡是日常接触的核心硬件。我们将当前在售的主流型号划分为五个档位，涵盖了 NVIDIA、AMD 和 Intel 三大阵营。 1. 档位总览表    档位 定位 NVIDIA AMD Intel     旗舰级 4K 光追 / 极致发烧 RTX 5090 / 5090D RX 9070 XT —   高端级 2K/4K 高画质畅玩 RTX 5080 / 4090 RX 7900 XTX Arc B580（越级挑战）   中端级 1080P 高画质 / 2K 入门 RTX...</div></div></div></a><a class="pagination-related" href="/2026/08/14/2026-08-14-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%89%E4%BD%93%E9%97%AE%E9%A2%98%E8%AE%A1%E7%AE%97%E9%80%9A%E4%BF%A1%E4%B8%8E%E5%86%85%E5%AD%98/" title="大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-14</div><div class="info-item-2">大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同</div></div><div class="info-2"><div class="info-item-1">大模型训练的&quot;三体问题&quot;:计算、通信与内存的深度协同 在大模型(LLM)预训练的万卡集群时代,算法架构(如 Transformer、MoE)的进步只是冰山一角。真正决定训练成本与效率的,是底层基础设施(AI Infra)的工程深度。当模型参数突破千亿,硬件算力(FLOPS)与显存带宽(HBM)、网络通信(NVLink/InfiniBand)之间的鸿沟日益扩大,性能瓶颈已从&quot;算法创新&quot;转向了&quot;硬件榨取&quot;。 本文将深入到单次训练迭代(Iteration)的微观尺度,从反向传播的数学本质出发,系统性地拆解计算墙(Kernel 优化)、通信墙(异步流水线)与内存墙(显存管理),并揭示顶级 AI Infra 团队如何通过精细的算子编写与调度策略,将 GPU 的有效算力(MFU)从 50% 拉升至 65% 以上。  一、 大模型训练的&quot;三堵墙&quot; 训练一个千亿参数的大模型,通常涉及数据并行(DP)、张量并行(TP)、流水线并行(PP)等多种并行策略的组合。在这个过程中,模型的前向与反向传播不再是简单的&quot;计...</div></div></div></a><a class="pagination-related" href="/2026/09/03/2026-09-03-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AE%B9%E9%94%99%E8%AE%AD%E7%BB%83%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%BB%8E%E6%9E%B6%E6%9E%84%E5%88%B0%E5%BD%A2%E5%BC%8F%E5%8C%96%E9%AA%8C%E8%AF%81/" title="大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证</div></div><div class="info-2"><div class="info-item-1">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证  本文基于一个真实落地的容错训练系统(下称 Aegis)的设计文档与源码整理,隐去了公司与内部组件信息,聚焦技术方案本身。  大模型训练的稳定性问题,是所有大规模训练团队的共同痛点。本文拆解 Aegis 的完整设计:为什么在调度平台层做容错、gRPC+NATS 双通道怎么配合、Master-Worker 状态机怎么流转、容错计数怎么算、故障节点怎么隔离,以及最有意思的一环——用 TLA+ 形式化验证状态机的安全性。  关联阅读:训练侧并行与通信见 图解 Megatron 的 SP/CP/EP、分布式训练核心技术:从 FSDP 到 All-Reduce。容错是这些训练技术之下的&quot;稳定性底座&quot;。   一、为什么需要专门的容错系统:三大痛点 1.1 训练频繁中断是常态 大模型分布式训练几乎都是同步方式(DDP/MPI):所有进程共同构建一个通信拓扑,任何一个进程出错,其他进程都会相继退出。而训练任务动辄跨数百个 GPU 节点,数小时到数天内大概率出各种问题:  OPT 175B 训练的 LogBo...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战</div></div><div class="info-2"><div class="info-item-1">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战 这篇长文写给算法工程师和平台工程师,从最基础的&quot;一张 GPU 卡怎么被 K8s 认识&quot;讲起,到&quot;一万张卡怎么不崩&quot;,再到&quot;大模型服务怎么在集群上跑起来&quot;,最后聊 Slurm。六大主题:K8s GPU 调度原理、万卡集群治理、资源池化、弹性伸缩、vLLM/SGLang 集群化部署、Slurm 实战。  一、开篇:为什么 GPU 调度比 CPU 调度难十倍 如果你做过 K8s 的 CPU/内存调度,可能觉得资源调度就是&quot;分配数字资源,加个 request/limit 完事&quot;。但当资源变成 GPU 之后,画风完全变了,原因有五个: 1. GPU 不可分割(默认情况下)。 CPU 可以按 0.1 核这样细粒度分配,内存可以按 MB 分配,但一张物理 GPU 卡,默认情况下,K8s 只能把它当作一个&quot;整数资源&quot;分配给一个容器——要么给你一整张卡,要么不给。这就导致一个尴尬场景:推理服...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%A8%E5%B1%80%E8%A7%86%E8%A7%92%EF%BC%9ANVIDIA-%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83-GPU-%E8%B7%AF%E7%BA%BF%E5%9B%BE"><span class="toc-number">1.</span> <span class="toc-text">一、全局视角：NVIDIA 数据中心 GPU 路线图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Blackwell%EF%BC%9A%E4%B8%BA%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E6%A8%A1%E5%9E%8B%E8%80%8C%E7%94%9F%E7%9A%84%E3%80%8C%E5%8F%8C-die-%E6%9C%BA%E6%9E%B6%E7%BA%A7%E3%80%8D"><span class="toc-number">2.</span> <span class="toc-text">二、Blackwell：为万亿参数模型而生的「双 die + 机架级」</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E8%AE%A1%E7%AE%97%E5%B1%82%EF%BC%9A%E5%8F%8C-die-%E5%90%88%E5%B0%81-%E5%BE%AE%E7%BC%A9%E6%94%BE%E4%BD%8E%E7%B2%BE%E5%BA%A6"><span class="toc-number">2.1.</span> <span class="toc-text">2.1 计算层：双 die 合封 + 微缩放低精度</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E5%BE%AE%E7%BC%A9%E6%94%BE%EF%BC%9A4bit-%E8%83%BD%E8%BF%9B%E7%94%9F%E4%BA%A7%E7%9A%84%E5%85%B3%E9%94%AE"><span class="toc-number">2.2.</span> <span class="toc-text">2.2 微缩放：4bit 能进生产的关键</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E4%BA%92%E8%81%94%E5%B1%82%EF%BC%9ANVLink-5-NVSwitch"><span class="toc-number">2.3.</span> <span class="toc-text">2.3 互联层：NVLink 5 + NVSwitch</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E5%86%85%E5%AD%98%E4%B8%8E%E7%B3%BB%E7%BB%9F%E5%B1%82"><span class="toc-number">2.4.</span> <span class="toc-text">2.4 内存与系统层</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E4%B8%93%E7%94%A8%E5%BC%95%E6%93%8E"><span class="toc-number">2.5.</span> <span class="toc-text">2.5 专用引擎</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Rubin%EF%BC%9A%E5%BB%B6%E7%BB%AD-Blackwell-%E4%BD%93%E7%B3%BB%EF%BC%8C%E7%89%A9%E7%90%86%E5%B1%82%E5%A4%A7%E8%B7%83%E8%BF%81"><span class="toc-number">3.</span> <span class="toc-text">三、Rubin：延续 Blackwell 体系，物理层大跃迁</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E6%A0%B8%E5%BF%83%E8%A7%84%E6%A0%BC"><span class="toc-number">3.1.</span> <span class="toc-text">3.1 核心规格</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-Vera-Rubin-NVL72"><span class="toc-number">3.2.</span> <span class="toc-text">3.2 Vera Rubin NVL72</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-Rubin-CPX%EF%BC%9A%E4%B8%BA%E8%B6%85%E9%95%BF%E4%B8%8A%E4%B8%8B%E6%96%87-prefill-%E8%80%8C%E7%94%9F"><span class="toc-number">3.3.</span> <span class="toc-text">3.3 Rubin CPX：为超长上下文 prefill 而生</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-%E2%9A%A0%EF%B8%8F-%E6%97%B6%E6%95%88%E6%80%A7%E6%8F%90%E9%86%92%EF%BC%9ARubin-%E7%9A%84%E8%A7%84%E6%A0%BC%E5%9C%A8-2026-%E4%B8%8B%E5%8D%8A%E5%B9%B4%E8%A2%AB%E4%B8%8B%E8%B0%83"><span class="toc-number">3.4.</span> <span class="toc-text">3.4 ⚠️ 时效性提醒：Rubin 的规格在 2026 下半年被下调</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-Rubin-Ultra-%E4%B8%8E-Feynman"><span class="toc-number">3.5.</span> <span class="toc-text">3.5 Rubin Ultra 与 Feynman</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E8%AE%AD%E7%BB%83%E4%BE%A7%EF%BC%9A%E5%9B%B4%E7%BB%95%E4%BD%8E%E7%B2%BE%E5%BA%A6%E4%B8%8E%E4%BA%92%E8%81%94%E7%9A%84%E7%B3%BB%E7%BB%9F%E7%BA%A7%E4%BC%98%E5%8C%96"><span class="toc-number">4.</span> <span class="toc-text">四、训练侧：围绕低精度与互联的系统级优化</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-FP8-%E8%AE%AD%E7%BB%83%E5%B7%B2%E8%BF%9B%E5%85%A5%E7%94%9F%E4%BA%A7%E5%AE%9E%E8%B7%B5"><span class="toc-number">4.1.</span> <span class="toc-text">4.1 FP8 训练已进入生产实践</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-MXFP8-%E9%A2%84%E8%AE%AD%E7%BB%83%E9%85%8D%E6%96%B9"><span class="toc-number">4.2.</span> <span class="toc-text">4.2 MXFP8 预训练配方</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-FP4-%E8%AE%AD%E7%BB%83%E4%BB%8D%E5%9C%A8%E6%8E%A2%E7%B4%A2%E6%9C%9F"><span class="toc-number">4.3.</span> <span class="toc-text">4.3 FP4 训练仍在探索期</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E5%B9%B6%E8%A1%8C%E7%AD%96%E7%95%A5%E5%9B%B4%E7%BB%95-NVLink-%E5%A4%A7%E5%9F%9F%E9%87%8D%E8%AE%BE%E8%AE%A1"><span class="toc-number">4.4.</span> <span class="toc-text">4.4 并行策略围绕 NVLink 大域重设计</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E6%8E%A8%E7%90%86%E4%BE%A7%EF%BC%9A%E4%BD%8E%E7%B2%BE%E5%BA%A6%E9%87%8F%E5%8C%96%E3%80%81%E4%B8%93%E7%94%A8-kernel-%E4%B8%8E-prefill-decode-%E5%88%86%E7%A6%BB"><span class="toc-number">5.</span> <span class="toc-text">五、推理侧：低精度量化、专用 kernel 与 prefill&#x2F;decode 分离</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-NVFP4-%E9%87%8F%E5%8C%96%E4%B8%8E%E9%83%A8%E7%BD%B2%E7%AE%A1%E7%BA%BF"><span class="toc-number">5.1.</span> <span class="toc-text">5.1 NVFP4 量化与部署管线</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E4%B8%93%E7%94%A8-attention-kernel"><span class="toc-number">5.2.</span> <span class="toc-text">5.2 专用 attention kernel</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-Prefill-decode-%E5%88%86%E7%A6%BB%E4%B8%8E%E9%95%BF%E4%B8%8A%E4%B8%8B%E6%96%87"><span class="toc-number">5.3.</span> <span class="toc-text">5.3 Prefill&#x2F;decode 分离与长上下文</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E4%B8%89%E5%AF%B9%E5%9B%A0%E6%9E%9C%EF%BC%9A%E7%A1%AC%E4%BB%B6%E7%89%B9%E6%80%A7%E5%A6%82%E4%BD%95%E5%86%B3%E5%AE%9A%E4%BC%98%E5%8C%96%E6%96%B9%E5%90%91"><span class="toc-number">6.</span> <span class="toc-text">六、三对因果：硬件特性如何决定优化方向</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E7%94%9F%E6%80%81%E4%B8%8E%E5%8A%A8%E6%89%8B%E8%B7%AF%E5%BE%84"><span class="toc-number">7.</span> <span class="toc-text">七、生态与动手路径</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/" title="agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差">agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-%E4%B8%BA%E6%9C%AC%E7%A7%91%E7%94%9F%E8%AE%BE%E8%AE%A1%E4%B8%80%E9%97%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83Infra%E8%AF%BE/" title="为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单">为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,654 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="当沙盒生命周期被压缩到毫秒级、pause&#x2F;resume&#x2F;fork 成为常规操作、内存超卖成为设计目标时，Kubernetes scheduler 那条为秒级 Pod 设计的调度路径就从基础设施变成了瓶颈。拆解 AgentENV 与 CubeSandbox 两套自建调度器的架构——一个做减法，一个把协调状态押在 Redis 上——以及它们背后的负载特性驱动逻辑。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="当沙盒生命周期被压缩到毫秒级、pause&#x2F;resume&#x2F;fork 成为常规操作、内存超卖成为设计目标时，Kubernetes scheduler 那条为秒级 Pod 设计的调度路径就从基础设施变成了瓶颈。拆解 AgentENV 与 CubeSandbox 两套自建调度器的架构——一个做减法，一个把协调状态押在 Redis 上——以及它们背后的负载特性驱动逻辑。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-04T17:36:48.934Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Firecracker">
+<meta property="article:tag" content="调度器">
+<meta property="article:tag" content="沙盒">
+<meta property="article:tag" content="Agent基础设施">
+<meta property="article:tag" content="AgentENV">
+<meta property="article:tag" content="CubeSandbox">
+<meta property="article:tag" content="DSec">
+<meta property="article:tag" content="microVM">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器",
+  "url": "https://roger-lv.github.io/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-04T16:00:00.000Z",
+  "dateModified": "2026-11-04T17:36:48.934Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-04T17:36:48.934Z" title="更新于 2026-11-05 01:36:48">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" data-flag-title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：Agent 沙盒系统绕过 kubelet，<strong>不只是为了隔离——调度本身才是更根本的动机</strong>。当沙盒生命周期被压缩到毫秒级、当 pause/resume/fork 成为常规操作而非异常事件、当内存超卖成为设计目标而非运维事故，Kubernetes scheduler 那套为「秒级生命周期 Pod、删除是异常事件」设计的调度路径，就从基础设施变成了瓶颈。</p>
+<p>AgentENV（kvcache-ai）和 CubeSandbox（腾讯云）给出了两个不同风格的答案：<strong>前者做减法</strong>，把调度器简化到只剩资源过滤 + 两种朴素策略；<strong>后者做分层</strong>，把控制面完全做成无状态、协调状态押在 Redis 上。</p>
+</blockquote>
+<p>这是沙盒系列第三篇。前两篇分别回答「<a href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/">选哪个沙盒</a>」和「<a href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">沙盒插在运行时栈的哪一层</a>」；这篇回答「为什么这两套系统连调度都要自己写」。</p>
+<p>本文的组件名、RPC 清单、状态枚举、调度流程逐条核对自两个项目的源码与官方文档。<strong>核对中发现原稿有七处需要更正，其中一条数字查无出处已删除</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="一、问题：Agent-沙盒负载对调度器提出了什么要求">一、问题：Agent 沙盒负载对调度器提出了什么要求</h2>
+<p>先把矛盾摆清楚。传统 K8s 集群里，scheduler 的一次完整调度是：watch informer 感知未绑定 Pod → 预选过滤 → 优选打分 → bind 写回 → kubelet 感知 → 容器创建。这条链路为「<strong>Pod 创建后长期运行、删除是异常事件</strong>」的世界设计，单次延迟在百毫秒到秒级。</p>
+<p>Agent 沙盒的世界完全不同：</p>
+<ul>
+<li><strong>启动延迟预算是 &lt;50ms（AgentENV resume）/ &lt;60ms（CubeSandbox 冷启动）</strong>——调度决策如果本身要花几百毫秒，它就成了整个链路里最慢的一环；</li>
+<li><strong>每秒可能创建销毁数百个沙盒</strong>，pause / resume / fork / snapshot→clone 是常规生命周期操作，要求毫秒内完成，根本来不及走一遍完整调度流程；</li>
+<li><strong>资源模型无法用 requests/limits 表达</strong>——靠的是多个沙盒共享只读块设备和 page cache，这些指标 K8s scheduler 既看不到也不理解；</li>
+<li><strong>数据面网络不走 CNI</strong>——每沙盒独立的 SNAT/DNAT 和网络策略用 eBPF 在节点本地实现（CubeSandbox 的 CubeVS），毫秒级创建销毁的沙盒撑不起「一 Pod 一 IP + kube-proxy」的模型。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>措辞要收紧一处</strong>：原稿写「K8s 适合作为部署底座，但沙盒调度<strong>必须</strong>自己做。这不是能力问题，是语义不匹配」。「必须」太强了——<strong>kubernetes-sigs/agent-sandbox</strong> 那条路线就是走 RuntimeClass 委托给 Kata/gVisor、<strong>不自己写调度器</strong>，它在自己的负载假设下是成立的。</p>
+<p>准确的说法是：<strong>在这类负载特征下</strong>（毫秒级生命周期 + 高频创建销毁 + 超卖资源模型 + 绕过 CNI 的网络），自建调度是更自然的选择。原稿末尾其实自己补了这个反面，但开头的「必须」会把读者带偏。</p>
+</blockquote>
+<hr>
+<h2 id="二、AgentENV：把调度器做减法">二、AgentENV：把调度器做减法</h2>
+<p>AgentENV 的多节点控制平面在 <code>services/</code> 下，<strong>控制面服务只有两个</strong>：Gateway 和 Scheduler（该目录另有 <code>api/</code>、<code>shared/</code>、<code>config/</code>、<code>compose/</code> 四项，但它们不是控制面服务——项目文档明确说 Compose planner “is not a control-plane service”）。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    C[Client &#x2F; RL Rollout] --&gt;|&quot;HTTP&quot;| GW[Gateway&lt;br&#x2F;&gt;services&#x2F;gateway&#x2F;]
+    GW --&gt;|&quot;Schedule() 新建沙盒&quot;| SCH[Scheduler&lt;br&#x2F;&gt;gRPC 服务]
+    SCH --&gt;|&quot;filter + round_robin&lt;br&#x2F;&gt;选定节点&quot;| GW
+    GW --&gt; N1[Node 1&lt;br&#x2F;&gt;特权 DaemonSet Pod]
+    GW --&gt;|&quot;LookupNode() 已有沙盒&quot;| SCH
+    GW --&gt;|&quot;RecordAssignment()&lt;br&#x2F;&gt;写回绑定&quot;| SCH
+    N1 --&gt; ORC[节点 Orchestrator&lt;br&#x2F;&gt;src&#x2F;orchestrator&#x2F;]
+    ORC --&gt; FC[Firecracker microVM]
+    N2[Node 2] -.-&gt;|&quot;Heartbeat()&lt;br&#x2F;&gt;上报沙盒 roster&quot;| SCH
+    N3[Node 3] -.-&gt;|&quot;Heartbeat()&quot;| SCH</pre></div>
+<p><strong>Gateway 是流量入口，也是调度决策的消费者。</strong> 对新建沙盒调 <code>Schedule()</code> 选节点，对已有沙盒调 <code>LookupNode()</code> 查绑定，创建成功后再调 <code>RecordAssignment()</code> 把 sandbox→node 映射写回。路由依据是请求头 <code>x-agentenv-sandbox-id</code> / <code>e2b-sandbox-id</code>，或配置的 <code>&#123;port&#125;-&#123;sandboxID&#125;.&#123;proxy_domain&#125;</code> 域名规则（仅对显式配置的域生效，要求 sandbox ID 符合 DNS label 规范、整段 ≤63 字符）。</p>
+<h3 id="2-1-调度路径：过滤-两种策略">2.1 调度路径：过滤 + 两种策略</h3>
+<p>源码里 <code>Schedule()</code> 的完整流程只有四步：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">nodes.Snapshot() → filterFreshObservations() → FilterByResourceLimit() → strategy.Select()</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「没有预选优选」。<strong>预选是有的</strong>——<code>services/scheduler/internal/filter.go</code> 里的 <code>FilterByResourceLimit</code> 按 <code>NodeResourceLimit</code> 剔除超阈节点（<code>max_sandbox_count</code>、<code>max_cpu_used_percent</code>、<code>max_cpu_allocated_percent</code>、<code>max_memory_*</code> 及 <code>*IncludingPaused</code> 系列）；没有心跳快照的节点一律保留。</p>
+<p>准确说法是「<strong>有预选（资源阈值过滤），没有优选（无打分/评分），也没有优先级抢占和亲和性</strong>」。</p>
+</blockquote>
+<p>策略本身<strong>确实只有两种</strong>（<code>strategy.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> RoundRobinStrategy <span class="keyword">struct</span>&#123; next <span class="type">uint64</span> &#125;</span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *RoundRobinStrategy)</span></span> Select(nodes []RichNode, _ *schedulerv1.ScheduleRequestHint) (RichNode, <span class="type">error</span>) &#123;</span><br><span class="line">    idx := atomic.AddUint64(&amp;s.next, <span class="number">1</span>)</span><br><span class="line">    <span class="keyword">return</span> nodes[(idx<span class="number">-1</span>)%<span class="type">uint64</span>(<span class="built_in">len</span>(nodes))], <span class="literal">nil</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">type</span> RandomStrategy <span class="keyword">struct</span>&#123;&#125;</span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(s *RandomStrategy)</span></span> Select(nodes []RichNode, _ *schedulerv1.ScheduleRequestHint) (RichNode, <span class="type">error</span>) &#123;</span><br><span class="line">    <span class="keyword">return</span> nodes[rand.Intn(<span class="built_in">len</span>(nodes))], <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>NewStrategy(name)</code> 里 <code>case &quot;random&quot;</code> 走 Random，<code>case &quot;round_robin&quot;</code> 走 <code>fallthrough</code> 到 <code>default</code>——<strong>即 <code>round_robin</code> 是默认值，而且这两种就是 <code>Schedule()</code> 的全部策略</strong>，不存在「粘性命中则跳过策略」的路径。</p>
+<h3 id="2-2-RPC-面：13-个，不是-8-个">2.2 RPC 面：13 个，不是 8 个</h3>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「Scheduler 暴露八个 RPC」，<strong>实际 proto 里是 13 个</strong>。清单如下（<code>services/api/proto/scheduler.proto</code>，main 与 v0.2.4 一致）：</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>RPC</th>
+<th>原稿是否列出</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>Schedule</code></td>
+<td>✓</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>ListNodes</code></td>
+<td>✗</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>LookupNode</code></td>
+<td>✓</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>RecordAssignment</code></td>
+<td>✓</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>Heartbeat</code></td>
+<td>✓</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>ReportSandboxEvent</code></td>
+<td>✗</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>ListObservedNodes</code></td>
+<td>✓</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>ListP2pPeers</code></td>
+<td>✓</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>RecordP2pArtifact</code></td>
+<td>✗</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>ForgetP2pArtifact</code></td>
+<td>✗</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>LookupP2pArtifact</code></td>
+<td>✗</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>GetNode</code></td>
+<td>✓</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>UnregisterNode</code></td>
+<td>✓</td>
+</tr>
+</tbody>
+</table>
+<p>漏掉的五个里，<code>ReportSandboxEvent</code> 在 <code>service.go</code> 里目前是空实现（只打 debug 日志），三个 P2P artifact RPC 走内存索引。</p>
+<p><strong>一个值得记的细节</strong>：<strong>AgentENV 自己的文档也不全</strong>——<code>architecture.md</code> 只列 8 个、<code>services.md</code> 列 9 个，都漏了 <code>ReportSandboxEvent</code> 和三个 P2P RPC。<strong>proto 才是权威</strong>。这也解释了原稿的 8 个是从哪来的。</p>
+<h3 id="2-3-状态与多实例">2.3 状态与多实例</h3>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「状态<strong>全</strong>在内存里，重启即丢」，并称「Scheduler 是<strong>潜在单点</strong>」。两处都要改。</p>
+</blockquote>
+<p>官方 Limitations 原文确实写了内存绑定的问题：</p>
+<blockquote>
+<p><strong>Limitations</strong>: All bindings are in-memory (lost on scheduler restart). After a scheduler restart, bindings are rebuilt from new sandbox creations plus the next heartbeat roster from each runtime node.</p>
+</blockquote>
+<p>但<strong>这不等于没有别的选择</strong>：源码里有 <code>redis_store.go</code>，<code>scheduler.redis_addr</code> 可以切到 Redis-backed binding store。而且 <strong>Scheduler 支持多实例</strong>——<code>leader_election</code> 开启后 N 个副本竞争 <code>coordination.k8s.io/Lease</code>，恰好一个 leader 调度，standby 返回 <code>Unavailable</code>；另有 <code>--query-only</code> 只读副本专服务 <code>LookupNode</code>。</p>
+<p>配置注释说得很清楚：</p>
+<blockquote>
+<p>A Redis binding store is <strong>recommended but not required</strong>: without it, failover loses routing for pre-failover sandboxes (degraded mode).</p>
+</blockquote>
+<p><strong>所以准确的说法是</strong>：默认（不配 Redis）是纯内存、重启丢绑定；配了 Redis 就能支撑 HA 切换。原稿的「潜在单点」只描述了默认配置。</p>
+<h3 id="2-4-节点侧">2.4 节点侧</h3>
+<p>节点发现支持 <code>static</code>（配置固定列表）和 <code>kubernetes</code>（watch headless Service <strong><code>agentenv-nodes</code></strong> 的 EndpointSlice，用 ready DaemonSet Pod IP 作为后端）两种模式。</p>
+<p>节点内部另有一个<strong>节点级 Orchestrator</strong>（<code>src/orchestrator/</code>），但它做的是单节点生命周期状态机，不参与跨节点调度决策。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处枚举</strong>：原稿列的状态是 <code>Creating/Running/Pausing/Paused/Resuming/Killing</code> 六个，<strong>源码 <code>types.rs</code> 实际有八个</strong>：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">SandboxState</span> &#123;</span><br><span class="line">    Creating, Resuming, Running, Snapshotting, Forking, Pausing, Paused, Killing,</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>漏了 <strong><code>Snapshotting</code> 和 <code>Forking</code></strong>。这条很可能也是照抄文档的——<strong>AgentENV 架构文档里的表格同样只写了那六个</strong>，文档与代码不一致。</p>
+</blockquote>
+<p>运行时节点是<strong>特权 DaemonSet Pod</strong>：需要 host 的 <code>/dev/kvm</code>、用 host iptables 与 network namespace 做沙盒网络、运行时资产与快照状态缓存在 <code>/var/lib/aenv</code>（hostPath）。</p>
+<blockquote>
+<p><strong>一处推断要标注</strong>：原稿写「K8s 只负责把 runtime 节点调度到宿主机上，沙盒本身的调度完全不走 kubelet」。方向正确、可从文档合理推出（runtime 用 DaemonSet，落点由 AgentENV 自己的 Scheduler 决定并写 binding、由 Gateway 转发），<strong>但全仓库 grep <code>kubelet</code> 只有一处无关命中，没有明文</strong>。本文按「推断」而非「原文」引用。</p>
+</blockquote>
+<p><strong>AgentENV 的立场可以概括为</strong>：跨节点调度做到极简（过滤 + round-robin 够用），把复杂度下沉到节点内的生命周期管理和 fork/snapshot 原语上。</p>
+<hr>
+<h2 id="三、CubeSandbox：控制面无状态，协调状态押在-Redis">三、CubeSandbox：控制面无状态，协调状态押在 Redis</h2>
+<p>CubeSandbox 走的是另一条路：控制平面与数据平面彻底分离，<strong>用 Redis 做协调状态的唯一真实源</strong>。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    C[Client] --&gt; API[CubeAPI]
+    API --&gt; M[CubeMaster&lt;br&#x2F;&gt;Go 编写]
+    M --&gt;|&quot;约束解析 → 过滤 →&lt;br&#x2F;&gt;加权打分 → top-N 随机选&quot;| N1[Node 1&lt;br&#x2F;&gt;Cubelet]
+    M --&gt;|&quot;生命周期事件&quot;| R[(Redis&lt;br&#x2F;&gt;元数据&#x2F;事件流&#x2F;&lt;br&#x2F;&gt;路由表&#x2F;分布式锁)]
+    API -.-&gt; R
+    N1 --&gt; SH[CubeShim&lt;br&#x2F;&gt;Rust]
+    SH --&gt; HY[CubeHypervisor&lt;br&#x2F;&gt;RustVMM + KVM]
+    N1 --&gt;|&quot;集成 containerd&lt;br&#x2F;&gt;拉取镜像&quot;| CRIO[containerd]
+    N2[Node 2&lt;br&#x2F;&gt;Cubelet &#x2F; CubeEgress] -.-&gt; R
+    PRX[CubeProxy&lt;br&#x2F;&gt;OpenResty] -.-&gt;|&quot;路由表&quot;| R
+    VS[CubeVS&lt;br&#x2F;&gt;eBPF SNAT&#x2F;DNAT] -.-&gt; N1</pre></div>
+<p>官方架构文档把组件明确分成两张表：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>组件</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>控制平面</strong></td>
+<td>CubeAPI、CubeMaster、WebUI、Redis</td>
+<td>API 网关、调度、状态协调、控制台</td>
+</tr>
+<tr>
+<td><strong>数据平面</strong></td>
+<td>Cubelet、CubeShim、CubeHypervisor、CubeCoW、CubeVS、CubeEgress、CubeProxy</td>
+<td>VM 生命周期、存储、网络、安全执行、请求路由</td>
+</tr>
+</tbody>
+</table>
+<p>各数据面组件的语言与定位（官方原文）：<strong>Cubelet</strong> 是 <strong>Go</strong> 写的节点本地调度代理，管理单节点所有沙盒的完整生命周期（create → run → pause → resume → snapshot → destroy），集成 containerd 做镜像拉取、集成 CubeCoW 做卷管理；<strong>CubeShim</strong> 用 <strong>Rust</strong> 实现 containerd Shim v2 接口；<strong>CubeHypervisor</strong> 是基于 <strong>RustVMM + KVM</strong> 的轻量 VMM；<strong>CubeCoW</strong> 是 <strong>Rust</strong> 库，通过 XFS 上的 <code>FICLONE</code> ioctl 实现 <strong>O(1) 快照与克隆</strong>（元数据级，共享 extent 不拷贝字节）；<strong>CubeVS</strong> 是基于 <strong>eBPF</strong> 的内核态网络数据面；<strong>CubeEgress</strong> 是每宿主的 L7 透明出口代理（OpenResty + Lua）；<strong>CubeProxy</strong> 是 OpenResty 反向代理。</p>
+<h3 id="3-1-调度不是「只有资源过滤」">3.1 调度不是「只有资源过滤」</h3>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿把 CubeMaster 的调度概括为「<strong>NodeSelector + 资源可用性过滤</strong>」，并说「比 K8s scheduler 的预选/优选/绑定流程简单得多」。<strong>这漏掉了一整个打分阶段。</strong></p>
+<p>官方调度器配置文档描述的<strong>实际</strong>流程是四步：</p>
+<ol>
+<li><strong>解析请求约束</strong>——<code>instance_type</code>、模板 ID、资源需求、显式 host IP、node affinity / annotations；</li>
+<li><strong>过滤节点</strong>——剔除不健康节点、指标过期节点、超过 MVM 上限的节点、<strong>没有本地模板副本的节点</strong>、实时/本地观测创建数过多的节点、不满足亲和性的节点、磁盘使用率过高的节点；</li>
+<li><strong>加权打分</strong>——对剩余候选打分，权重含 <code>mvm_num</code>、<code>local_create_num</code>、<code>quota_cpu_usage</code>、<code>quota_mem_usage</code>；</li>
+<li><strong>选最终节点</strong>——从最高分候选集里选，<code>priority_select_num</code> 控制有多少个 top 节点进入最终随机选择。</li>
+</ol>
+<p>文档还专门强调了打分的作用：「<strong>Without scoring, CubeMaster still filters nodes but may choose from the filtered order, which can concentrate new sandboxes on the first eligible node</strong>」。</p>
+<p>所以准确的说法是「<strong>过滤 + 加权打分 + top-N 随机</strong>」，而且<strong>已经有 affinity 支持和模板本地性过滤</strong>（<code>template_locality</code>）。「NodeSelector」这个词官方根本没用来描述 CubeMaster 调度（<code>nodeSelector</code> 只出现在 K8s 部署的 placement 里）。</p>
+</blockquote>
+<h3 id="3-2-Redis-承担什么">3.2 Redis 承担什么</h3>
+<p>Redis 承担的四类协调状态<strong>逐条命中</strong>（官方 Redis key 规范文档）：</p>
+<table>
+<thead>
+<tr>
+<th>论断</th>
+<th>实际 key</th>
+<th>结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>沙盒元数据</td>
+<td><code>cube:v1:master:instance:info:&#123;insID&#125;</code>、<code>cube:v1:shared:sandbox:lifecycle:meta</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td>生命周期事件流</td>
+<td><code>cube:v1:shared:sandbox:lifecycle:events</code>（<strong>Stream</strong>，MAXLEN ~100000）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>CubeProxy 路由表</td>
+<td><code>cube:v1:shared:sandbox:proxy:&#123;sandboxID&#125;</code>（Writer=CubeMaster，Reader=CubeProxy）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>分布式锁</td>
+<td><code>cube:v1:master:lock:sandbox:&#123;sandboxID&#125;</code>（SET NX EX）、<code>...:lifecycle-manager:leader</code></td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>一处要加限定</strong>：原稿写「Redis 承担了<strong>所有</strong>协调状态」。架构文档的原话是 “<strong>all coordination</strong> goes through Redis”——<strong>协调</strong>状态，不是<strong>所有</strong>状态。Redis 里还有清单外的 key（节点资源指标、Proxy 副本注册与心跳、Pub/Sub 等），更重要的是——<strong>持久业务元数据在 MySQL 里</strong>：K8s 架构文档明确 CubeAPI / CubeMaster / CubeOps 都 reads/writes MySQL，存 template 定义、sandbox spec、instance 表等。</p>
+<p>所以准确说法是「<strong>控制面的协调状态走 Redis，持久业务元数据走 MySQL</strong>」。</p>
+</blockquote>
+<h3 id="3-3-无状态的边界">3.3 无状态的边界</h3>
+<p>「CubeAPI 和 CubeMaster 无状态、可任意水平扩副本」<strong>属实</strong>——官方设计原则表原文：「<strong>Stateless Control Plane</strong>: CubeAPI and CubeMaster hold no local state; all coordination goes through Redis, so horizontal scale-out is trivial.」</p>
+<blockquote>
+<p>但要加一条边界：<strong><code>cube-lifecycle-manager</code> 不是任意可扩的</strong>——它用 Redis leader lease 做 active-standby（<code>replicas=2</code> + <code>leaderElection.enabled=true</code>，“Only the leader writes shared sandbox state”）。</p>
+</blockquote>
+<h3 id="3-4-roadmap-与版本演进">3.4 roadmap 与版本演进</h3>
+<p><strong>roadmap 五项全部命中</strong>——官方 <code>roadmap.md</code> 的 “Scheduling and Operations Enhancements” 一条原文：</p>
+<blockquote>
+<p>Richer scheduling capabilities including <strong>resource-aware placement, affinity/anti-affinity rules, and priority classes</strong>. Also covers operational tooling: <strong>live resource rebalancing and node drain with sandbox migration</strong>.</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>但这里有个文档层面的自相矛盾要指出</strong>：roadmap 把「resource-aware placement」「affinity/anti-affinity」列为 Coming Soon，而<strong>调度器配置文档显示当前已经按资源占用加权打分、且已支持 affinity 过滤</strong>。</p>
+<p>可以解释为 roadmap 措辞是 “<strong>Richer</strong> scheduling capabilities”（更强的能力，而非从零开始），但读者交叉看两份文档会困惑。<strong>写博客时以调度器配置文档为准描述现状</strong>，并注明 roadmap 用的是 “richer”。</p>
+<p>旁证 drain 确实还没实现：节点运维文档明确写「<strong>Isolation is not drain</strong>. Isolation does not evict existing sandboxes.」</p>
+</blockquote>
+<p><strong>版本演进</strong>核实无误：<strong>v0.6</strong>（2026-07-24）加入 K8s 部署支持（把控制面组件和计算节点部署到 TKE / 标准 K8s / k3s）；<strong>v0.7</strong>（2026-08-28）把节点管理从 CubeMaster 拆出成 <strong>CubeOps</strong>，支持多副本部署并附带 cubeopscli 工具。</p>
+<p><strong>CubeVS 的 eBPF 实现细节</strong>值得一提：SNAT 在 <code>from_cube</code>（TAP 上的 TC ingress）做，DNAT 在 <code>from_world</code>/<code>from_envoy</code> 做，SNAT IP 按沙盒确定性选择——<code>index = jhash(sandbox_ip) % 4</code>，「All connections from the same sandbox therefore use the same SNAT IP」。三个 BPF 程序，无 iptables / bridge / OVS。</p>
+<h3 id="3-5-冷启动数字要带并发条件">3.5 冷启动数字要带并发条件</h3>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「冷启动 &lt;60ms」没带条件。README 确实写「<strong>Average &lt;60ms cold start</strong>」，官方 CubeBench v0.7.3 基准（Intel Xeon Platinum 8255C 裸金属，2vCPU/2000MiB）也给了数据——<strong>但只在低并发下成立</strong>：</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>并发</th>
+<th>冷启动均值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>41.0 ms</strong>（p95 52.3 ms）</td>
+</tr>
+<tr>
+<td>10</td>
+<td>47.9 ms</td>
+</tr>
+<tr>
+<td>20</td>
+<td>56.0 ms</td>
+</tr>
+<tr>
+<td><strong>50</strong></td>
+<td><strong>92.4 ms</strong>（p95 121.9 ms）</td>
+</tr>
+</tbody>
+</table>
+<p>另外<strong>架构文档写的是 “sub-100ms cold starts”</strong>，与 README 的 &lt;60ms 口径不一致。引用时建议以 README + CubeBench 的 &lt;60ms 为准，并注明并发条件；还要注意别和「从快照恢复」（4.3 节，并发 1 时 53.1 ms）混为一谈——两者语义不同。</p>
+<hr>
+<h2 id="四、两条路线的对照">四、两条路线的对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>AgentENV</th>
+<th>CubeSandbox</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>调度组件</td>
+<td>Scheduler（独立 gRPC 服务，13 个 RPC）</td>
+<td>CubeMaster（Go 编排器）</td>
+</tr>
+<tr>
+<td>调度流程</td>
+<td>资源阈值过滤 → round_robin（默认）/ random</td>
+<td>约束解析 → 过滤 → <strong>加权打分</strong> → top-N 随机</td>
+</tr>
+<tr>
+<td>状态存储</td>
+<td>默认内存（重启丢绑定）；<strong>可选 Redis</strong> 支撑 HA</td>
+<td>协调状态走 Redis；持久元数据走 MySQL</td>
+</tr>
+<tr>
+<td>多实例</td>
+<td>支持（Lease 选主 + standby + query-only 副本）</td>
+<td>CubeAPI / CubeMaster 任意扩；CLM 是 leader-elected</td>
+</tr>
+<tr>
+<td>节点发现</td>
+<td><code>static</code> / <code>agentenv-nodes</code> EndpointSlice</td>
+<td>CubeOps 节点管理（v0.7+）</td>
+</tr>
+<tr>
+<td>节点代理</td>
+<td>节点级 Orchestrator（Rust，8 个状态）</td>
+<td>Cubelet（Go）</td>
+</tr>
+<tr>
+<td>与 K8s 关系</td>
+<td>K8s 部署 DaemonSet，不参与沙盒调度（推断）</td>
+<td>K8s 部署控制面，不参与沙盒调度（推断）</td>
+</tr>
+<tr>
+<td>抢占/优先级/亲和性</td>
+<td>无</td>
+<td>部分有（affinity 已有），roadmap 继续增强</td>
+</tr>
+</tbody>
+</table>
+<p>一个有意思的观察：<strong>两者的调度器都比 K8s scheduler 简单，但这是特性而非缺陷</strong>。AgentENV 用「调度器简单到可以随时重启」换取实现简单和低延迟；CubeSandbox 用「控制面无状态 + Redis 协调」换取可扩展性和状态安全。</p>
+<p><strong>复杂度没有被消灭，只是被转移到了各自更擅长处理的位置</strong>——AgentENV 转移到节点内的 Orchestrator 状态机（fork/snapshot 原语），CubeSandbox 转移到数据平面组件（CubeVS 的 eBPF 网络、CubeCoW 的写时复制存储）。</p>
+<hr>
+<h2 id="五、这个选择是行业共识，不是个案">五、这个选择是行业共识，不是个案</h2>
+<p>回头看 <strong>DSec</strong>——DeepSeek 的论文（arXiv:<strong>2609.22978</strong>，标题 <em>DeepSeek Elastic Compute (DSec): A Sandbox Infrastructure for Effective Agentic Training at Scale</em>，2026-09-19 提交，<strong>131 位作者</strong>，主体单位 DeepSeek-AI 带清华联合署名）。</p>
+<p>规模数字（摘要原文）：</p>
+<blockquote>
+<p>A single production-scale unit of DSec spans around <strong>160 nodes</strong>, serving about <strong>3 million sandboxes per day</strong>; in production, it supports over <strong>380,000 concurrent sandboxes</strong> and sustains over <strong>5,000 sandbox creations per second</strong>.</p>
+</blockquote>
+<p>130+ 作者的团队最终也是自建调度层。它的场景更进一步：<strong>异构负载四级后端</strong>（FnCall / Container / MicroVM / FullVM）需要调度器理解「这个请求该落到哪一级运行时」——这种多目标决策更是通用调度器无法覆盖的。论文自己也强调这四级的 “startup costs, isolation boundaries, filesystem semantics, and operating-system capabilities” 都不同。</p>
+<p>归纳起来，<strong>「绕过 kubelet 自建调度」的适用边界</strong>大致是：</p>
+<ol>
+<li><strong>调度对象生命周期 &lt; 秒级</strong>，且创建/销毁频率高到调度延迟成为主要瓶颈；</li>
+<li><strong>常规操作包含 pause / resume / fork / snapshot</strong> 这类 K8s Pod 模型里不存在的生命周期转换；</li>
+<li><strong>资源模型依赖超卖</strong>（共享只读块、page cache 复用），requests/limits 无法表达；</li>
+<li><strong>数据面网络需要每沙盒独立策略</strong>且必须绕过 CNI 的创建开销。</li>
+</ol>
+<p><strong>反过来</strong>，如果你的沙盒负载是「分钟级生命周期的容器、正常 K8s 资源模型、可以容忍秒级启动」，那 <strong>kubernetes-sigs/agent-sandbox</strong> 这类走 RuntimeClass 委托给 Kata/gVisor 的方案仍然是更省力的选择——不必为了架构上的纯粹性，引入一套自建控制平面的长期维护成本。</p>
+<hr>
+<h2 id="六、结语">六、结语</h2>
+<p>AgentENV 和 CubeSandbox 绕过 kubelet 的方式，表面上一个是「极简调度器」、一个是「Redis 中心化编排」，但底层判断是一致的：<strong>Agent 沙盒的调度问题，在延迟预算、生命周期语义、资源模型、网络路径四个维度上都偏离了 K8s 的设计假设</strong>。与其在 scheduler framework 里做扩展硬拗，不如自己写一个匹配负载语义的调度器，把 K8s 降级为部署底座。</p>
+<p>对正在做 Agent 基础设施选型的团队，这两套系统的价值<strong>不在于可以直接抄</strong>（它们的调度器都还很简单，生产特性在 roadmap 上），而在于验证了一个架构判断：</p>
+<blockquote>
+<p>当你的沙盒需要 &lt;60ms 启动、接近 10× 的内存超卖、毫秒级 fork 时，「调度器」就该从「K8s 的一个组件」重新定位为「<strong>系统的第二控制平面</strong>」——它值得被独立设计、独立演进、独立评估，而不是当作既定设施去适配。</p>
+</blockquote>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a>——沙盒插在运行时栈的哪一层</li>
+<li><a href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/">具身智能仿真场景的沙盒选型</a>——仿真主力为什么是裸金属容器而非 microVM</li>
+<li><a href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</a>——DSec 与 AgentENV 的完整拆解（含我们自建沙盒框架的会话粘性设计）</li>
+<li><a href="/2026/10/24/2026-10-24-containerd-Snapshotter%E6%8E%A5%E5%8F%A3%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E6%87%92%E5%8A%A0%E8%BD%BD%E9%95%9C%E5%83%8F%E6%96%B9%E6%A1%88%E7%9A%84%E6%8A%80%E6%9C%AF%E5%9F%BA%E7%9F%B3/">containerd Snapshotter 接口深度解析</a>——镜像按需加载的抽象边界</li>
+<li><a href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/">Kubernetes 多调度器共存实践指南</a>——多调度器共存的冲突与兜底</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文代码级结论基于 <strong>AgentENV</strong> <code>main</code> @ <code>6a18edc7</code>（2026-11-04）与 <strong>v0.2.4</strong> @ <code>9f62cbe0</code>（2026-10-23）——两者的 <code>strategy.go</code> 与 <code>scheduler.proto</code> <strong>逐字节相同</strong>，故版本差异不能解释任何描述分歧；<strong>CubeSandbox</strong> <code>master</code> 分支的架构总览、调度器配置、roadmap、Redis key 规范、K8s 架构、changelog 与 CubeBench 基准文档；<strong>DSec</strong> 论文 arXiv:2609.22978 摘要与 HTML 全文。</p>
+<p><strong>原稿更正汇总</strong>：AgentENV 的 RPC 数（<strong>13 个而非 8 个</strong>，且项目自身文档也不全）、「没有预选」（<strong>有 <code>FilterByResourceLimit</code></strong>）、「状态全在内存 / 潜在单点」（<strong>有 Redis 选项与 Lease 选主多实例</strong>）、Orchestrator 状态枚举（<strong>8 个而非 6 个</strong>，漏 <code>Snapshotting</code>/<code>Forking</code>）、CubeMaster 调度流程（<strong>漏掉加权打分与 affinity</strong>）、「Redis 承担所有状态」（<strong>持久元数据在 MySQL</strong>）、冷启动 &lt;60ms（<strong>需带并发条件</strong>）。另有<strong>一条数字「CPU 超卖 27.9×」全仓库查无出处，已删除</strong>——9.6× 内存超卖确实存在于 README，但项目未给测量方法，且其自身 docs 复述时把数字去掉了。最后，「沙盒调度完全不走 kubelet」是<strong>可从文档推出的推断，非明文</strong>，已在文中标注。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/">https://roger-lv.github.io/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Firecracker/">Firecracker</a><a class="post-meta__tags" href="/tags/%E8%B0%83%E5%BA%A6%E5%99%A8/">调度器</a><a class="post-meta__tags" href="/tags/%E6%B2%99%E7%9B%92/">沙盒</a><a class="post-meta__tags" href="/tags/Agent%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD/">Agent基础设施</a><a class="post-meta__tags" href="/tags/AgentENV/">AgentENV</a><a class="post-meta__tags" href="/tags/CubeSandbox/">CubeSandbox</a><a class="post-meta__tags" href="/tags/DSec/">DSec</a><a class="post-meta__tags" href="/tags/microVM/">microVM</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">从 K8s 到 AI Infra：跨越五道技术鸿沟</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：K8s 把 GPU 当作 nvidia.com/gpu: 8 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「只分配、不感知」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。  上一讲（K8s 很熟，为什么月薪卡在三万）讲的是怎么看——nvidia-smi topo -m 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲怎么修：五道鸿沟各自的工程解法。 本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败，已在文中以 ⚠️ 标注。  五道鸿沟总览    维度 K8s 原生方案 AI 训练瓶颈 生产级方案 核心工具链     调度 kube-scheduler 逐 Pod 打分 部分 Pod 无法调度导致整组死锁 Gang 整组调度 + 多维配比 Volcano PodGroup   网络 TCP ...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-GPU%E5%BE%AE%E6%9E%B6%E6%9E%84%E4%BB%8E%E6%99%B6%E4%BD%93%E7%AE%A1%E5%88%B0%E4%B8%80%E6%AC%A1GEMM%E7%9A%84%E5%AE%8C%E6%95%B4%E6%95%B0%E6%8D%AE%E6%B5%81/" title="GPU 微架构：从晶体管到一次 GEMM 的完整数据流"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">GPU 微架构：从晶体管到一次 GEMM 的完整数据流</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：GPU 是一台「用海量小计算单元换并发、用深存储层级换带宽」的吞吐机器。它所有构件——SM 内的调度器/寄存器/Shared Memory/Tensor Core、芯片级的 L2/内存控制器/HBM、系统级的 NVLink/NVSwitch——都在服务同一个目标：让 Tensor Core 永远有数据可吃、让数据永远在路上不空转。  本文以 H100（SXM5）为参考基准，对照 NVIDIA 官方白皮书逐条核对过数字。核对中发现原稿有六处需要更正，其中一处涉及 GEMM 数据流的核心步骤，已在文中以 ⚠️ 标注。  一、全景：从晶体管到集群的层级堆叠 以 H100 SXM5 为参考：8 个 GPC → 66 个 TPC → 132 个 SM（每 TPC 2 个）→ 每 SM 128 个 FP32 CUDA Core + 4 个第四代 Tensor Core，配 5 个 HBM3 堆栈、50 MB L2、3.35 TB/s 显存带宽、80 GB 容量。  ⚠️ SM 数量有三个版本，别混：H100 SXM5 = 132 SM、H100 PCIe = 114 SM、满配...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/" title="具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：具身智能公司的仿真主力沙盒应当是「裸金属容器 + K8s GPU 调度」，而不是 DSec / AgentENV 那套 Firecracker microVM 层。只有轻量 Agent 工具调用和不可信代码执行才下沉到 microVM。这不是对多级运行时架构的否定，而是该框架在具身场景下的正确映射——仿真吃的是 NVIDIA 专有计算栈，而虚拟化层的 GPU 转发方案恰恰覆盖不到这里。  这篇是 Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地 的延伸。那篇里有一节（§3.5）讲具身仿真的 GPU 路线，结论是「虚拟化不是默认选项」；本文把那个结论展开成一份完整的选型依据——为什么 microVM 接不住仿真、虚拟化 GPU 的四条路径各自能到哪、以及三层负载该怎么分别匹配。  一、为什么这不是一个「通用沙盒」问题 讨论的对象是一类典型的具身智能公司：自研端到端具身大模型，部署轮式双臂仿人机器人与高自由度灵巧手，自建数据工厂沉淀了数万小时多模态具身数据集，机器人已规模化进入真实家庭。 这个形态决定了基础设施要同时承载三类性质完全...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/" title="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</div></div><div class="info-2"><div class="info-item-1">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解 LLM Agent 正在把一个老问题重新推到台前:当代码由模型生成、且不可信时,你把它放在哪里执行? 容器的隔离撑不住对抗性负载;传统虚拟机又太重,扛不住每秒几十次的沙箱创建。于是一批沉寂多年的技术突然变得炙手可热——Firecracker、gVisor、Kata Containers、microVM。这些名词经常混在一起出现,但它们分处不同层次、解决不同问题。要真正理解它们的取舍,需要从最底层讲起:从冯·诺依曼架构的&quot;核心与外围&quot;,一路讲到 Agent infra 的选型决策。 本文分四部分:先梳理虚拟化技术栈的分层关系,再深入 QEMU 的设备模型理解&quot;外围设备&quot;的本质,然后分析性能差异的根源,最后落到 Agent 沙箱的实战选型。  一、技术栈全景:谁在谁的上面 先用一句话给所有主角定位:  KVM 是 Linux 内核提供的硬件虚拟化基础设施;QEMU 是基于 KVM 的传统全功能虚拟机监视器;Firecracker 是基于 KVM、专为 Serverless 设计的...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：kubelet 不直接创建容器，它只通过 CRI（Container Runtime Interface）下达指令；真正干活的是高级运行时（containerd / CRI-O）和低级运行时（runc / kata-agent / runsc）。沙盒选型的本质，就是在决定「谁来接 kubelet 的 CRI 调用」以及「容器进程最终跑在什么隔离边界里」。对具身智能公司而言，仿真训练、Agent 工具调用、强隔离 VM、真机设备接入这四类负载对应完全不同的运行时组合——不存在一个「万能沙盒」能同时满足。  这篇是 具身智能仿真场景的沙盒选型 的下层视角。上篇回答「该选哪个沙盒」，这篇回答「沙盒插在运行时栈的哪一层、跟 kubelet 怎么耦合」。 本文的架构描述逐条核对自 Kubernetes 官方文档、containerd 源码与文档、Kata/gVisor/Firecracker 官方文档与仓库。核对中发现原稿有十余处需要更正，已在文中以 ⚠️ 标注。  一、先立骨架：kubelet 之下的运行时栈分层 Kubernetes 的容器运行时体系是明确的两层结构，这个...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E9%97%AE%E9%A2%98%EF%BC%9AAgent-%E6%B2%99%E7%9B%92%E8%B4%9F%E8%BD%BD%E5%AF%B9%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8F%90%E5%87%BA%E4%BA%86%E4%BB%80%E4%B9%88%E8%A6%81%E6%B1%82"><span class="toc-number">1.</span> <span class="toc-text">一、问题：Agent 沙盒负载对调度器提出了什么要求</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81AgentENV%EF%BC%9A%E6%8A%8A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%81%9A%E5%87%8F%E6%B3%95"><span class="toc-number">2.</span> <span class="toc-text">二、AgentENV：把调度器做减法</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E8%B0%83%E5%BA%A6%E8%B7%AF%E5%BE%84%EF%BC%9A%E8%BF%87%E6%BB%A4-%E4%B8%A4%E7%A7%8D%E7%AD%96%E7%95%A5"><span class="toc-number">2.1.</span> <span class="toc-text">2.1 调度路径：过滤 + 两种策略</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-RPC-%E9%9D%A2%EF%BC%9A13-%E4%B8%AA%EF%BC%8C%E4%B8%8D%E6%98%AF-8-%E4%B8%AA"><span class="toc-number">2.2.</span> <span class="toc-text">2.2 RPC 面：13 个，不是 8 个</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E7%8A%B6%E6%80%81%E4%B8%8E%E5%A4%9A%E5%AE%9E%E4%BE%8B"><span class="toc-number">2.3.</span> <span class="toc-text">2.3 状态与多实例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E8%8A%82%E7%82%B9%E4%BE%A7"><span class="toc-number">2.4.</span> <span class="toc-text">2.4 节点侧</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81CubeSandbox%EF%BC%9A%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%97%A0%E7%8A%B6%E6%80%81%EF%BC%8C%E5%8D%8F%E8%B0%83%E7%8A%B6%E6%80%81%E6%8A%BC%E5%9C%A8-Redis"><span class="toc-number">3.</span> <span class="toc-text">三、CubeSandbox：控制面无状态，协调状态押在 Redis</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E8%B0%83%E5%BA%A6%E4%B8%8D%E6%98%AF%E3%80%8C%E5%8F%AA%E6%9C%89%E8%B5%84%E6%BA%90%E8%BF%87%E6%BB%A4%E3%80%8D"><span class="toc-number">3.1.</span> <span class="toc-text">3.1 调度不是「只有资源过滤」</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-Redis-%E6%89%BF%E6%8B%85%E4%BB%80%E4%B9%88"><span class="toc-number">3.2.</span> <span class="toc-text">3.2 Redis 承担什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E6%97%A0%E7%8A%B6%E6%80%81%E7%9A%84%E8%BE%B9%E7%95%8C"><span class="toc-number">3.3.</span> <span class="toc-text">3.3 无状态的边界</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-roadmap-%E4%B8%8E%E7%89%88%E6%9C%AC%E6%BC%94%E8%BF%9B"><span class="toc-number">3.4.</span> <span class="toc-text">3.4 roadmap 与版本演进</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-%E5%86%B7%E5%90%AF%E5%8A%A8%E6%95%B0%E5%AD%97%E8%A6%81%E5%B8%A6%E5%B9%B6%E5%8F%91%E6%9D%A1%E4%BB%B6"><span class="toc-number">3.5.</span> <span class="toc-text">3.5 冷启动数字要带并发条件</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%A4%E6%9D%A1%E8%B7%AF%E7%BA%BF%E7%9A%84%E5%AF%B9%E7%85%A7"><span class="toc-number">4.</span> <span class="toc-text">四、两条路线的对照</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E8%BF%99%E4%B8%AA%E9%80%89%E6%8B%A9%E6%98%AF%E8%A1%8C%E4%B8%9A%E5%85%B1%E8%AF%86%EF%BC%8C%E4%B8%8D%E6%98%AF%E4%B8%AA%E6%A1%88"><span class="toc-number">5.</span> <span class="toc-text">五、这个选择是行业共识，不是个案</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E7%BB%93%E8%AF%AD"><span class="toc-number">6.</span> <span class="toc-text">六、结语</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/" title="agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差">agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-%E4%B8%BA%E6%9C%AC%E7%A7%91%E7%94%9F%E8%AE%BE%E8%AE%A1%E4%B8%80%E9%97%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83Infra%E8%AF%BE/" title="为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单">为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

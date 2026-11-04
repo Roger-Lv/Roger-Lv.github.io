@@ -1,0 +1,658 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从 kubelet 到沙盒：高级运行时与低级运行时的映射全景 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="kubelet 不创建容器，它只通过 CRI 下达指令；真正干活的是高级运行时（containerd&#x2F;CRI-O）和低级运行时（runc&#x2F;kata-agent&#x2F;runsc）。沙盒选型的本质，就是在决定「谁来接 kubelet 的 CRI 调用」以及「容器进程最终跑在什么隔离边界里」。本文按仿真训练、Agent 工具调用、强隔离 VM、真机接入四类负载拆解运行时组合，附拓扑图与全场景对比表。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="kubelet 不创建容器，它只通过 CRI 下达指令；真正干活的是高级运行时（containerd&#x2F;CRI-O）和低级运行时（runc&#x2F;kata-agent&#x2F;runsc）。沙盒选型的本质，就是在决定「谁来接 kubelet 的 CRI 调用」以及「容器进程最终跑在什么隔离边界里」。本文按仿真训练、Agent 工具调用、强隔离 VM、真机接入四类负载拆解运行时组合，附拓扑图与全场景对比表。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-04T17:37:34.765Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Firecracker">
+<meta property="article:tag" content="containerd">
+<meta property="article:tag" content="DRA">
+<meta property="article:tag" content="gVisor">
+<meta property="article:tag" content="Kata">
+<meta property="article:tag" content="具身智能">
+<meta property="article:tag" content="容器运行时">
+<meta property="article:tag" content="CRI">
+<meta property="article:tag" content="RuntimeClass">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从 kubelet 到沙盒：高级运行时与低级运行时的映射全景",
+  "url": "https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-04T16:00:00.000Z",
+  "dateModified": "2026-11-04T17:37:34.765Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从 kubelet 到沙盒：高级运行时与低级运行时的映射全景',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-04T17:37:34.765Z" title="更新于 2026-11-05 01:37:34">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" data-flag-title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：kubelet 不直接创建容器，它只通过 CRI（Container Runtime Interface）下达指令；真正干活的是<strong>高级运行时</strong>（containerd / CRI-O）和<strong>低级运行时</strong>（runc / kata-agent / runsc）。沙盒选型的本质，就是在决定「<strong>谁来接 kubelet 的 CRI 调用</strong>」以及「<strong>容器进程最终跑在什么隔离边界里</strong>」。对具身智能公司而言，仿真训练、Agent 工具调用、强隔离 VM、真机设备接入这四类负载对应完全不同的运行时组合——<strong>不存在一个「万能沙盒」能同时满足</strong>。</p>
+</blockquote>
+<p>这篇是 <a href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/">具身智能仿真场景的沙盒选型</a> 的<strong>下层视角</strong>。上篇回答「该选哪个沙盒」，这篇回答「沙盒插在运行时栈的哪一层、跟 kubelet 怎么耦合」。</p>
+<p>本文的架构描述逐条核对自 Kubernetes 官方文档、containerd 源码与文档、Kata/gVisor/Firecracker 官方文档与仓库。<strong>核对中发现原稿有十余处需要更正</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="一、先立骨架：kubelet-之下的运行时栈分层">一、先立骨架：kubelet 之下的运行时栈分层</h2>
+<p>Kubernetes 的容器运行时体系是明确的<strong>两层结构</strong>，这个分层决定了后面所有场景的讨论框架：</p>
+<ul>
+<li><strong>高级运行时</strong>：对接 kubelet 的 CRI gRPC 接口，负责镜像管理、容器生命周期编排、存储快照、网络（CNI 调用）。代表是 containerd（内部的 <code>cri</code> 插件）和 CRI-O。</li>
+<li><strong>低级运行时</strong>：高级运行时通过 OCI Runtime Spec 调用它，负责真正创建/销毁容器进程。传统上是 runc（namespace + cgroups + seccomp），沙盒场景下则可能是 Kata（VM 内的 kata-agent）、gVisor 的 runsc、或 Firecracker 的 guest agent。</li>
+</ul>
+<blockquote>
+<p>说明：K8s 官方文档本身不使用「高级/低级运行时」这两个词，该分层是 <strong>CNCF 生态的通行表述</strong>——「Low-level Container Runtime: OCI-compliant implementations that can receive a runnable filesystem (rootfs) and a configuration file (config.json) to execute isolated processes… such as runc, crun, youki, gvisor, and kata. High-level Container Runtime: responsible for the transport and management of container images, unpacking the image, and passing it off to the low-level runtime…」</p>
+</blockquote>
+<p><strong>kubelet 与 containerd 的协作流程</strong>（对照 containerd 官方 CRI 架构文档）：</p>
+<ol>
+<li>kubelet 通过 CRI <code>RuntimeService</code> 调 containerd 的 <code>cri</code> 插件创建 Pod sandbox；</li>
+<li><code>cri</code> 插件创建网络命名空间并调 <strong>CNI</strong> 配置网络；</li>
+<li><code>cri</code> 插件创建并启动 <strong>pause 容器</strong>（sandbox 容器）；</li>
+<li>kubelet 通过 CRI <code>ImageService</code> 拉取业务镜像；</li>
+<li>kubelet 再调 <code>cri</code> 在 Pod 内创建并启动业务容器。</li>
+</ol>
+<blockquote>
+<p>⚠️ <strong>两处需要精确化</strong>：</p>
+<ol>
+<li><strong>CNI 不是 kubelet 调的，是 CRI 实现（containerd 的 cri 插件）调的。</strong> K8s 的 CRI 网络规范原文：「Kubelet expects the runtime shim to manage pod’s network life cycle… <code>RunPodSandbox</code> must set up pod’s network.」</li>
+<li><strong>pause 容器属于 sandbox 创建阶段，不是之后单独的一步。</strong> 默认实现里 sandbox 就是 pause 容器，它在 <code>RunPodSandbox</code> 内完成。</li>
+</ol>
+</blockquote>
+<p><strong>containerd 与低级运行时之间是 shim v2 协议</strong>：containerd 不直接 fork/exec 运行时引擎，而是通过长驻 shim 进程的 <strong>ttRPC socket</strong> 下发指令。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    subgraph Node[&quot;Kubernetes Node&quot;]
+        K[kubelet] --&gt;|&quot;CRI gRPC&lt;br&#x2F;&gt;RuntimeService &#x2F; ImageService&quot;| C[containerd&lt;br&#x2F;&gt;cri 插件]
+        C --&gt;|&quot;CNI&quot;| N[CNI 插件&lt;br&#x2F;&gt;Calico&#x2F;Cilium]
+        C --&gt;|&quot;shim v2 &#x2F; ttRPC&quot;| S[containerd-shim-runc-v2]
+        S --&gt;|&quot;exec&quot;| R[runc&lt;br&#x2F;&gt;低级运行时]
+        R --&gt; P[容器进程&lt;br&#x2F;&gt;namespace+cgroups+seccomp]
+        C -.-&gt;|镜像快照| SNAP[snapshotter&lt;br&#x2F;&gt;overlayfs&#x2F;nydus]
+        K -.-&gt;|Device API| DP[Device Plugin &#x2F; DRA driver]
+    end</pre></div>
+<blockquote>
+<p>⚠️ <strong>更正（这条原稿的对比不准确）</strong>：原稿写「containerd 为每个 pod sandbox 启动一个 shim 进程，通过 socket 长连接，<strong>而不是每次操作 fork 一个 runtime 二进制</strong>」。</p>
+<p>两个问题：</p>
+<ol>
+<li><strong>「每个 pod sandbox 一个 shim」是 <code>io.containerd.runc.v2</code> 这个 shim 实现的选择，不是 containerd 的强制语义。</strong> containerd 官方原文：「containerd does not know or care about whether the shim to container relationship is one-to-one, or one-to-many. <strong>It is entirely up to the shim to decide.</strong>」而通用 Runtime v2 模型的表述是「containerd launches a shim process for each container」。是 <code>runc.v2</code> shim 主动按 <strong><code>io.kubernetes.cri.sandbox-id</code> 标签聚合</strong>，才让同一个 Pod 的所有容器共用一个 shim。</li>
+<li><strong>「不再 fork runtime 二进制」不成立</strong>——长驻 shim 本身在每次 create/start/stop 时<strong>仍会 exec <code>runc</code></strong>。准确的表述是「containerd 不直接调用运行时引擎，而是通过长驻 shim 的 ttRPC socket 下发指令」。</li>
+</ol>
+</blockquote>
+<p>这个分层的关键含义是：<strong>沙盒技术插在哪一层，决定了它跟 kubelet 的耦合方式</strong>。gVisor 和 Kata 插在 shim 层（containerd 换个 runtime handler 就能切换）；Firecracker 可以走 firecracker-containerd 的 control plugin 路径，也可以走独立 shim 路径；而 AgentENV / CubeSandbox 这类自带控制平面的系统干脆绕过 kubelet，自建调度。</p>
+<hr>
+<h2 id="二、场景一：裸金属容器仿真训练">二、场景一：裸金属容器仿真训练</h2>
+<p><strong>适用场景</strong>：Isaac Lab / MuJoCo Warp / Genesis 大规模 RL rollout，GPU 密集，容器内直接跑 CUDA / PhysX / RT Core 负载，不需要 VM 级隔离。</p>
+<ul>
+<li><strong>高级运行时</strong>：containerd（标准配置），配 nydus-snapshotter 做镜像按需加载；</li>
+<li><strong>低级运行时</strong>：runc（<code>io.containerd.runc.v2</code> shim）。</li>
+</ul>
+<p>GPU 不走虚拟化，通过 <strong>DRA driver</strong> 或 NVIDIA Device Plugin 注册到 kubelet 的设备管理器。DRA（<strong>K8s 1.34 GA</strong>，feature gate 在 1.35 起 locked）比旧 Device Plugin 多了拓扑感知：</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    subgraph Node[&quot;GPU 裸金属节点&quot;]
+        K[kubelet] --&gt;|&quot;CRI&quot;| C[containerd cri]
+        K --&gt;|&quot;Topology Manager&quot;| TM[NUMA 对齐]
+        TM --&gt; DM[Device Manager]
+        DM --&gt;|&quot;gRPC 注册&quot;| DRA[DRA driver&lt;br&#x2F;&gt;kubelet plugin]
+        DRA --&gt; CDI[CDI device ID]
+        CDI --&gt; C
+        C --&gt; S[shim-runc-v2] --&gt; R[runc]
+        R --&gt; P[仿真容器&lt;br&#x2F;&gt;Isaac Lab &#x2F; MuJoCo]
+        P -.-&gt;|CUDA 直访| GPU[物理 GPU]
+        C -.-&gt;|snapshotter| NYD[nydus-snapshotter&lt;br&#x2F;&gt;EROFS 按需加载]
+        K -.-&gt;|HAMi 替换| HAMI[HAMi device plugin&lt;br&#x2F;&gt;vGPU 时间片]
+    end</pre></div>
+<p><strong>DRA 的完整链路</strong>：scheduler 的 <code>DynamicResources</code> 插件把 Pod 匹配到 ResourceSlice 描述的硬件上并写回 ResourceClaim → kubelet 通过 gRPC 调 driver 的 <strong><code>NodePrepareResources</code></strong> → driver 返回 <strong>CDI device ID</strong> → containerd 消费。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处措辞</strong>：原稿写「<code>NodePrepareResources</code> <strong>生成 CDI spec</strong>」。实际上 driver 返回的是 <strong>CDI device ID</strong>（<code>NodePrepareResourcesResponse</code> 里的 <code>repeated string cdi_device_ids</code>）；<strong>CDI spec 文件是厂商 driver 的 spec 生成器写进 <code>/etc/cdi</code> 或 <code>/var/run/cdi</code> 的</strong>，containerd 读取并注入。两者不是一回事。</p>
+</blockquote>
+<p><strong>CDI（Container Device Interface）</strong> 的全称与归属核实无误，仓库在 CNCF 的 <code>cncf-tags</code> 组织下。但有一个版本差异要知道：</p>
+<blockquote>
+<p>⚠️ containerd <strong>1.7 默认 <code>enable_cdi = false</code>（需手动开）</strong>，<strong>2.0 起 CDI 默认启用</strong>——所以 2.0 的 config 参考里已经不再出现这个开关。跨版本排查设备注入问题时会踩到。</p>
+</blockquote>
+<p>几个关键细节：</p>
+<ul>
+<li><strong>HAMi 提利用率的路径是替换节点上的 NVIDIA device plugin</strong>（它本身就是 k8s-device-plugin 的 fork）。官方前置条件文档要求：把 GPU Operator 的 <code>devicePlugin.enabled=false</code>、关掉节点上其他 NVIDIA device plugin，<strong>避免 <code>nvidia.com/gpu</code> 被重复注册</strong>。切分粒度是 <code>nvidia.com/gpumem</code>（MiB）和 <code>nvidia.com/gpucores</code>（百分比），由 <code>libvgpu.so</code> 在 CUDA API 层做容器内软隔离。<strong>但时间片无故障隔离</strong>，一个 rollout OOM 可能波及共享同卡的其他副本。</li>
+<li><strong>nydus-snapshotter 是 containerd 的外部插件进程</strong>（<code>containerd-nydus-grpc</code>），以 <code>[proxy_plugins]</code> 的 <code>type = &quot;snapshot&quot;</code> 身份接入，实现的是 <strong>remote snapshotter</strong> 接口。它的完整机制见 <a href="/2026/10/24/2026-10-24-containerd-Snapshotter%E6%8E%A5%E5%8F%A3%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E6%87%92%E5%8A%A0%E8%BD%BD%E9%95%9C%E5%83%8F%E6%96%B9%E6%A1%88%E7%9A%84%E6%8A%80%E6%9C%AF%E5%9F%BA%E7%9F%B3/">containerd Snapshotter 接口深度解析</a>。</li>
+<li><strong>断点续跑靠仿真器自身的 <code>save_state</code></strong>（Isaac Lab、MuJoCo、Genesis 都支持），不靠虚拟化层快照——<strong>GPU 状态无法被 hypervisor 快照</strong>，这是仿真沙盒与通用沙盒最本质的差别。</li>
+</ul>
+<hr>
+<h2 id="三、场景二：Agent-工具调用沙盒">三、场景二：Agent 工具调用沙盒</h2>
+<p><strong>适用场景</strong>：具身 Agent 训练中的工具调用（代码执行、文件操作、API 调用），CPU 密集、生命周期短（秒到分钟）、高并发 fanout、不需要 GPU。</p>
+<ul>
+<li><strong>高级运行时</strong>：containerd，配 <code>firecracker</code> 或 <code>gvisor</code> runtime handler，由 Kubernetes SIG 的 agent-sandbox（Sandbox CRD + controller + webhook）统一管理生命周期与策略；</li>
+<li><strong>低级运行时</strong>：按隔离强度分三档。</li>
+</ul>
+<p><strong>（1）gVisor runsc</strong>（<code>containerd-shim-runsc-v1</code>）：Sentry 作为用户态内核拦截系统调用，Gofer 代理文件系统访问。开销在 syscall 密集型负载明显——官方原文：「This cost will principally impact applications that are <strong>system call bound</strong>」，纯 CPU 负载几乎无开销。部署最简单。</p>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「Sentry 与 Gofer 之间用 <strong>9P</strong> 协议」。<strong>现行协议是 LISAFS</strong>，9P 是历史实现。gVisor 官方文档：「Gofer instances communicate with their respective sentry using the <strong>LISAFS</strong> protocol.」仓库 <code>pkg/lisafs/README.md</code> 解释了换的原因：「Historically, gVisor used a custom extension of the 9P2000.L protocol… <strong>9P proved to be chatty</strong> in certain situations, inducing a lot of RPCs. LISAFS aims to be more economical.」（主仓库已无 <code>pkg/9p</code> 目录。）</p>
+</blockquote>
+<p><strong>（2）独立 firecracker-shim</strong>（社区实现 <code>PipeOpsHQ/firecracker-shim</code>）：无中间 daemon，containerd 直接调 shim，shim 启动 Firecracker VMM，<strong>VM 内 <code>fc-agent</code> 再调 runc 跑容器</strong>。标准 CNI 可用，VM 池化预热后冷启动 &lt;50ms，单 VM 内存开销 64—128MB。</p>
+<blockquote>
+<p>这一条的组件名（<code>fc-agent</code> + 调 runc）<strong>核实属实</strong>——README 架构图是 <code>fc-agent → runc → container</code>，源码 <code>cmd/fc-agent/main.go</code> 注释 “manages containers using runc”，常量 <code>runcBinary=&quot;/usr/bin/runc&quot;</code>。</p>
+<p>⚠️ <strong>但项目本身要打个折扣</strong>：该仓库 2026-01 创建、约 8 star，<strong>很新很小</strong>，可以叫「社区实现」，不宜当成熟方案推荐。而且它自己文档里内存开销有 <strong>64—128MB</strong> 与 <strong>~10MB</strong> 两个口径并存（前者是整机 VM 占用、后者是相对 runc 的增量），引用时要注明。</p>
+</blockquote>
+<p><strong>（3）firecracker-containerd</strong>（AWS 官方）：<strong>shim + 编译进 containerd 的 control plugin</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写它是「<strong>daemon 架构</strong>，容器管理通过<strong>单独的 gRPC 接口而非标准 OCI shim</strong>」。实际是：</p>
+<ul>
+<li>它是「A control plugin <strong>compiled in to the containerd binary</strong>」（需要专门构建的 containerd 二进制）+ 「A runtime implementing both the control API and the <strong>V2 runtime API</strong>, implemented as an out-of-process shim communicating over <strong>ttrpc</strong>」；</li>
+<li><strong>容器/任务生命周期走的正是标准 V2 runtime（shim）模型</strong>；那个 control plugin（<code>FC-Control</code>）只管 <strong>VM 级 API</strong>（<code>StartVM</code> 等），不接管容器管理；</li>
+<li>通信是 <strong>ttrpc 不是 gRPC</strong>。</li>
+</ul>
+<p>维护状态也要说准：<strong>未归档、未标记废弃</strong>（GitHub API <code>archived: false</code>，2026-10 仍有提交），近一年以依赖升级为主、<strong>无重大功能开发</strong>——是「明显放缓」，不是「停止维护」。</p>
+</blockquote>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    subgraph Cluster[&quot;Agent 工具调用集群&quot;]
+        AS[agent-sandbox controller&lt;br&#x2F;&gt;Sandbox CRD &#x2F; webhook] --&gt; K
+        subgraph Node[&quot;K8s 节点&quot;]
+            K[kubelet] --&gt;|&quot;CRI&lt;br&#x2F;&gt;RuntimeClass&#x3D;firecracker&quot;| C[containerd]
+            C --&gt;|&quot;shim v2 &#x2F; ttRPC&quot;| FCS[containerd-shim-fc-v2]
+            FCS --&gt; FC[Firecracker VMM]
+            FC --&gt;|&quot;virtio-vsock&quot;| AG[fc-agent]
+            AG --&gt;|&quot;guest 内 exec&quot;| R2[runc]
+            R2 --&gt; P[工具容器&lt;br&#x2F;&gt;python&#x2F;shell]
+            K -.-&gt;|RuntimeClass&#x3D;gvisor| GV[containerd-shim-runsc-v1]
+            GV --&gt; SEN[Sentry 用户态内核]
+            SEN --&gt;|&quot;LISAFS&quot;| GOF[Gofer]
+            C --&gt;|&quot;标准 CNI&quot;| NET[Calico&#x2F;Cilium&lt;br&#x2F;&gt;egress NetworkPolicy]
+        end
+    end
+    AS -.-&gt;|策略注入| NET</pre></div>
+<p><strong>这个场景最容易混淆的一点</strong>：<strong>AgentENV 和 CubeSandbox 不在这个拓扑里</strong>。它们自带控制平面——CubeSandbox 的 CubeMaster 做集群调度、Cubelet 管节点上沙盒实例的生命周期、CubeShim 实现 containerd shim v2 接口做 VM 启动与 vsock 通信——<strong>K8s 只承载外层 Pod，内层 microVM 的调度不走 kubelet 的 CRI</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处技术基座</strong>：原稿写「CubeHypervisor 基于 <strong>Cloud Hypervisor</strong>」。官方原文是「CubeHypervisor… The lightweight VMM built on <strong>RustVMM + KVM</strong>」。Cloud Hypervisor 只出现在致谢里（“Special thanks to Cloud Hypervisor, Kata Containers, virtiofsd…”）——是灵感血缘，不是直接基座。</p>
+</blockquote>
+<p><strong>kubelet 对内层 microVM 是不感知的</strong>——它只看到外层 Pod 的 requests/limits，内层 VM 的内存、VMM 开销、文件缓存、快照写入都不在 K8s 计量里，<strong>容量规划需要单独评估</strong>。</p>
+<hr>
+<h2 id="四、场景三：Kata-VM-强隔离（含-GPU-直通）">四、场景三：Kata VM 强隔离（含 GPU 直通）</h2>
+<p><strong>适用场景</strong>：多租户不可信负载、需要 VM 级内核隔离、或需要 VFIO 设备直通（整卡 GPU、RDMA NIC）的场景。</p>
+<ul>
+<li><strong>高级运行时</strong>：containerd（或 CRI-O），配 <code>kata</code> runtime handler；</li>
+<li><strong>低级运行时</strong>：kata-runtime（shim v2 形态的 <code>containerd-shim-kata-v2</code>），其下可选 QEMU / Cloud Hypervisor / Firecracker / Dragonball 作为 VMM 后端。</li>
+</ul>
+<p><strong>Kata 2.x 相对 1.x 的架构变化是本质性的</strong>：不再有独立的 <code>kata-proxy</code> 和 <code>kata-shim</code> 进程，而是<strong>每个 pod sandbox（VM）一个 <code>containerd-shim-kata-v2</code> 进程</strong>。官方 history 文档的对比表：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>1.x</th>
+<th>2.x</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>shim 进程</td>
+<td>multiple <strong>per container</strong></td>
+<td><strong>1 per VM</strong>（hosting any number of containers）</td>
+</tr>
+<tr>
+<td>proxy 进程</td>
+<td>1 per container connection</td>
+<td>0</td>
+</tr>
+<tr>
+<td>独立 kata-shim</td>
+<td>1</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p>这个 <strong>per-sandbox/VM 粒度</strong>意味着：一个 Pod 里的所有容器<strong>共享同一个 microVM 和同一个内核</strong>。</p>
+<blockquote>
+<p>补两个精度：shim 实现的是 <strong>containerd shimv2 API</strong>（与 OCI runtime CLI「similar… in terms of the way the container lifecycle is split into different verbs」，但不完全等同 OCI runtime spec）；与 guest 内 kata-agent 的通信是 <strong>ttRPC over VSOCK</strong>，I/O 流也走这条协议。</p>
+</blockquote>
+<p><strong>存储走 virtio-fs</strong>，是 virtio-9p 的替代——官方原文：「As of the 2.0 release of Kata Containers, <strong>virtio-fs is the default filesystem sharing mechanism</strong>… provides significant performance and POSIX compliance improvements over 9pfs.」<strong>virtiofsd 守护进程在 host 侧运行，每个 VM 一个</strong>。（runtime-rs 里 9pfs 已被移除。）</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    subgraph Node[&quot;Kata 节点&quot;]
+        K[kubelet] --&gt;|&quot;CRI&lt;br&#x2F;&gt;RuntimeClass&#x3D;kata&quot;| C[containerd]
+        C --&gt;|&quot;shim v2&quot;| KS[containerd-shim-kata-v2&lt;br&#x2F;&gt;per sandbox&#x2F;VM]
+        KS --&gt; QEMU[VMM&lt;br&#x2F;&gt;QEMU &#x2F; CLH &#x2F; Firecracker &#x2F; Dragonball]
+        QEMU --&gt; VM[MicroVM&lt;br&#x2F;&gt;独立内核]
+        VM --&gt;|&quot;ttRPC over vsock&quot;| AGENT[kata-agent]
+        AGENT --&gt; R[runc in guest]
+        R --&gt; P[业务容器]
+        C -.-&gt;|&quot;virtio-fs&quot;| VFS[virtiofsd host 侧]
+        VFS -.-&gt; VM
+        KS -.-&gt;|&quot;VFIO 直通&quot;| GPU[整卡 GPU&lt;br&#x2F;&gt;PCIe passthrough]
+        QEMU -.-&gt; GPU
+    end</pre></div>
+<p>关键细节：</p>
+<ul>
+<li><strong>Kata 与 GPU 的关系是「两件可分离的事」</strong>：默认 QEMU + KVM 全 virtio 设备模型不带 GPU；开启 <strong>VFIO 直通</strong>后每 VM 独占一张物理卡，密度降到一卡一 guest，但拿到接近裸金属的性能。</li>
+<li><strong>Kata 硬性要求 KVM</strong>，不支持纯软件翻译（TCG）——官方：「All supported hypervisors use <strong>KVM</strong> as the underlying hardware virtualization interface on Linux」；「Kata Containers requires <strong>nested virtualization or bare metal</strong>」。云 VM 上嵌套虚拟化不可用时，AgentENV 提供 <strong>PVM（shadow paging）模式</strong>作为替代（标记为 EXPERIMENTAL，需自装 PVM 内核），但那已经离开 Kata 路径。</li>
+<li><strong>选 VMM 后端的权衡</strong>：</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「CLH 是当前推荐默认」。<strong>官方默认/推荐是 Dragonball</strong>——<code>virtualization.md</code> 原文：「For Most Users: <strong>Use the default Dragonball VMM</strong> with the Kata Containers Rust runtime.」配置表里标 <code>configuration-dragonball.toml (default)</code>。Dragonball 是「a special hypervisor created by the Ant Group that runs in the same process as the Rust-based containerd shim」——<strong>零 IPC 开销</strong>是它的卖点。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>后端</th>
+<th>定位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dragonball</strong></td>
+<td><strong>官方默认</strong>，Kata 内置 Rust VMM，与 shim 同进程</td>
+</tr>
+<tr>
+<td><strong>QEMU</strong></td>
+<td>功能最全（VFIO、热插拔、多架构）；官方称它是 <strong>NVIDIA GPU 支持最好的后端</strong></td>
+</tr>
+<tr>
+<td><strong>Cloud Hypervisor</strong></td>
+<td>性能与兼容性平衡</td>
+</tr>
+<tr>
+<td><strong>Firecracker</strong></td>
+<td>最轻，但设备模型极简</td>
+</tr>
+</tbody>
+</table>
+<p><strong>用 Kata 跑 Firecracker 后端是官方支持的</strong>，但有明确限制：<strong>无 virtio-fs、无设备热插拔、无 VFIO/直通、无 CPU/内存热插拔、CRI API 支持有限</strong>。所以「用 Kata 跑 Firecracker」得到的是 K8s 原生集成，失去的正是 Firecracker 设备极简性带来的那部分优势；反之直接用独立 firecracker-shim 得到轻量但失去 Kata 的多 hypervisor 抽象——<strong>这是两条不同的集成路径，不是谁替代谁</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处硬件支持表述</strong>：原稿写「Kata 官方硬件支持列表明确包含 Nvidia GPU、<strong>FPGA</strong>、RDMA、SR-IOV」。核实结果：<strong>GPU / SR-IOV / RDMA 有据</strong>（设计需求文档：「The Kata Containers runtime MUST provide containers with secure pass through for generic devices such as GPUs, SRIOV, RDMA, QAT」），<strong>但 FPGA 无据</strong>——全仓库检索只在某内核配置文件里出现过一次 <code># CONFIG_FPGA is not set</code>，没有任何官方文档把它列为支持。而且<strong>官方并没有一份统一的「硬件支持列表」文档</strong>，出处是设计需求文档。</p>
+</blockquote>
+<p><strong>Kata、gVisor、runc 可以在同一集群以不同 RuntimeClass 共存</strong>（官方专门有 “Mixing VM based and namespace based runtimes” 一节），Pod spec 里 <code>runtimeClassName</code> 一个字段切换。RuntimeClass 机制 <strong>1.20 GA</strong>。</p>
+<hr>
+<h2 id="五、场景四：真机设备接入">五、场景四：真机设备接入</h2>
+<p><strong>适用场景</strong>：机械臂、遥操作设备、摄像头等真机硬件的调度与数据回流，以及数据工厂流水线的高吞吐网络。</p>
+<ul>
+<li><strong>高级运行时</strong>：containerd 标准配置；</li>
+<li><strong>低级运行时</strong>：runc（不需要沙盒增强，但要配合设备注入）。</li>
+</ul>
+<p>真机接入<strong>不走 RuntimeClass</strong>，走 kubelet 的设备与网络扩展点：</p>
+<ul>
+<li><strong>设备层</strong>：自定义 Device Plugin（或 DRA driver）把机械臂/CAN 总线/摄像头注册为 Extended Resource 或 ResourceClaim。旧 Device Plugin 只能静态整数分配；DRA 支持按属性匹配、拓扑对齐、与其他 DRA 资源（GPU、高速 NIC）联合调度。<code>dra-driver-cpu</code> 这类项目甚至用 DRA 替代 kubelet 内置的 CPUManager——官方明确「The kubelet’s CPUManager and this DRA driver are <strong>mutually incompatible</strong>, and only one can be enabled at a time on any given node」。</li>
+<li><strong>网络层</strong>：<code>sriov-network-device-plugin</code> 发现并注册 SR-IOV <strong>VF / PF / auxiliary（SF）</strong> 三类设备；Multus 作为 <strong>meta-plugin</strong> 给 Pod 挂多个网络接口。</li>
+</ul>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    subgraph Node[&quot;真机接入节点&quot;]
+        K[kubelet] --&gt;|&quot;CRI&quot;| C[containerd] --&gt; S[shim-runc-v2] --&gt; R[runc]
+        R --&gt; P[仿真回放&#x2F;数据流水线容器]
+        K --&gt;|&quot;Device Manager&quot;| DP[自定义 Device Plugin&lt;br&#x2F;&gt;rlinf.io&#x2F;device-franka]
+        DP --&gt;|注册| ARM[机械臂&#x2F;CAN&#x2F;摄像头]
+        K --&gt;|CDI 注入| C
+        P -.-&gt;|设备节点直访| ARM
+        P -.-&gt;|&quot;SR-IOV VF&lt;br&#x2F;&gt;net1 接口&quot;| VF[SR-IOV VF]
+        VF --&gt; PF[PF 物理网卡] --&gt; SW[高吞吐数据面]
+        M[Multus CNI&lt;br&#x2F;&gt;meta-plugin] -.-&gt;|多接口编排| P
+    end</pre></div>
+<p>关键细节：</p>
+<ul>
+<li><strong>Multus 不是独立 CNI，是 CNI 多路复用器</strong>——官方原文：「Multus acting as a “<strong>meta-plugin</strong>”, a CNI plugin that can call multiple other CNI plugins」，且要求先装一个默认网络 CNI。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>SR-IOV 这条要分模式说</strong>（原稿说得太绝对）。SR-IOV CNI 有两种驱动模式：</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>VF 绑定</th>
+<th>是否绕过内核网络栈</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>kernel driver</strong>（默认/最小可用配置）</td>
+<td>内核驱动，进入 Pod netns 作为<strong>内核网卡</strong></td>
+<td><strong>否</strong>，走内核栈</td>
+</tr>
+<tr>
+<td><strong>DPDK userspace</strong>（uio/vfio）</td>
+<td><code>vfio-pci</code> / <code>uio</code>，Pod 拿到 <strong>PCIe 设备节点</strong></td>
+<td><strong>是</strong>，数据面在用户态</td>
+</tr>
+</tbody>
+</table>
+<p>所以「绕过内核网络栈、Pod 直接拿到 VF 的 PCIe 设备节点」<strong>只在 DPDK/vfio 模式成立</strong>。另外「延迟微秒级」是通行描述，但我没找到官方量化的原文，宜标为量级参考。</p>
+<p><strong>NetworkPolicy 那条也要补</strong>：标准 K8s NetworkPolicy 由主 CNI 在默认接口（eth0）上实施，<strong>secondary 网络（含 SR-IOV）确实不在标准 NetworkPolicy 覆盖范围内</strong>；但<strong>不是「完全管不到」</strong>——可以用上游的 <strong>MultiNetworkPolicy</strong> CRD 单独给 secondary 接口加策略。</p>
+</blockquote>
+<ul>
+<li><strong>kubelet 的 Topology Manager</strong> 在这里发挥作用：从各 <em>Hint Provider</em> 收集 NUMA hint 并对齐，<strong>scope 取 <code>container</code>（默认）或 <code>pod</code>，policy 取 <code>none</code>（默认）/ <code>best-effort</code> / <code>restricted</code> / <code>single-numa-node</code></strong>。对齐对象是 CPU（经 CPU Manager）、内存/大页（Memory Manager）、设备（Device Manager）。<strong>GPU 和 SR-IOV NIC 不是 Topology Manager 直接识别</strong>，而是其 device plugin 在 <code>Allocate</code> 里返回 <code>TopologyInfo</code>、经 Device Manager 参与对齐。</li>
+</ul>
+<hr>
+<h2 id="六、全场景对比">六、全场景对比</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>裸金属容器仿真</th>
+<th>Agent 工具调用沙盒</th>
+<th>Kata VM 强隔离</th>
+<th>真机设备接入</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>高级运行时</strong></td>
+<td>containerd（标准）</td>
+<td>containerd + agent-sandbox controller</td>
+<td>containerd（RuntimeClass=kata）</td>
+<td>containerd（标准）</td>
+</tr>
+<tr>
+<td><strong>低级运行时</strong></td>
+<td>runc</td>
+<td>runsc / fc-agent+runc / kata-agent</td>
+<td>kata-runtime（shim v2，per VM）</td>
+<td>runc</td>
+</tr>
+<tr>
+<td><strong>与 kubelet 耦合点</strong></td>
+<td>CRI + Device Manager + CDI</td>
+<td>CRI + RuntimeClass</td>
+<td>CRI + RuntimeClass + VFIO</td>
+<td>CRI + Device Manager + Multus</td>
+</tr>
+<tr>
+<td><strong>GPU 路径</strong></td>
+<td>物理直访 / HAMi 时间片 / DRA 切片</td>
+<td>无（CPU 密集）</td>
+<td>VFIO 整卡直通</td>
+<td>不涉及</td>
+</tr>
+<tr>
+<td><strong>沙盒边界</strong></td>
+<td>namespace + cgroups + seccomp</td>
+<td>用户态内核 / microVM</td>
+<td>microVM + 独立内核</td>
+<td>namespace + cgroups</td>
+</tr>
+<tr>
+<td><strong>存储增强</strong></td>
+<td>nydus-snapshotter 按需加载</td>
+<td>guest 内文件系统 / Kata virtio-fs</td>
+<td>virtio-fs（virtiofsd 在 host）</td>
+<td>标准 overlayfs</td>
+</tr>
+<tr>
+<td><strong>启动延迟</strong></td>
+<td>秒级</td>
+<td>&lt;50ms（VM 池化预热后）</td>
+<td>分钟级</td>
+<td>秒级</td>
+</tr>
+<tr>
+<td><strong>适合负载</strong></td>
+<td>RL 仿真、CUDA 训练</td>
+<td>代码执行、工具调用</td>
+<td>多租户、不可信代码</td>
+<td>真机调度、数据流水线</td>
+</tr>
+<tr>
+<td><strong>不适合</strong></td>
+<td>强隔离多租户</td>
+<td>GPU 负载</td>
+<td>高密度 GPU 仿真</td>
+<td>强隔离</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="七、选型决策要点">七、选型决策要点</h2>
+<p><strong>第一，不要找一个万能沙盒，找一组 RuntimeClass。</strong> 上面四个场景可以在同一集群共存：仿真 Pod 用默认 runtime、Agent 工具调用 Pod 用 <code>firecracker</code> 或 <code>gvisor</code>、多租户 Pod 用 <code>kata</code>、真机 Pod 用默认 runtime + 自定义 device plugin。<strong>K8s 的 RuntimeClass 机制（1.20 GA）就是为这种混合负载设计的。</strong></p>
+<p><strong>第二，区分「标准 RuntimeClass 路径」与「自带控制平面路径」。</strong> firecracker-containerd、独立 firecracker-shim、Kata+Firecracker 都走 <code>kubelet → CRI → containerd → shim</code> 链路，K8s 调度、NetworkPolicy、metrics 全部原生生效；<strong>AgentENV / CubeSandbox 这类系统自带 Master/Scheduler/Node 组件</strong>，K8s 只承载外层 Pod，内层 microVM 的生命周期、容量、网络策略都要独立建设。前者运维负担小但灵活性受限，后者需要平台团队持续投入——<strong>没有银弹</strong>。</p>
+<p><strong>第三，GPU 负载先定 GPU 路径，再定沙盒路径。</strong> 仿真主流是裸金属容器 + 设备插件直访；强隔离多租户才考虑 VFIO 直通（Kata）；MIG-backed vGPU 是「想保留 VM 形态又要硬件隔离」的折中；virtio-gpu（Venus/VirGL）只翻译图形 API，不覆盖 CUDA，仿真栈直接排除。<strong>GPU 路径定了，沙盒技术选型的可行集就自动收敛了</strong>——这是具身场景与通用容器场景最大的不同。</p>
+<p><strong>第四，快照与断点续跑是分层解决的。</strong> 仿真 rollout 的状态恢复靠<strong>仿真器 <code>save_state</code></strong>（GPU 状态 hypervisor 快照不了）；Agent 工具调用沙盒的暂停恢复靠 <strong>microVM snapshot</strong>（CPU + 内存状态）。<strong>两者的快照机制不通用，混用会掉坑。</strong></p>
+<p><strong>一句话总结</strong>：kubelet 之下，高级运行时管「怎么调度和编排」，低级运行时管「跑在什么隔离边界里」；具身智能公司的沙盒架构不是选一个技术，而是<strong>按负载类型把 runc、gVisor、Firecracker、Kata 各归其位</strong>，用 RuntimeClass 和 Device Plugin 把它们编成一个整体的调度拓扑。</p>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a>——<strong>下篇</strong>：当沙盒生命周期压到毫秒级，调度器为什么必须从 K8s 里独立出来</li>
+<li><a href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/">具身智能仿真场景的沙盒选型</a>——上篇：为什么仿真主力是裸金属容器而非 microVM，虚拟化层 GPU 转发的四条路径边界</li>
+<li><a href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</a>——多级运行时的完整拆解</li>
+<li><a href="/2026/10/24/2026-10-24-containerd-Snapshotter%E6%8E%A5%E5%8F%A3%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E6%87%92%E5%8A%A0%E8%BD%BD%E9%95%9C%E5%83%8F%E6%96%B9%E6%A1%88%E7%9A%84%E6%8A%80%E6%9C%AF%E5%9F%BA%E7%9F%B3/">containerd Snapshotter 接口深度解析</a>——nydus / remote snapshotter 的机制</li>
+<li><a href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/">从冯·诺依曼到 Agent 沙箱：虚拟化隔离技术栈的一次完整拆解</a>——隔离谱系</li>
+<li><a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">K8s GPU 复用与 HAMi 异构架构全解</a>——HAMi 的切分机制</li>
+<li><a href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/">DRA 拓扑感知调度</a>——DRA 的调度侧机制</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文架构描述逐条核对自一手来源——Kubernetes 官方文档（CRI、RuntimeClass、Topology Manager、Device Plugin、DRA）与 feature gate 定义、containerd 官方文档与源码（<code>docs/runtime-v2.md</code>、<code>docs/sandbox-api.md</code>、<code>cri/docs/architecture.md</code>、<code>docs/containerd-2.0.md</code>）、CRI proto、CDI 规范仓库、Kata Containers 官方仓库（<code>docs/design/architecture/history.md</code>、<code>virtualization.md</code>、<code>hypervisors.md</code>、<code>storage.md</code>、各 how-to）、gVisor 官方文档与 <code>pkg/lisafs/README.md</code>、Firecracker 官方仓库与 FAQ、AWS firecracker-containerd 仓库、HAMi / nydus-snapshotter / Multus / SR-IOV CNI / sriov-network-device-plugin / dra-driver-cpu / CubeSandbox 各项目 README。</p>
+<p><strong>原稿更正汇总</strong>：CNI 的调用方（containerd 非 kubelet）、pause 容器归属阶段、<strong>shim 的 per-pod 粒度是 runc.v2 的实现选择而非 containerd 语义</strong>、「不再 fork runtime 二进制」不准确（shim 仍 exec runc）、DRA driver 返回的是 <strong>CDI device ID</strong> 而非「生成 CDI spec」、CDI 默认值随 containerd 版本变化、<strong>gVisor 的 Sentry↔Gofer 协议是 LISAFS 非 9P</strong>、firecracker-containerd 的架构描述（shim + control plugin，ttrpc 非 gRPC，容器走标准 V2 runtime）、<strong>Kata 默认 VMM 是 Dragonball 非 Cloud Hypervisor</strong>、Kata 硬件支持列表中的 <strong>FPGA 无据</strong>、<strong>SR-IOV「绕过内核网络栈」仅 DPDK/vfio 模式成立</strong>、NetworkPolicy 可用 MultiNetworkPolicy 覆盖、<strong>CubeHypervisor 是 RustVMM + KVM 非「基于 Cloud Hypervisor」</strong>。另外<strong>为 <code>PipeOpsHQ/firecracker-shim</code> 标注了项目成熟度与文档口径不一致</strong>。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Firecracker/">Firecracker</a><a class="post-meta__tags" href="/tags/containerd/">containerd</a><a class="post-meta__tags" href="/tags/DRA/">DRA</a><a class="post-meta__tags" href="/tags/gVisor/">gVisor</a><a class="post-meta__tags" href="/tags/Kata/">Kata</a><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a><a class="post-meta__tags" href="/tags/%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6/">容器运行时</a><a class="post-meta__tags" href="/tags/CRI/">CRI</a><a class="post-meta__tags" href="/tags/RuntimeClass/">RuntimeClass</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从 K8s 到 AI Infra：跨越五道技术鸿沟</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：K8s 把 GPU 当作 nvidia.com/gpu: 8 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「只分配、不感知」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。  上一讲（K8s 很熟，为什么月薪卡在三万）讲的是怎么看——nvidia-smi topo -m 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲怎么修：五道鸿沟各自的工程解法。 本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败，已在文中以 ⚠️ 标注。  五道鸿沟总览    维度 K8s 原生方案 AI 训练瓶颈 生产级方案 核心工具链     调度 kube-scheduler 逐 Pod 打分 部分 Pod 无法调度导致整组死锁 Gang 整组调度 + 多维配比 Volcano PodGroup   网络 TCP ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/" title="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</div></div><div class="info-2"><div class="info-item-1">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解 LLM Agent 正在把一个老问题重新推到台前:当代码由模型生成、且不可信时,你把它放在哪里执行? 容器的隔离撑不住对抗性负载;传统虚拟机又太重,扛不住每秒几十次的沙箱创建。于是一批沉寂多年的技术突然变得炙手可热——Firecracker、gVisor、Kata Containers、microVM。这些名词经常混在一起出现,但它们分处不同层次、解决不同问题。要真正理解它们的取舍,需要从最底层讲起:从冯·诺依曼架构的&quot;核心与外围&quot;,一路讲到 Agent infra 的选型决策。 本文分四部分:先梳理虚拟化技术栈的分层关系,再深入 QEMU 的设备模型理解&quot;外围设备&quot;的本质,然后分析性能差异的根源,最后落到 Agent 沙箱的实战选型。  一、技术栈全景:谁在谁的上面 先用一句话给所有主角定位:  KVM 是 Linux 内核提供的硬件虚拟化基础设施;QEMU 是基于 KVM 的传统全功能虚拟机监视器;Firecracker 是基于 KVM、专为 Serverless 设计的...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/" title="具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：具身智能公司的仿真主力沙盒应当是「裸金属容器 + K8s GPU 调度」，而不是 DSec / AgentENV 那套 Firecracker microVM 层。只有轻量 Agent 工具调用和不可信代码执行才下沉到 microVM。这不是对多级运行时架构的否定，而是该框架在具身场景下的正确映射——仿真吃的是 NVIDIA 专有计算栈，而虚拟化层的 GPU 转发方案恰恰覆盖不到这里。  这篇是 Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地 的延伸。那篇里有一节（§3.5）讲具身仿真的 GPU 路线，结论是「虚拟化不是默认选项」；本文把那个结论展开成一份完整的选型依据——为什么 microVM 接不住仿真、虚拟化 GPU 的四条路径各自能到哪、以及三层负载该怎么分别匹配。  一、为什么这不是一个「通用沙盒」问题 讨论的对象是一类典型的具身智能公司：自研端到端具身大模型，部署轮式双臂仿人机器人与高自由度灵巧手，自建数据工厂沉淀了数万小时多模态具身数据集，机器人已规模化进入真实家庭。 这个形态决定了基础设施要同时承载三类性质完全...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：Agent 沙盒系统绕过 kubelet，不只是为了隔离——调度本身才是更根本的动机。当沙盒生命周期被压缩到毫秒级、当 pause/resume/fork 成为常规操作而非异常事件、当内存超卖成为设计目标而非运维事故，Kubernetes scheduler 那套为「秒级生命周期 Pod、删除是异常事件」设计的调度路径，就从基础设施变成了瓶颈。 AgentENV（kvcache-ai）和 CubeSandbox（腾讯云）给出了两个不同风格的答案：前者做减法，把调度器简化到只剩资源过滤 + 两种朴素策略；后者做分层，把控制面完全做成无状态、协调状态押在 Redis 上。  这是沙盒系列第三篇。前两篇分别回答「选哪个沙盒」和「沙盒插在运行时栈的哪一层」；这篇回答「为什么这两套系统连调度都要自己写」。 本文的组件名、RPC 清单、状态枚举、调度流程逐条核对自两个项目的源码与官方文档。核对中发现原稿有七处需要更正，其中一条数字查无出处已删除，已在文中以 ⚠️ 标注。  一、问题：Agent 沙盒负载对调度器提出了什么要求 先把矛盾摆清楚。传统 K8s 集群里，schedul...</div></div></div></a><a class="pagination-related" href="/2026/10/24/2026-10-24-containerd-Snapshotter%E6%8E%A5%E5%8F%A3%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E6%87%92%E5%8A%A0%E8%BD%BD%E9%95%9C%E5%83%8F%E6%96%B9%E6%A1%88%E7%9A%84%E6%8A%80%E6%9C%AF%E5%9F%BA%E7%9F%B3/" title="containerd Snapshotter 接口深度解析：懒加载镜像方案的技术基石"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-24</div><div class="info-item-2">containerd Snapshotter 接口深度解析：懒加载镜像方案的技术基石</div></div><div class="info-2"><div class="info-item-1">containerd Snapshotter 接口深度解析：懒加载镜像方案的技术基石 在《容器镜像加速全景指南》中我们反复提到一个结论：Nydus / eStargz / SOCI 等懒加载方案之所以能在 containerd 生态落地，根本原因是 containerd 把&quot;文件系统准备&quot;抽象成了一个可插拔接口，并且这个接口的契约里留了一个&quot;关键的后门&quot;——它只要求返回有效的挂载配置，并不要求层数据已经下载到本地。 本文把这个抽象彻底拆开讲透。理解了它，你就理解了所有 remote snapshotter 方案的设计原理。  一、问题域：从 blob 到 rootfs 之间缺失的一环 先看 containerd 内部从 pull 到 run 的完整数据流： 1234567891011121314151617┌──────────────┐   pull    ┌───────────────┐│   Registry   │ ────────► │ Content Store  │  ← 第一站：内容寻址 blob 存储│ (OCI 镜像)...</div></div></div></a><a class="pagination-related" href="/2026/10/24/2026-10-24-%E5%AE%B9%E5%99%A8%E9%95%9C%E5%83%8F%E5%8A%A0%E9%80%9F%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97%EF%BC%9A%E6%9E%84%E5%BB%BA%E3%80%81%E7%BC%93%E5%AD%98%E3%80%81%E6%87%92%E5%8A%A0%E8%BD%BD%E4%B8%8E%E5%88%86%E5%8F%91%E4%BC%98%E5%8C%96/" title="容器镜像加速全景指南：构建、缓存、懒加载与分发优化"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-24</div><div class="info-item-2">容器镜像加速全景指南：构建、缓存、懒加载与分发优化</div></div><div class="info-2"><div class="info-item-1">容器镜像加速全景指南：构建、缓存、懒加载与分发优化  容器启动慢，76% 的时间花在&quot;拉镜像&quot;上，而拉下来的数据平均只有 6.4% 会被真正读到。这组来自 AWS 的测量数据，揭示了容器启动优化最核心的矛盾：我们在为&quot;用不到的数据&quot;付出高昂的时间成本。 这篇文章从底层概念讲起，沿着&quot;构建期瘦身 → 本地缓存复用 → 按需懒加载 → 网络分发加速&quot;的完整链路，系统拆解容器快速启动与镜像快速拉取的所有主流方案。   第一部分：先补齐底层概念——镜像到底是个什么东西 要理解所有加速方案，必须先理解容器镜像的物理本质。这一部分是后面所有内容的地基。 1.1 容器 = Namespace + Cgroups + Rootfs Linux 容器本质上并不神秘，它是三个内核机制的组合：  Namespace（如 mount、pid、net、uts）给进程一个&quot;隔离的视野&quot;——容器内看到的文件系统、进程列表、网络栈都是独立的； Cgroups 限制进程能用的 CPU、内存等资源额度； Rootfs（根文件系统）则是容...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">302</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">459</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E7%AB%8B%E9%AA%A8%E6%9E%B6%EF%BC%9Akubelet-%E4%B9%8B%E4%B8%8B%E7%9A%84%E8%BF%90%E8%A1%8C%E6%97%B6%E6%A0%88%E5%88%86%E5%B1%82"><span class="toc-number">1.</span> <span class="toc-text">一、先立骨架：kubelet 之下的运行时栈分层</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%9C%BA%E6%99%AF%E4%B8%80%EF%BC%9A%E8%A3%B8%E9%87%91%E5%B1%9E%E5%AE%B9%E5%99%A8%E4%BB%BF%E7%9C%9F%E8%AE%AD%E7%BB%83"><span class="toc-number">2.</span> <span class="toc-text">二、场景一：裸金属容器仿真训练</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%9C%BA%E6%99%AF%E4%BA%8C%EF%BC%9AAgent-%E5%B7%A5%E5%85%B7%E8%B0%83%E7%94%A8%E6%B2%99%E7%9B%92"><span class="toc-number">3.</span> <span class="toc-text">三、场景二：Agent 工具调用沙盒</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%9C%BA%E6%99%AF%E4%B8%89%EF%BC%9AKata-VM-%E5%BC%BA%E9%9A%94%E7%A6%BB%EF%BC%88%E5%90%AB-GPU-%E7%9B%B4%E9%80%9A%EF%BC%89"><span class="toc-number">4.</span> <span class="toc-text">四、场景三：Kata VM 强隔离（含 GPU 直通）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%9C%BA%E6%99%AF%E5%9B%9B%EF%BC%9A%E7%9C%9F%E6%9C%BA%E8%AE%BE%E5%A4%87%E6%8E%A5%E5%85%A5"><span class="toc-number">5.</span> <span class="toc-text">五、场景四：真机设备接入</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%85%A8%E5%9C%BA%E6%99%AF%E5%AF%B9%E6%AF%94"><span class="toc-number">6.</span> <span class="toc-text">六、全场景对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E9%80%89%E5%9E%8B%E5%86%B3%E7%AD%96%E8%A6%81%E7%82%B9"><span class="toc-number">7.</span> <span class="toc-text">七、选型决策要点</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-agentgateway%E6%B7%B1%E6%BD%9CAI%E5%8E%9F%E7%94%9F%E7%BD%91%E5%85%B3%E7%9A%84%E6%9E%B6%E6%9E%84%E5%8F%96%E8%88%8D%E4%B8%8E%E9%AA%8C%E8%AF%81/" title="agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差">agentgateway 深潜：AI 原生网关的架构、取舍，与几处宣传落差</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/04/2026-11-04-%E4%B8%BA%E6%9C%AC%E7%A7%91%E7%94%9F%E8%AE%BE%E8%AE%A1%E4%B8%80%E9%97%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83Infra%E8%AF%BE/" title="为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单">为本科生设计一门大模型训练 Infra 课：16 周结构、大作业与开课清单</a><time datetime="2026-11-03T16:00:00.000Z" title="发表于 2026-11-04 00:00:00">2026-11-04</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
