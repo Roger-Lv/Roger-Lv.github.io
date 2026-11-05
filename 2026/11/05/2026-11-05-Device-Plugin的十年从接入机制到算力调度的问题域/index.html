@@ -1,0 +1,805 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Device Plugin 的本质，是把「让 Kubernetes 认识一种新硬件」从改内核代码降维成了写一个 gRPC 服务；而它的边界与局限，恰好勾勒出了大模型时代算力调度的完整问题域。本文从机制源码讲到 DRA 演进，再落到分布式训练、GPU 共享、边缘具身三个实战场景，并回答一个高频疑问——Bind 与 Allocate 的先后顺序，以及多调度器在哪个环节真的会冲突。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="Device Plugin 的本质，是把「让 Kubernetes 认识一种新硬件」从改内核代码降维成了写一个 gRPC 服务；而它的边界与局限，恰好勾勒出了大模型时代算力调度的完整问题域。本文从机制源码讲到 DRA 演进，再落到分布式训练、GPU 共享、边缘具身三个实战场景，并回答一个高频疑问——Bind 与 Allocate 的先后顺序，以及多调度器在哪个环节真的会冲突。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-05T06:22:57.535Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="HAMi">
+<meta property="article:tag" content="DRA">
+<meta property="article:tag" content="GPU调度">
+<meta property="article:tag" content="DevicePlugin">
+<meta property="article:tag" content="昇腾">
+<meta property="article:tag" content="KubeEdge">
+<meta property="article:tag" content="算力池化">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域",
+  "url": "https://roger-lv.github.io/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-04T16:00:00.000Z",
+  "dateModified": "2026-11-05T06:22:57.535Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">304</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">468</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-05T06:22:57.535Z" title="更新于 2026-11-05 14:22:57">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/" data-flag-title="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：Device Plugin 的本质，是把「<strong>让 Kubernetes 认识一种新硬件</strong>」这件事，从改内核代码降维成了<strong>写一个 gRPC 服务</strong>。而它的边界与局限——只能表达整数、调度决策黑盒、无拓扑感知、无故障协同——恰好勾勒出了大模型时代算力调度的完整问题域。</p>
+<p>今天做 AI Infra，大概率不会从零写一个 device plugin，但一定会在这套机制的边界上做选型：训练集群选 Volcano 还是 KAI、推理集群选 HAMi 还是 MIG、要不要切 DRA、边缘具身用 KubeEdge 还是裸 K8s。</p>
+</blockquote>
+<p>本文的机制描述逐条核对自 Kubernetes 官方文档与 proto 源码、NVIDIA/昇腾/HAMi/KubeEdge 各项目仓库。<strong>核对中发现原稿有十余处需要更正，其中两处是硬伤</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="一、设计动机：为什么要有-Device-Plugin">一、设计动机：为什么要有 Device Plugin</h2>
+<p>Kubernetes 原生只认识 CPU、内存和本地存储。让每一种硬件的枚举、健康检查、分配逻辑都进 kubelet 主干，在工程上是不可持续的——每出一个新硬件就要改一次核心代码。</p>
+<p>设计提案里说得很直接：我们需要一个<strong>厂商无关的插件化方案</strong>，让硬件厂商在不写 Kubernetes 代码的前提下，把自己的资源报给 kubelet，并监控其健康状态。</p>
+<p>这条路在 2017 年走通了第一程。三个版本节点的官方记录：</p>
+<table>
+<thead>
+<tr>
+<th>版本</th>
+<th>事件</th>
+<th>CHANGELOG 原文</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1.8</strong></td>
+<td>进入 alpha</td>
+<td><code>[alpha] Add the Hardware Device Plugins API.</code></td>
+</tr>
+<tr>
+<td><strong>1.10</strong></td>
+<td>升 beta，默认开启</td>
+<td><code>The DevicePlugins feature has graduated to beta, and is now enabled by default</code></td>
+</tr>
+<tr>
+<td><strong>1.11</strong></td>
+<td>移除内置 GPU 路径</td>
+<td><code>Support for the alpha.kubernetes.io/nvidia-gpu resource, which was deprecated in 1.10, has been removed. Please use the resource exposed by DevicePlugins instead (nvidia.com/gpu).</code></td>
+</tr>
+</tbody>
+</table>
+<p>此后近十年，<code>nvidia.com/gpu</code> 这种扩展资源成了 GPU 集群的事实标准接口。</p>
+<p>而 <strong>DRA（Dynamic Resource Allocation）在 1.34 正式 GA，并从 1.35 起特性门控锁定</strong>（locked，无法再关闭）。官方 Feature Gates 表的原话是：</p>
+<blockquote>
+<p>You can no longer disable or opt out of this feature or behavior (it is locked)</p>
+</blockquote>
+<p>两条技术路线的交接，是这篇文章后半段的主线。</p>
+<blockquote>
+<p>⚠️ <strong>一处引用要改</strong>：原稿引了一句「官方文档的表述是 ‘DRA replaces device plugins for accessing resources from workloads’」。<strong>这句话在 Kubernetes 官方文档里查无出处</strong>（DRA 概念页、dra-api、dra-features、Device Plugins 页、set-up-dra-cluster 全文检索均未命中）。</p>
+<p>最接近的两处官方原文是：</p>
+<ul>
+<li>WG Device Management 官方博客：<em>“The working group’s primary deliverable is Dynamic Resource Allocation (DRA), a new framework that <strong>replaces the rigid device plugin model</strong> with a flexible, declarative API.”</em></li>
+<li>DRA 概念页：<em>“These benefits provide significant improvements in the device allocation workflow when compared to device plugins, which require per-container device requests, don’t support device sharing, and don’t support expression-based device filtering.”</em></li>
+</ul>
+<p>引用时用这两句之一。</p>
+</blockquote>
+<hr>
+<h2 id="二、机制解析：kubelet-与插件之间的-gRPC-握手">二、机制解析：kubelet 与插件之间的 gRPC 握手</h2>
+<p>Device Plugin 的运行模型非常克制：每个插件是一个部署在节点上的 DaemonSet 进程，通过 Unix socket 与 kubelet 通信，对外暴露一组 gRPC 接口。</p>
+<h3 id="2-1-五个方法，不是四个">2.1 五个方法，不是四个</h3>
+<blockquote>
+<p>⚠️ <strong>更正（硬伤之一）</strong>：原稿写「核心只有四个方法」，<strong>实际 proto 里 <code>service DevicePlugin</code> 有 5 个 rpc</strong>，漏掉的是 <strong><code>PreStartContainer</code></strong>：</p>
+</blockquote>
+<figure class="highlight protobuf"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">service </span><span class="title class_">DevicePlugin</span> &#123;</span><br><span class="line">  <span class="comment">// 注册时告知 kubelet 支持哪些可选能力</span></span><br><span class="line">  <span class="function"><span class="keyword">rpc</span> GetDevicePluginOptions(Empty) <span class="keyword">returns</span> (DevicePluginOptions) </span>&#123;&#125;</span><br><span class="line">  <span class="comment">// 持续上报设备列表与健康状态（服务端流式 RPC）</span></span><br><span class="line">  <span class="function"><span class="keyword">rpc</span> ListAndWatch(Empty) <span class="keyword">returns</span> (stream ListAndWatchResponse) </span>&#123;&#125;</span><br><span class="line">  <span class="comment">// 可选：向 devicemanager 返回建议的优先分配集合</span></span><br><span class="line">  <span class="function"><span class="keyword">rpc</span> GetPreferredAllocation(PreferredAllocationRequest)</span></span><br><span class="line"><span class="function">      <span class="keyword">returns</span> (PreferredAllocationResponse) </span>&#123;&#125;</span><br><span class="line">  <span class="comment">// 容器创建时被 kubelet 调用，返回设备节点、环境变量、挂载</span></span><br><span class="line">  <span class="function"><span class="keyword">rpc</span> Allocate(AllocateRequest) <span class="keyword">returns</span> (AllocateResponse) </span>&#123;&#125;</span><br><span class="line">  <span class="comment">// 可选：容器启动前调用（由 DevicePluginOptions.pre_start_required 决定）</span></span><br><span class="line">  <span class="function"><span class="keyword">rpc</span> PreStartContainer(PreStartContainerRequest)</span></span><br><span class="line"><span class="function">      <span class="keyword">returns</span> (PreStartContainerResponse) </span>&#123;&#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>另外要区分：<strong><code>Register</code> 不在这个服务里</strong>——它属于另一个独立的 <code>service Registration</code>。官方文档也强调，<code>GetPreferredAllocation</code> 与 <code>PreStartContainer</code> 都是<strong>可选的</strong>，其可用性由 <code>DevicePluginOptions</code> 里的标志位声明。</p>
+<h3 id="2-2-注册、长连与两个容易忽略的工程细节">2.2 注册、长连与两个容易忽略的工程细节</h3>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>sequenceDiagram
+    participant P as Device Plugin (DaemonSet)
+    participant K as kubelet DeviceManager
+    participant A as API Server &#x2F; Scheduler
+    Note over P: 启动：向 kubelet 的固定 socket 发起 Register
+    P-&gt;&gt;K: Register(资源名, socket路径, API版本)
+    K-&gt;&gt;P: 建立到插件 socket 的 gRPC 连接
+    K-&gt;&gt;P: ListAndWatch(Empty)
+    P--&gt;&gt;K: stream.ListAndWatchResponse(设备ID + 健康状态)
+    K-&gt;&gt;A: 以 Extended Resource 形式上报 allocatable&lt;br&#x2F;&gt;(如 nvidia.com&#x2F;gpu: 8)
+    Note over A: kubectl describe node 可见
+    Note over K: 调度器选中节点后，Pod 进入创建流程
+    K-&gt;&gt;P: Allocate(容器请求的设备ID列表)
+    P--&gt;&gt;K: 设备节点路径 + 环境变量 + 挂载点
+    K-&gt;&gt;K: 交给容器运行时注入（CDI &#x2F; nvidia-container-runtime）</pre></div>
+<p><strong>细节一：socket 路径是硬编码的。</strong> 官方文档原文：</p>
+<blockquote>
+<p>under the host path <code>/var/lib/kubelet/device-plugins/</code> (<strong>this path is hardcoded and is not affected by the kubelet’s <code>--root-dir</code> or any other configuration</strong>)</p>
+</blockquote>
+<p><strong>这个「不受 <code>--root-dir</code> 影响」是个常见的排查陷阱</strong>——改了 kubelet 的 root-dir，插件 socket 位置不会跟着变。另外 kubelet 启动时会<strong>清掉该目录下所有已存在的 socket</strong>，所以插件必须能感知 kubelet 重启并自动重新注册。</p>
+<p><strong>细节二：NVIDIA 插件靠 fsnotify 监听 kubelet socket 的创建事件来重注册。</strong> 源码里是这么写的：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// Detect a kubelet restart by watching for a newly created &#x27;pluginapi.KubeletSocket&#x27; file.</span></span><br><span class="line"><span class="keyword">case</span> event := &lt;-watcher.Events:</span><br><span class="line">    <span class="keyword">if</span> o.kubeletSocket != <span class="string">&quot;&quot;</span> &amp;&amp; event.Name == o.kubeletSocket &amp;&amp;</span><br><span class="line">        event.Op&amp;fsnotify.Create == fsnotify.Create &#123;</span><br><span class="line">        klog.Infof(<span class="string">&quot;inotify: %s created, restarting.&quot;</span>, o.kubeletSocket)</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+<p><strong><code>ListAndWatch</code> 是一条服务端流式长连接</strong>（proto 里是 <code>returns (stream ...)</code>），插件持续把设备状态推给 kubelet。GPU 出现 ECC 错误或 Xid 掉卡，插件标记为 <code>Unhealthy</code>，kubelet 就把它从可分配资源里摘掉。</p>
+<blockquote>
+<p>⚠️ <strong>一处措辞要精确</strong>：官方原文是「the kubelet will decrease the <strong>allocatable</strong> count for this resource on the Node… <strong>Capacity count for the resource will not change</strong>」——<strong>下降的是 <code>allocatable</code>，<code>capacity</code> 不变</strong>。</p>
+<p>所以那个经典现象「<code>nvidia-smi</code> 能看到卡、但 <code>kubectl describe node</code> 里 GPU 数量是 0」，严格说是 <strong><code>Allocatable: nvidia.com/gpu: 0</code> 而 <code>Capacity</code> 仍是原值</strong>。</p>
+</blockquote>
+<p><strong><code>Allocate</code> 并不真的「分配」显存</strong>，它返回的是环境变量（<code>NVIDIA_VISIBLE_DEVICES</code>、<code>ASCEND_VISIBLE_DEVICES</code>——两个名字都在各自插件的源码里确认过）、设备节点路径、挂载点和 CDI 设备名。真正的设备注入由容器运行时（配合 CDI 或 nvidia-container-toolkit / Ascend Docker Runtime）完成。</p>
+<blockquote>
+<p>补充一句：<strong>time-slicing / MPS 下 <code>Allocate</code> 更不做显存隔离</strong>——这一点在第四节展开。</p>
+</blockquote>
+<h3 id="2-3-Bind-严格在前，Allocate-严格在后">2.3 Bind 严格在前，Allocate 严格在后</h3>
+<p>这是一个高频疑问，而且<strong>前提里藏着一个常见误解需要先澄清</strong>：</p>
+<blockquote>
+<p><strong>调度器从头到尾不联系 device plugin。</strong> 它只看节点对象上的 Extended Resource 计数；真正调用插件 <code>Allocate()</code> 的是<strong>目标节点上的 kubelet</strong>，时机是容器创建路径中。</p>
+</blockquote>
+<p>完整时序：</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>sequenceDiagram
+    autonumber
+    actor U as kubectl
+    participant A as API Server
+    participant S as kube-scheduler
+    participant K as kubelet (PodWorker + DeviceManager)
+    participant P as Device Plugin
+    participant R as 容器运行时 (CRI)
+    U-&gt;&gt;A: 创建 Pod（无 nodeName）
+    Note over A,S: spec.nodeName 为空 → 进入调度队列
+    rect rgb(235, 245, 255)
+    Note over S: ── 调度周期：全程不触碰任何插件 ──
+    S-&gt;&gt;S: Filter：节点 GPU 计数 ≥ 请求量&lt;br&#x2F;&gt;(计数源自节点 status，由 ListAndWatch 汇聚上报)
+    S-&gt;&gt;S: Score：候选节点排序
+    S-&gt;&gt;S: Reserve&#x2F;Assume：在调度器本地缓存里把该节点 GPU 计数 +1
+    S-&gt;&gt;S: Permit：放行（coscheduling 等在此等待整批）
+    S-&gt;&gt;S: PreBind：卷 attach、hostPort 预留
+    S-&gt;&gt;A: Bind：POST &#x2F;pods&#x2F;{name}&#x2F;binding
+    A--&gt;&gt;A: spec.nodeName &#x3D; NodeX ✅ 绑定完成
+    Note over S: 调度器使命结束，此后不再参与此 Pod
+    end
+    rect rgb(235, 255, 240)
+    Note over K,R: ── 节点侧：绑定之后 ──
+    K-&gt;&gt;A: watch 到分给自己的 Pod
+    K-&gt;&gt;K: 准入检查 → PodManager 注册 → SyncPod
+    K-&gt;&gt;K: DeviceManager.devicesToAllocate：为本容器挑选具体设备 ID
+    opt 插件声明 GetPreferredAllocationAvailable
+        K-&gt;&gt;P: GetPreferredAllocation(候选设备集)
+        P--&gt;&gt;K: 返回建议优先的设备 ID
+    end
+    K-&gt;&gt;P: Allocate(设备 ID 列表)　← gRPC 一元调用
+    P--&gt;&gt;K: Envs + 设备节点路径 + 挂载点
+    K-&gt;&gt;K: 分配结果写入 checkpoint
+    K-&gt;&gt;R: RunPodSandbox → CreateContainer → StartContainer
+    R--&gt;&gt;K: 容器运行
+    K-&gt;&gt;A: 上报 Pod Status → Running
+    end</pre></div>
+<p>从外部可观察的状态看，这条链对应 Pod 的状态流转：<code>Pending(未调度)</code> → <strong>Bind</strong> → <code>Pending(ContainerCreating)</code> → <strong>Allocate 发生在这里</strong> → <code>Running</code>。</p>
+<p><strong>「两个分配」不是一回事</strong>，这是最容易混淆的点：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>调度器的 Reserve/Assume</th>
+<th>kubelet 的 Allocate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>时机</td>
+<td>Bind <strong>之前</strong>，调度周期内</td>
+<td>Bind <strong>之后</strong>，容器创建时</td>
+</tr>
+<tr>
+<td>性质</td>
+<td>记账式虚拟占用（本地缓存 +1）</td>
+<td>真实选定具体设备 ID 并锁定</td>
+</tr>
+<tr>
+<td>粒度</td>
+<td>只知道「数量够不够」</td>
+<td>精确到 <code>/dev/nvidia0</code> 这种实例级</td>
+</tr>
+<tr>
+<td>失败回滚</td>
+<td>Bind 失败则 un-assume，计数 −1</td>
+<td>失败<strong>不会解绑</strong>，Pod 留在节点上重试</td>
+</tr>
+<tr>
+<td>谁执行</td>
+<td>kube-scheduler</td>
+<td>kubelet → 插件 gRPC</td>
+</tr>
+</tbody>
+</table>
+<p>调度器在 Filter 阶段看到的 GPU 计数，是节点 status 里 Extended Resource 的 capacity/allocatable——<strong>数据源头正是 device plugin 的 <code>ListAndWatch</code> 推给 kubelet、再由 kubelet 汇聚上报的</strong>。所以插件<strong>间接</strong>参与了调度，但调度决策时刻<strong>没有任何针对插件的 RPC</strong>。</p>
+<h3 id="2-4-三个语义细节">2.4 三个语义细节</h3>
+<p><strong>Allocate 是按容器粒度的。</strong> 一个 Pod 里多个容器各请求多少资源，kubelet 就分别调用多少次——不是每个 Pod 一次。</p>
+<p><strong>分配是粘性的。</strong> kubelet 把（Pod UID, 容器, 资源名）→ 设备 ID 列表的映射持久化在 <code>kubelet_internal_checkpoint</code>。容器 crash 重启、甚至 kubelet 自身重启后，再次 <code>Allocate</code> 会命中已有分配、返回<strong>同一批设备</strong>——<strong>训练任务里这至关重要，因为 NCCL 通信组绑定的设备不能漂移</strong>。</p>
+<p><strong>Allocate 失败的后果是「卡住」而非「重调度」。</strong> 假设刚绑定完设备就变 <code>Unhealthy</code>：<code>devicesToAllocate</code> 会从健康集合里挑选，健康集合不足则报错；kubelet 记事件、按 backoff 重试，<strong>Pod 长期停在 <code>ContainerCreating</code></strong>。绑定关系不会回退——要打破这种僵局得靠删除 Pod 重新调度，或者上层系统（Volcano 重调度、昇腾插件的故障自愈）介入。</p>
+<p><strong>这是 device plugin 模型「调度与分配割裂」的直接代价。</strong></p>
+<p><strong>释放发生在 Pod 终止路径</strong>：容器停止、Pod 被删除或驱逐时，DeviceManager 才把设备 ID 归还到可分配集合并更新 checkpoint。</p>
+<h3 id="2-5-DRA-把时序整个反了过来">2.5 DRA 把时序整个反了过来</h3>
+<p>这个顺序在 DRA 下发生了根本翻转，也是理解两者差异的最直观切口：</p>
+<ul>
+<li><strong>Device Plugin</strong>：「<strong>先定节点，再在节点上选设备</strong>」——调度器选完节点、Bind 完成后，设备选择才在 kubelet 本地发生，<strong>调度器对「选了哪张卡」完全无感</strong>。这正是黑盒、无拓扑感知的根源。</li>
+<li><strong>DRA + 结构化参数</strong>：「<strong>选设备和选节点在同一个调度闭环</strong>」——scheduler 在调度周期内直接为 ResourceClaim 挑选具体设备并写回 ResourceClaim status，<strong>然后才 Bind</strong>。设备分配从节点本地事件升级为 <strong>API Server 上可观察、可约束的调度原语</strong>。</li>
+</ul>
+<p><strong>排障时的证据在哪找</strong>，就以此分界：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>看什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Bind 之前</strong></td>
+<td>调度器日志、节点 <code>nvidia.com/gpu</code> 计数、<code>FailedScheduling</code> 事件</td>
+</tr>
+<tr>
+<td><strong>Bind 之后</strong></td>
+<td>kubelet 日志（<code>device_allocate</code> 相关事件）、<code>kubectl describe pod</code> 的 Events、<code>Error Allocating</code> 类报错，最后才是插件自身日志</td>
+</tr>
+</tbody>
+</table>
+<p><strong>两个世界以 Bind 为界，泾渭分明。</strong></p>
+<blockquote>
+<p><strong>机制部分的更深细节</strong>（注册流程源码、ListAndWatch 实现、Allocate 返回结构）见 <a href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">NVIDIA device plugin for Kubernetes 原理分析</a>，那里逐节拆过。</p>
+</blockquote>
+<hr>
+<h2 id="三、深水区：扩展资源模型的四个根本局限">三、深水区：扩展资源模型的四个根本局限</h2>
+<p>理解了机制，才能看清它为什么不够用。Device Plugin 把硬件抽象成「<strong>资源名 + 整数数量</strong>」，这个模型在 AI 算力场景暴露了四个结构性问题：</p>
+<p><strong>第一，只能表达整数个数，无法表达分数与属性。</strong> <code>nvidia.com/gpu: 1</code> 意味着独占一张卡，Pod 没法申请「半张卡」或「20GB 显存」；调度器也看不到卡的型号、显存大小、NVLink 拓扑这些属性，做不了「给我一张显存 ≥ 40GB 的卡」这类请求。</p>
+<p><strong>第二，调度决策对插件是黑盒。</strong> kube-scheduler 只看节点上的 Extended Resource 数量做过滤打分，<strong>插件无法参与调度决策</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正（硬伤之二）</strong>：原稿在这里举的例子是「NVIDIA 插件 time-slicing 配了 <code>replicas: 4</code> 但<strong>节点 capacity 仍显示 1</strong>，因为 kubelet 只把原始设备数上报为 capacity」。<strong>这个论据是反的。</strong></p>
+<p>NVIDIA 官方文档明确写着：</p>
+<blockquote>
+<p>On a machine with one GPU, the following config map configures Kubernetes so that the node <strong>advertises four GPU resources</strong>. A machine with two GPUs advertises eight GPUs, and so on.</p>
+</blockquote>
+<p>也就是说 <strong><code>replicas: 4</code> 会让单卡节点的 capacity/allocatable 变成 4</strong>（4 张物理卡就是 16）。</p>
+<p><strong>这个更正其实让论点更强</strong>——time-slicing 恰恰是<strong>插件通过 <code>ListAndWatch</code> 虚增设备数来影响调度的正面例子</strong>：kubelet 上报的就是插件通告的数量，<strong>插件想报几个就报几个</strong>。正确的表述是「<strong>time-slicing 靠虚增设备数来实现超卖</strong>」，而不是「kubelet 不理插件」。</p>
+<p>真正的黑盒在于：<strong>插件通告的是数量，不是属性</strong>——它能告诉你「有 4 个 GPU」，但没法告诉你「这 4 个是同一张物理卡的时间片，共享显存和故障域」。</p>
+</blockquote>
+<p><strong>第三，没有拓扑感知。</strong> 八卡训练任务被调度到两台没有高速互联的机器上，通信效率直接塌方——原生调度器对 NVLink、灵衢总线、RDMA 拓扑一无所知。</p>
+<p><strong>第四，无故障协同与重调度语义。</strong> 设备坏了只能从可用列表里摘掉，正在跑的 Pod 怎么办？训练任务怎么恢复？这些都需要插件和上层调度系统自己发明约定。</p>
+<p><strong>所有后续演进——DRA、GPU Operator、Volcano、HAMi——本质上都是在不同层面补这四个洞。</strong></p>
+<hr>
+<h2 id="四、演进：DRA-用-ResourceClaim-重写语义">四、演进：DRA 用 ResourceClaim 重写语义</h2>
+<p>Dynamic Resource Allocation 是对上述局限的正面回答。它在 Pod 规格里引入了新的原语：<strong><code>ResourceClaim</code> / <code>ResourceClaimTemplate</code></strong>（声明「我要什么」而不是「我要几个」，可带属性选择器）、<strong><code>DeviceClass</code></strong>（厂商预定义的设备模板）、<strong><code>ResourceSlice</code></strong>（DRA 驱动上报设备用），以及配套的 <strong>DRA Driver</strong>（kubelet 插件 + scheduler 插件）。</p>
+<p>最关键的进步是 <strong>Structured Parameters</strong>（1.32 beta）：设备能力以结构化属性暴露给调度器，让 kube-scheduler 能<strong>自己做属性过滤和拓扑对齐</strong>，而不是把决策黑盒地交给某个节点上的驱动。</p>
+<blockquote>
+<p>⚠️ <strong>两处原语更正</strong>：</p>
+<ol>
+<li>原稿把 <strong><code>ResourceClass</code></strong> 列进了 DRA 原语清单——<strong>它已经过时</strong>。<code>ResourceClass</code> 是 <strong>classic DRA（KEP-3063，1.26–1.31）</strong> 的集群级 class；structured-parameters DRA（KEP-4381）改用了 <strong><code>DeviceClass</code></strong>。当前官方 API 参考里只有 <code>DeviceClass</code>。</li>
+<li>清单里应补上 <strong><code>ResourceSlice</code></strong>。</li>
+</ol>
+</blockquote>
+<p><strong>DRA 的版本脉络要分两段说</strong>（这是很容易搞混的地方）：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>设计</th>
+<th>KEP</th>
+<th>版本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>classic DRA</strong></td>
+<td><code>PodSchedulingContext</code> 协商模型</td>
+<td>KEP-3063</td>
+<td>alpha <strong>1.26</strong>，<strong>1.32 已 withdrawn、代码移除</strong></td>
+</tr>
+<tr>
+<td><strong>structured parameters DRA</strong></td>
+<td>结构化参数 + <code>DeviceClass</code></td>
+<td>KEP-4381</td>
+<td>alpha 1.30—1.31，beta 1.32，<strong>stable 1.34</strong></td>
+</tr>
+</tbody>
+</table>
+<p>KEP-3063 的 README 自己说明了这个角色反转：</p>
+<blockquote>
+<p>Originally, this KEP introduced DRA in Kubernetes 1.26 and the “structured parameters” KEP … added an extension. <strong>Now the roles are reversed</strong>: #4381 defines the base functionality and this KEP is an optional extension.</p>
+</blockquote>
+<p>两者用的是<strong>同一个 feature gate 名 <code>DynamicResourceAllocation</code></strong>，所以只看 gate 名会以为是一条线——实际底下换过一轮设计。</p>
+<p><strong>Device Plugin vs DRA 对照：</strong></p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Device Plugin</th>
+<th>DRA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>引入版本</td>
+<td>1.8 alpha（2017），1.26 stable</td>
+<td>1.26 alpha（classic）/ 1.30 alpha（structured）→ <strong>1.34 GA</strong></td>
+</tr>
+<tr>
+<td>资源模型</td>
+<td>Extended Resource，整数计数</td>
+<td>ResourceClaim，可带属性选择器</td>
+</tr>
+<tr>
+<td>调度参与</td>
+<td>kube-scheduler 只看数量，插件不参与</td>
+<td>驱动提供结构化参数，<strong>调度器原生过滤</strong></td>
+</tr>
+<tr>
+<td>分数/属性</td>
+<td>不支持</td>
+<td>原生支持（按显存、MIG profile 请求）</td>
+</tr>
+<tr>
+<td>设备配置</td>
+<td><code>Allocate</code> 返回 env/mount</td>
+<td><code>NodePrepareResources</code> 等生命周期钩子</td>
+</tr>
+<tr>
+<td>设备选择时机</td>
+<td><strong>Bind 之后，节点本地</strong></td>
+<td><strong>Bind 之前，调度周期内</strong></td>
+</tr>
+<tr>
+<td>共享与拓扑</td>
+<td>需借助外部项目（HAMi、Volcano）</td>
+<td>机制内建</td>
+</tr>
+<tr>
+<td>生态成熟度</td>
+<td>NVIDIA/昇腾/网络插件全面支持</td>
+<td>NVIDIA DRA driver 已可用，部分能力 alpha</td>
+</tr>
+</tbody>
+</table>
+<p><strong>现状是过渡态</strong>：NVIDIA GPU Operator 支持 DRA Driver 与 Device Plugin <strong>二选一</strong>部署，官方原文是「A cluster can have either a GPUCluster resource for DRA or a ClusterPolicy resource for the Device Plugin, <strong>but not both</strong>」；昇腾的 Ascend Device Plugin 文档标注支持 <strong>Kubernetes 1.17.x—1.36.x</strong>，处于跟随 DRA 演进的节奏上。</p>
+<blockquote>
+<p>⚠️ <strong>一处时间线要改</strong>：原稿写「1.34 GA <strong>后</strong>还补上了 Pod 级的资源健康状态上报（同时覆盖 DRA 和 Device Plugin 两种路径）」。实际是——该能力最早（<strong>1.31 alpha</strong>）是<strong>给 Device Plugin 路径</strong>做的（KEP-4680）；<strong>DRA 路径是随 1.34 一起引入的 alpha 特性</strong>（不是 GA 之后补的），且到 <strong>1.36 才 beta</strong>。</p>
+</blockquote>
+<blockquote>
+<p>DRA 的完整架构（四大支柱、五个特性、DeviceClass / ResourceClaim 的 YAML 示例、迁移路径）见 <a href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/">告别 Device Plugin：深度解析 DRA</a>。</p>
+</blockquote>
+<hr>
+<h2 id="五、大模型时代的三条实战主线">五、大模型时代的三条实战主线</h2>
+<p>Device Plugin 及其生态在 AI 场景的分化，可以沿三条主线看：<strong>训练要的是「整批资源不空转」，推理要的是「单位成本吞吐最大」，具身要的是「确定性时延」</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>核心诉求</th>
+<th>代表组件</th>
+<th>解决的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>分布式训练</td>
+<td>整批同时启动、拓扑对齐</td>
+<td>Volcano、Kueue、KAI Scheduler</td>
+<td>Gang scheduling、队列、拓扑感知</td>
+</tr>
+<tr>
+<td>大模型推理</td>
+<td>单卡承载多模型、显存切分</td>
+<td>HAMi、time-slicing、MIG</td>
+<td>GPU 共享、显存/算力限额</td>
+</tr>
+<tr>
+<td>高性能网络</td>
+<td>RDMA/SR-IOV 直通</td>
+<td>sriov-network-device-plugin、k8s-rdma-shared-dev-plugin</td>
+<td>训练通信低延迟</td>
+</tr>
+<tr>
+<td>异构算力</td>
+<td>NPU/GPU/国产卡统一调度</td>
+<td>昇腾 Ascend Device Plugin、HAMi</td>
+<td>多后端统一接口</td>
+</tr>
+<tr>
+<td>边缘具身</td>
+<td>云边协同、设备孪生</td>
+<td>KubeEdge（DeviceModel/Device CRD + Mapper）</td>
+<td>边缘设备管理与数据下行</td>
+</tr>
+<tr>
+<td>虚机 GPU</td>
+<td>Passthrough / vGPU</td>
+<td>kubevirt-gpu-device-plugin（<strong>NVIDIA 出品</strong>）</td>
+<td>VM 场景的 GPU 透传</td>
+</tr>
+</tbody>
+</table>
+<h3 id="5-1-主线一：分布式训练——gang-scheduling-与故障自愈">5.1 主线一：分布式训练——gang scheduling 与故障自愈</h3>
+<p>原生 kube-scheduler 把每个 Pod 当成独立的放置决策，这在「64 个 H100 worker 必须整体启动」的场景下是灾难：调度器先收下 60 个，剩下 4 个 Pending，<strong>已启动的 60 个 rank 在 GPU 上空烧，等一个永远不会完成的 rendezvous</strong>。</p>
+<p>Volcano（2019 年 3 月由华为云开源，调度器基于 kube-batch 演化）为此引入了 <strong>PodGroup</strong> 抽象，配合队列、<strong>DRF 公平共享</strong>、<strong>网络拓扑感知调度</strong>，把「AI 训练任务」变成一等公民。</p>
+<blockquote>
+<p>⚠️ <strong>一处字段名要精确</strong>：原稿写「PodGroup 抽象和 <code>minAvailable</code> 语义」。实际是——<strong>PodGroup 的 spec 字段叫 <code>minMember</code></strong>（“minMember indicates the minimum number of pods or tasks running under the PodGroup”），而 <strong><code>minAvailable</code> 是 VolcanoJob 的字段</strong>。两者语义相近但归属不同。</p>
+</blockquote>
+<p><strong>昇腾的 Ascend Device Plugin 在这条线上走得更远</strong>——它把 Device Plugin 从「资源上报器」升级成了「<strong>故障自愈的参与者</strong>」：</p>
+<ul>
+<li><strong><code>-volcanoType</code></strong> 参数原生存在（源码 <code>main.go</code> 里 <code>flag.Bool(&quot;volcanoType&quot;, false, &quot;Specifies whether to use volcano for scheduling&quot;)</code>），Helm chart 默认开启，文档明确「<strong>重调度场景下必须使用 Volcano</strong>」；</li>
+<li><strong><code>-autoStowing</code></strong> 支持故障芯片自动隔离、恢复后自动回归——但要注意<strong>两个限制</strong>：文档已标注该字段「<strong>已日落</strong>」（deprecated），且<strong>仅在 <code>volcanoType=true</code> 时生效</strong>；</li>
+<li><strong>NPU 设备重调度</strong>：节点或芯片故障后，系统把训练任务重调度到健康设备上、重启训练容器、隔离故障芯片——这是 MindCluster 的断点续训能力，重调度由 Volcano 执行；</li>
+<li><strong>故障感知走的是订阅而非轮询</strong>：插件启动时调用 <strong>DCMI 故障订阅接口</strong>注册监测，故障发生时由驱动主动上报（驱动不支持订阅时才退化为轮询），而且<strong>芯片故障与网络故障都上报</strong>（<code>fault_type</code> 含 <code>CardNetworkUnhealthy</code>）。</li>
+</ul>
+<p><strong>KAI Scheduler 与 Kueue 在这条线上继续演进</strong>，但分工要分清：</p>
+<blockquote>
+<p>⚠️ <strong>一处归属要改</strong>：原稿写「KAI Scheduler、Kueue 把『配额、抢占、<strong>多集群</strong>』做进了调度语义」。核实结果——<strong>KAI 归属 NVIDIA</strong>（来自 Run:ai 的调度引擎，现为 CNCF Sandbox），有分层队列/配额、抢占、DRF、拓扑感知，但**「多集群」在 KAI 文档里查无**；<strong>「多集群」是 Kueue 的 MultiKueue</strong>（“dispatch workloads to other clusters with free capacity”）。</p>
+</blockquote>
+<h3 id="5-2-主线二：推理服务——把「一-Pod-一卡」改成「一卡-N-片」">5.2 主线二：推理服务——把「一 Pod 一卡」改成「一卡 N 片」</h3>
+<p>推理是 GPU 共享需求最强烈的地方。一个 4B 模型只占 8GB 显存，独占一张 80GB 的 A100 是巨大的浪费。当前解法分三层：</p>
+<p><strong>Time-slicing</strong>：NVIDIA device plugin 原生支持，通过 ConfigMap 定义 <code>replicas</code>，把一张物理卡暴露成 N 个逻辑副本，由 CUDA 驱动做时间片轮转。实现最轻，<strong>但节点上的 GPU 数量会被虚增为 <code>replicas × 物理卡数</code></strong>（见第三节的更正），而且<strong>没有显存和故障隔离</strong>。</p>
+<p><strong>MIG</strong>：A100/H100 等硬件级切分，每个实例有独立的显存和 SM，隔离由硬件保证。适合强隔离需求，但切分 profile 需要预先配置、实例数有限。</p>
+<p><strong>HAMi</strong>：在 Device Plugin 之上做了更彻底的改造，四步链路是——<strong>Mutating Webhook 改写 Pod</strong>（如果 Pod 请求 HAMi 资源且没指定别的调度器，就把 <code>schedulerName</code> 设成 <code>hami-scheduler</code>）→ <strong>自研调度器做 Filter/Bind + 内部设备打分</strong> → <strong>设备插件在 <code>Allocate()</code> 时读 annotations，注入 <code>libvgpu.so</code>、<code>/etc/ld.so.preload</code> 和虚拟化环境变量</strong>（如 <code>CUDA_DEVICE_MEMORY_LIMIT_0=3000m</code>）→ <strong>容器内 <code>libvgpu.so</code> 拦截 CUDA/NVML 调用执行实际限额</strong>。Pod 可以这样申请：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">resources:</span></span><br><span class="line">  <span class="attr">limits:</span></span><br><span class="line">    <span class="attr">nvidia.com/gpu:</span> <span class="number">1</span>          <span class="comment"># 1 张物理卡</span></span><br><span class="line">    <span class="attr">nvidia.com/gpumem:</span> <span class="number">3000</span>    <span class="comment"># 该卡上占 3000 MiB 显存</span></span><br><span class="line">    <span class="attr">nvidia.com/gpucores:</span> <span class="number">30</span>    <span class="comment"># 占 30% 算力</span></span><br></pre></td></tr></table></figure>
+<p><code>gpumem</code> 单位是 <strong>MiB</strong>、<code>gpucores</code> 是<strong>百分比</strong>——两个都在官方文档里核实过。</p>
+<blockquote>
+<p>⚠️ <strong>三处更正</strong>：</p>
+<ol>
+<li><strong>删掉「4 张降到 2 张、利用率 50%→100%」这组数字</strong>——HAMi 官方 case-studies、文档、博客里都没有这个表述。官方最接近的数字是 SNOW Corp 的「2× fewer GPUs」和 DaoCloud 的「&gt;80% average GPU utilization」，口径与原文不同，不能混用。</li>
+<li><strong>删掉「NVIDIA KAI + HAMi：8 张 A100 跑 16 个 Qwen3-4B，每个半卡」</strong>——KAI×HAMi 集成本身<strong>真实存在</strong>（HAMi-core 自 KAI Scheduler v0.16.4 起被内置用于显存硬隔离），但<strong>没有这个实验</strong>。HAMi 官方 benchmark 用的是 <strong>2×A100-SXM4-40GB 跑 Qwen3-8B</strong>，模型和规模都对不上。</li>
+<li><strong>「HAMi 用统一资源键前缀做异构屏蔽」不成立</strong>——各厂商用<strong>各自的资源名前缀</strong>。官方文档明写 “Other vendors use their own resource names”：NVIDIA 是 <code>nvidia.com/gpumem</code>，昇腾是 <code>huawei.com/Ascend910B3-memory</code>，寒武纪是 <code>cambricon.com/mlu.smlu.vmemory</code>。异构的「统一」体现在<strong>同一套 API 与管理体验</strong>，不是资源键前缀统一。</li>
+</ol>
+<p><strong>一处核实为正确、保留</strong>：HAMi 支持的<strong>设备类型数确实是 14 类</strong>——官方 device-supported 表（标注 v2.10.0）正好 14 行：NVIDIA GPU、AMD GPU(ROCm)、AWS Neuron、Biren、Cambricon MLU、Enflame GCU、Huawei Ascend NPU、Hygon HCU、Iluvatar、Kunlunxin XPU、MetaX、Mthreads、Teco DPU、Vastai。</p>
+</blockquote>
+<blockquote>
+<p>HAMi 的底层原理（LD_PRELOAD 劫持 <code>cuMemAlloc</code> 的完整链路、五步调度链路、DRA 模式）见 <a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">深入解析 K8s GPU 复用：从通用方案到 HAMi 异构架构全解</a>。</p>
+</blockquote>
+<h3 id="5-3-主线三：具身智能——边缘设备管理与确定性时延">5.3 主线三：具身智能——边缘设备管理与确定性时延</h3>
+<p>具身智能把算力需求从数据中心推到了物理世界，其 GPU 负载结构与大模型推理<strong>完全不同</strong>：<strong>不是按用户请求量弹性波动，而是随部署单元数线性扩展、需要确定性时延</strong>——一条每分钟处理 1000 个零件的产线机械臂，无法容忍 500ms 的 GPU 调度抖动。</p>
+<p><strong>（1）设备接入与数字孪生：KubeEdge 的声明式设备模型</strong></p>
+<p>KubeEdge 用 <strong>DeviceModel / Device</strong> 两个 CRD 描述物理设备（传感器、摄像头、机械臂控制器），通过 <strong>Mapper</strong> 组件对接具体协议。完整链路是：</p>
+<blockquote>
+<p>云端创建 Device CRD → <strong>Device Controller 创建一个 ConfigMap</strong> 存放设备属性与 visitor 定义 → <strong>借助 edge controller 既有的 ConfigMap 同步机制下发到边缘</strong> → 边缘 Mapper 容器读取该 ConfigMap，据此与物理设备通信 → <strong>DeviceTwin 把孪生状态回报云端</strong></p>
+</blockquote>
+<p>下发通道是 <strong>CloudHub（websocket server）→ EdgeHub（websocket client）</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>一处协议归类要改</strong>：原稿把 <strong>MQTT</strong> 列为 Mapper 对接的设备协议。<strong>MQTT 不是设备侧 mapper 协议</strong>——它是 EventBus / 数据推送（<code>pushMethod.mqtt</code>）用的<strong>消息通道</strong>。Mapper 侧真正对接的协议是官方 mappers-go 实现的那几个：<strong>Modbus、Bluetooth、ONVIF、OPC-UA</strong>。</p>
+</blockquote>
+<p><strong>（2）边缘 GPU 与仿真算力</strong></p>
+<p>边缘节点跑推理需要 GPU 直通（device plugin 标准用法），训练侧则依赖 GPU 集群上的物理仿真——Isaac Sim 这类高保真接触动力学仿真本身就是 GPU 密集型，<strong>仿真精度直接影响 sim-to-real 迁移成功率</strong>。</p>
+<p><strong>（3）云边协同调度</strong></p>
+<p>KubeEdge 的核心卖点之一是<strong>边缘自治</strong>——官方原文：</p>
+<blockquote>
+<p><strong>Edge Autonomy</strong>: Ensure edge nodes run autonomously and the applications in edge run normally, when the cloud-edge network is unstable or edge is offline and restarted.</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>一处表述要收</strong>：原稿写「KubeEdge 在边缘节点本地<strong>保留完整的 Kubernetes API 能力</strong>」。这<strong>过度了</strong>——边缘侧是 <strong>Edged（轻量 kubelet）+ MetaManager</strong>（把元数据存到<strong>轻量数据库 SQLite</strong>），并<strong>不是</strong>在边缘跑一个完整的 kube-apiserver。官方自己的说法是「<strong>Kubernetes-native</strong> support … just like a traditional Kubernetes cluster in the Cloud」。</p>
+<p>「云断边不断」这个结论是对的，只是机制要说准。</p>
+</blockquote>
+<p><strong>（4）具身场景的另一个延伸：KubeVirt 路线</strong></p>
+<p>把 GPU 通过 <strong>vfio-pci 直通</strong>给虚拟机，配合 <strong>kubevirt-gpu-device-plugin</strong> 把 VFIO 设备和 vGPU 暴露给 VM 调度。对于需要完整操作系统隔离的具身仿真环境或传统工业软件，这是比容器更现实的选择。</p>
+<blockquote>
+<p>⚠️ <strong>一处归属要改</strong>：<code>kubevirt-gpu-device-plugin</code> 属于 <strong>NVIDIA</strong>（<code>github.com/NVIDIA/kubevirt-gpu-device-plugin</code>），<strong>不是 KubeVirt 组织的项目</strong>——<code>github.com/kubevirt/kubevirt-gpu-device-plugin</code> 这个仓库不存在。</p>
+</blockquote>
+<hr>
+<h2 id="六、多调度器真的会在哪里冲突？">六、多调度器真的会在哪里冲突？</h2>
+<p>既然 §2.3 已经确立了「调度器不调用 Allocate」，那么一个自然的追问是：<strong>多个调度器共存时，会在哪里冲突？</strong></p>
+<p><strong>答案：冲突不在 Allocate，而在 Assume。</strong></p>
+<ul>
+<li><strong>Allocate 侧不可能冲突</strong>：它由<strong>目标节点的 kubelet</strong> 调用，<strong>每节点一个 kubelet</strong>、串行处理 SyncPod——<strong>节点侧只有一个写者</strong>。</li>
+<li><strong>冲突发生在 Assume/Reserve 阶段</strong>：调度器算「这个节点还剩几张卡」，<strong>不是读节点上的实时值</strong>，而是拿自己 informer 缓存里的 Pod 列表求和，再用节点 status 里的 capacity 去减。两个调度器各有各的缓存、同步有先后——A 把最后一张卡 assume 掉（本地缓存 +1），B 的缓存还没看到那个 Pod，<strong>于是也 assume 了同一张卡</strong>，两个都 Bind 成功。</li>
+</ul>
+<p><strong>后果比想象的轻，但形态很坑。</strong> kubelet 会兜住这一层：DeviceManager 用 <code>kubelet_internal_checkpoint</code> 记账，<code>devicesToAllocate</code> 会跳过已在 <code>allocatedDevices</code> 里的设备 ID——<strong>同一个 <code>/dev/nvidia0</code> 不会分给两个 Pod</strong>。</p>
+<p>所以失败形态<strong>不是</strong>「两个 Pod 悄悄共享一张卡」，而是：</p>
+<blockquote>
+<p><strong>第二个 Pod 卡在 <code>ContainerCreating</code></strong>，报 <code>Insufficient nvidia.com/gpu</code>。</p>
+</blockquote>
+<p>而这恰好呼应 §2.4 那条语义——<strong>Allocate 失败不会解绑，Pod 留在节点上按 backoff 重试</strong>。于是它变成一个<strong>僵局</strong>：Pod 既没跑起来，也没被重新调度。</p>
+<p><strong>这个僵局其实是「调度与分配割裂」的意外好处</strong>：</p>
+<blockquote>
+<p><strong>上游允许多写者，下游保证单写者。</strong> 无论上面挂几个调度器、缓存多乱，节点侧只有一份权威账本。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>一个我没有核实的推论</strong>：DRA 把设备分配提前到调度周期内、写回 <code>ResourceClaim.status.allocation</code>——设备是在 <strong>API Server 上的对象</strong>里定好的，kubelet 的 <code>NodePrepareResources</code> 更像是「按单准备」而不是「从池子里挑」。<strong>这意味着 DRA 下那道节点侧的最后防线可能变薄了</strong>：同样的陈旧缓存问题，在 Device Plugin 下会退化成「Pod 卡住」，在 DRA 下会不会退化成「两个 ResourceClaim 拿到同一张卡」，取决于 DRA driver 的实现。<strong>这一点建议实测，我没有找到明确结论。</strong></p>
+</blockquote>
+<p><strong>四层解法，从浅到深：</strong></p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>手段</th>
+<th>能解决什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Pod 层</strong></td>
+<td><code>spec.schedulerName</code> 显式声明</td>
+<td>解决「谁处理这个 Pod」——<strong>但不解决共享节点视图</strong></td>
+</tr>
+<tr>
+<td><strong>配额层</strong></td>
+<td>namespace + ResourceQuota</td>
+<td>在配额层面划界，防止跨调度器的资源争抢</td>
+</tr>
+<tr>
+<td><strong>调度器层</strong></td>
+<td>缩短 informer 同步延迟、PriorityClass 全局对齐</td>
+<td><strong>缩小冲突窗口，不能消除</strong></td>
+</tr>
+<tr>
+<td><strong>节点层（最彻底）</strong></td>
+<td><strong>节点池物理隔离</strong>：taint + nodeSelector/affinity</td>
+<td>两个调度器管的节点集合<strong>不重叠</strong> → 视图冲突从根上消失</td>
+</tr>
+</tbody>
+</table>
+<p><strong>只有节点池物理隔离能根治，其余都是缩小窗口。</strong></p>
+<blockquote>
+<p>多调度器共存的其他两个坑（<strong>抢占互相不知情</strong>、<strong>拓扑约束不互通</strong>）、四种共存模式与组合拳建议，见 <a href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/">Kubernetes 多调度器共存实践指南</a> 与 <a href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/">跨调度器抢占：机制、冲突根因与选型实践</a>。本节只补「从 Bind/Allocate 时序看冲突」这个角度。</p>
+</blockquote>
+<hr>
+<h2 id="七、算力池化的三层解构">七、算力池化的三层解构</h2>
+<p>把上面所有内容收拢，今天所谓的「AI 算力池化」其实可以解构成三层，每层的成熟度和瓶颈都不同：</p>
+<p><strong>设备虚拟化层——把物理卡切成可调度的最小单元。</strong> 硬件路线（MIG、vGPU）隔离强但切分粒度粗；软件路线（HAMi vGPU、time-slicing）灵活但算力隔离依赖驱动时间片，硬限制能力因厂商和驱动世代而异。这一层的根本约束是：<strong>软件虚拟化无法凭空造出硬件没有提供的隔离边界</strong>。</p>
+<p><strong>调度语义层——表达「要什么样的资源、怎么放、故障怎么办」。</strong> Device Plugin 把这层做成了黑盒，DRA 用结构化参数把它拉回了调度器原生视野，Volcano/KAI 在其上补齐了 gang、队列、抢占、拓扑。演进方向很清晰：<strong>从「数量调度」走向「属性与拓扑调度」</strong>。</p>
+<p><strong>异构屏蔽层——让 NVIDIA、昇腾、海光、寒武纪在同一套 YAML 下可互换。</strong> HAMi 用统一的管理体验做了一层薄封装，代价是各后端能力差异需要用户自己核对支持矩阵（连资源键前缀都是各厂商自己的）。这一层最难标准化，因为「通用抽象」和「发挥每家硬件特性」天然冲突。</p>
+<p><strong>如果要跨域借鉴一个视角</strong>：Device Plugin 的 <code>ListAndWatch</code> 是<strong>事件驱动</strong>的状态上报，但硬件侧的感知大多是<strong>周期轮询</strong>——这和 TCP 拥塞控制里「ACK 驱动的窗口调整 + 发送方周期性探测带宽」的结构是<strong>同构的</strong>。算力调度面对的核心张力也一样：</p>
+<blockquote>
+<p>如何用最小的探测开销，在最短时间内逼近真实的资源边界，又不在边界附近反复震荡。</p>
+</blockquote>
+<p>DRA 的结构化参数、Volcano 的拓扑感知、HAMi 的动态 MIG 实例缓存复用，本质上都是在优化这个「<strong>探测—收敛—避免震荡</strong>」的闭环。</p>
+<hr>
+<h2 id="八、写在最后">八、写在最后</h2>
+<p>Device Plugin 用一个 gRPC 接口加一个 Unix socket，撑起了近十年异构算力接入的事实标准；它的局限（<strong>整数、黑盒、无拓扑</strong>）则催生了 DRA、Volcano、HAMi 这一整代新组件。</p>
+<p>从 2017 到 2025，从 alpha 到 GA 到被替代，Device Plugin 的生命周期本身就是云原生基础设施演化的一个缩影：</p>
+<blockquote>
+<p><strong>机制解决「接入」，演进解决「表达」，生态解决「场景」。</strong></p>
+</blockquote>
+<p>理解了这三层的关系，就能在任何新硬件、新调度器出现时，快速找到它在这张地图上的位置。</p>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">NVIDIA device plugin for Kubernetes 原理分析</a>——注册服务、ListAndWatch、Allocate 的源码级拆解</li>
+<li><a href="/2026/01/19/2026-01-19-%E5%91%8A%E5%88%AB-Device-Plugin-%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-Kubernetes-%E4%B8%8B%E4%B8%80%E4%BB%A3%E5%BC%82%E6%9E%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%88%A9%E5%99%A8--DRA/">告别 Device Plugin：深度解析 DRA</a>——DRA 四大支柱、五个特性与完整 YAML 示例</li>
+<li><a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">深入解析 K8s GPU 复用：从通用方案到 HAMi 异构架构全解</a>——LD_PRELOAD 劫持与 HAMi 调度链路</li>
+<li><a href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/">Kubernetes 多调度器共存实践指南</a>——四种共存模式与三个坑</li>
+<li><a href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/">跨调度器抢占：机制、冲突根因与选型实践</a>——跨调度器抢占为什么没有原生支持</li>
+<li><a href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/">DRA 拓扑感知调度</a>——DRA 的拓扑对齐能力</li>
+<li><a href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a>——Device Plugin 与 DRA 在运行时栈里的位置</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文的版本脉络核对自 Kubernetes CHANGELOG（1.8/1.10/1.11/1.32）与 KEP 仓库（KEP-3573 Device Plugins、KEP-3063 classic DRA、KEP-4381 Structured Parameters、KEP-4680 Resource Health）；gRPC 接口核对自 <code>staging/src/k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1/api.proto</code>；机制细节核对自 Device Plugins 官方概念页与 NVIDIA k8s-device-plugin 源码；DRA 语义核对自官方 DRA 概念页与 GPU Operator 文档；生态部分核对自 HAMi 官方文档与源码、Ascend mind-cluster 仓库、KubeEdge 官方文档、Volcano 官方文档、KAI Scheduler / Kueue 仓库。</p>
+<p><strong>原稿更正汇总</strong>：<strong>gRPC 方法数（5 个而非 4 个，漏了 <code>PreStartContainer</code>）</strong>、<strong>time-slicing 会让节点 GPU 数虚增为 replicas×物理卡数（而非「仍显示 1」）</strong>、「DRA replaces device plugins」引文查无出处、<code>ResourceClass</code> 已被 <code>DeviceClass</code> 取代且应补 <code>ResourceSlice</code>、资源健康状态上报的时间线（DRA 路径是 1.34 alpha 而非 GA 之后）、Unhealthy 下降的是 <code>allocatable</code> 而非 <code>capacity</code>、Volcano 的字段归属（PodGroup 用 <code>minMember</code>，<code>minAvailable</code> 属 VolcanoJob）、「多集群」应归于 Kueue 而非 KAI、昇腾 <code>-autoStowing</code> 已日落且仅 <code>volcanoType=true</code> 时生效、KubeEdge 的 MQTT 归类（是 EventBus 通道非 Mapper 协议）与「完整 K8s API 能力」的过度表述、<code>kubevirt-gpu-device-plugin</code> 归属 NVIDIA。另有<strong>两组具体数字因查无出处已删除</strong>（HAMi 的「4→2 张 / 50%→100%」与「8×A100 跑 16 个 Qwen3-4B」）。<strong>一处核实为正确并保留</strong>：HAMi 支持的设备类型确为 14 类。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/">https://roger-lv.github.io/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/HAMi/">HAMi</a><a class="post-meta__tags" href="/tags/DRA/">DRA</a><a class="post-meta__tags" href="/tags/GPU%E8%B0%83%E5%BA%A6/">GPU调度</a><a class="post-meta__tags" href="/tags/DevicePlugin/">DevicePlugin</a><a class="post-meta__tags" href="/tags/%E6%98%87%E8%85%BE/">昇腾</a><a class="post-meta__tags" href="/tags/KubeEdge/">KubeEdge</a><a class="post-meta__tags" href="/tags/%E7%AE%97%E5%8A%9B%E6%B1%A0%E5%8C%96/">算力池化</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%B8%87%E5%8D%A1GPU%E9%9B%86%E7%BE%A4%E8%BF%90%E7%BB%B4%E7%9B%91%E6%8E%A7%E5%9B%9B%E5%B9%B3%E9%9D%A2%E6%95%85%E9%9A%9C%E4%BA%94%E5%88%86%E7%B1%BB%E4%B8%8E%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7/" title="万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：把 RoCEv2 网络配成无损只是让集群「能跑起来」，真正吃掉算力的在后面——几万张卡在几个月里不停地出故障、掉速、Hang 住，而你要在没有用户配合、看不到业务代码的情况下，判断这一次的锅是硬件、是网络还是调度。 这篇给一套可执行的方法：四个监控平面分工排查、五类故障定性定位、RoCE 三种典型病的判据、三板斧的调优顺序，最后落一份巡检清单。  开场先看一个真实场景。 某集群上一个 2048 卡预训练任务，MFU 长期在 38% 上下波动。团队查了两周网络：PFC 计数正常、ECN 标记率正常、交换机上零丢包、ib_write_bw 端到端带宽也达标。 最后在 DCGM 的 SM Clock 指标上发现问题——256 台机器里有一台的 8 张卡，SM 时钟长期跑在 1.1GHz，其他机器都是 1.9GHz。这台机器是慢节点，它在每一个 AllReduce 里拖后腿，整条 ring 都要等它。换掉之后 MFU 回到 45%，而且不再波动。 这类问题在交换机上永远查不到，因为网络侧所有计数都是干净的。  边界说明：文中命令以 NVIDIA DCGM 与 nvidia-...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：kubelet 不直接创建容器，它只通过 CRI（Container Runtime Interface）下达指令；真正干活的是高级运行时（containerd / CRI-O）和低级运行时（runc / kata-agent / runsc）。沙盒选型的本质，就是在决定「谁来接 kubelet 的 CRI 调用」以及「容器进程最终跑在什么隔离边界里」。对具身智能公司而言，仿真训练、Agent 工具调用、强隔离 VM、真机设备接入这四类负载对应完全不同的运行时组合——不存在一个「万能沙盒」能同时满足。  这篇是 具身智能仿真场景的沙盒选型 的下层视角。上篇回答「该选哪个沙盒」，这篇回答「沙盒插在运行时栈的哪一层、跟 kubelet 怎么耦合」。 本文的架构描述逐条核对自 Kubernetes 官方文档、containerd 源码与文档、Kata/gVisor/Firecracker 官方文档与仓库。核对中发现原稿有十余处需要更正，已在文中以 ⚠️ 标注。  一、先立骨架：kubelet 之下的运行时栈分层 Kubernetes 的容器运行时体系是明确的两层结构，这个...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/" title="深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-24</div><div class="info-item-2">深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解</div></div><div class="info-2"><div class="info-item-1">深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 在云原生 AI 时代,GPU 作为算力核心资产,其高昂的成本与常常不到 40% 的实际利用率,让&quot;显卡复用&quot;成为企业降本增效的必答题。本文将全景解析当前主流的 GPU 复用方案,并深度剖析国产开源项目 HAMi 如何通过底层 Hook 技术与云原生调度,实现多厂商异构 GPU 的精细化隔离。  一、 GPU 复用全景:8 大主流方案对比 当前主流的显卡复用方案可按技术层次划分为五大类,不同路线在隔离强度、性能损耗、硬件门槛和部署复杂度上呈现明显的梯度差异:从硬到软,灵活性递增、隔离性递减。    方案 技术层次 隔离级别 性能损耗 硬件门槛 典型场景     MIG 硬件分区 物理硬隔离 几乎无 仅 A100/A30/H100 等 多租户推理、确定 QoS   NVIDIA vGPU 驱动/Hypervisor 级 驱动级硬隔离 较低 VGX 系列卡 + IOMMU VDI、图形桌面云、虚机推理   SR-IOV PCIe 硬件虚拟化 硬件级 极低 Ampere 及以后数据中心卡 HPC/A...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战</div></div><div class="info-2"><div class="info-item-1">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战 这篇长文写给算法工程师和平台工程师,从最基础的&quot;一张 GPU 卡怎么被 K8s 认识&quot;讲起,到&quot;一万张卡怎么不崩&quot;,再到&quot;大模型服务怎么在集群上跑起来&quot;,最后聊 Slurm。六大主题:K8s GPU 调度原理、万卡集群治理、资源池化、弹性伸缩、vLLM/SGLang 集群化部署、Slurm 实战。  一、开篇:为什么 GPU 调度比 CPU 调度难十倍 如果你做过 K8s 的 CPU/内存调度,可能觉得资源调度就是&quot;分配数字资源,加个 request/limit 完事&quot;。但当资源变成 GPU 之后,画风完全变了,原因有五个: 1. GPU 不可分割(默认情况下)。 CPU 可以按 0.1 核这样细粒度分配,内存可以按 MB 分配,但一张物理 GPU 卡,默认情况下,K8s 只能把它当作一个&quot;整数资源&quot;分配给一个容器——要么给你一整张卡,要么不给。这就导致一个尴尬场景:推理服...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-DRA%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%B0%83%E5%BA%A6/" title="DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA&#x2F;PCIe 对齐</div></div><div class="info-2"><div class="info-item-1">DRA 拓扑感知调度:从 ResourceSlice 到 NUMA/PCIe 对齐 DRA(Dynamic Resource Allocation)已经原生支持拓扑感知调度,而且这是它的核心设计目标之一——通过 ResourceSlice 暴露设备拓扑信息,配合 ResourceClaim 中的约束(constraint)让调度器在 Pod 绑定前就完成 NUMA / PCIe 级别的拓扑对齐。本文从实现机制、版本演进、使用示例和当前局限几个维度展开说明。  本文是 深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 的深入篇——那篇讲 HAMi 怎么用 DRA 做异构 GPU 分配,这篇专讲 DRA 本身的拓扑感知能力。   一、实现机制:拓扑如何参与调度决策 DRA 的拓扑感知能力建立在 KEP-4381(DRA Structured Parameters) 引入的结构化参数模型之上,核心链路分三层: 123456789101112131415161718192021222324              ┌─────────────────────────...</div></div></div></a><a class="pagination-related" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-10</div><div class="info-item-2">OpenSandbox 项目学习</div></div><div class="info-2"><div class="info-item-1">OpenSandbox 项目学习 项目地址：https://github.com/opensandbox-group/OpenSandbox 官方文档：https://open-sandbox.ai 一、它是什么 一句话：OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform），提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。 为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：  隔离：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。 可编程：统一的...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">一个 MCP 沙箱路由调度框架的架构分析</div></div><div class="info-2"><div class="info-item-1">一个 MCP 沙箱路由调度框架的架构分析 本文分析一个用 Go 实现、面向 MCP(Model Context Protocol)的沙箱路由与调度框架。它把&quot;给 agent 起一个隔离环境跑工具&quot;这件事标准化、规模化、多引擎化。 一、它是什么 一句话:一个面向 MCP 的沙箱路由与调度框架,用 Go 写成,直接基于官方 modelcontextprotocol/go-sdk,把沙箱的创建、路由、调度、生命周期、计量都做成了一套基础设施。 它跟&quot;控制面 Python + 数据面 Go、协议优先的通用沙箱平台&quot;是两种不同路线:本框架全 Go、MCP 原生(直接用官方 SDK),更强调调度(快照+Epoch 的确定性调度)和路由(二层网络高可用网格)。它的&quot;沙箱&quot;抽象本质是一个 http.RoundTripper——工具调用就是 HTTP,没有单独的执行协议。 核心能力:  沙箱路由:按沙箱类型分发、MCP 会话生命周期管理、按下游负载动态调整、二层网络高可用。 沙箱引擎:Echo / FileServer / Git / P...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">304</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">468</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E8%AE%BE%E8%AE%A1%E5%8A%A8%E6%9C%BA%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E6%9C%89-Device-Plugin"><span class="toc-number">1.</span> <span class="toc-text">一、设计动机：为什么要有 Device Plugin</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%9C%BA%E5%88%B6%E8%A7%A3%E6%9E%90%EF%BC%9Akubelet-%E4%B8%8E%E6%8F%92%E4%BB%B6%E4%B9%8B%E9%97%B4%E7%9A%84-gRPC-%E6%8F%A1%E6%89%8B"><span class="toc-number">2.</span> <span class="toc-text">二、机制解析：kubelet 与插件之间的 gRPC 握手</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E4%BA%94%E4%B8%AA%E6%96%B9%E6%B3%95%EF%BC%8C%E4%B8%8D%E6%98%AF%E5%9B%9B%E4%B8%AA"><span class="toc-number">2.1.</span> <span class="toc-text">2.1 五个方法，不是四个</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E6%B3%A8%E5%86%8C%E3%80%81%E9%95%BF%E8%BF%9E%E4%B8%8E%E4%B8%A4%E4%B8%AA%E5%AE%B9%E6%98%93%E5%BF%BD%E7%95%A5%E7%9A%84%E5%B7%A5%E7%A8%8B%E7%BB%86%E8%8A%82"><span class="toc-number">2.2.</span> <span class="toc-text">2.2 注册、长连与两个容易忽略的工程细节</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-Bind-%E4%B8%A5%E6%A0%BC%E5%9C%A8%E5%89%8D%EF%BC%8CAllocate-%E4%B8%A5%E6%A0%BC%E5%9C%A8%E5%90%8E"><span class="toc-number">2.3.</span> <span class="toc-text">2.3 Bind 严格在前，Allocate 严格在后</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E4%B8%89%E4%B8%AA%E8%AF%AD%E4%B9%89%E7%BB%86%E8%8A%82"><span class="toc-number">2.4.</span> <span class="toc-text">2.4 三个语义细节</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-DRA-%E6%8A%8A%E6%97%B6%E5%BA%8F%E6%95%B4%E4%B8%AA%E5%8F%8D%E4%BA%86%E8%BF%87%E6%9D%A5"><span class="toc-number">2.5.</span> <span class="toc-text">2.5 DRA 把时序整个反了过来</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%B7%B1%E6%B0%B4%E5%8C%BA%EF%BC%9A%E6%89%A9%E5%B1%95%E8%B5%84%E6%BA%90%E6%A8%A1%E5%9E%8B%E7%9A%84%E5%9B%9B%E4%B8%AA%E6%A0%B9%E6%9C%AC%E5%B1%80%E9%99%90"><span class="toc-number">3.</span> <span class="toc-text">三、深水区：扩展资源模型的四个根本局限</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%BC%94%E8%BF%9B%EF%BC%9ADRA-%E7%94%A8-ResourceClaim-%E9%87%8D%E5%86%99%E8%AF%AD%E4%B9%89"><span class="toc-number">4.</span> <span class="toc-text">四、演进：DRA 用 ResourceClaim 重写语义</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%97%B6%E4%BB%A3%E7%9A%84%E4%B8%89%E6%9D%A1%E5%AE%9E%E6%88%98%E4%B8%BB%E7%BA%BF"><span class="toc-number">5.</span> <span class="toc-text">五、大模型时代的三条实战主线</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E4%B8%BB%E7%BA%BF%E4%B8%80%EF%BC%9A%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E2%80%94%E2%80%94gang-scheduling-%E4%B8%8E%E6%95%85%E9%9A%9C%E8%87%AA%E6%84%88"><span class="toc-number">5.1.</span> <span class="toc-text">5.1 主线一：分布式训练——gang scheduling 与故障自愈</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E4%B8%BB%E7%BA%BF%E4%BA%8C%EF%BC%9A%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E2%80%94%E2%80%94%E6%8A%8A%E3%80%8C%E4%B8%80-Pod-%E4%B8%80%E5%8D%A1%E3%80%8D%E6%94%B9%E6%88%90%E3%80%8C%E4%B8%80%E5%8D%A1-N-%E7%89%87%E3%80%8D"><span class="toc-number">5.2.</span> <span class="toc-text">5.2 主线二：推理服务——把「一 Pod 一卡」改成「一卡 N 片」</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E4%B8%BB%E7%BA%BF%E4%B8%89%EF%BC%9A%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E2%80%94%E2%80%94%E8%BE%B9%E7%BC%98%E8%AE%BE%E5%A4%87%E7%AE%A1%E7%90%86%E4%B8%8E%E7%A1%AE%E5%AE%9A%E6%80%A7%E6%97%B6%E5%BB%B6"><span class="toc-number">5.3.</span> <span class="toc-text">5.3 主线三：具身智能——边缘设备管理与确定性时延</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E7%9C%9F%E7%9A%84%E4%BC%9A%E5%9C%A8%E5%93%AA%E9%87%8C%E5%86%B2%E7%AA%81%EF%BC%9F"><span class="toc-number">6.</span> <span class="toc-text">六、多调度器真的会在哪里冲突？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E7%AE%97%E5%8A%9B%E6%B1%A0%E5%8C%96%E7%9A%84%E4%B8%89%E5%B1%82%E8%A7%A3%E6%9E%84"><span class="toc-number">7.</span> <span class="toc-text">七、算力池化的三层解构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E5%86%99%E5%9C%A8%E6%9C%80%E5%90%8E"><span class="toc-number">8.</span> <span class="toc-text">八、写在最后</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/" title="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%B8%87%E5%8D%A1GPU%E9%9B%86%E7%BE%A4%E8%BF%90%E7%BB%B4%E7%9B%91%E6%8E%A7%E5%9B%9B%E5%B9%B3%E9%9D%A2%E6%95%85%E9%9A%9C%E4%BA%94%E5%88%86%E7%B1%BB%E4%B8%8E%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7/" title="万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧">万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
