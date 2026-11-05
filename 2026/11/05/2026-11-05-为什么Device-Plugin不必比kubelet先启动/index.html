@@ -1,0 +1,531 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>为什么 Device Plugin 不必比 kubelet 先启动：节点级组件的启动顺序与容错 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="Device Plugin Pod 做不到、也不需要做到比 kubelet 先启动——Kubernetes 为这条链路设计的容错是「kubelet 兜底等待 + 插件自动重注册」，靠的是反方向的容错，而不是启动顺序的保证。本文拆解节点冷启动时序、5 分钟宽限期的精确行为（capacity 与 allocatable 在哪个阶段变化）、两类服务的保障对比，以及一个真实的生产事故：Karpenter">
+<meta property="og:type" content="article">
+<meta property="og:title" content="为什么 Device Plugin 不必比 kubelet 先启动：节点级组件的启动顺序与容错">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="Device Plugin Pod 做不到、也不需要做到比 kubelet 先启动——Kubernetes 为这条链路设计的容错是「kubelet 兜底等待 + 插件自动重注册」，靠的是反方向的容错，而不是启动顺序的保证。本文拆解节点冷启动时序、5 分钟宽限期的精确行为（capacity 与 allocatable 在哪个阶段变化）、两类服务的保障对比，以及一个真实的生产事故：Karpenter">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-05T08:09:39.982Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="容错">
+<meta property="article:tag" content="DevicePlugin">
+<meta property="article:tag" content="GPU运维">
+<meta property="article:tag" content="kubelet">
+<meta property="article:tag" content="启动顺序">
+<meta property="article:tag" content="Karpenter">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "为什么 Device Plugin 不必比 kubelet 先启动：节点级组件的启动顺序与容错",
+  "url": "https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-04T16:00:00.000Z",
+  "dateModified": "2026-11-05T08:09:39.982Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '为什么 Device Plugin 不必比 kubelet 先启动：节点级组件的启动顺序与容错',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">307</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">482</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">为什么 Device Plugin 不必比 kubelet 先启动：节点级组件的启动顺序与容错</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">为什么 Device Plugin 不必比 kubelet 先启动：节点级组件的启动顺序与容错</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-05T08:09:39.982Z" title="更新于 2026-11-05 16:09:39">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/" data-flag-title="为什么 Device Plugin 不必比 kubelet 先启动：节点级组件的启动顺序与容错"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：Device Plugin Pod <strong>做不到、也不需要做到</strong>比 kubelet 先启动。Kubernetes 为这条链路设计的容错机制是「<strong>kubelet 兜底等待 + 插件自动重注册</strong>」——靠的是<strong>反方向的容错</strong>，而不是启动顺序的保证。</p>
+<p>节点级组件的启动顺序靠 systemd 依赖图（kubelet 之前），Pod 级组件的顺序靠<strong>调度屏障 + 容错重试</strong>（kubelet 之后），而不是试图让后者插入前者。</p>
+</blockquote>
+<p>这篇是 <a href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/">Device Plugin 的十年</a> 的姊妹篇。那篇讲机制与问题域，这篇讲<strong>启动顺序与容错</strong>——也就是「这套机制解决了什么、又故意没解决什么」。</p>
+<p>本文的行为描述逐条核对自 Kubernetes 官方文档与 <code>release-1.34</code> 源码。<strong>核对中发现原稿有五处需要更正，其中一处是把 capacity 与 allocatable 搞反了</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="一、为什么顺序不能反">一、为什么顺序不能反</h2>
+<p>原因很直接：<strong>kubelet 每次启动都会删除 <code>/var/lib/kubelet/device-plugins/</code> 目录下的所有既有 Unix socket</strong>，然后才重新创建自己的 <code>kubelet.sock</code> 等待注册。</p>
+<p>官方 Device Plugins 文档「Handling kubelet restarts」一节的原文：</p>
+<blockquote>
+<p>A device plugin is expected to detect kubelet restarts and re-register itself with the new kubelet instance. <strong>A new kubelet instance deletes all the existing Unix sockets under <code>/var/lib/kubelet/device-plugins</code> (the hardcoded path for device plugins) when it starts.</strong> A device plugin can monitor the deletion of its Unix socket and re-register itself upon such an event.</p>
+</blockquote>
+<p>源码里的<strong>顺序</strong>也印证了这一点——<code>server.go</code> 的 <code>Start()</code> 先清理目录、再监听 socket：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// pkg/kubelet/cm/devicemanager/plugin/v1beta1/server.go</span></span><br><span class="line">s.rhandler.CleanupPluginDirectory(s.socketDir)   <span class="comment">// ← 先删所有旧 socket</span></span><br><span class="line">ln, err := net.Listen(<span class="string">&quot;unix&quot;</span>, s.SocketPath())     <span class="comment">// ← 再建 kubelet.sock</span></span><br></pre></td></tr></table></figure>
+<p>而 <code>CleanupPluginDirectory()</code> 的注释写得很直白：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// CleanupPluginDirectory is to remove all existing unix sockets</span></span><br><span class="line"><span class="comment">// from /var/lib/kubelet/device-plugins on Device Plugin Manager start</span></span><br></pre></td></tr></table></figure>
+<p>（一个细节：它删的是<strong>该目录下的 socket 文件</strong>，会跳过 checkpoint 文件——不是无差别删目录。）</p>
+<p><strong>所以如果插件先于 kubelet 启动，它注册用的 socket 会被 kubelet 直接清掉，注册等于作废。</strong> 正确的顺序必须是 kubelet 先起、插件后注册，<strong>这个方向无法反转</strong>。</p>
+<hr>
+<h2 id="二、节点冷启动的完整时序">二、节点冷启动的完整时序</h2>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>timeline
+    title 节点冷启动时间线
+    section 系统层
+        systemd : 加载 unit 依赖图 (containerd → network)
+        containerd : 容器运行时就绪
+    section kubelet 层
+        kubelet 启动 : 删除旧 device-plugin socket，重建注册目录
+        : 读取 staticPodPath 拉起静态 Pod（控制面）
+        : 启动内部 DeviceManager，扫描注册目录等待插件
+    section 调度层
+        节点 NotReady → Ready : 等 CRI RuntimeReady + CNI NetworkReady
+        DaemonSet Controller : 发现新节点，创建 device-plugin Pod
+        kube-scheduler : 把 device-plugin Pod bind 到该节点
+        kubelet（本节点） : 拉起 device-plugin 容器
+        插件 Register : 写入自己的 socket，通过 kubelet.sock 发起注册
+        kubelet : ListAndWatch 建流，capacity&#x2F;allocatable 更新为真实值
+    section 业务层
+        业务 Pod : 才能被成功调度到该节点</pre></div>
+<p>关键在于两条独立路径的汇合点：<strong>kubelet 起来后节点并不会立即 Ready</strong>——但原因<strong>不是</strong>等 DeviceManager（见 §四的更正），而是等 CRI 与 CNI；而 device plugin 作为普通 DaemonSet Pod，<strong>必须等调度器把它调度到这个节点、再由 kubelet 自己拉起</strong>。</p>
+<p>所以「<strong>插件晚于 kubelet 启动</strong>」是常态而非异常。</p>
+<hr>
+<h2 id="三、kubelet-如何容忍插件短暂缺席">三、kubelet 如何容忍插件短暂缺席</h2>
+<p>这是整套机制的核心。分三种情况，<strong>每种依赖的机制不同</strong>。</p>
+<h3 id="3-1-kubelet-自身重启（节点不重启）">3.1 kubelet 自身重启（节点不重启）</h3>
+<p>kubelet 新实例会删除所有旧 socket，插件的 FS watcher 监测到 kubelet 重启，会自动向新 kubelet 重新注册。</p>
+<blockquote>
+<p>⚠️ <strong>更正一处机制描述</strong>：原稿写「NVIDIA 插件<strong>同时 watch 自己的 socket 文件和 OS 信号</strong>，任何一侧变化都触发重注册」。核实结果——<strong>它不监听自己的 socket 被删</strong>。</p>
+<p>看源码：fsnotify 监听的是 <code>device-plugins/</code> <strong>目录</strong>，但触发条件被限定为 <code>event.Name == kubeletSocket &amp;&amp; Op&amp;Create</code>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">case</span> event := &lt;-watcher.Events:</span><br><span class="line">    <span class="keyword">if</span> o.kubeletSocket != <span class="string">&quot;&quot;</span> &amp;&amp; event.Name == o.kubeletSocket &amp;&amp;</span><br><span class="line">        event.Op&amp;fsnotify.Create == fsnotify.Create &#123;</span><br><span class="line">        klog.Infof(<span class="string">&quot;inotify: %s created, restarting.&quot;</span>, o.kubeletSocket)</span><br><span class="line">        <span class="keyword">goto</span> restart</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+<p>即<strong>只在 <code>kubelet.sock</code> 被创建（= kubelet 重启）时重启插件</strong>。插件自己的 socket 被删（<code>Remove</code> 事件）不命中这个分支。</p>
+<p>OS 信号那半是对的，但要<strong>区分信号语义</strong>：<strong>SIGHUP 触发重启（重注册），SIGINT / SIGTERM / SIGQUIT 触发退出</strong>。</p>
+</blockquote>
+<h3 id="3-2-插件-Pod-重启（kubelet-不动）——-5-分钟宽限期">3.2 插件 Pod 重启（kubelet 不动）—— 5 分钟宽限期</h3>
+<blockquote>
+<p>⚠️ <strong>更正（这是本文最实质的一处）</strong>：原稿写「capacity 置零但保留 endpoint 缓存一小段时间……超时后才把资源从 Node 对象彻底移除」。<strong>capacity 和 allocatable 搞反了，而且「超时后移除」也不对。</strong></p>
+</blockquote>
+<p>源码里的实际行为是<strong>两段</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>capacity</th>
+<th>allocatable</th>
+<th>资源还在 Node 对象里吗</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>插件故障，宽限期内</strong></td>
+<td><strong>保持 N</strong></td>
+<td><strong>→ 0</strong></td>
+<td>在</td>
+</tr>
+<tr>
+<td><strong>宽限期满</strong></td>
+<td><strong>→ 0</strong></td>
+<td>→ 0</td>
+<td><strong>仍然在</strong>（不是移除）</td>
+</tr>
+</tbody>
+</table>
+<p>宽限期常量是 <code>pkg/kubelet/cm/devicemanager/types.go</code> 里的：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// endpointStopGracePeriod indicates the grace period after an endpoint is stopped</span></span><br><span class="line"><span class="comment">// because its device plugin fails. DeviceManager keeps the stopped endpoint in its</span></span><br><span class="line"><span class="comment">// cache during this grace period to cover the time gap for the capacity change to</span></span><br><span class="line"><span class="comment">// take effect.</span></span><br><span class="line"><span class="keyword">const</span> endpointStopGracePeriod = time.Duration(<span class="number">5</span>) * time.Minute</span><br></pre></td></tr></table></figure>
+<p><strong>「超时后置 0 而不是移除」是 v1.10 由 PR #59835 刻意改的</strong>，<code>setters.go</code> 里有一行注释解释得很清楚：</p>
+<blockquote>
+<p>Set the capacity of the removed resource to 0 <strong>instead of removing the resource from the node status</strong>. This is to indicate that the resource is managed by device plugin and had been registered before.</p>
+</blockquote>
+<p><strong>这个更正有实用价值</strong>：它解释了为什么节点上 GPU 出问题时你看到的是 <strong><code>nvidia.com/gpu: 0</code> 而不是这个资源条目整个消失</strong>——<strong>这是设计意图，不是异常</strong>。</p>
+<blockquote>
+<p><strong>另一条容易混的路径</strong>：真正会出现「<strong>capacity 临时降到 0</strong>」的是 <strong>kubelet 重启</strong>场景——<code>readCheckpoint()</code> 为 checkpoint 里登记过的每个资源建一个空的 <code>healthyDevices</code> 并挂上 stopped endpoint，源码注释写着 “so that the resource capacity will stay zero till the corresponding device plugin re-registers”。<strong>这与「插件故障」是两条不同的路径</strong>，别混。</p>
+</blockquote>
+<p><strong>宽限期内重注册则恢复</strong>：5 分钟内插件重连（<code>PluginConnected()</code> 会用新 endpoint 覆盖旧的 stopped endpoint，<code>stopTime</code> 归零）+ <code>ListAndWatch</code> 重新上报 → capacity/allocatable 恢复为 N。</p>
+<p><strong>正在运行的 Pod 不受影响</strong>——kubelet 在本地 checkpoint（<code>kubelet_internal_checkpoint</code>）里持久化了 Pod → 设备的映射：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> PodDevicesEntry <span class="keyword">struct</span> &#123;</span><br><span class="line">    PodUID, ContainerName, ResourceName <span class="type">string</span></span><br><span class="line">    DeviceIDs                            []<span class="type">string</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><code>devicesToAllocate()</code> 会先查这个映射：</p>
+<blockquote>
+<p>// Gets list of devices that have already been allocated. <strong>This can happen if a container restarts for example.</strong></p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>一处语义要限定</strong>：复用是<strong>按 Pod UID + 容器名</strong>命中的。所以「Pod 重建时命中缓存拿到同一批设备」<strong>只在「同 UID 重建」时成立</strong>——即容器重启、kubelet 重启、节点重启。<strong>一个全新 Pod（新 UID）是重新分配，不命中缓存。</strong></p>
+</blockquote>
+<h3 id="3-3-节点整体冷启动">3.3 节点整体冷启动</h3>
+<p>前两条机制的组合，加上调度器层面的天然屏障——<strong>节点 Ready 之前业务 Pod 调度不进来</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>但原稿把这道屏障的成因说错了</strong>。它写「DeviceManager 未就绪通常意味着节点不会 Ready」，并把这个当屏障。<strong>DeviceManager 不参与 Node Ready 判定</strong>——详见 §四。所以正确的说法是：这道屏障<strong>与 DeviceManager 无关</strong>，它挡的是「CRI/CNI 没就绪」，而 <strong>DeviceManager 的缺失是穿透这道屏障的</strong>——这正是下面那个漏洞的成因。</p>
+</blockquote>
+<p><strong>漏洞的形态</strong>：节点已 Ready、DeviceManager 因驱动问题还在 crash-loop，此时业务 Pod 已被调度过来，kubelet 准入时会报：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Node didn&#x27;t have enough resource: nvidia.com/gpu, requested: 1, used: 0, capacity: 0</span><br></pre></td></tr></table></figure>
+<p>这个报错串<strong>逐字匹配源码</strong>（<code>pkg/kubelet/lifecycle/predicate.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(e *InsufficientResourceError)</span></span> Error() <span class="type">string</span> &#123;</span><br><span class="line">    <span class="keyword">return</span> fmt.Sprintf(<span class="string">&quot;Node didn&#x27;t have enough resource: %s, requested: %d, used: %d, capacity: %d&quot;</span>,</span><br><span class="line">        e.ResourceName, e.Requested, e.Used, e.Capacity)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="四、两类服务的启动保障对比">四、两类服务的启动保障对比</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Device Plugin (DaemonSet)</th>
+<th>kube-proxy / CNI (DaemonSet)</th>
+<th>控制面 (Static Pod)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>启动主体</td>
+<td>kubelet（经调度器 bind 后）</td>
+<td>kubelet（经调度器 bind 后）</td>
+<td>kubelet <strong>直读 manifest</strong>，不经调度器</td>
+</tr>
+<tr>
+<td>依赖 kubelet 先启动</td>
+<td>是</td>
+<td>是</td>
+<td>是（但 kubelet 读到 manifest 就立即拉起，几乎同步）</td>
+</tr>
+<tr>
+<td>常用保障手段</td>
+<td><code>system-node-critical</code> + 重注册逻辑</td>
+<td><code>system-node-critical</code> + readinessGate</td>
+<td>无需保障——静态 Pod 就是设计给节点重启场景的</td>
+</tr>
+<tr>
+<td>缺失时节点行为</td>
+<td><strong>allocatable 归零，节点仍 Ready</strong></td>
+<td><strong>节点 NotReady</strong>（<code>NetworkReady</code> 上报失败）</td>
+<td>kubelet 起不来或控制面瘫痪</td>
+</tr>
+<tr>
+<td>依赖的容错机制</td>
+<td>checkpoint + 5 分钟注册宽限期</td>
+<td>kubelet 重启时重建</td>
+<td>kubelet 周期性重读 manifest 目录</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>一处更正（比 capacity/allocatable 那处更影响结论）</strong>：原稿写「kubelet 的 readiness 上报要等关键组件（<strong>CNI、DeviceManager 等</strong>）就绪」。</p>
+<p><strong>DeviceManager 不参与 Node Ready。</strong> 源码里 <code>ReadyCondition()</code> 聚合的是：</p>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runtimeErrors</code></td>
+<td>CRI <code>RuntimeReady</code> 未就绪 / 运行时 down / <strong>PLEG</strong> 等 healthChecks 失败</td>
+</tr>
+<tr>
+<td><code>networkErrors</code></td>
+<td><strong>CNI 的 <code>NetworkReady</code></strong></td>
+</tr>
+<tr>
+<td><code>storageErrors</code></td>
+<td>volume / CSI 插件错误</td>
+</tr>
+<tr>
+<td>shutdown</td>
+<td>节点关机状态</td>
+</tr>
+</tbody>
+</table>
+<p>有意思的是 <code>containerManager.Status</code> <strong>确实</strong>被传进了 <code>ReadyCondition</code>，但它<strong>只有一个字段 <code>SoftRequirements error</code></strong>，而且只被拼成 <strong>WARNING 文本</strong>附加到 message 上，<strong>不改变 Ready 的 True/False</strong>。DeviceManager 唯一暴露的 health checker 只在 <code>SystemdWatchdog</code> 特性开启时喂给 systemd watchdog，<strong>与 Node Ready 无关</strong>。</p>
+<p><strong>所以「节点 Ready 了 GPU 却不可用」不是「屏障的漏洞」，而是本来就没有这道屏障</strong>——DeviceManager 只影响它自己管理的扩展资源是否被广告、allocatable 是否为 0。</p>
+</blockquote>
+<p><strong><code>system-node-critical</code> 的实际作用是保障运行时</strong>（资源紧张时不被驱逐、调度优先），<strong>而不是保障启动顺序</strong>——一个还没被调度到节点的 DaemonSet Pod，优先级再高也起不来（DaemonSet 文档明确 Pod 由<strong>默认调度器</strong> bind 到节点）。</p>
+<hr>
+<h2 id="五、两个常见误区与排查">五、两个常见误区与排查</h2>
+<h3 id="误区一：给-device-plugin-加-initContainer-或-priorityClassName-就能保证先起">误区一：给 device plugin 加 initContainer 或 priorityClassName 就能保证先起</h3>
+<p><code>priorityClassName</code> 只影响<strong>驱逐与调度优先级</strong>，不影响 kubelet 与 DaemonSet 的先后。</p>
+<blockquote>
+<p>而且 GPU 场景下 <strong>initContainer 请求 <code>nvidia.com/gpu</code> 会引入新的竞态</strong>——这不是理论推测，Kubernetes 有一条几乎逐字对应的 issue（<strong>#138446</strong>，标题 “Kubelet restart triggers UnexpectedAdmissionError for pods using device plugins in both initContainers and containers”）：</p>
+<blockquote>
+<p>pods have initContainers and containers both requesting the same device plugin resources. <strong>After kubelet restart</strong>, the pod is killed with:<br>
+<code>Allocate failed due to no healthy devices present; cannot allocate unhealthy devices &lt;resource&gt;</code><br>
+After kubelet restart, the device manager tries to re-allocate for the completed initContainer and fails.</p>
+</blockquote>
+<p>复现步骤就是「initContainer 与主容器都请求同一 device plugin 资源 + 重启 kubelet」。<code>UnexpectedAdmissionError</code> 这个 reason 常量定义在 <code>pkg/kubelet/cm/admission/errors.go</code>（不是 <code>kubelet_pods.go</code> 或 <code>status/</code>）。同类 issue 还有 #123971、#117955、#125579，修复在 PR #137919 / #143126。</p>
+</blockquote>
+<p><strong>真正的顺序保证只能靠「节点 Ready 之前业务 Pod 进不来」这个调度屏障</strong>——但如 §三 所说，这道屏障挡不住 DeviceManager 的问题。</p>
+<h3 id="误区二：节点-Ready-了-GPU-就能用">误区二：节点 Ready 了 GPU 就能用</h3>
+<p>节点 Ready 只代表 CRI 和 CNI 就绪，<strong>DeviceManager 是完全独立的就绪路径</strong>（见 §四）。排障按这个顺序查：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. 看 capacity/allocatable 是不是 0</span></span><br><span class="line">kubectl describe node &lt;node&gt; | grep -A2 nvidia.com/gpu</span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 看插件 Pod 是否 Running 以及重启次数</span></span><br><span class="line">kubectl -n kube-system get pods -o wide | grep device-plugin</span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 看插件日志有没有完成注册</span></span><br><span class="line">kubectl -n kube-system logs &lt;device-plugin-pod&gt; | grep -i register</span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. 节点上看 checkpoint 文件确认分配持久化</span></span><br><span class="line"><span class="built_in">cat</span> /var/lib/kubelet/device-plugins/kubelet_internal_checkpoint</span><br><span class="line"></span><br><span class="line"><span class="comment"># 5. 业务侧看 kubelet 的拒绝事件</span></span><br><span class="line">kubectl describe pod &lt;gpu-pod&gt; | grep -A5 Events</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>两条命令的核实：<strong>checkpoint 文件的路径与文件名完全正确</strong>（<code>/var/lib/kubelet/device-plugins/kubelet_internal_checkpoint</code>，文件名无后缀，目录是 <code>device-plugins</code> 不是 <code>plugins/</code>）；<code>kubectl describe node</code> 会依次输出 <strong><code>Capacity:</code> / <code>Allocatable:</code> / <code>Allocated resources:</code> 三节</strong>，扩展资源在三节里都有，<code>grep -A2</code> 足以命中。</p>
+</blockquote>
+<hr>
+<h2 id="六、一个真实的生产事故：Karpenter-的循环扩容">六、一个真实的生产事故：Karpenter 的循环扩容</h2>
+<p>这条值得单独讲，因为它把上面所有机制串成了一个真实故障。</p>
+<p><strong>issue 是真实存在的</strong>：<code>aws/karpenter-provider-aws#1459</code>，标题 “Race condition with nvidia-device-plugin?”。原文摘录：</p>
+<blockquote>
+<p>Karpenter provisions a new GPU node correctly, however it also immediately schedules the Riva pod on to this new node.</p>
+<p>At this point some sort of timer must start counting down, because <strong>approx 60 seconds later</strong> the Riva pod transitions state to <strong><code>OutOfnvidia.com/gpu</code></strong> and is now stuck.</p>
+<p>This is because the node must start up enough to load the nvidia-device-plugin daemonset (in order to get the <code>nvidia.com/gpu</code> resource added to the node) however this takes longer than 60 seconds usually.</p>
+<p>These stuck pods remain and seem to be blocking the <a target="_blank" rel="noopener" href="http://nvidia.com/gpu">nvidia.com/gpu</a> resource as at this point Karpenter attempts to provision another new node, <strong>leading to a loop which can result in multiple nodes being repeatedly launched over and over again.</strong></p>
+</blockquote>
+<p>实际事件长这样：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Warning  OutOfnvidia.com/gpu  4m52s  kubelet</span><br><span class="line">  Node didn&#x27;t have enough resource: nvidia.com/gpu, requested: 1, used: 0, capacity: 0</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p><strong><code>OutOfnvidia.com/gpu</code> 不是排版错误。</strong> 它是 K8s 源码里拼出来的真实字符串——<code>pkg/kubelet/lifecycle/predicate.go</code>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">InsufficientResourcePrefix = <span class="string">&quot;OutOf&quot;</span></span><br><span class="line">reason = fmt.Sprintf(<span class="string">&quot;%s%s&quot;</span>, InsufficientResourcePrefix, re.ResourceName)</span><br></pre></td></tr></table></figure>
+<p>即 <code>&quot;OutOf&quot; + &quot;nvidia.com/gpu&quot;</code> = <code>OutOfnvidia.com/gpu</code>。它是 Pod 的 <strong>Reason</strong>（同时也是 kubelet event 的 reason），不是 Phase；<code>kubectl get pods</code> 在非正常状态下显示的 STATUS 就是它。</p>
+</blockquote>
+<p><strong>「60 秒」的性质要说准</strong>：它是 issue 作者<strong>观测到的近似耗时</strong>（“approx 60 seconds”、“takes longer than 60 seconds usually”），<strong>不是</strong> kubelet 里某个 60 秒的硬超时——kubelet 侧没有这个定时器。</p>
+<p><strong>根因比「拉镜像慢」更深</strong>：issue 讨论串里最终定位到的是 <strong>Karpenter 把 Pod 预先 bind 到节点</strong>（pre-binding），叠加 <strong>kubelet 启动时把扩展资源清零</strong>。维护者结论是 Karpenter 不应预绑定（PR #1856 移除了预绑定，PR #1476 让新节点先带上 GPU 资源）。<strong>拉镜像慢只是触发这个窗口的诱因之一，不是根因。</strong></p>
+<h3 id="正确解法：把顺序依赖显式化到调度约束里">正确解法：把顺序依赖显式化到调度约束里</h3>
+<blockquote>
+<p>⚠️ <strong>但原稿给的解法里，标签的语义用错了。</strong> 原稿说「等插件成功注册并打上 <strong><code>nvidia.com/gpu.present=true</code></strong> 后才允许业务 Pod 调度进来」——<strong>标签名是对的，语义不对</strong>。</p>
+<p><code>nvidia.com/gpu.present</code> 是**「节点上有没有 GPU」的发现标签**，由 <strong>GPU Operator 的 node-labeling 控制器</strong>打上，<strong>源自 NFD 的 GPU PCI 标签</strong>（<code>feature.node.kubernetes.io/pci-10de.present</code>，<code>10de</code> 是 NVIDIA 的 PCI vendor ID）。也就是说——<strong>GPU 一被探测到就打上了，早于 device plugin 注册成功</strong>。拿它当「插件已注册」的门闩，<strong>逻辑上不等价</strong>。</p>
+<p>补充几个容易混的：</p>
+<ul>
+<li><strong>GFD 不打这个标签</strong>。GFD 打的是 <code>nvidia.com/gpu.count</code> / <code>gpu.product</code> / <code>gpu.memory</code> / <code>gpu.family</code> 等，文档的 “Generated Labels” 表里 grep “present” 零命中。</li>
+<li><strong>device plugin 自己打的是 <code>nvidia.com/vgpu.present</code></strong>（vGPU，不是 GPU）。</li>
+<li>k8s-device-plugin 的 Helm chart 把 <code>nvidia.com/gpu.present</code> 当作<strong>强制部署的 opt-in 标签</strong>用（写在 nodeAffinity 里）。</li>
+<li>反映 device-plugin 部署状态的标签另有其人：<strong><code>nvidia.com/gpu.deploy.device-plugin</code></strong>。</li>
+</ul>
+</blockquote>
+<p><strong>所以正确的解法是</strong>：业务侧用 nodeSelector + toleration 配合一个<strong>真正代表「插件已就绪」的信号</strong>——比如 GPU Operator 的 <code>nvidia.com/gpu.deploy.device-plugin</code>，或者干脆用<strong>你自己的就绪探针/Operator 在插件注册成功后才打的自定义标签</strong>。核心思路不变：<strong>把顺序依赖显式化到调度约束里，而不是抢启动顺序。</strong></p>
+<hr>
+<h2 id="七、一句话收束">七、一句话收束</h2>
+<p>Kubernetes 的设计哲学在这里很清楚：</p>
+<blockquote>
+<p><strong>节点级组件的启动顺序靠 systemd 依赖图（kubelet 之前），Pod 级组件的顺序靠调度屏障 + 容错重试（kubelet 之后），而不是试图让后者插入前者。</strong></p>
+</blockquote>
+<p>理解了这个分层，「怎么保证 X 比 Y 先起」这类问题的答案就自然浮现：<strong>要么把 X 做成静态 Pod 进入 kubelet 之前的层，要么接受 X 晚起、用调度约束把依赖 X 的负载挡在门外。</strong></p>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</a>——姊妹篇：机制、四个根本局限、DRA 演进与三条实战主线</li>
+<li><a href="/2024/09/28/2024-09-28-NVIDIA-device-plugin-for-Kubernetes%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">NVIDIA device plugin for Kubernetes 原理分析</a>——注册服务、ListAndWatch、Allocate 的源码级拆解</li>
+<li><a href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a>——kubelet 与 CRI 的分工</li>
+<li><a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">K8s GPU 复用与 HAMi 异构架构全解</a>——设备插件层做 GPU 切分的实现</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文行为描述逐条核对自 Kubernetes 官方文档（Device Plugins 概念页、Pod Priority、DaemonSet、Static Pods、Node Status）与 <code>kubernetes/kubernetes</code> <code>release-1.34</code> 源码（<code>pkg/kubelet/cm/devicemanager/&#123;manager.go,types.go,endpoint.go,plugin/v1beta1/server.go&#125;</code>、<code>pkg/kubelet/nodestatus/setters.go</code>、<code>pkg/kubelet/lifecycle/predicate.go</code>、<code>pkg/kubelet/cm/admission/errors.go</code>、<code>pkg/kubelet/config/file.go</code>）、NVIDIA k8s-device-plugin 与 GPU Operator 源码、Karpenter issue #1459、Kubernetes issue #60176 / #138446。</p>
+<p><strong>原稿更正汇总</strong>：<strong>插件故障时的 capacity/allocatable 行为搞反了</strong>（宽限期内是 <strong>allocatable→0、capacity 保持 N</strong>；宽限期满才 capacity→0 且<strong>资源保留在 Node 对象中而非移除</strong>）、<strong>DeviceManager 不参与 Node Ready 判定</strong>、<strong>#60176 是 issue 而非 PR</strong>（修复者是 PR #60856，v1.9 及更早是「从 Node 对象整条移除」而非「清零」）、NVIDIA 插件<strong>不监听自己 socket 被删</strong>（只匹配 kubelet.sock 的 Create 事件）且 OS 信号语义要区分（SIGHUP 重注册、SIGINT/TERM/QUIT 退出）、checkpoint 复用<strong>按 Pod UID + 容器名</strong>命中（仅「同 UID 重建」成立）、<strong><code>nvidia.com/gpu.present</code> 是 GPU 存在性发现标签而非「插件已注册」信号</strong>（由 GPU Operator 依 NFD 结果打，早于插件注册）、「60 秒」是观测近似值而非硬超时。<strong>一处核实为正确并保留</strong>：<code>OutOfnvidia.com/gpu</code> 是 K8s 源码拼出的真实字符串，不是排版错误。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/">https://roger-lv.github.io/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E5%AE%B9%E9%94%99/">容错</a><a class="post-meta__tags" href="/tags/DevicePlugin/">DevicePlugin</a><a class="post-meta__tags" href="/tags/GPU%E8%BF%90%E7%BB%B4/">GPU运维</a><a class="post-meta__tags" href="/tags/kubelet/">kubelet</a><a class="post-meta__tags" href="/tags/%E5%90%AF%E5%8A%A8%E9%A1%BA%E5%BA%8F/">启动顺序</a><a class="post-meta__tags" href="/tags/Karpenter/">Karpenter</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/05/2026-11-05-Linux%E5%86%85%E6%A0%B8IO%E8%B7%AF%E5%BE%84%E7%9C%9F%E7%9B%B8PageCache-mmap%E9%9B%B6%E6%8B%B7%E8%B4%9D%E4%B8%8EGPUDirect-Storage%E7%9B%B4%E9%80%9A/" title="Linux 内核 I/O 路径真相：Page Cache、mmap 零拷贝与 GPUDirect Storage 直通"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Linux 内核 I/O 路径真相：Page Cache、mmap 零拷贝与 GPUDirect Storage 直通</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：存储到计算的 I/O 路径走过四个阶段——从 read() 的 Page Cache 三次拷贝，到 Direct I/O + io_uring 绕缓存直传，再到 mmap 的按需缺页加载，最终由 GPUDirect Storage 把 NVMe 与 GPU HBM 之间压成一次 PCIe 直接 DMA。 每一代演进都在回答同一个问题：能不能少一次拷贝、少一次陷入、少一跳物理路径？ 核心驱动是让数据在物理上离计算单元越来越近、离 CPU 这个「搬运工」越来越远。  本文的内核路径描述逐条核对自 Linux 内核源码（torvalds/linux master）与 NVMe Base Spec 2.0d；GDS 部分核对自 NVIDIA 官方文档。核对中发现原稿有十余处需要更正，其中四处是事实错误、一段叙述查无实据，已在文中以 ⚠️ 标注。  一、Page Cache：Linux 缓冲 I/O 的物理真相 Page Cache 是内核对磁盘文件的内存级缓存，目的是弥合存储介质与 DRAM 之间的延迟差距——DRAM 命中约 100 ns，HDD 随机寻道约 10 ms，...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%B8%87%E5%8D%A1GPU%E9%9B%86%E7%BE%A4%E8%BF%90%E7%BB%B4%E7%9B%91%E6%8E%A7%E5%9B%9B%E5%B9%B3%E9%9D%A2%E6%95%85%E9%9A%9C%E4%BA%94%E5%88%86%E7%B1%BB%E4%B8%8E%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7/" title="万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：把 RoCEv2 网络配成无损只是让集群「能跑起来」，真正吃掉算力的在后面——几万张卡在几个月里不停地出故障、掉速、Hang 住，而你要在没有用户配合、看不到业务代码的情况下，判断这一次的锅是硬件、是网络还是调度。 这篇给一套可执行的方法：四个监控平面分工排查、五类故障定性定位、RoCE 三种典型病的判据、三板斧的调优顺序，最后落一份巡检清单。  开场先看一个真实场景。 某集群上一个 2048 卡预训练任务，MFU 长期在 38% 上下波动。团队查了两周网络：PFC 计数正常、ECN 标记率正常、交换机上零丢包、ib_write_bw 端到端带宽也达标。 最后在 DCGM 的 SM Clock 指标上发现问题——256 台机器里有一台的 8 张卡，SM 时钟长期跑在 1.1GHz，其他机器都是 1.9GHz。这台机器是慢节点，它在每一个 AllReduce 里拖后腿，整条 ring 都要等它。换掉之后 MFU 回到 45%，而且不再波动。 这类问题在交换机上永远查不到，因为网络侧所有计数都是干净的。  边界说明：文中命令以 NVIDIA DCGM 与 nvidia-...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/09/03/2026-09-03-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AE%B9%E9%94%99%E8%AE%AD%E7%BB%83%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%BB%8E%E6%9E%B6%E6%9E%84%E5%88%B0%E5%BD%A2%E5%BC%8F%E5%8C%96%E9%AA%8C%E8%AF%81/" title="大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证</div></div><div class="info-2"><div class="info-item-1">大模型容错训练系统设计:从故障检测、原地恢复到 TLA+ 形式化验证  本文基于一个真实落地的容错训练系统(下称 Aegis)的设计文档与源码整理,隐去了公司与内部组件信息,聚焦技术方案本身。  大模型训练的稳定性问题,是所有大规模训练团队的共同痛点。本文拆解 Aegis 的完整设计:为什么在调度平台层做容错、gRPC+NATS 双通道怎么配合、Master-Worker 状态机怎么流转、容错计数怎么算、故障节点怎么隔离,以及最有意思的一环——用 TLA+ 形式化验证状态机的安全性。  关联阅读:训练侧并行与通信见 图解 Megatron 的 SP/CP/EP、分布式训练核心技术:从 FSDP 到 All-Reduce。容错是这些训练技术之下的&quot;稳定性底座&quot;。   一、为什么需要专门的容错系统:三大痛点 1.1 训练频繁中断是常态 大模型分布式训练几乎都是同步方式(DDP/MPI):所有进程共同构建一个通信拓扑,任何一个进程出错,其他进程都会相继退出。而训练任务动辄跨数百个 GPU 节点,数小时到数天内大概率出各种问题:  OPT 175B 训练的 LogBo...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/" title="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：Device Plugin 的本质，是把「让 Kubernetes 认识一种新硬件」这件事，从改内核代码降维成了写一个 gRPC 服务。而它的边界与局限——只能表达整数、调度决策黑盒、无拓扑感知、无故障协同——恰好勾勒出了大模型时代算力调度的完整问题域。 今天做 AI Infra，大概率不会从零写一个 device plugin，但一定会在这套机制的边界上做选型：训练集群选 Volcano 还是 KAI、推理集群选 HAMi 还是 MIG、要不要切 DRA、边缘具身用 KubeEdge 还是裸 K8s。  本文的机制描述逐条核对自 Kubernetes 官方文档与 proto 源码、NVIDIA/昇腾/HAMi/KubeEdge 各项目仓库。核对中发现原稿有十余处需要更正，其中两处是硬伤，已在文中以 ⚠️ 标注。  一、设计动机：为什么要有 Device Plugin Kubernetes 原生只认识 CPU、内存和本地存储。让每一种硬件的枚举、健康检查、分配逻辑都进 kubelet 主干，在工程上是不可持续的——每出一个新硬件就要改一次核心代码。 设计提案里说得很...</div></div></div></a><a class="pagination-related" href="/2026/08/10/2026-08-10-OpenSandbox%E9%A1%B9%E7%9B%AE%E5%AD%A6%E4%B9%A0/" title="OpenSandbox 项目学习"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-10</div><div class="info-item-2">OpenSandbox 项目学习</div></div><div class="info-2"><div class="info-item-1">OpenSandbox 项目学习 项目地址：https://github.com/opensandbox-group/OpenSandbox 官方文档：https://open-sandbox.ai 一、它是什么 一句话：OpenSandbox 是面向 AI 应用的通用沙箱平台（general-purpose sandbox platform），提供多语言 SDK、统一的沙箱协议，以及 Docker / Kubernetes 两套运行时，覆盖 Coding Agent、GUI Agent、Agent 评测、AI 代码执行、RL 训练等场景。 为什么需要它？如今 Agent（尤其 Coding Agent、代码解释器、浏览器自动化、RL 训练）需要在隔离环境里跑不可信代码、装第三方依赖、访问网络、长出进程，甚至要批量起几万实例。直接在宿主机上跑既不安全也不可规模化。OpenSandbox 把「隔离 + 可编程 + 可调度」这三件事标准化了：  隔离：容器级隔离，并可选 gVisor / Kata / Firecracker microVM 强化；网络出入站可策略化。 可编程：统一的...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">一个 MCP 沙箱路由调度框架的架构分析</div></div><div class="info-2"><div class="info-item-1">一个 MCP 沙箱路由调度框架的架构分析 本文分析一个用 Go 实现、面向 MCP(Model Context Protocol)的沙箱路由与调度框架。它把&quot;给 agent 起一个隔离环境跑工具&quot;这件事标准化、规模化、多引擎化。 一、它是什么 一句话:一个面向 MCP 的沙箱路由与调度框架,用 Go 写成,直接基于官方 modelcontextprotocol/go-sdk,把沙箱的创建、路由、调度、生命周期、计量都做成了一套基础设施。 它跟&quot;控制面 Python + 数据面 Go、协议优先的通用沙箱平台&quot;是两种不同路线:本框架全 Go、MCP 原生(直接用官方 SDK),更强调调度(快照+Epoch 的确定性调度)和路由(二层网络高可用网格)。它的&quot;沙箱&quot;抽象本质是一个 http.RoundTripper——工具调用就是 HTTP,没有单独的执行协议。 核心能力:  沙箱路由:按沙箱类型分发、MCP 会话生命周期管理、按下游负载动态调整、二层网络高可用。 沙箱引擎:Echo / FileServer / Git / P...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">307</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">482</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E9%A1%BA%E5%BA%8F%E4%B8%8D%E8%83%BD%E5%8F%8D"><span class="toc-number">1.</span> <span class="toc-text">一、为什么顺序不能反</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E8%8A%82%E7%82%B9%E5%86%B7%E5%90%AF%E5%8A%A8%E7%9A%84%E5%AE%8C%E6%95%B4%E6%97%B6%E5%BA%8F"><span class="toc-number">2.</span> <span class="toc-text">二、节点冷启动的完整时序</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81kubelet-%E5%A6%82%E4%BD%95%E5%AE%B9%E5%BF%8D%E6%8F%92%E4%BB%B6%E7%9F%AD%E6%9A%82%E7%BC%BA%E5%B8%AD"><span class="toc-number">3.</span> <span class="toc-text">三、kubelet 如何容忍插件短暂缺席</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-kubelet-%E8%87%AA%E8%BA%AB%E9%87%8D%E5%90%AF%EF%BC%88%E8%8A%82%E7%82%B9%E4%B8%8D%E9%87%8D%E5%90%AF%EF%BC%89"><span class="toc-number">3.1.</span> <span class="toc-text">3.1 kubelet 自身重启（节点不重启）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E6%8F%92%E4%BB%B6-Pod-%E9%87%8D%E5%90%AF%EF%BC%88kubelet-%E4%B8%8D%E5%8A%A8%EF%BC%89%E2%80%94%E2%80%94-5-%E5%88%86%E9%92%9F%E5%AE%BD%E9%99%90%E6%9C%9F"><span class="toc-number">3.2.</span> <span class="toc-text">3.2 插件 Pod 重启（kubelet 不动）—— 5 分钟宽限期</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E8%8A%82%E7%82%B9%E6%95%B4%E4%BD%93%E5%86%B7%E5%90%AF%E5%8A%A8"><span class="toc-number">3.3.</span> <span class="toc-text">3.3 节点整体冷启动</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%A4%E7%B1%BB%E6%9C%8D%E5%8A%A1%E7%9A%84%E5%90%AF%E5%8A%A8%E4%BF%9D%E9%9A%9C%E5%AF%B9%E6%AF%94"><span class="toc-number">4.</span> <span class="toc-text">四、两类服务的启动保障对比</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E4%B8%A4%E4%B8%AA%E5%B8%B8%E8%A7%81%E8%AF%AF%E5%8C%BA%E4%B8%8E%E6%8E%92%E6%9F%A5"><span class="toc-number">5.</span> <span class="toc-text">五、两个常见误区与排查</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%B8%80%EF%BC%9A%E7%BB%99-device-plugin-%E5%8A%A0-initContainer-%E6%88%96-priorityClassName-%E5%B0%B1%E8%83%BD%E4%BF%9D%E8%AF%81%E5%85%88%E8%B5%B7"><span class="toc-number">5.1.</span> <span class="toc-text">误区一：给 device plugin 加 initContainer 或 priorityClassName 就能保证先起</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%BA%8C%EF%BC%9A%E8%8A%82%E7%82%B9-Ready-%E4%BA%86-GPU-%E5%B0%B1%E8%83%BD%E7%94%A8"><span class="toc-number">5.2.</span> <span class="toc-text">误区二：节点 Ready 了 GPU 就能用</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E4%B8%80%E4%B8%AA%E7%9C%9F%E5%AE%9E%E7%9A%84%E7%94%9F%E4%BA%A7%E4%BA%8B%E6%95%85%EF%BC%9AKarpenter-%E7%9A%84%E5%BE%AA%E7%8E%AF%E6%89%A9%E5%AE%B9"><span class="toc-number">6.</span> <span class="toc-text">六、一个真实的生产事故：Karpenter 的循环扩容</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%AD%A3%E7%A1%AE%E8%A7%A3%E6%B3%95%EF%BC%9A%E6%8A%8A%E9%A1%BA%E5%BA%8F%E4%BE%9D%E8%B5%96%E6%98%BE%E5%BC%8F%E5%8C%96%E5%88%B0%E8%B0%83%E5%BA%A6%E7%BA%A6%E6%9D%9F%E9%87%8C"><span class="toc-number">6.1.</span> <span class="toc-text">正确解法：把顺序依赖显式化到调度约束里</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E4%B8%80%E5%8F%A5%E8%AF%9D%E6%94%B6%E6%9D%9F"><span class="toc-number">7.</span> <span class="toc-text">七、一句话收束</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/" title="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%B8%87%E5%8D%A1GPU%E9%9B%86%E7%BE%A4%E8%BF%90%E7%BB%B4%E7%9B%91%E6%8E%A7%E5%9B%9B%E5%B9%B3%E9%9D%A2%E6%95%85%E9%9A%9C%E4%BA%94%E5%88%86%E7%B1%BB%E4%B8%8E%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7/" title="万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧">万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

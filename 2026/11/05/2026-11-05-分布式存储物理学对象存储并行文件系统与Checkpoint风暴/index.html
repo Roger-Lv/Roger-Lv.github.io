@@ -1,0 +1,1022 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="对象存储以「扁平命名空间 + HTTP REST + 最终一致性」换取近乎无限的扩展与极低的单位成本，POSIX 并行文件系统以「元数据&#x2F;数据分离 + 细粒度锁」换取微秒级延迟与聚合 TB&#x2F;s 带宽——这两套物理规律的碰撞，在大模型训练数百台机器同时写入 500GB Checkpoint 的瞬间被推向极限。附万卡集群把保存开销压进 1% 的异步设计。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/05/2026-11-05-%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8%E7%89%A9%E7%90%86%E5%AD%A6%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%8ECheckpoint%E9%A3%8E%E6%9A%B4/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="对象存储以「扁平命名空间 + HTTP REST + 最终一致性」换取近乎无限的扩展与极低的单位成本，POSIX 并行文件系统以「元数据&#x2F;数据分离 + 细粒度锁」换取微秒级延迟与聚合 TB&#x2F;s 带宽——这两套物理规律的碰撞，在大模型训练数百台机器同时写入 500GB Checkpoint 的瞬间被推向极限。附万卡集群把保存开销压进 1% 的异步设计。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-04T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-05T09:41:12.404Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="JuiceFS">
+<meta property="article:tag" content="对象存储">
+<meta property="article:tag" content="分布式存储">
+<meta property="article:tag" content="Lustre">
+<meta property="article:tag" content="GPFS">
+<meta property="article:tag" content="CephFS">
+<meta property="article:tag" content="Checkpoint">
+<meta property="article:tag" content="异步保存">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴",
+  "url": "https://roger-lv.github.io/2026/11/05/2026-11-05-%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8%E7%89%A9%E7%90%86%E5%AD%A6%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%8ECheckpoint%E9%A3%8E%E6%9A%B4/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-04T16:00:00.000Z",
+  "dateModified": "2026-11-05T09:41:12.404Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8%E7%89%A9%E7%90%86%E5%AD%A6%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%8ECheckpoint%E9%A3%8E%E6%9A%B4/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">307</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">482</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-05T09:41:12.404Z" title="更新于 2026-11-05 17:41:12">2026-11-05</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/05/2026-11-05-%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8%E7%89%A9%E7%90%86%E5%AD%A6%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%8ECheckpoint%E9%A3%8E%E6%9A%B4/" data-flag-title="分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：对象存储（S3/OSS）以「扁平命名空间 + HTTP REST + 最终一致性」换取近乎无限的水平扩展与极低的单位容量成本；POSIX 并行文件系统（Lustre/GPFS/CephFS/JuiceFS）以「共享存储集群 + 元数据/数据分离 + 细粒度锁」换取微秒级延迟与聚合 TB/s 带宽。</p>
+<p><strong>这两套物理规律的碰撞，在大模型训练数百台机器同时写入 500GB Checkpoint 的瞬间被推向极限。</strong></p>
+</blockquote>
+<p>本文分两部分：<strong>上半场讲存储范式</strong>（对象存储原理 → 四类并行文件系统架构对比 → Checkpoint 风暴的成因与缓解），<strong>下半场落到工程</strong>（万卡集群如何设计异步保存，把对训练的影响压进 1%）。</p>
+<p>所有架构描述核对自各系统官方文档与原始论文，性能数字核对自一手来源。<strong>核对中发现原稿有二十余处需要更正，其中两处是整段数字错误</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h1>上半场：三种存储范式的物理学</h1>
+<h2 id="一、对象存储：HTTP-语义构建的「无限货架」">一、对象存储：HTTP 语义构建的「无限货架」</h2>
+<h3 id="1-1-扁平命名空间与-REST-接口">1.1 扁平命名空间与 REST 接口</h3>
+<p>与文件系统「目录树 + inode」的层次化模型不同，对象存储把整个存储池抽象为 <strong><code>Bucket + Object Key</code> 两级扁平结构</strong>：Bucket 是顶层容器，Object Key 是一个任意长度的字符串，<strong>整个系统没有「目录」概念</strong>——所谓「目录」只是 key 前缀的约定俗成。</p>
+<p>所有操作通过 HTTP REST 接口完成，以 AWS S3 为事实标准：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>API</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>写入对象</td>
+<td><code>PUT /bucket/key</code></td>
+</tr>
+<tr>
+<td>读取对象</td>
+<td><code>GET /bucket/key</code></td>
+</tr>
+<tr>
+<td>删除对象</td>
+<td><code>DELETE /bucket/key</code></td>
+</tr>
+<tr>
+<td>前缀列举</td>
+<td><code>GET /bucket?list-type=2&amp;prefix=xxx</code></td>
+</tr>
+</tbody>
+</table>
+<p>鉴权通过 HTTP Header 的 <code>Authorization</code> 签名实现——<strong>SigV4 用 AWS4-HMAC-SHA256</strong>，即 HMAC-SHA256 派生签名密钥。</p>
+<p>这种「每次操作都是一次完整 HTTP 往返」的设计，天然带来<strong>每次请求至少一次 TCP/TLS 握手、一次 HTTP 编解码、一次服务端路由</strong>的开销——<strong>这是对象存储高延迟的根本来源</strong>。</p>
+<h3 id="1-2-Multipart-Upload：用并发换吞吐">1.2 Multipart Upload：用并发换吞吐</h3>
+<p>由于单次 PUT 有上限、且大对象传输极易中途失败，S3 用 <strong>Multipart Upload</strong> 支撑超大对象：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>限制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单个对象最大</td>
+<td><strong>50 TB（实际上限 48.8 TiB）</strong></td>
+</tr>
+<tr>
+<td>Parts 数量</td>
+<td>1 — 10,000</td>
+</tr>
+<tr>
+<td>单个 Part 大小</td>
+<td>5 MiB — 5 GiB（最后一个 Part 可更小）</td>
+</tr>
+<tr>
+<td>单次 PUT 上限</td>
+<td>5 GB</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>一处已过时</strong>：原稿写「单个对象最大 <strong>5 TB</strong>」。<strong>这是旧值</strong>——AWS 官方 FAQ 现在写的是 <strong>Maximum object size 48.8 TiB</strong>，并说明「documentation commonly references 50 TB object size limit, the actual maximum object size is 53.7 TB (48.8 TiB)」，由 multipart 约束推出（10,000 parts × 5 GiB）。</p>
+</blockquote>
+<p>工作流程三步：</p>
+<ol>
+<li><strong>Initiate</strong> —— <code>CreateMultipartUpload</code>（<code>POST /key?uploads</code>），服务端返回 <code>uploadId</code>；</li>
+<li><strong>Upload Parts</strong> —— 客户端把大文件切成 N 个 Part，<strong>并发地</strong> <code>PUT /key?partNumber=i&amp;uploadId=xxx</code>；Part 之间完全独立、可乱序、可失败重传；</li>
+<li><strong>Complete</strong> —— <code>POST /key?uploadId=xxx</code>，携带 <code>&lt;PartNumber, ETag&gt;</code> 列表，服务端按序拼接。</li>
+</ol>
+<p>关键在于 <strong>Parts 彼此独立，可被路由到不同存储服务器并行写入</strong>——尽管单个 HTTP 请求延迟数十毫秒，但把大对象切成几十甚至上千个 Part 并行上传，聚合吞吐可以线性扩展至网络带宽上限。</p>
+<p><strong>这正是对象存储「高延迟但高吞吐」悖论的技术根源：它不擅长低延迟，但极度擅长并行。</strong></p>
+<p>未完成或未 Abort 的 Multipart Upload 会在 S3 中留下「僵尸 Parts」，持续占用存储并计费——AWS 官方原文：</p>
+<blockquote>
+<p>After you initiate a multipart upload and upload one or more parts, you must either complete or stop the multipart upload to <strong>stop incurring charges for storage of the uploaded parts</strong>.</p>
+</blockquote>
+<p>生产系统通常配合生命周期规则自动清理。</p>
+<h3 id="1-3-高延迟劣势与语义缺失">1.3 高延迟劣势与语义缺失</h3>
+<table>
+<thead>
+<tr>
+<th>存储</th>
+<th>延迟量级</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>JuiceFS 命中本地缓存</td>
+<td><strong>0.05 — 0.1 ms</strong></td>
+</tr>
+<tr>
+<td>JuiceFS 命中分布式缓存（企业版）</td>
+<td><strong>0.1 — 0.2 ms</strong></td>
+</tr>
+<tr>
+<td>JuiceFS 穿透到对象存储</td>
+<td><strong>30 — 50 ms 以上</strong></td>
+</tr>
+<tr>
+<td>对象存储 TTFB</td>
+<td>数十毫秒量级</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>✅ <strong>前三行逐字来自 JuiceFS 官方博客</strong>（“When hitting the local cache, latency is between 0.05 and 0.1 milliseconds” / “ranges from 0.1 to 0.2 milliseconds” / “Directly reading from object storage incurs latency above 30 to 50 milliseconds”）。</p>
+<p>⚠️ <strong>但另外两个数字找不到一手来源</strong>：原稿写「对象存储 TTFB 通常 <strong>20—100 毫秒</strong>」「本地 NVMe 随机读延迟 <strong>~100µs</strong>」「Lustre/GPFS 在 RDMA/InfiniBand 加持下<strong>亚毫秒级</strong>」——这三条我在 AWS 官方文档、NVMe 厂商文档、Lustre 官方手册里都<strong>没找到可引用的基准</strong>。方向可信，但引用时宜标为量级参考而非规格。</p>
+</blockquote>
+<p><strong>对象存储不支持 POSIX 语义</strong>：没有 <code>mmap</code>、没有 <code>fsync</code>、没有文件锁、没有 append（需重写整个对象）、没有原子 rename，元数据（通过 HTTP Header 携带）也非常有限。</p>
+<p>因此对象存储天然<strong>不适合海量小文件随机读</strong>——一次百万级小文件遍历会被每次数十毫秒的 HTTP 延迟拖垮；但它<strong>极适合大对象的顺序吞吐</strong>。</p>
+<blockquote>
+<p><strong>一句话</strong>：对象存储的物理学是「<strong>用延迟换扩展性、用 HTTP 换运维简单性</strong>」——单次访问永远不快，但并发可以无限加。</p>
+</blockquote>
+<hr>
+<h2 id="二、POSIX-并行文件系统：为共享与一致性而生">二、POSIX 并行文件系统：为共享与一致性而生</h2>
+<p>当上百台计算节点需要<strong>同时</strong>读写同一份数据、且要求 POSIX 语义时，就必须引入并行文件系统。核心物理问题只有一个：<strong>如何让多台机器在共享命名空间下不互相踩踏</strong>。</p>
+<h3 id="2-1-Lustre：HPC-超算的事实标准">2.1 Lustre：HPC 超算的事实标准</h3>
+<p>Lustre 的架构由四类组件构成：</p>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MGS</strong>（Management Server）</td>
+<td>存储整个文件系统的配置信息（OST 列表、网络拓扑），是集群的「配置中心」</td>
+</tr>
+<tr>
+<td><strong>MDS</strong>（Metadata Server）</td>
+<td>namespace 操作（open/close/stat/rename），维护 inode 与目录结构</td>
+</tr>
+<tr>
+<td><strong>OSS</strong>（Object Storage Server）</td>
+<td>数据服务器，每台管理多个 <strong>OST</strong>（Object Storage Target），一个 OST 对应一组后端磁盘</td>
+</tr>
+<tr>
+<td><strong>Client + LNet</strong></td>
+<td>计算节点内核客户端，通过 LNet 网络层（IB/RoCE/TCP）与 MDS/OSS 通信</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键设计是「元数据与数据分离」</strong>：所有 namespace 操作走 MDS，而文件数据 I/O 由 Client <strong>直接</strong>与多个 OSS 上的 OST 交互，绕过任何中心瓶颈。文件写入时被<strong>条带化（striping）</strong> 切分到多个 OST，客户端并行读写，<strong>聚合带宽随 OST 数量线性扩展</strong>。</p>
+<blockquote>
+<p>✅ <strong>一处细节原稿写对了</strong>：MGS 是独立逻辑组件，但<strong>通常与 MDS 同机部署</strong>。Lustre 官方手册原文：「It is preferable that the MGS have its own storage space… However, the MGS <strong>can be co-located and share storage space with an MDS</strong>」。</p>
+</blockquote>
+<p><strong>物理限制</strong>：元数据全部落在磁盘、依赖内存缓存加速，文件数超过数亿时 MDS 内存与单点性能成为瓶颈；<strong>小文件 I/O 是它的弱项</strong>。</p>
+<h3 id="2-2-GPFS（IBM-Spectrum-Scale）：商用的「全能选手」">2.2 GPFS（IBM Spectrum Scale）：商用的「全能选手」</h3>
+<ul>
+<li>
+<p><strong>Token-based 分布式锁管理器</strong> —— GPFS 不依赖中心锁服务器，持有 token 的节点可在本地缓存执行锁操作，<strong>只有冲突时才升级到全局协商</strong>。FAST 2002 论文原文：</p>
+<blockquote>
+<p>The global lock manager coordinates locks between local lock managers by handing out lock tokens… Once a node has obtained the token from the global lock manager, <strong>subsequent operations issued on the same node can acquire a lock on the same object without requiring additional messages</strong>. Only when an operation on another node requires a conflicting lock on the same object are additional messages necessary to revoke the lock token.</p>
+</blockquote>
+<p>这种设计在「不同节点访问不同数据」时并行度极高，但在「大量节点竞争同一批元数据」时反而不如集中式管理。</p>
+</li>
+<li>
+<p><strong>NSD（Network Shared Disk）</strong> —— 所有磁盘被抽象为 NSD，可被多台节点通过 SAN 直接访问（Shared-Disk 模式）。</p>
+</li>
+<li>
+<p><strong>文件系统层复制</strong> —— 支持在文件系统层面做数据多副本，<strong>allowable values 1/2/3，默认 1</strong>；max replicas 默认 2。即使一台服务器宕机，文件系统仍可继续服务。</p>
+</li>
+<li>
+<p><strong>存储池（Storage Pools）</strong> —— 可将不同性能/成本的磁盘划分为不同 pool，配合策略实现冷热分层。</p>
+</li>
+</ul>
+<h3 id="2-3-CephFS：统一存储栈的「瑞士军刀」">2.3 CephFS：统一存储栈的「瑞士军刀」</h3>
+<p>Ceph 在 <strong>RADOS</strong> 这一分布式对象存储基座之上，同时提供 <strong>RGW（S3 兼容）、RBD（块设备）和 CephFS（POSIX 文件系统）</strong> 三种接口。</p>
+<ul>
+<li>
+<p><strong>数据直接读写 RADOS</strong> —— 官方原文：</p>
+<blockquote>
+<p>CRUSH allows Ceph clients to <strong>communicate with OSDs directly rather than through a centralized server or broker</strong>.</p>
+<p>All file data in CephFS is stored as RADOS objects. CephFS clients can directly access RADOS to operate on file data. <strong>MDS only handles metadata operations.</strong></p>
+</blockquote>
+</li>
+<li>
+<p><strong>MDS 集群管理元数据</strong> —— 元数据存储在<strong>独立的 RADOS Pool</strong>（<code>ceph fs new &lt;name&gt; &lt;metadata pool&gt; &lt;data pool&gt;</code>），使用 <strong>OMAP</strong> 结构（官方文档：“Open file table is stored in <strong>omap</strong> of RADOS objects”），由可动态扩缩的 MDS 集群提供服务。</p>
+</li>
+<li>
+<p><strong>强一致 + 可调副本/EC</strong> —— 通过多副本或纠删码保证可靠性，CRUSH 保证数据分布均匀与故障域隔离。</p>
+</li>
+</ul>
+<p><strong>物理劣势</strong>：所有 I/O 都要经过 RADOS 的 PG 协商，小文件延迟高于 Lustre；元数据性能在超大规模时仍受制于 MDS 集群规模。</p>
+<h3 id="2-4-JuiceFS：云原生时代的「元数据-数据解耦」">2.4 JuiceFS：云原生时代的「元数据/数据解耦」</h3>
+<p>JuiceFS 走了一条与前述系统截然不同的路线——<strong>把「元数据引擎」与「数据存储」彻底解耦</strong>：</p>
+<ul>
+<li>
+<p><strong>数据层</strong> —— 全部持久化在<strong>对象存储</strong>上，文件切分为 <strong>Chunk（默认 64 MiB）→ Slice（变长）→ Block（默认 4 MiB）</strong> 三级结构。官方原文：</p>
+<blockquote>
+<p>each file is composed of one or more chunks. Each chunk has a maximum size of <strong>64 MB</strong>… slices are further split into individual blocks (<strong>default maximum size of 4 MB</strong>) to enable multi-threaded concurrent writes</p>
+</blockquote>
+</li>
+<li>
+<p><strong>元数据层</strong> —— 由独立的元数据引擎承载。社区版支持 <strong>Redis、TiKV、Badger（KV 类）与 SQLite、MySQL、PostgreSQL（关系类）</strong>，另有 etcd；企业版使用<strong>自研全内存元数据引擎</strong>：</p>
+<blockquote>
+<p>JuiceFS Enterprise Edition provides a <strong>custom-built, fully in-memory metadata engine that ensures an average metadata request processing time of around 100 microseconds</strong>, even when managing massive file counts.</p>
+<p>support <strong>hundreds of billions of files in a single volume</strong></p>
+</blockquote>
+</li>
+<li>
+<p><strong>客户端</strong> —— FUSE 挂载，完整 POSIX 兼容；通过<strong>多级缓存</strong>弥补对象存储的高延迟。</p>
+</li>
+<li>
+<p><strong>云原生</strong> —— 原生 CSI Driver 支持，支持跨云/多区域镜像文件系统。</p>
+</li>
+</ul>
+<blockquote>
+<p>注意一个措辞差异：JuiceFS <strong>官网简介页</strong>写的是保守的 “millisecond-level metadata latency”，而<strong>官方博客</strong>明确给出 100 µs。引用时宜注明出处。</p>
+</blockquote>
+<blockquote>
+<p>JuiceFS 的完整架构（三平面分离、多级缓存体系、K8s 挂载模式、Checkpoint 落地纪律）见 <a href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/">具身智能训练存储与数据管线：JuiceFS + Lance 深度实践</a>。</p>
+</blockquote>
+<h3 id="2-5-四类并行文件系统横向对比">2.5 四类并行文件系统横向对比</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Lustre</th>
+<th>GPFS (Spectrum Scale)</th>
+<th>CephFS</th>
+<th>JuiceFS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>开源/商业</strong></td>
+<td>开源（GPL）</td>
+<td>商业（IBM）</td>
+<td>开源（LGPL）</td>
+<td>社区版开源 / 企业版商业</td>
+</tr>
+<tr>
+<td><strong>元数据架构</strong></td>
+<td>独立 MDS（active/standby），磁盘存储</td>
+<td>分布式 Token 锁，NSD 共享磁盘</td>
+<td>可扩缩 MDS 集群，元数据存于 RADOS Pool</td>
+<td>独立元数据引擎（Redis/TiKV/自研内存引擎）</td>
+</tr>
+<tr>
+<td><strong>数据存储</strong></td>
+<td>OST（XFS 后端）</td>
+<td>NSD（多种磁盘）</td>
+<td>RADOS（副本/EC）</td>
+<td><strong>对象存储</strong>（S3/OSS/GCS…）</td>
+</tr>
+<tr>
+<td><strong>一致性模型</strong></td>
+<td>强一致（POSIX）</td>
+<td>Token 锁强一致</td>
+<td>强一致（RADOS）</td>
+<td>强一致（元数据事务）</td>
+</tr>
+<tr>
+<td><strong>海量小文件</strong></td>
+<td>弱（MDS 内存瓶颈）</td>
+<td>中等</td>
+<td>中等</td>
+<td><strong>强</strong>（百亿文件）</td>
+</tr>
+<tr>
+<td><strong>跨云/多云</strong></td>
+<td>无原生支持</td>
+<td>无原生支持</td>
+<td>无原生支持</td>
+<td><strong>原生镜像文件系统</strong></td>
+</tr>
+<tr>
+<td><strong>云原生/K8s</strong></td>
+<td>弱</td>
+<td>弱</td>
+<td>中等</td>
+<td><strong>CSI Driver 原生支持</strong></td>
+</tr>
+<tr>
+<td><strong>典型场景</strong></td>
+<td>HPC 超算、LLM 训练热层</td>
+<td>科研 + 企业关键业务、AI</td>
+<td>统一存储栈（对象+块+文件）</td>
+<td>云原生 AI、数据湖、跨云训练</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="三、Checkpoint-存储风暴">三、Checkpoint 存储风暴</h2>
+<h3 id="3-1-风暴的物理成因">3.1 风暴的物理成因</h3>
+<p>Checkpoint 的写入模式是<strong>所有存储系统最噩梦般的组合</strong>：</p>
+<ul>
+<li><strong>体量巨大</strong> —— 一个 350—500 GB 的 Checkpoint，约为模型参数量的数倍；</li>
+<li><strong>瞬间爆发</strong> —— 数百台机器上的<strong>数千个进程几乎在同一秒开始写入</strong>，每个进程写一个独立分片文件（DeepSpeed/Megatron 默认 per-rank 一文件），<strong>单次 Checkpoint 可产生数百到数千个独立文件</strong>；</li>
+<li><strong>元数据风暴</strong> —— 数万文件的创建、打开、关闭、rename 让 MDS/元数据引擎瞬间过载；</li>
+<li><strong>POSIX 缓存放大</strong> —— 默认 buffered I/O 会在计算节点 DRAM 与文件系统缓存之间引入冗余拷贝。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>两处数字要改</strong>：</p>
+<p><strong>第一处（口径明显偏低）</strong>：原稿写「175B 模型 FP16 权重约 350 GB，<strong>加上 Adam 优化器状态可达 1TB+</strong>」。按 ZeRO 论文的标准口径，<strong>混合精度 + Adam 是 16 bytes/参数</strong>（fp16 参数 2 + fp16 梯度 2 + fp32 master weight 4 + 动量 m 4 + 方差 v 4），所以 <strong>175B × 16 = 约 2.8 TB</strong>——原稿的「1TB+」<strong>明显低估</strong>。ZeRO 论文原文：</p>
+<blockquote>
+<p>Mixed-precision Adam has <strong>K = 12</strong>. In total, this results in 2Ψ + 2Ψ + KΨ = <strong>16Ψ bytes</strong> of memory requirement.<br>
+training a 1 trillion parameter model with mixed precision requires approximately <strong>16 terabytes</strong> (TB) of memory</p>
+</blockquote>
+<p><strong>第二处（无一手来源）</strong>：原稿写「研究表明，<strong>元数据相关操作占文件系统总操作的 60% 以上</strong>」。找不到逐字写 “&gt;60%” 的一手来源。文献里的实际数字是**「最高 80%」<strong>（综述）与</strong>「实测 67%—96%」**（EuroSys’23 的 CFS 论文，转引自 SwitchFS）——方向对，但引用宜用后两个。</p>
+</blockquote>
+<p><strong>物理后果</strong>：当数百台机器同时向同一共享存储倾泻 500 GB 数据时，后端的元数据服务器、网络交换、磁盘带宽会在某一瞬间被打满，形成「<strong>存储 I/O 泥潭</strong>」——<strong>如果存储无法在 5 分钟内吸收完这次写入，训练就会被迫暂停，数千张 H100 集体空转</strong>。</p>
+<h3 id="3-2-风暴的量化画像">3.2 风暴的量化画像</h3>
+<p><strong>VAST Data</strong> 的官方博客对生产集群做了一次量化分析：</p>
+<blockquote>
+<p>We surveyed <strong>40 large (i.e., more than 1,024-GPU) production training runs</strong>, covering <strong>more than 85,000 checkpoints across 18 clusters</strong> at AI cloud providers.</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>三处口径要改</strong>：原稿写「对 <strong>40 个千卡级训练集群、85,000 个 Checkpoint</strong> 的分析」——实际是 <strong>40 个训练 run</strong>（不是 40 个集群），集群数是 <strong>18</strong>，checkpoint 数是 “<strong>more than 85,000</strong>”。原稿另一处写的「<strong>85,619</strong>」这个精确数字<strong>在原文里根本不存在</strong>（页面上的 “85.614” 之类是 SVG 路径坐标）。</p>
+</blockquote>
+<p>这份分析给出的关键结论：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>数值</th>
+<th>官方原文</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Checkpoint 重叠率</strong></td>
+<td><strong>几乎每个 run 的中位数都 &lt;10%</strong></td>
+<td>“almost every one kept the <strong>median checkpoint overlap under 10%</strong> of total training time”</td>
+</tr>
+<tr>
+<td><strong>全局聚合带宽</strong></td>
+<td><strong>50—200 GB/s</strong>，与模型规模无明确相关性</td>
+<td>“asynchronous checkpoints drained to global storage at rates of <strong>50–200 GB/s</strong>, with no clear correlation to model size”</td>
+</tr>
+<tr>
+<td><strong>万亿参数的带宽需求</strong></td>
+<td><strong>远低于 1 TB/s</strong></td>
+<td>“even trillion-parameter-scale models can train efficiently with <strong>well under 1 TB/s</strong> of checkpoint bandwidth”</td>
+</tr>
+</tbody>
+</table>
+<p><strong>核心洞察</strong>：<strong>全局存储不需要匹配 GPU 峰值吞吐</strong>——异步 checkpoint 只需能「消化」周期性倾泻的节点本地数据即可。</p>
+<p>按 500 GB / 5 分钟折算，聚合突发写带宽约 <strong>1.7 GB/s</strong>——算术成立（350 GB 则是 1.17 GB/s）。但要注意 <strong>350—500 GB 与「5 分钟」这两个前提是文章自设场景</strong>，VAST 博客里并没有直接给出。</p>
+<h3 id="3-3-存储系统在风暴中的不同表现">3.3 存储系统在风暴中的不同表现</h3>
+<p><strong>如果直接写入对象存储</strong>：</p>
+<ul>
+<li>每个文件都要经历 Initiate → Upload Parts → Complete 的 Multipart 流程；</li>
+<li>每次请求数十毫秒的首字节延迟被数千并发放大；</li>
+<li>最终一致性 + 无原子 rename，可能在 Checkpoint 未完全可见时训练即崩溃；</li>
+<li>结果：保存时长动辄数十分钟，GPU 空转代价极高。</li>
+</ul>
+<p><strong>如果直接写入 POSIX 并行文件系统</strong>：</p>
+<ul>
+<li>元数据风暴立即触发：数千个文件的 create/open/close 让 MDS/Token Manager 过载；</li>
+<li>文件分片过小导致聚合 I/O 效率低；</li>
+<li>写入与数据加载读取路径<strong>争抢同一份带宽</strong>，训练数据流被 Checkpoint I/O 挤压。</li>
+</ul>
+<p><strong>JuiceFS 的实测表现</strong>：</p>
+<blockquote>
+<p>Based on <strong>user testing</strong>, when saving checkpoints using torch.save to JuiceFS, a single process writing a checkpoint on each GPU card can achieve a write throughput of <strong>1.7 GB/s or higher</strong>.</p>
+</blockquote>
+<blockquote>
+<p>注意官方措辞是 “Based on <strong>user testing</strong>”（转述用户测试），不是 JuiceFS 自建受控实测。</p>
+</blockquote>
+<hr>
+<h2 id="四、缓解方案">四、缓解方案</h2>
+<h3 id="4-1-异步-Checkpointing：分层写入">4.1 异步 Checkpointing：分层写入</h3>
+<p>主流方案是「<strong>GPU 本地 NVMe 高速落盘 → 后台缓慢同步到全局存储</strong>」的两阶段异步模式。这一层在下半场详细展开。</p>
+<p>VAST 的分析给了它一个有力的论据——<strong>整机故障只占少数</strong>：</p>
+<blockquote>
+<p>While the exact rate of whole-node failures varies (<strong>one study by the Llama team at Meta found this to be only 5% of failures</strong>)…</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>一处误归因</strong>：原稿写「<strong>VAST Data 分析指出</strong>整机故障仅占所有故障的 5%」。<strong>这个 5% 是 VAST 转引 Meta Llama 团队的研究</strong>，不是 VAST 自己的分析结论。VAST 原文明确标了出处（“one study by the Llama team at Meta”）。</p>
+</blockquote>
+<p><strong>绝大多数故障是单卡/网络链路问题，可从本地 Checkpoint 恢复</strong>——所以全局存储无需匹配峰值带宽。</p>
+<h3 id="4-2-增量-Checkpoint">4.2 增量 Checkpoint</h3>
+<p>只保存自上次以来发生变化的部分（例如 MoE 模型中未被激活的 Expert 权重），可将单次写入量从 500 GB 降至数十 GB，<strong>把 I/O 压力降低一个数量级</strong>。</p>
+<h3 id="4-3-写入聚合与-I-O-优化">4.3 写入聚合与 I/O 优化</h3>
+<p>有一篇论文专门做了这件事——<strong>《Understanding LLM Checkpoint/Restore I/O Strategies and Patterns》</strong>（arXiv:2512.24511）：</p>
+<blockquote>
+<p>Compared to state-of-the-art LLM checkpointing engines, our approach achieves up to <strong>3.9× higher write throughput than DataStates-LLM and 7.6× higher than TorchSnapshot</strong>.</p>
+</blockquote>
+<p>核心手段是<strong>文件系统感知的聚合</strong>（“file system-aware aggregation restores bandwidth and reduces metadata overhead”）：</p>
+<ul>
+<li>把同一进程的所有张量（权重、优化器状态、元数据）<strong>聚合为单个连续大文件</strong>，减少文件数量与元数据开销；</li>
+<li>对大块写入使用 <strong>O_DIRECT</strong> 绕过页缓存；</li>
+<li>用 <strong>liburing</strong> 等内核异步 I/O 框架替代传统 POSIX I/O。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>一处会议名要改</strong>：原稿写「<strong>ACM SCA 2026</strong>」。<strong>这里的 SCA 是 Supercomputing Asia（HPCAsia），不是 Symposium on Computer Architecture</strong>（后者是 ISCA）。论文发在 <strong>SCA/HPCAsia 2026 Workshops</strong>。数字 3.9× / 7.6× <strong>精确出现在摘要里，属实</strong>。</p>
+</blockquote>
+<h3 id="4-4-分层存储架构">4.4 分层存储架构</h3>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>存储介质</th>
+<th>典型系统</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>热层</strong></td>
+<td>NVMe-oF / RDMA 直连</td>
+<td>Lustre、GPFS、WekaFS、VAST、JuiceFS 企业版</td>
+<td>训练数据实时读取、Checkpoint 同步写入</td>
+</tr>
+<tr>
+<td><strong>温层</strong></td>
+<td>对象存储 + 分布式缓存</td>
+<td>JuiceFS（对象存储 + 缓存）</td>
+<td>Checkpoint 异步汇聚、模型版本管理</td>
+</tr>
+<tr>
+<td><strong>冷层</strong></td>
+<td>对象存储（低频/归档）</td>
+<td>S3 IA/Glacier、OSS 归档</td>
+<td>长期归档、灾备</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>两处公开案例的数字全错，已删</strong>：</p>
+<p><strong>第一处</strong>：原稿写「<strong>Meta Llama 3</strong> 训练在 <strong>1PB NVMe</strong> 上实现 <strong>380 GB/s</strong> 持续吞吐」。<strong>Llama 3 论文里的实际数字完全不同</strong>：</p>
+<blockquote>
+<p><strong>Tectonic</strong>… offers <strong>240 PB of storage out of 7,500 servers equipped with SSDs</strong>, and supports a <strong>sustainable throughput of 2 TB/s and a peak throughput of 7 TB/s</strong>.</p>
+</blockquote>
+<p>论文里没有「1PB」，也没有「380 GB/s」（“380” 只出现在 Table 4 的 TFLOPs/GPU，与存储无关）。<strong>这组数字整段是错的。</strong></p>
+<p><strong>第二处</strong>：原稿写「<strong>Anthropic Claude 3</strong> 使用 <strong>2PB 热存储 + 15PB 对象存储</strong>冷备」。<strong>Claude 3 的 Model Card 和发布博客全文检索都没有任何 PB 级存储数字</strong>，网络上也没有出处。已删除。</p>
+</blockquote>
+<h3 id="4-5-写入路径优化与一个必须说清的权衡">4.5 写入路径优化与一个必须说清的权衡</h3>
+<p>JuiceFS 的做法有代表性：<strong>分块并发</strong>（大文件切多个 Chunk 并行写入对象存储）+ <strong>写缓存</strong>。</p>
+<p>但<strong>写缓存这里有一个真实的权衡，必须写清楚</strong>：</p>
+<blockquote>
+<p>⚠️ <strong>一处需要澄清的矛盾</strong>。JuiceFS 的 <code>writeback</code> 模式在 Checkpoint 场景下的取舍是<strong>两个方向</strong>的，取决于<strong>你把哪一份当作恢复源</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>立场</th>
+<th>建议</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>持久性优先</strong></td>
+<td><strong>关 writeback</strong></td>
+<td>开启时 <code>close()</code> 返回 ≠ 数据已到对象存储；节点崩了就丢</td>
+</tr>
+<tr>
+<td><strong>性能优先</strong></td>
+<td>开 writeback</td>
+<td>Checkpoint 先落本地 NVMe，再异步上传，写入延迟显著降低</td>
+</tr>
+</tbody>
+</table>
+<p>本站 <a href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/">JuiceFS + Lance 那篇</a> 的立场是<strong>前者</strong>——「Checkpoint 场景必须关 writeback，确保 flush 返回 = 数据已在对象存储持久化」。</p>
+<p><strong>两者的分界在于「谁是恢复源」</strong>：</p>
+<ul>
+<li>如果<strong>本地 NVMe 是恢复源</strong>（节点级故障，占绝大多数）→ writeback 可以开，本地那份就是你要恢复的；</li>
+<li>如果<strong>对象存储必须是恢复源</strong>（整机故障、跨集群迁移）→ 必须关，等 flush 返回才能认为持久。</li>
+</ul>
+<p><strong>实践上的折中是分层</strong>：本地 NVMe 那份走「快速路径」供节点级恢复，对象存储那份走「严格路径」供灾难恢复——两份的目的不同，配置也就不必一致。</p>
+</blockquote>
+<hr>
+<h2 id="五、选型建议">五、选型建议</h2>
+<p><strong>「用正确的工具做正确的事」</strong>：</p>
+<ul>
+<li><strong>训练热数据</strong>（数据集读取 + Checkpoint 同步写入）→ <strong>POSIX 并行文件系统</strong>：自建超算选 <strong>Lustre</strong>、企业关键业务选 <strong>GPFS/Spectrum Scale</strong>、统一存储栈选 <strong>CephFS</strong>、云原生/多云/海量小文件选 <strong>JuiceFS</strong>；</li>
+<li><strong>Checkpoint 归档与模型库</strong> → <strong>对象存储（S3/OSS）</strong>，通过异步复制从热层同步，享受低成本与高持久性；</li>
+<li><strong>避免「对象存储直写训练热路径」</strong>——HTTP 延迟、最终一致性、缺乏 POSIX 语义决定了它不适合作为训练的实时存储层。</li>
+</ul>
+<p><strong>未来趋势是融合而非对立</strong>：对象存储正在「文件化」（S3 Express One Zone 等提供毫秒级首字节延迟）；POSIX 文件系统正在「对象化」（JuiceFS 同时兼容 POSIX/HDFS/S3 三种协议）；新的 I/O 栈（GPUDirect Storage、liburing）正在消除 GPU 与存储之间的 CPU 瓶颈；Checkpoint 工具链正在拥抱文件系统感知的聚合 I/O 策略。</p>
+<blockquote>
+<p><strong>存储物理学的边界不会消失，但工程的艺术在于：让每一种存储介质都工作在其最擅长的工作点上。</strong></p>
+</blockquote>
+<hr>
+<h1>下半场：万卡集群如何把保存开销压进 1%</h1>
+<blockquote>
+<p><strong>核心公式只有一条</strong>：<code>同步阻塞时长 = Checkpoint 体积 ÷（并行度 × 传输带宽）</code>。万卡集群下唯一可行的做法，是<strong>把「同步阻塞」极限压缩到「GPU → CPU pinned memory 的一次 DMA」</strong>，把所有真正耗时的序列化、落盘、跨节点网络传输全部推到后台。</p>
+</blockquote>
+<h2 id="六、先算清时间预算">六、先算清时间预算</h2>
+<p>一个 1T 参数模型（混合精度 + Adam），每参数 <strong>12—16 字节</strong>，全局状态约 <strong>12—16 TB</strong>。</p>
+<blockquote>
+<p>✅ <strong>这个口径是对的</strong>：ZeRO 论文的 K=12 指<strong>纯优化器状态</strong>（fp32 master copy 4 + 动量 m 4 + 方差 v 4），加上 fp16 参数 2 + fp16 梯度 2 才是 <strong>16 bytes/参数</strong>。</p>
+</blockquote>
+<p>在 ZeRO-3 / FSDP 分片后，每个 rank 只持有全局状态的 1/N。以 <strong>1024 张 H100</strong> 为例，每卡分片约 <strong>12—16 GB</strong>（16 TB / 1024 = 16 GB ✓，ZeRO 论文自己就用这个例子）。</p>
+<p>逐条传输路径的物理上限：</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>带宽（单卡）</th>
+<th>16 GB 分片耗时</th>
+<th>是否阻塞训练</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU HBM → CPU pinned（PCIe Gen4 x16）</td>
+<td>~32 GB/s</td>
+<td><strong>~0.5 s</strong></td>
+<td><strong>是，唯一必须同步的阶段</strong></td>
+</tr>
+<tr>
+<td>GPU HBM → GPU HBM（NVLink）</td>
+<td><strong>~450 GB/s（单向）</strong></td>
+<td>~0.03 s</td>
+<td>否</td>
+</tr>
+<tr>
+<td>GPU → 本地 NVMe（GPUDirect Storage）</td>
+<td>~14 GB/s（单盘 Gen5）</td>
+<td>~1.1 s</td>
+<td>否（后台 DMA）</td>
+</tr>
+<tr>
+<td>CPU pinned → 本地 NVMe</td>
+<td>7—14 GB/s</td>
+<td>1—2 s</td>
+<td>否（后台线程）</td>
+</tr>
+<tr>
+<td>节点本地 NVMe → 共享存储</td>
+<td>受网络限制</td>
+<td>数十秒</td>
+<td>否（后台进程）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>三处口径要标清</strong>：</p>
+<ol>
+<li><strong>NVLink「~450 GB/s」是单向</strong>——H100 官方标的是 <strong>900 GB/s 双向</strong>。直接写 450 会与官方数冲突，必须注明是单向。</li>
+<li><strong>「~14 GB/s」是单盘 PCIe Gen5 x4 NVMe</strong> 的顺序读上限（Gen5 x4 理论 ~15.75 GB/s，扣协议开销约 14）。</li>
+<li><strong>这些带宽数字多来自厂商博客的量级估算，不是实测基准</strong>。而且同一篇博客内部就有矛盾——它说 140 GB checkpoint 用 GDS 写「34 秒」（折算仅 ~4.1 GB/s），远低于它自己表格里的 7—14 GB/s。</li>
+</ol>
+</blockquote>
+<p>如果训练迭代时间约 <strong>8 s</strong>，1% 预算 = <strong>80 ms</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>「1T 模型典型迭代 8 s」找不到权威来源</strong>。公开数据点差异极大（例如某 1.6T MoE 在昇腾 910C 上约 27 s/step）。dense 1T 的每步时间取决于 batch/seq，<strong>没有「8 s 典型值」这样的标准数字</strong>——宜标为经验假设。</p>
+</blockquote>
+<p>PCIe Gen4 单次 DMA 16 GB 需约 <strong>500 ms</strong>（16 GB ÷ 32 GB/s = 0.5 s ✓），<strong>远超 80 ms 预算</strong>。但如果叠加 NVLink 多卡中转、或启用 GDS 把 HBM 直写 NVMe（绕过 CPU 中转），以及<strong>利用 forward/backward 阶段张量的不可变性把 DMA 拆散到整个迭代内</strong>，实测同步阻塞可以压到 100 ms 量级。</p>
+<blockquote>
+<p><strong>关键洞察</strong>：<strong>同步阻塞只发生在「数据离开 HBM 的那一刻」，其余一切皆可异步。</strong></p>
+</blockquote>
+<p>这条洞察来自 Argonne 的 <strong>DataStates-LLM</strong> 论文（HPDC’24，arXiv:2406.10707），它的核心机制正是：</p>
+<blockquote>
+<p>takes advantage of the fact that <strong>the tensors making up the model and optimizer state shards remain immutable for extended periods of time</strong></p>
+</blockquote>
+<p>论文报告的收益是「<strong>up to 48× faster checkpointing and 2.2× faster end-to-end training runtime</strong>」。</p>
+<blockquote>
+<p>⚠️ <strong>但规模要标清</strong>：该论文的实验规模是 <strong>up to 180 GPUs</strong>，<strong>不是万卡</strong>。48× 是相对 SOTA 的加速比，在 180 卡规模测得。</p>
+</blockquote>
+<p>关于「同步 checkpoint 到底有多慢」，DataStates-LLM 论文给了一组对比数字，<strong>但归属容易搞错</strong>：</p>
+<blockquote>
+<p>despite the availability of high speed links (50+ GB/s network and 25+ GB/s PCIe), the LLM checkpointing throughput is far from saturating the link capacity (e.g., <strong>REFT reports 38% saturation</strong>), and often drops as low as a few GB/s (e.g., <strong>Nebula… reports 1-4 GB/s</strong>).</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>更正</strong>：原稿写「Microsoft Nebula 实测 1—4 GB/s，<strong>PCIe 饱和率仅 38%</strong>」。<strong>38% 是 REFT 的数字，不是 Nebula 的</strong>——1—4 GB/s 才归 Nebula。而且<strong>两者都不是万卡实测</strong>：DataStates-LLM 自己只在 ≤180 卡做实验，Nebula 那个例子是<strong>单机 GPT2-XL（20.6 GB）</strong>。「万卡规模」是原稿自行加的限定。</p>
+</blockquote>
+<hr>
+<h2 id="七、分层异步架构">七、分层异步架构</h2>
+<p>整个方案物理上是三级流水，<strong>只有第一级的前半程（GPU→CPU）需要同步</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">┌─────────┐  DMA    ┌──────────┐  独立进程  ┌──────────┐  限速后台  ┌──────────┐</span><br><span class="line">│ GPU HBM │ ──────► │ CPU      │ ────────► │ 本地     │ ────────► │ 对象存储  │</span><br><span class="line">│(同步段) │ &lt;100ms  │ Pinned   │  1-2s     │ NVMe     │  30-60min │ (S3/OSS) │</span><br><span class="line">└─────────┘         │ Memory   │           │          │           │          │</span><br><span class="line">   ▲                └──────────┘           └──────────┘           └──────────┘</span><br><span class="line">   │                  第2级                    第3级                   冷层</span><br><span class="line"> 训练恢复计算</span><br></pre></td></tr></table></figure>
+<h3 id="7-1-第-1-级：GPU-→-CPU-pinned-memory（同步段）">7.1 第 1 级：GPU → CPU pinned memory（同步段）</h3>
+<p>在 <code>optimizer.step()</code> 完成的瞬间，用 <code>cudaMemcpyAsync</code> + 预分配的 pinned memory 池（<code>cudaMallocHost</code> 或 PyTorch 的 <code>pin_memory()</code>），把当前 rank 持有的所有张量通过独立 CUDA stream DMA 到主机内存。</p>
+<p>pinned memory 的作用是让 GPU 的 DMA 引擎不经 CPU 中转直接写入主机物理内存。</p>
+<blockquote>
+<p>⚠️ <strong>一处量级要改</strong>：原稿写「pinned memory 相比 pageable memory 能把拷贝时间<strong>从数秒压到数百毫秒</strong>」——这是 10× 量级的说法。NVIDIA 官方博客给的是：</p>
+</blockquote>
+<blockquote>
+<p><strong>pinned transfers are more than twice as fast as pageable transfers</strong>（示例：pageable 2.31 GB/s vs pinned 5.77 GB/s）</p>
+</blockquote>
+<blockquote>
+<p>即约 <strong>2×</strong>。实际耗时完全取决于传输大小（16 GB @ 25 GB/s ≈ 640 ms，@ 12 GB/s ≈ 1.3 s）。宜改为「pinned 约把带宽翻倍」。</p>
+</blockquote>
+<p><strong>DataStates-LLM 在此基础上更进一步</strong>：利用参数与优化器状态在 forward/backward 期间不可变这一事实，把拷贝拆散到整个迭代的计算过程中间，在 CUDA stream 上与计算 kernel 交错执行。</p>
+<h3 id="7-2-第-2-级：CPU-内存-→-本地-NVMe（异步段）">7.2 第 2 级：CPU 内存 → 本地 NVMe（异步段）</h3>
+<p><strong>序列化与本地落盘必须在独立进程中完成，而非线程</strong>——这是最容易被忽视的陷阱。</p>
+<p><strong>PyTorch <code>async_save()</code> 的情况</strong>：</p>
+<ul>
+<li><strong>2.4 引入</strong> ✅（官方教程前置条件写的是 “PyTorch v2.4.0 or later”）；</li>
+<li><strong>默认用线程</strong> ✅（源码 <code>AsyncCheckpointerType.THREAD</code> 为默认值）。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>那组实测数字的出处与规模要标清</strong>：原稿写「<strong>实测</strong>在 H100 上使 step 时间从 <strong>108ms 退化到 162ms</strong>（约 50% overhead）」。数字属实，但<strong>出处是一篇个人技术博客</strong>（shayon.dev，2026-02），实验环境是 <strong>单卡 Llama 1.3B FSDP bf16、7.5 GB checkpoint</strong>——<strong>不是万卡规模</strong>。原文：</p>
+</blockquote>
+<blockquote>
+<p>Training steps that should take <strong>108ms were consistently running at 162ms</strong> for as long as the background thread was active – a <strong>50% step-time penalty</strong></p>
+</blockquote>
+<p><strong>绕开 GIL 的正确姿势</strong>：</p>
+<blockquote>
+<p>⚠️ <strong>一处「官方推荐」不成立</strong>：原稿写「正确做法是用 <code>ProcessPoolExecutor</code>」。<strong>PyTorch 确实提供了进程式后端</strong>（<code>AsyncCheckpointerType.PROCESS</code>），但那篇博客实测有效的是「用 <code>spawn</code> 起进程 + 共享内存传递 staged tensors」。<strong>PyTorch 官方教程并未推荐进程池</strong>——它只建议「limiting checkpoints to one asynchronous request at a time」，并介绍了 <code>DefaultStager</code> 把 state_dict 构建与 D2H 拷贝挪到后台线程，<strong>全文未提 GIL 或进程池</strong>。</p>
+<p>所以准确说法是：「PyTorch 提供了 <code>AsyncCheckpointerType.PROCESS</code> 后端；实践表明进程式能绕开 GIL，但官方文档并未就此给出推荐」。</p>
+</blockquote>
+<p><strong>GDS 的合并路径</strong>：如果节点配备 NVMe 并启用 GPUDirect Storage（cuFile + nvidia-fs），第 1、2 级可以合并为一次 HBM→NVMe 的 DMA 直写，<strong>完全绕过 CPU 与 pinned buffer</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>一处硬件描述与来源不符</strong>：原稿写「PCIe <strong>Gen5</strong> NVMe + GDS，实测 140 GB Checkpoint 从 4 分 52 秒压到 34 秒（8.6×）」。<strong>那组实测跑在 1× Gen4 NVMe 上</strong>（Gen5 是同表另一行 8×H200 配置，对应约 9×）。而且<strong>来源是第三方 GPU 云厂商博客（Spheron），不是 NVIDIA 官方</strong>——NVIDIA 官方 GDS 博客给的是另一套更保守的数字。</p>
+</blockquote>
+<h3 id="7-3-第-3-级：本地-NVMe-→-共享存储-对象存储（完全后台）">7.3 第 3 级：本地 NVMe → 共享存储 / 对象存储（完全后台）</h3>
+<p>这是「存储风暴」真正发生的层。设计原则是<strong>错峰 + 限速</strong>：每个节点以固定速率（例如 2—4 GB/s，远低于网络峰值）在 Checkpoint 间隔的整个周期内持续向对象存储或 Lustre 后端同步，<strong>把瞬时风暴摊平成长尾流</strong>。</p>
+<p>VAST 的实测支持这个思路：即使是万亿参数模型，<strong>全局聚合 Checkpoint 带宽需求实际低于 1 TB/s</strong>——因为故障恢复只需从最近的本地副本回读，全局存储只需在长周期内缓慢吸收。</p>
+<blockquote>
+<p>⚠️ <strong>一处二手描述要标注</strong>：原稿写「<strong>Microsoft Nebula</strong> 的三级方案（内存 → <strong>邻居节点 SSD</strong> → 对象存储）」。<strong>找不到 Microsoft 官方一手文档确认「邻居节点 SSD」这一层</strong>——微软官方把 Nebula 描述为「<strong>disk-less</strong>」工具，只提到可保存到 Azure Blob / ADLS / NFS。「三级架构」的说法在二手材料中一致，但与官方「disk-less」表述存在张力，<strong>引用时宜标为「据二手描述」</strong>。</p>
+</blockquote>
+<hr>
+<h2 id="八、Checkpoint-频率与故障恢复的权衡">八、Checkpoint 频率与故障恢复的权衡</h2>
+<p>万卡集群的 MTBF 随规模线性恶化。<strong>Meta 的 RSC 集群</strong>（Research SuperCluster）11 个月的数据是这一领域最常被引用的实证。</p>
+<blockquote>
+<p>⚠️ <strong>这一段的数字原稿全错，而且是最危险的一类错——论文真实存在，数字却对不上。</strong></p>
+</blockquote>
+<p>论文确实存在：<strong>《Revisiting Reliability in Large-Scale Machine Learning Research Clusters》</strong>（arXiv:<strong>2410.21680</strong>，HPCA 2025，FAIR at Meta）。RSC = Research SuperCluster ✅、16k A100 ✅、11 个月 ✅ 都对得上。</p>
+<p><strong>但原稿的具体数字在该论文中查无实据</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>原稿</th>
+<th>论文原文</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>8000 GPU</strong> 作业需 <strong>30 分钟</strong>间隔达 0.9 ETTR</td>
+<td><strong>2048—4096 GPU</strong> 作业，且假设 Daly-Young 最优间隔 + 重启 5 分钟 + 写入 5 分钟</td>
+</tr>
+<tr>
+<td>（隐含间隔 30 分钟）</td>
+<td>论文假设<strong>每小时</strong> checkpoint：“we find this is a typical checkpoint interval for larger jobs on the RSC clusters”</td>
+</tr>
+<tr>
+<td><strong>100k GPU</strong> 需压到<strong>约 2 分钟</strong></td>
+<td>论文说的是 <strong>~12,000 GPU</strong> 需把写入开销压到 <strong>~10 秒</strong>；对未来规模的投影是 <strong>131k GPU 的 MTTF ≈ 0.23 小时（约 14 分钟）</strong></td>
+</tr>
+</tbody>
+</table>
+<p>论文的实际表述：</p>
+<blockquote>
+<p><strong>2048-4096 GPU job runs on RSC-1 show an average ETTR of around 0.9</strong> assuming checkpoint intervals are Daly-Young optimal and that both restart overhead and checkpoint write overhead is 5 minutes.</p>
+</blockquote>
+<blockquote>
+<p>To reach ETTR of 0.9 for the largest feasible training runs on RSC-1 (<strong>~12,000 GPUs</strong>…), checkpoint write time overhead needs to be on the order of <strong>~10 seconds</strong></p>
+</blockquote>
+<blockquote>
+<p>we project the <strong>MTTF for 16384 GPU jobs to be 1.8 hours and for 131072 GPU jobs to be 0.23 hours</strong></p>
+</blockquote>
+<p><strong>最优间隔的经典公式</strong>：</p>
+<blockquote>
+<p>⚠️ <strong>漏了系数 2</strong>：原稿写 <code>τ* ≈ √(MTBF × C)</code>。<strong>Young (1974) / Daly (2006) 的标准形式是 <code>τ* = √(2·C·MTBF)</code></strong>——一阶近似。Meta 那篇论文式(3) 用的也是 <code>√(2·w_cp/(N·r_f))</code> 这个形式。漏掉 2 会让最优间隔算小约 30%。</p>
+</blockquote>
+<p><strong>由于异步方案已把 C 压到近零，频率的上限实际上由第 3 级后台传输的完成时间决定</strong>——相邻两次 Checkpoint 的间隔必须 ≥ 本地 NVMe → 对象存储的排空时间，否则 pinned memory 池会被覆盖。工程上常见的配置：</p>
+<ul>
+<li><strong>高频本地 Checkpoint</strong>：每 1000—2000 步（约 15—30 分钟）保存到本地 NVMe，用于<strong>节点级故障恢复</strong>；</li>
+<li><strong>低频全局归档</strong>：每 2—4 小时从本地 NVMe 同步到对象存储，用于<strong>跨集群/灾难恢复</strong>；</li>
+<li><strong>保留策略</strong>：本地保留最近 2—3 份，对象存储保留里程碑与最终模型，中间态自动过期——避免 1 TB × 每 30 分钟 = <strong>每天 48 TB</strong> 的容量爆炸。</li>
+</ul>
+<hr>
+<h2 id="九、代码级落地">九、代码级落地</h2>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> torch, multiprocessing <span class="keyword">as</span> mp</span><br><span class="line"><span class="keyword">from</span> concurrent.futures <span class="keyword">import</span> ProcessPoolExecutor</span><br><span class="line"></span><br><span class="line"><span class="comment"># 训练启动时预分配 pinned memory 池（避免运行时 cudaMallocHost 开销）</span></span><br><span class="line">PINNED_POOL = torch.empty(POOL_SIZE_GB, dtype=torch.uint8, pin_memory=<span class="literal">True</span>)</span><br><span class="line"></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">async_checkpoint</span>(<span class="params">model, optimizer, step, executor: ProcessPoolExecutor</span>):</span><br><span class="line">    <span class="comment"># ── 阶段 1：同步段（唯一阻塞点）──────────────────</span></span><br><span class="line">    <span class="comment"># 利用 forward/backward 中张量不可变的特性，</span></span><br><span class="line">    <span class="comment"># 在计算 stream 之外用独立 stream 交错 DMA</span></span><br><span class="line">    <span class="keyword">with</span> torch.cuda.stream(cuda_stream_ckpt):</span><br><span class="line">        cpu_state = &#123;</span><br><span class="line">            <span class="string">&#x27;model&#x27;</span>: pin_copy(model.state_dict()),      <span class="comment"># DMA 到 PINNED_POOL</span></span><br><span class="line">            <span class="string">&#x27;optim&#x27;</span>: pin_copy(optimizer.state_dict()),</span><br><span class="line">            <span class="string">&#x27;step&#x27;</span>: step,</span><br><span class="line">        &#125;</span><br><span class="line">    torch.cuda.current_stream().wait_stream(cuda_stream_ckpt)</span><br><span class="line">    <span class="comment"># ── 至此训练立即恢复，以下全部异步 ────────────────</span></span><br><span class="line"></span><br><span class="line">    <span class="comment"># ── 阶段 2：独立进程持久化到本地 NVMe ────────────</span></span><br><span class="line">    future = executor.submit(persist_worker, cpu_state, <span class="string">f&#x27;/mnt/nvme/ckpt/<span class="subst">&#123;step&#125;</span>&#x27;</span>)</span><br><span class="line">    checkpoint_futures.append(future)   <span class="comment"># 下次 save 前检查是否完成</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">def</span> <span class="title function_">persist_worker</span>(<span class="params">cpu_state, local_path</span>):</span><br><span class="line">    <span class="comment"># 在子进程中执行：GIL 隔离 + 序列化 + 写本地 NVMe</span></span><br><span class="line">    torch.save(cpu_state, local_path)</span><br><span class="line">    <span class="comment"># ── 阶段 3：限速后台上传共享存储 ────────────────</span></span><br><span class="line">    upload_to_s3(local_path, <span class="string">f&#x27;s3://bucket/<span class="subst">&#123;step&#125;</span>&#x27;</span>,</span><br><span class="line">                 rate_limit=<span class="string">&#x27;3GB/s&#x27;</span>)            <span class="comment"># 错峰避免存储风暴</span></span><br><span class="line">    notify_metadata_server(step, local_path)    <span class="comment"># 注册全局一致性元数据</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 训练主循环</span></span><br><span class="line"><span class="keyword">for</span> step, batch <span class="keyword">in</span> <span class="built_in">enumerate</span>(dataloader):</span><br><span class="line">    loss = model(batch); loss.backward(); optimizer.step()</span><br><span class="line">    <span class="keyword">if</span> step % SAVE_INTERVAL == <span class="number">0</span>:</span><br><span class="line">        drain_stale_futures(checkpoint_futures)   <span class="comment"># 确保上一份已落 NVMe</span></span><br><span class="line">        async_checkpoint(model, optimizer, step, executor)</span><br></pre></td></tr></table></figure>
+<p><strong>NeMo/Megatron 的对应配置</strong>（两个参数都核实存在）：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>官方语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dist_ckpt_parallel_save: True</code></td>
+<td>每个 DP rank <strong>独立写入自己的 shard</strong>（Fully Parallel Saving）</td>
+</tr>
+<tr>
+<td><code>dist_ckpt_torch_dist_multiproc: 2</code></td>
+<td><strong>每个 rank 用于 checkpoint 保存的额外进程数</strong>，等于每个 rank 创建的文件数；「Increasing this number can help saturate the write bandwidth」；<strong>默认 2</strong></td>
+</tr>
+</tbody>
+</table>
+<p>天然把万卡写入扇出到数千个并发文件流。</p>
+<hr>
+<h2 id="十、监控指标与一个必须澄清的误区">十、监控指标与一个必须澄清的误区</h2>
+<p>三个北极星指标：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>目标</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>同步阻塞时长</strong>（P99）</td>
+<td><strong>&lt; 100 ms</strong></td>
+<td>在 <code>async_checkpoint</code> 前后埋点直接测量</td>
+</tr>
+<tr>
+<td><strong>重叠率（Overlap）</strong></td>
+<td><strong>&lt; 10%</strong></td>
+<td>VAST 对生产集群的实测显示优秀方案可压到 10% 以下</td>
+</tr>
+<tr>
+<td><strong>端到端恢复时间（RTO）</strong></td>
+<td>5—10 分钟</td>
+<td><strong>这是经验值，不是官方建议</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>「RTO 5—10 分钟」找不到官方标准</strong>——没有任何官方文档把它定为目标。能找到的最接近的是技术社区的经验区间（有建议「异步备份 + 脚本恢复 → RTO 通常 5—30 分钟」）。宜标为经验值。</p>
+</blockquote>
+<p><strong>最后一个必须澄清的误区</strong>：<strong>「异步保存等于零开销」并不成立。</strong></p>
+<blockquote>
+<p>⚠️ <strong>但那个「1—3% 吞吐损耗」的数字查无出处</strong>。原稿写「实测仍有 1—3% 的吞吐损耗」——我找不到任何一手来源给出这个具体百分比。文献讨论的是<strong>定性</strong>现象（重叠后吞吐仍会下降），没有 1—3% 这个量化值。</p>
+</blockquote>
+<p><strong>「零开销不成立」这个结论本身是有文献支持的</strong>——DataStates-LLM 论文明确写了异步的收益常被 PCIe 争用抵消：</p>
+<blockquote>
+<p>this results in significant overheads that <strong>reduce the benefit of asynchronous checkpointing to the point where it is not significantly faster as compared to synchronous</strong> checkpointing approach</p>
+</blockquote>
+<p>那篇 GIL 博客也实测了 thread-based async 在后台写盘期间造成约 50% step 时间上涨 / 约 33% 吞吐下降。</p>
+<p><strong>把总开销压进 1% 依赖四件事同时做到位，缺一不可</strong>：</p>
+<ol>
+<li><strong>pinned memory 池的预分配</strong>；</li>
+<li><strong>独立进程的 GIL 隔离</strong>；</li>
+<li><strong>本地 NVMe 的缓冲</strong>；</li>
+<li><strong>对象存储上传的错峰限速</strong>。</li>
+</ol>
+<p><strong>若第 4 件没做，数百节点同时上传的存储风暴仍会反向挤压数据加载路径，间接拖慢训练本身。</strong></p>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/">具身智能训练存储与数据管线：JuiceFS + Lance 深度实践</a>——JuiceFS 三平面分离、多级缓存与 Checkpoint 落地纪律</li>
+<li><a href="/2026/09/03/2026-09-03-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AE%B9%E9%94%99%E8%AE%AD%E7%BB%83%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%BB%8E%E6%9E%B6%E6%9E%84%E5%88%B0%E5%BD%A2%E5%BC%8F%E5%8C%96%E9%AA%8C%E8%AF%81/">大模型容错训练系统设计：从架构到形式化验证</a>——故障检测、原地恢复与 TLA+ 验证</li>
+<li><a href="/2026/10/12/2026-10-12-%E6%8B%86%E8%A7%A3%E9%82%A311.9%25-%E5%A4%A7%E8%A7%84%E6%A8%A1%E8%AE%AD%E7%BB%83%E9%9B%86%E7%BE%A4%E7%9A%84%E7%94%9F%E4%BA%A7%E5%8A%9B%E6%8D%9F%E5%A4%B1%E5%BA%A6%E9%87%8F%E4%B8%8E%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B2%BB%E7%90%86/">拆解那 11.9%：大规模训练集群的生产力损失度量与自动化治理</a>——生产力损失的量化分解</li>
+<li><a href="/2026/11/05/2026-11-05-Linux%E5%86%85%E6%A0%B8IO%E8%B7%AF%E5%BE%84%E7%9C%9F%E7%9B%B8PageCache-mmap%E9%9B%B6%E6%8B%B7%E8%B4%9D%E4%B8%8EGPUDirect-Storage%E7%9B%B4%E9%80%9A/">Linux 内核 I/O 路径真相：Page Cache、mmap 零拷贝与 GPUDirect Storage 直通</a>——本文下半场第 1、2 级涉及的 I/O 路径物理机制</li>
+<li><a href="/2026/07/09/2026-07-09-GPFS-Fileset-%E8%AF%A6%E8%A7%A3%EF%BC%9A%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%AD%E7%9A%84%E7%B2%BE%E7%BB%86%E5%8C%96%E8%BF%90%E8%90%A5%E4%B9%8B%E9%81%93/">GPFS Fileset 详解：并行文件系统中的精细化运营之道</a>——GPFS 的配额、快照与存储策略</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文架构描述核对自 AWS S3 官方文档与 SigV4 文档、Lustre 官方手册、GPFS FAST 2002 论文与 IBM Storage Scale 官方文档、Ceph 官方文档、JuiceFS 官方文档与博客；性能数字核对自 VAST Data 官方博客（40 runs / 18 clusters / &gt;85,000 checkpoints）、ZeRO 论文（arXiv:1910.02054）、DataStates-LLM（arXiv:2406.10707）、Meta RSC 可靠性论文（arXiv:2410.21680）、Llama 3 论文（arXiv:2407.21783）、SCA/HPCAsia 2026 的 checkpoint I/O 论文（arXiv:2512.24511）、PyTorch 源码与官方教程、NVIDIA NeMo 官方文档、NVIDIA pinned memory 博客。</p>
+<p><strong>原稿更正汇总</strong>：S3 单对象上限（<strong>5 TB 已过时 → 50 TB / 48.8 TiB</strong>）、175B + Adam 的 checkpoint 体积（<strong>~2.8 TB 而非「1TB+」</strong>）、「元数据操作占 60%」（<strong>无一手来源，文献为 up to 80% / 实测 67%—96%</strong>）、VAST 口径（<strong>40 个 run / 18 个集群 / &gt;85,000，非「40 个集群」，「85,619」不存在</strong>）、<strong>Meta Llama 3 的存储规模整段错误</strong>（<strong>实为 240 PB / 2 TB/s 持续 / 7 TB/s 峰值，非「1PB NVMe / 380 GB/s」</strong>）、<strong>Anthropic Claude 3 的 2PB/15PB 查无出处（已删）</strong>、VAST 的「5% 整机故障」实为<strong>转引 Meta</strong> 而非 VAST 自研、<strong>「SCA」是 Supercomputing Asia 不是 Symposium on Computer Architecture</strong>、Nebula 的「38% 饱和率」<strong>实为 REFT 的数字</strong>且两者都非万卡实测、<strong>Meta RSC 的 ETTR 数字在论文中查无实据</strong>（实为 2048—4096 GPU / 每小时 / ~12,000 GPU 需 10 秒 / 131k GPU MTTF 0.23h）、Young-Daly 公式<strong>漏了系数 2</strong>、NVLink 450 GB/s 需注明是单向（官方 900 双向）、「1T 迭代 8s」无来源、pinned 是约 2× 而非 10×、140 GB 的 GDS 实测跑在 <strong>Gen4</strong> 而非 Gen5、「1—3% 吞吐损耗」与「RTO 5—10 分钟」均无一手来源、<code>async_save</code> 的 108→162ms 出自<strong>个人博客且是单卡小模型</strong>、<strong>PyTorch 官方并未推荐 ProcessPoolExecutor</strong>、Nebula 三级方案<strong>无一手来源</strong>（官方称 disk-less）。另有 <strong>JuiceFS writeback 的取舍</strong>已在 §4.5 显式澄清。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/05/2026-11-05-%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8%E7%89%A9%E7%90%86%E5%AD%A6%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%8ECheckpoint%E9%A3%8E%E6%9A%B4/">https://roger-lv.github.io/2026/11/05/2026-11-05-%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8%E7%89%A9%E7%90%86%E5%AD%A6%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%8ECheckpoint%E9%A3%8E%E6%9A%B4/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/JuiceFS/">JuiceFS</a><a class="post-meta__tags" href="/tags/%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8/">对象存储</a><a class="post-meta__tags" href="/tags/%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8/">分布式存储</a><a class="post-meta__tags" href="/tags/Lustre/">Lustre</a><a class="post-meta__tags" href="/tags/GPFS/">GPFS</a><a class="post-meta__tags" href="/tags/CephFS/">CephFS</a><a class="post-meta__tags" href="/tags/Checkpoint/">Checkpoint</a><a class="post-meta__tags" href="/tags/%E5%BC%82%E6%AD%A5%E4%BF%9D%E5%AD%98/">异步保存</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/05/2026-11-05-Linux%E5%86%85%E6%A0%B8IO%E8%B7%AF%E5%BE%84%E7%9C%9F%E7%9B%B8PageCache-mmap%E9%9B%B6%E6%8B%B7%E8%B4%9D%E4%B8%8EGPUDirect-Storage%E7%9B%B4%E9%80%9A/" title="Linux 内核 I/O 路径真相：Page Cache、mmap 零拷贝与 GPUDirect Storage 直通"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Linux 内核 I/O 路径真相：Page Cache、mmap 零拷贝与 GPUDirect Storage 直通</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：存储到计算的 I/O 路径走过四个阶段——从 read() 的 Page Cache 三次拷贝，到 Direct I/O + io_uring 绕缓存直传，再到 mmap 的按需缺页加载，最终由 GPUDirect Storage 把 NVMe 与 GPU HBM 之间压成一次 PCIe 直接 DMA。 每一代演进都在回答同一个问题：能不能少一次拷贝、少一次陷入、少一跳物理路径？ 核心驱动是让数据在物理上离计算单元越来越近、离 CPU 这个「搬运工」越来越远。  本文的内核路径描述逐条核对自 Linux 内核源码（torvalds/linux master）与 NVMe Base Spec 2.0d；GDS 部分核对自 NVIDIA 官方文档。核对中发现原稿有十余处需要更正，其中四处是事实错误、一段叙述查无实据，已在文中以 ⚠️ 标注。  一、Page Cache：Linux 缓冲 I/O 的物理真相 Page Cache 是内核对磁盘文件的内存级缓存，目的是弥合存储介质与 DRAM 之间的延迟差距——DRAM 命中约 100 ns，HDD 随机寻道约 10 ms，...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/" title="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-22</div><div class="info-item-2">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</div></div><div class="info-2"><div class="info-item-1">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践 具身智能的存储问题,难点不在&quot;存得下&quot;,而在&quot;读得随机、写得突发、流得动&quot;——一段双臂叠衣 episode 里藏着 3 路 30Hz 相机视频、100Hz 关节状态、未来 50 步的 action chunk,训练时 DataLoader 要从数万条 episode 里随机抽 timestep 并把这几路异频流对齐成同一行。 招商局狮岩 AI Lab 的实测给出了量化答案:用 Lance 把长视频切成 GOP 尺度 blob 后,随机读吞吐相对 LeRobot 提升 1.7–6×、存储降低 42%;而地瓜机器人的集群数据则验证了另一端:JuiceFS 多云 + 分布式缓存把训练任务启动从 20 分钟压到 3 分钟、缓存命中率从 45% 提到 92%。本文把这两套栈拼成具身训练的完整存储底座。  一、具身训练的 I/O 画像:与 LLM/CV 根本不是一回事 先明确负载形态,后面所有选型推理都从这里出发。 具身数据的最小单元是 episode,不是 token,也不是单张图...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 K8s 到 AI Infra：跨越五道技术鸿沟</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：K8s 把 GPU 当作 nvidia.com/gpu: 8 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「只分配、不感知」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。  上一讲（K8s 很熟，为什么月薪卡在三万）讲的是怎么看——nvidia-smi topo -m 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲怎么修：五道鸿沟各自的工程解法。 本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败，已在文中以 ⚠️ 标注。  五道鸿沟总览    维度 K8s 原生方案 AI 训练瓶颈 生产级方案 核心工具链     调度 kube-scheduler 逐 Pod 打分 部分 Pod 无法调度导致整组死锁 Gang 整组调度 + 多维配比 Volcano PodGroup   网络 TCP ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">307</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">482</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">1.</span> <span class="toc-text">上半场：三种存储范式的物理学</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%EF%BC%9AHTTP-%E8%AF%AD%E4%B9%89%E6%9E%84%E5%BB%BA%E7%9A%84%E3%80%8C%E6%97%A0%E9%99%90%E8%B4%A7%E6%9E%B6%E3%80%8D"><span class="toc-number">1.1.</span> <span class="toc-text">一、对象存储：HTTP 语义构建的「无限货架」</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-%E6%89%81%E5%B9%B3%E5%91%BD%E5%90%8D%E7%A9%BA%E9%97%B4%E4%B8%8E-REST-%E6%8E%A5%E5%8F%A3"><span class="toc-number">1.1.1.</span> <span class="toc-text">1.1 扁平命名空间与 REST 接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-Multipart-Upload%EF%BC%9A%E7%94%A8%E5%B9%B6%E5%8F%91%E6%8D%A2%E5%90%9E%E5%90%90"><span class="toc-number">1.1.2.</span> <span class="toc-text">1.2 Multipart Upload：用并发换吞吐</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-%E9%AB%98%E5%BB%B6%E8%BF%9F%E5%8A%A3%E5%8A%BF%E4%B8%8E%E8%AF%AD%E4%B9%89%E7%BC%BA%E5%A4%B1"><span class="toc-number">1.1.3.</span> <span class="toc-text">1.3 高延迟劣势与语义缺失</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81POSIX-%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%EF%BC%9A%E4%B8%BA%E5%85%B1%E4%BA%AB%E4%B8%8E%E4%B8%80%E8%87%B4%E6%80%A7%E8%80%8C%E7%94%9F"><span class="toc-number">1.2.</span> <span class="toc-text">二、POSIX 并行文件系统：为共享与一致性而生</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-Lustre%EF%BC%9AHPC-%E8%B6%85%E7%AE%97%E7%9A%84%E4%BA%8B%E5%AE%9E%E6%A0%87%E5%87%86"><span class="toc-number">1.2.1.</span> <span class="toc-text">2.1 Lustre：HPC 超算的事实标准</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-GPFS%EF%BC%88IBM-Spectrum-Scale%EF%BC%89%EF%BC%9A%E5%95%86%E7%94%A8%E7%9A%84%E3%80%8C%E5%85%A8%E8%83%BD%E9%80%89%E6%89%8B%E3%80%8D"><span class="toc-number">1.2.2.</span> <span class="toc-text">2.2 GPFS（IBM Spectrum Scale）：商用的「全能选手」</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-CephFS%EF%BC%9A%E7%BB%9F%E4%B8%80%E5%AD%98%E5%82%A8%E6%A0%88%E7%9A%84%E3%80%8C%E7%91%9E%E5%A3%AB%E5%86%9B%E5%88%80%E3%80%8D"><span class="toc-number">1.2.3.</span> <span class="toc-text">2.3 CephFS：统一存储栈的「瑞士军刀」</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-JuiceFS%EF%BC%9A%E4%BA%91%E5%8E%9F%E7%94%9F%E6%97%B6%E4%BB%A3%E7%9A%84%E3%80%8C%E5%85%83%E6%95%B0%E6%8D%AE-%E6%95%B0%E6%8D%AE%E8%A7%A3%E8%80%A6%E3%80%8D"><span class="toc-number">1.2.4.</span> <span class="toc-text">2.4 JuiceFS：云原生时代的「元数据&#x2F;数据解耦」</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-5-%E5%9B%9B%E7%B1%BB%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E6%A8%AA%E5%90%91%E5%AF%B9%E6%AF%94"><span class="toc-number">1.2.5.</span> <span class="toc-text">2.5 四类并行文件系统横向对比</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Checkpoint-%E5%AD%98%E5%82%A8%E9%A3%8E%E6%9A%B4"><span class="toc-number">1.3.</span> <span class="toc-text">三、Checkpoint 存储风暴</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E9%A3%8E%E6%9A%B4%E7%9A%84%E7%89%A9%E7%90%86%E6%88%90%E5%9B%A0"><span class="toc-number">1.3.1.</span> <span class="toc-text">3.1 风暴的物理成因</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E9%A3%8E%E6%9A%B4%E7%9A%84%E9%87%8F%E5%8C%96%E7%94%BB%E5%83%8F"><span class="toc-number">1.3.2.</span> <span class="toc-text">3.2 风暴的量化画像</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E5%AD%98%E5%82%A8%E7%B3%BB%E7%BB%9F%E5%9C%A8%E9%A3%8E%E6%9A%B4%E4%B8%AD%E7%9A%84%E4%B8%8D%E5%90%8C%E8%A1%A8%E7%8E%B0"><span class="toc-number">1.3.3.</span> <span class="toc-text">3.3 存储系统在风暴中的不同表现</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E7%BC%93%E8%A7%A3%E6%96%B9%E6%A1%88"><span class="toc-number">1.4.</span> <span class="toc-text">四、缓解方案</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%BC%82%E6%AD%A5-Checkpointing%EF%BC%9A%E5%88%86%E5%B1%82%E5%86%99%E5%85%A5"><span class="toc-number">1.4.1.</span> <span class="toc-text">4.1 异步 Checkpointing：分层写入</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E5%A2%9E%E9%87%8F-Checkpoint"><span class="toc-number">1.4.2.</span> <span class="toc-text">4.2 增量 Checkpoint</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E5%86%99%E5%85%A5%E8%81%9A%E5%90%88%E4%B8%8E-I-O-%E4%BC%98%E5%8C%96"><span class="toc-number">1.4.3.</span> <span class="toc-text">4.3 写入聚合与 I&#x2F;O 优化</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E5%88%86%E5%B1%82%E5%AD%98%E5%82%A8%E6%9E%B6%E6%9E%84"><span class="toc-number">1.4.4.</span> <span class="toc-text">4.4 分层存储架构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E5%86%99%E5%85%A5%E8%B7%AF%E5%BE%84%E4%BC%98%E5%8C%96%E4%B8%8E%E4%B8%80%E4%B8%AA%E5%BF%85%E9%A1%BB%E8%AF%B4%E6%B8%85%E7%9A%84%E6%9D%83%E8%A1%A1"><span class="toc-number">1.4.5.</span> <span class="toc-text">4.5 写入路径优化与一个必须说清的权衡</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E9%80%89%E5%9E%8B%E5%BB%BA%E8%AE%AE"><span class="toc-number">1.5.</span> <span class="toc-text">五、选型建议</span></a></li></ol></li><li class="toc-item toc-level-1"><a class="toc-link"><span class="toc-number">2.</span> <span class="toc-text">下半场：万卡集群如何把保存开销压进 1%</span></a><ol class="toc-child"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E5%85%88%E7%AE%97%E6%B8%85%E6%97%B6%E9%97%B4%E9%A2%84%E7%AE%97"><span class="toc-number">2.1.</span> <span class="toc-text">六、先算清时间预算</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%88%86%E5%B1%82%E5%BC%82%E6%AD%A5%E6%9E%B6%E6%9E%84"><span class="toc-number">2.2.</span> <span class="toc-text">七、分层异步架构</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E7%AC%AC-1-%E7%BA%A7%EF%BC%9AGPU-%E2%86%92-CPU-pinned-memory%EF%BC%88%E5%90%8C%E6%AD%A5%E6%AE%B5%EF%BC%89"><span class="toc-number">2.2.1.</span> <span class="toc-text">7.1 第 1 级：GPU → CPU pinned memory（同步段）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-%E7%AC%AC-2-%E7%BA%A7%EF%BC%9ACPU-%E5%86%85%E5%AD%98-%E2%86%92-%E6%9C%AC%E5%9C%B0-NVMe%EF%BC%88%E5%BC%82%E6%AD%A5%E6%AE%B5%EF%BC%89"><span class="toc-number">2.2.2.</span> <span class="toc-text">7.2 第 2 级：CPU 内存 → 本地 NVMe（异步段）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-%E7%AC%AC-3-%E7%BA%A7%EF%BC%9A%E6%9C%AC%E5%9C%B0-NVMe-%E2%86%92-%E5%85%B1%E4%BA%AB%E5%AD%98%E5%82%A8-%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%EF%BC%88%E5%AE%8C%E5%85%A8%E5%90%8E%E5%8F%B0%EF%BC%89"><span class="toc-number">2.2.3.</span> <span class="toc-text">7.3 第 3 级：本地 NVMe → 共享存储 &#x2F; 对象存储（完全后台）</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81Checkpoint-%E9%A2%91%E7%8E%87%E4%B8%8E%E6%95%85%E9%9A%9C%E6%81%A2%E5%A4%8D%E7%9A%84%E6%9D%83%E8%A1%A1"><span class="toc-number">2.3.</span> <span class="toc-text">八、Checkpoint 频率与故障恢复的权衡</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E4%BB%A3%E7%A0%81%E7%BA%A7%E8%90%BD%E5%9C%B0"><span class="toc-number">2.4.</span> <span class="toc-text">九、代码级落地</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E7%9B%91%E6%8E%A7%E6%8C%87%E6%A0%87%E4%B8%8E%E4%B8%80%E4%B8%AA%E5%BF%85%E9%A1%BB%E6%BE%84%E6%B8%85%E7%9A%84%E8%AF%AF%E5%8C%BA"><span class="toc-number">2.5.</span> <span class="toc-text">十、监控指标与一个必须澄清的误区</span></a></li></ol></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/" title="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%B8%87%E5%8D%A1GPU%E9%9B%86%E7%BE%A4%E8%BF%90%E7%BB%B4%E7%9B%91%E6%8E%A7%E5%9B%9B%E5%B9%B3%E9%9D%A2%E6%95%85%E9%9A%9C%E4%BA%94%E5%88%86%E7%B1%BB%E4%B8%8E%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7/" title="万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧">万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
