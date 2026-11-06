@@ -1,0 +1,807 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="一份 Ubuntu 镜像看起来是一个完整的 Linux 系统，为什么它能和宿主机共享内核？Kata 又为什么要有自己的内核？「内核套内核」到底是不是嵌套虚拟化？——从最底层的 syscall 路径开始，把这三层问题一次讲清楚，并纠正几处流传很广的说法（clone3 事故、Kata 的内存开销、Firecracker 的内核来源）。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="一份 Ubuntu 镜像看起来是一个完整的 Linux 系统，为什么它能和宿主机共享内核？Kata 又为什么要有自己的内核？「内核套内核」到底是不是嵌套虚拟化？——从最底层的 syscall 路径开始，把这三层问题一次讲清楚，并纠正几处流传很广的说法（clone3 事故、Kata 的内存开销、Firecracker 的内核来源）。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-05T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-06T07:54:51.175Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="虚拟化">
+<meta property="article:tag" content="容器">
+<meta property="article:tag" content="内核">
+<meta property="article:tag" content="Firecracker">
+<meta property="article:tag" content="Kata">
+<meta property="article:tag" content="namespace">
+<meta property="article:tag" content="syscall">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界",
+  "url": "https://roger-lv.github.io/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-05T16:00:00.000Z",
+  "dateModified": "2026-11-06T07:54:51.175Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">309</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">489</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-06T07:54:51.175Z" title="更新于 2026-11-06 15:54:51">2026-11-06</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/" data-flag-title="容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：<strong>Ubuntu 镜像里根本没有内核。</strong> 它不是一个「完整的 Linux 系统」，只是一份 <strong>rootfs</strong>——打包好的用户态二进制和库文件。容器里的进程发起的每一个 syscall 都<strong>直接打到宿主机内核上</strong>，namespace 只是给进程一个「看起来像独立系统」的视图，不是真的给它装了一个内核。</p>
+<p>而 Kata 和 Firecracker 之所以「有自己的内核」，是因为它们在容器外多加了一层 VM，VM 里需要一份 guest kernel 来承载上面的容器——<strong>整个链路里只发生了一次虚拟化，不是嵌套</strong>。</p>
+</blockquote>
+<p>本文的机制描述与实测数据核对自 Docker Registry 实际镜像内容、Linux 内核文档与 man pages、glibc 与 kmod 源码、Kata Containers 与 Firecracker 官方文档。<strong>核对中发现原稿有十余处需要更正，其中一处是流传很广的机制错误</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="一、把「Linux-系统」拆开看：内核和用户态是两件事">一、把「Linux 系统」拆开看：内核和用户态是两件事</h2>
+<p>日常说「Ubuntu 22.04」这个概念，其实打包了两个完全独立的东西：</p>
+<table>
+<thead>
+<tr>
+<th>组成部分</th>
+<th>具体内容</th>
+<th>来源</th>
+<th>放在哪里</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Linux 内核</strong></td>
+<td><code>vmlinuz</code>（编译好的二进制）、内核模块 <code>.ko</code>、设备驱动、调度器、内存管理、网络栈、syscall 实现</td>
+<td>从 <a target="_blank" rel="noopener" href="http://kernel.org">kernel.org</a> 源码编译，由发行版打包</td>
+<td>宿主机的 <code>/boot/vmlinuz-xxx</code>、<code>/lib/modules/xxx</code></td>
+</tr>
+<tr>
+<td><strong>Ubuntu 用户态</strong></td>
+<td><code>/bin/bash</code>、<code>/bin/ls</code>、<code>/lib/x86_64-linux-gnu/libc.so.6</code>、<code>apt</code>、<code>dpkg</code>、<code>/etc/apt/sources.list</code>、<code>/var/lib/dpkg/status</code></td>
+<td>Ubuntu 项目自己构建的二进制</td>
+<td>可以放在任何地方，包括一个 Docker 镜像 tar 包里</td>
+</tr>
+</tbody>
+</table>
+<p>关键认知：<strong>Linux 内核是一个独立项目，跟 Ubuntu 没有从属关系</strong>。Ubuntu 只是把 <a target="_blank" rel="noopener" href="http://kernel.org">kernel.org</a> 的源码编译一遍、打上自己的补丁、配上自己的默认参数、然后随 ISO 一起发布。「Ubuntu 22.04」这个名字里，内核版本是「搭售」的，不是「Ubuntu 的一部分」——<strong>同一个内核完全可以搭载 Debian/Fedora/Arch 的用户态跑起来</strong>。</p>
+<hr>
+<h2 id="二、Ubuntu-镜像里到底有什么、没什么">二、Ubuntu 镜像里到底有什么、没什么</h2>
+<p>做几个实验就能验证（下面是在 <code>ubuntu:22.04</code> 上实测的结果）：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 1. 找内核</span></span><br><span class="line">docker run --<span class="built_in">rm</span> ubuntu:22.04 <span class="built_in">ls</span> -la /boot</span><br><span class="line"><span class="comment"># total 8</span></span><br><span class="line"><span class="comment"># drwxr-xr-x 2 root root 4096 Apr 18  2022 .</span></span><br><span class="line"><span class="comment"># drwxr-xr-x 1 root root 4096 Nov  6 07:45 ..</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 2. 找内核模块</span></span><br><span class="line">docker run --<span class="built_in">rm</span> ubuntu:22.04 <span class="built_in">ls</span> /lib/modules</span><br><span class="line"><span class="comment"># ls: cannot access &#x27;/lib/modules&#x27;: No such file or directory</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 3. 加载模块</span></span><br><span class="line">docker run --<span class="built_in">rm</span> ubuntu:22.04 bash -c <span class="string">&quot;apt-get install -y kmod &amp;&amp; modprobe dummy&quot;</span></span><br><span class="line"><span class="comment"># modprobe: FATAL: Module dummy not found in directory /lib/modules/&lt;宿主内核版本&gt;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 4. 看内核版本</span></span><br><span class="line">docker run --<span class="built_in">rm</span> ubuntu:22.04 <span class="built_in">uname</span> -r</span><br><span class="line"><span class="comment"># 6.10.14-linuxkit   ← 这是宿主（Docker Desktop 的 LinuxKit VM）的内核版本</span></span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>一处措辞要精确</strong>：原稿写「没有 <code>/boot</code>」。<strong>实测 <code>/boot</code> 是存在的，只是空目录</strong>（0 字节内容）。真正的差别在于：</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/boot</code></td>
+<td><strong>存在，但为空</strong></td>
+</tr>
+<tr>
+<td><code>/lib/modules</code></td>
+<td><strong>不存在</strong>（<code>find -name '*.ko*'</code> 计数为 0）</td>
+</tr>
+<tr>
+<td><code>/lib/firmware</code></td>
+<td><strong>不存在</strong>（连设备固件都没有）</td>
+</tr>
+<tr>
+<td><code>vmlinuz*</code> / <code>initrd*</code> / <code>System.map*</code> / <code>config-*</code></td>
+<td>均无</td>
+</tr>
+</tbody>
+</table>
+<p>镜像里共 <strong>101 个 dpkg 包</strong>，其中<strong>没有任何 <code>linux-image-*</code> / <code>linux-headers-*</code> / <code>linux-modules-*</code></strong>。</p>
+</blockquote>
+<p><strong><code>uname -r</code> 显示宿主机内核版本，这件事是本质证据。</strong> <code>uname</code> 命令本身是镜像里的二进制（用户态），但它调用的 <code>uname()</code> syscall 被宿主内核响应，内核把自己的版本号报回去。<strong>镜像里没有任何内核可读，<code>uname</code> 只能问运行它的那个内核。</strong></p>
+<p>镜像里实际打包的是：</p>
+<ul>
+<li><code>/bin</code>、<code>/usr/bin</code> 下的二进制（<code>bash</code>、<code>ls</code>、<code>apt</code>）</li>
+<li><code>/lib</code>、<code>/usr/lib</code> 下的共享库（最核心的是 <code>libc.so.6</code>，即 glibc）</li>
+<li><code>/etc</code> 下的配置文件（<code>/etc/passwd</code>、<code>/etc/apt/sources.list</code>、<code>/etc/resolv.conf</code>）</li>
+<li><code>/var/lib/dpkg</code> 下的包数据库</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>「Ubuntu 22.04 官方 ISO 里的内核是 5.15」这句话要加限定</strong>。用官方 ISO 的 <code>.manifest</code> 逐版本核对：</p>
+<table>
+<thead>
+<tr>
+<th>版本</th>
+<th><strong>Desktop ISO</strong>（HWE 滚动）</th>
+<th><strong>Live-Server ISO</strong>（GA）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>22.04 / 22.04.1</td>
+<td>5.15.0-25 / -43</td>
+<td>5.15.0-25 / -43</td>
+</tr>
+<tr>
+<td>22.04.2</td>
+<td><strong>5.19.0-32</strong></td>
+<td>5.15.0-60</td>
+</tr>
+<tr>
+<td>22.04.3</td>
+<td><strong>6.2.0-26</strong></td>
+<td>5.15.0-78</td>
+</tr>
+<tr>
+<td>22.04.4</td>
+<td><strong>6.5.0-18</strong></td>
+<td>5.15.0-94</td>
+</tr>
+<tr>
+<td>22.04.5</td>
+<td><strong>6.8.0-40</strong></td>
+<td>5.15.0-119</td>
+</tr>
+</tbody>
+</table>
+<p>Ubuntu 官方 jammy 发布说明原文：<em>“Ubuntu Server defaults to a <strong>non-rolling LTS kernel v5.15</strong>”</em>、<em>“The <strong>rolling HWE kernel</strong> is based on the v5.15 kernel for 22…”</em>。</p>
+<p><strong>所以「22.04 是 5.15」只对 GA 栈和 Server ISO 成立</strong>；22.04.2 起的桌面 ISO 是 HWE 内核。这一点在拿 ISO 版本做对比时容易踩坑。</p>
+</blockquote>
+<hr>
+<h2 id="三、syscall-路径：进程为什么「借」宿主机内核用">三、syscall 路径：进程为什么「借」宿主机内核用</h2>
+<p>容器里的进程看起来有自己独立的文件系统、PID 空间、网络栈，但这一切都是<strong>视图隔离</strong>，不是真的有独立内核。一次 syscall 的完整路径：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">[容器里] 应用调用 printf()</span><br><span class="line">        ↓</span><br><span class="line">[镜像里的] glibc 把 printf 翻译成 write(1, &quot;Hello&quot;, 5) syscall</span><br><span class="line">        ↓ CPU 切换到内核态</span><br><span class="line">[宿主机 Linux 内核] 处理 write syscall</span><br><span class="line">        ↓ 内核看这个进程属于哪个 namespace</span><br><span class="line">[内核根据 namespace 信息] 把 fd=1 映射到正确的 tty、应用正确的 quota/cgroup 限制</span><br><span class="line">        ↓</span><br><span class="line">[内核] 把数据写到真正的硬件或终端</span><br></pre></td></tr></table></figure>
+<p><strong>关键在于：syscall 接口是 Linux 内核的稳定 ABI</strong>，它不关心调用方是「宿主机自己的进程」还是「容器里的进程」。内核只看到「某个 PID 发起 write syscall，这个 PID 在 pid namespace X、net namespace Y、mount namespace Z 里，cgroup 是 cgroup W」——然后按规则处理。</p>
+<blockquote>
+<p>这部分路径分析（以及容器 / microVM / VM 三者的 syscall 代价差异）在 <a href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/">从冯·诺依曼到 Agent 沙箱</a> 的第三节已经展开过，这里不重复。</p>
+</blockquote>
+<p>namespace 的作用是<strong>让同一个内核对不同的进程组呈现不同的视图</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>namespace</th>
+<th>隔离什么</th>
+<th>man page 原文</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PID</strong></td>
+<td>让容器里的进程以为自己是 PID 1</td>
+<td><em>“PIDs in a new PID namespace start at 1, somewhat like a standalone system”</em></td>
+</tr>
+<tr>
+<td><strong>Mount</strong></td>
+<td>让容器看到自己的 rootfs</td>
+<td><em>“will see distinct single-directory hierarchies”</em></td>
+</tr>
+<tr>
+<td><strong>Network</strong></td>
+<td>独立网卡、IP、路由表</td>
+<td><em>“isolation of the system resources associated with networking: network devices, … <strong>IP routing tables</strong>, firewall rules, …”</em></td>
+</tr>
+<tr>
+<td><strong>User</strong></td>
+<td>让容器 UID 0 映射到宿主非特权 UID</td>
+<td><em>“a process can have a normal unprivileged user ID outside a user namespace while at the same time having a user ID of 0 inside the namespace”</em></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>但 user namespace 那条要加一个重要限定：Docker 默认不启用它。</strong> 实测容器内 <code>/proc/self/uid_map</code> 是<strong>恒等映射</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">$ docker run --rm ubuntu:22.04 sh -c &#x27;cat /proc/self/uid_map&#x27;</span><br><span class="line">         0          0 4294967295</span><br></pre></td></tr></table></figure>
+<p><code>0 0 4294967295</code> 表示<strong>容器内 UID 0 = 宿主 UID 0</strong>，没有做重映射。Docker 的 <code>userns-remap</code> 是<strong>显式开启的 opt-in 功能</strong>，官方文档原文：<em>“<strong>If you enable</strong> user namespaces on the daemon, all containers are started with user namespaces enabled by default”</em>。</p>
+<p>也就是说「容器 root 就是宿主 root」才是默认行为——<strong>这正是容器逃逸风险的根本原因</strong>，也是为什么「不可信代码要上 microVM」这个判断成立。</p>
+</blockquote>
+<p><strong>所有这些 namespace 的实现逻辑都在宿主机内核里。</strong> namespaces(7) 开篇即：<em>“One use of namespaces is to <strong>implement containers</strong>.”</em> 创建 namespace 用的是内核系统调用 <code>clone(2)</code> / <code>unshare(2)</code>（<code>CLONE_NEWPID</code> / <code>CLONE_NEWNS</code> / <code>CLONE_NEWNET</code> / <code>CLONE_NEWUSER</code>）——容器运行时（runc 等）只是<strong>发起</strong>这些 syscall，实现全在内核。</p>
+<hr>
+<h2 id="四、为什么跨发行版能跑：syscall-ABI-的稳定性">四、为什么跨发行版能跑：syscall ABI 的稳定性</h2>
+<p>从 Docker Hub 拉 <code>centos:7</code> 或 <code>rockylinux:8</code> 跑在一个 Arch Linux 宿主机上，完全没问题。原因是 <strong>syscall ABI 极其稳定</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>Linus 那句名言的原文要引准</strong>。流传的版本是「we don’t break user space」，<strong>原文是全大写</strong>——LKML，<strong>2012-12-23</strong>，主题 <code>Re: [Regression w/ patch] Media commit causes user space to misbahave</code>：</p>
+<blockquote>
+<p>If a change results in user programs breaking, <strong>it’s a bug in the kernel. We never EVER blame the user programs.</strong><br>
+<strong>WE DO NOT BREAK USERSPACE!</strong></p>
+</blockquote>
+</blockquote>
+<p>内核官方文档 <code>stable-api-nonsense.rst</code> 也把这写成正式规则：</p>
+<blockquote>
+<p>The kernel to userspace interface is the one that application programs use, <strong>the syscall interface. That interface is very stable over time, and will not break.</strong></p>
+</blockquote>
+<p>注意这里有个容易混淆的地方：<strong>稳定的只是 kernel→userspace 的 syscall 接口，内核内部的 API 明确不保证稳定</strong>（这也是「stable-api-nonsense」这个名字的由来）。</p>
+<p>实际的兼容矩阵是：<strong>容器里的 glibc 版本 ↔ 宿主机内核版本</strong>。</p>
+<ul>
+<li><strong>老镜像跑在新内核上</strong> → 通常没问题（内核向前兼容旧 syscall）；</li>
+<li><strong>新镜像跑在老内核上</strong> → 取决于新 glibc 用了哪些新 syscall。</li>
+</ul>
+<h3 id="4-1-关于-clone3：一个流传很广的错误归因">4.1 关于 <code>clone3</code>：一个流传很广的错误归因</h3>
+<blockquote>
+<p>⚠️ <strong>原稿在这里搞错了机制</strong>。它写「新 glibc 用了 <code>clone3</code> syscall，老内核（CentOS 7 的 3.10）不认识，就失败」。<strong>前半段对，后半段的因果错了。</strong></p>
+</blockquote>
+<p>先把事实摆清楚：</p>
+<table>
+<thead>
+<tr>
+<th>事实</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clone3</code> 引入版本</td>
+<td><strong>Linux 5.3</strong>（man page HISTORY 段）</td>
+</tr>
+<tr>
+<td>CentOS 7 内核</td>
+<td><strong>3.10</strong>（仓库实包 <code>kernel-3.10.0-1160.el7</code>）</td>
+</tr>
+<tr>
+<td>glibc 开始用 <code>clone3</code></td>
+<td><strong>2.34</strong>（2021-08 发布，新增 <code>clone-internal.c</code>）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>但 glibc 对「老内核不认识」这件事是有回退的。</strong> glibc 2.34 的 <code>clone-internal.c</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Try clone3 first.  */</span></span><br><span class="line">ret = __clone3 (cl_args, <span class="keyword">sizeof</span> (*cl_args), func, arg);</span><br><span class="line"><span class="keyword">if</span> (ret != <span class="number">-1</span> || errno != ENOSYS)</span><br><span class="line">    <span class="keyword">return</span> ret;</span><br><span class="line"><span class="comment">/* ... 回退到 clone ... */</span></span><br></pre></td></tr></table></figure>
+<p>即 <strong>glibc 只在拿到 <code>ENOSYS</code>（和后来的 <code>EINVAL</code>）时才回退</strong>。而<strong>老内核（&lt; 5.3）对 <code>clone3</code> 返回的正是 <code>ENOSYS</code></strong>——所以老内核<strong>不会</strong>导致失败，会正常回退到 <code>clone()</code>。</p>
+<p><strong>真正的事故是 seccomp 返回 <code>EPERM</code>。</strong> Docker 的默认 seccomp 策略把 <code>clone3</code> 拦掉、返回 <code>EPERM</code>，而 <strong>glibc 不把 <code>EPERM</code> 当作可回退错误 → 直接致命失败</strong>。</p>
+<p>最权威的记录是 moby/moby <strong>issue #42680</strong>（2021-07-27）：</p>
+<blockquote>
+<p>The latest glibc now attempts to use ‘clone3’ by default. For backwards compatibility it will look for ENOSYS errno and fallback to ‘clone’. <strong>The EPERM errno meanwhile is treated as a fatal error.</strong> The default seccomp filter installed by docker is causing EPERM and so this breaks the glibc fallback.</p>
+</blockquote>
+<p>报错现场：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">clone3(&#123;flags=CLONE_VM|CLONE_FS|...|CLONE_THREAD|...&#125;, 88) = -1 EPERM (Operation not permitted)</span><br><span class="line">curl: (6) getaddrinfo() thread failed to start</span><br></pre></td></tr></table></figure>
+<p><strong>而且这些事故恰恰发生在新内核上</strong>（Fedora Rawhide、openSUSE Tumbleweed、RHEL 9 Beta）——这本身就证明问题不在「老内核」。</p>
+<p>修复在 Docker 侧：PR #42681 把默认 seccomp 策略改成「当无 <code>CAP_SYS_ADMIN</code> 时让 <code>clone3</code> 返回 <strong><code>ENOSYS</code></strong> 而不是 <code>EPERM</code>」，从而让 glibc 的回退生效：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span> <span class="attr">&quot;names&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="string">&quot;clone3&quot;</span><span class="punctuation">]</span><span class="punctuation">,</span> <span class="attr">&quot;action&quot;</span><span class="punctuation">:</span> <span class="string">&quot;SCMP_ACT_ERRNO&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;excludes&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span><span class="attr">&quot;caps&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="string">&quot;CAP_SYS_ADMIN&quot;</span><span class="punctuation">]</span><span class="punctuation">&#125;</span> <span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p><strong>结论</strong>：跨发行版的兼容性是 <strong>syscall 兼容性</strong>，不是发行版兼容性。但要注意——<strong>syscall 之外的中介层（seccomp 过滤器、能力集）会人为改变可见的 syscall 集合</strong>，从而破坏可移植性。<code>clone3</code> 这个案例的教训正在于此。</p>
+<h3 id="4-2-兼容性的边界：镜像不能「自带」任何需要内核侧配合的东西">4.2 兼容性的边界：镜像不能「自带」任何需要内核侧配合的东西</h3>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>能跑吗</th>
+<th>为什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ip</code></td>
+<td>✅</td>
+<td>用的是<strong>宿主机内核</strong>的网络栈</td>
+</tr>
+<tr>
+<td><code>iptables</code></td>
+<td>✅</td>
+<td>操作的是<strong>宿主机</strong>的 netfilter</td>
+</tr>
+<tr>
+<td><code>systemd</code></td>
+<td>✅</td>
+<td>但需要专门配置（以 systemd 作 PID 1、处理 cgroup 挂载）</td>
+</tr>
+<tr>
+<td><code>systemctl poweroff</code></td>
+<td>❌</td>
+<td>见下</td>
+</tr>
+<tr>
+<td><code>modprobe</code></td>
+<td>❌</td>
+<td>见下</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong><code>modprobe</code> 为什么失败</strong>：报错是</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">modprobe: FATAL: Module dummy not found in directory /lib/modules/&lt;宿主内核版本&gt;</span><br></pre></td></tr></table></figure>
+<p>这个字符串来自 kmod 源码 <code>tools/modprobe.c</code>（<code>LOG(&quot;Module %s not found in directory %s\n&quot;, ...)</code>，<code>log_priority = LOG_CRIT</code> 渲染成 <code>FATAL:</code>），目录名来自 <code>kmod_get_dirname</code> = <code>/lib/modules/$(uname -r)</code>。</p>
+<p><strong>在容器里先命中「找不到模块文件」</strong>——<code>/lib/modules</code> 目录压根不存在，modprobe 在「查模块文件」阶段就失败了，走不到「加载」那一步。</p>
+<p><strong>权限是下一道关</strong>：即便把模块文件塞进去，加载模块需要 <code>CAP_SYS_MODULE</code>（实测默认容器 <code>CapEff</code> <strong>不含</strong>），且 Docker 默认 seccomp 对 <code>init_module</code>/<code>finit_module</code> 只在有该能力时才放行——那时会变成 <code>EPERM</code>。<strong>两个原因都会导致失败，但原稿给的这条报错对应的是「找不到文件」而非「没有权限」。</strong></p>
+</blockquote>
+<blockquote>
+<p><strong><code>systemctl poweroff</code> 为什么关不掉机器</strong>：两道机制都拦着。</p>
+<ol>
+<li><strong>权限</strong>：<code>reboot(2)</code> man page：<em>“EPERM — The calling process has insufficient privilege to call reboot(); the caller must have the <strong>CAP_SYS_BOOT</strong> inside its user namespace.”</em> 默认容器没有 CAP_SYS_BOOT。</li>
+<li><strong>语义</strong>（更根本）：<em>“Since Linux 3.4, if <code>reboot()</code> is called from a PID namespace other than the initial PID namespace … it performs a ‘reboot’ of <strong>that namespace</strong>: the ‘init’ process of the PID namespace is immediately terminated.”</em></li>
+</ol>
+<p>也就是说，容器里调 <code>LINUX_REBOOT_CMD_POWER_OFF</code> <strong>只会终止本 namespace 的 init（即停掉这个容器）</strong>，不会关掉宿主机。<strong>容器不是一台机器，poweroff 最多把自己干掉。</strong></p>
+</blockquote>
+<hr>
+<h2 id="五、容器-vs-Kata-vs-VM：栈的真正差异">五、容器 vs Kata vs VM：栈的真正差异</h2>
+<table>
+<thead>
+<tr>
+<th>组成层</th>
+<th>Docker 容器</th>
+<th>Kata 容器</th>
+<th>虚拟机</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>应用</td>
+<td>✅（来自镜像）</td>
+<td>✅（来自镜像）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>用户态二进制 + 库</td>
+<td>✅（来自镜像）</td>
+<td>✅（来自镜像）</td>
+<td>✅（来自 guest OS）</td>
+</tr>
+<tr>
+<td>init / systemd</td>
+<td>⚠️ 可选，通常无（PID 1 是 entrypoint）</td>
+<td>✅（kata-agent 或 systemd）</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><strong>内核</strong></td>
+<td>❌ <strong>没有，借用宿主机的</strong></td>
+<td>✅ <strong>有，Kata 自己的精简 Linux</strong></td>
+<td>✅ 有，guest kernel</td>
+</tr>
+<tr>
+<td>内核模块</td>
+<td>❌ 无</td>
+<td>✅ 有</td>
+<td>✅ 有</td>
+</tr>
+<tr>
+<td>隔离机制</td>
+<td>namespace + cgroups</td>
+<td><strong>VM 硬件虚拟化 + namespace</strong></td>
+<td>VM 硬件虚拟化</td>
+</tr>
+<tr>
+<td>启动对象</td>
+<td>一个进程</td>
+<td>一个 VM（含 guest kernel）+ 容器</td>
+<td>一个 VM</td>
+</tr>
+<tr>
+<td>启动时间</td>
+<td>毫秒级</td>
+<td>见下方更正</td>
+<td>秒级</td>
+</tr>
+<tr>
+<td>内存 overhead</td>
+<td>数 MB 量级（无权威精确值）</td>
+<td><strong>数十~数百 MiB，取决于 VMM</strong></td>
+<td>几十 MB 起</td>
+</tr>
+<tr>
+<td>镜像大小</td>
+<td><strong>≈28.4 MiB</strong>（<code>ubuntu:22.04</code> 压缩后）</td>
+<td>更大（含 guest 内核与 mini-OS rootfs）</td>
+<td>GB 级</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>Kata 的内存开销那格，原稿写错了</strong>。它写「&lt;5 MiB（VMM）+ guest kernel」——<strong><code>&lt;= 5 MiB</code> 是 Firecracker 的数字，被误用到了 Kata 上</strong>。</p>
+<p>Firecracker <code>SPECIFICATION.md</code> 原文：<em>“Firecracker’s virtual machine manager threads have a memory overhead <strong>&lt;= 5 MiB</strong>. The memory overhead is <strong>dependent on the workload</strong> … and on the VMM <strong>configuration</strong>”</em>（连 Firecracker 自己都强调这数字依赖负载与配置）。</p>
+<p><strong>Kata 官方从未给过这个数。</strong> Kata 的默认 VMM 是 QEMU / Cloud Hypervisor / Dragonball，官方 <code>docs/design/virtualization.md</code> 只给<strong>定性排序</strong>：QEMU = Medium、Cloud Hypervisor = Low、Firecracker = Lowest、Dragonball = Lowest——<strong>QEMU 与 CLH 的 footprint 远大于 5 MiB</strong>。</p>
+<p>官方给出的实测量级是<strong>百 MiB 级</strong>（模板方案每 VM 约 178.2 MiB vs 223.2 MiB），而且 <code>how-to-size-sandbox-overhead-runtime-rs.md</code> 明确说：overhead 取决于 <em>“the hypervisor in use (<strong>each has a different memory/CPU footprint</strong>)”</em>，且 <em>“<strong>Kata cannot ship a single correct value for this function</strong>”</em>，需实测调优。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>Kata 的启动时间也没有官方数字</strong>。原稿写「~150-300ms」——<strong>Kata 官方仓库、文档站、4.0 release blog 都没有这个数字</strong>，它来自一家第三方厂商博客。Kata 4.0 的 release blog 只定性写 <em>“Lower latency and faster startup times”</em>，无数字。</p>
+<p><strong>官方唯一带数字的地方反而更慢</strong>：<code>how-to-use-template-in-runtime-rs.md</code> 给的是「<strong>0.6s vs 0.82s</strong>」（模板方案带来的约 73.2% 降低），即官方口径的 VM 启动在 <strong>600—820ms</strong> 量级。</p>
+</blockquote>
+<p><strong>Docker 容器省掉的就是「内核」这一层。</strong> 这也是为什么它启动是毫秒级（没有内核 boot 流程）、内存 overhead 只有数 MB（没有内核常驻内存）、镜像只有几十 MB（没有 vmlinuz 和模块）。</p>
+<hr>
+<h2 id="六、「内核套内核」的误解：栈长-≠-嵌套">六、「内核套内核」的误解：栈长 ≠ 嵌套</h2>
+<p>这是最容易被搞混的一点。看完整栈就清楚了：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">[宿主机 Linux 内核]（启用 KVM 模块）</span><br><span class="line">        ↓ 用户态调用 KVM ioctl</span><br><span class="line">[Firecracker / Cloud Hypervisor / QEMU]（只是一个用户态进程）</span><br><span class="line">        ↓ 通过 KVM 创建 VM</span><br><span class="line">[guest Linux 内核]（第一次也是唯一一次虚拟化）</span><br><span class="line">        ↓ guest 内核上跑 namespace/cgroups</span><br><span class="line">[容器 workload]</span><br></pre></td></tr></table></figure>
+<p>整个过程<strong>只发生了一次虚拟化</strong>：宿主机内核的 KVM 模块把 CPU/内存虚拟化给 guest 内核用。guest 内核起来之后跑容器，走的是 namespace/cgroups——<strong>这是容器，不是又一次虚拟化</strong>。</p>
+<p>真正的「内核套内核」（nested virtualization）长这样：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Host kernel (KVM)</span><br><span class="line">    → VM A (第一层 guest kernel + KVM)</span><br><span class="line">        → VM B (第二层 guest kernel)</span><br><span class="line">            → 应用</span><br></pre></td></tr></table></figure>
+<p>这才需要嵌套虚拟化支持，性能损耗也大。</p>
+<p><strong>栈长 ≠ 虚拟化嵌套。</strong> Kata 看起来栈很长（containerd → runtime → VMM → guest kernel → agent → container），但其中只有 <strong>VMM → guest kernel</strong> 这一段是虚拟化，前面是编排逻辑，后面是容器机制。</p>
+<blockquote>
+<p>Kata 官方文档也印证了这一点：<em>“Requirements: <strong>Kata requires nested virtualization or bare metal.</strong>”</em>——<strong>宿主是裸机时不需要嵌套虚拟化</strong>，因为 Kata 的 VM 就是唯一一层硬件虚拟化。</p>
+</blockquote>
+<p><strong>唯一的例外</strong>：如果宿主机本身就是一个云 VM（比如在 AWS EC2 上跑 Kata），那才会出现真正的嵌套，需要云厂商在该实例类型上开启 nested virtualization。AWS 官方给了具体清单（M7i / C7i / R7i / I7i 等系列，实例级 <code>CpuOptions NestedVirtualization=enabled</code>）。<strong>注意 <code>.metal</code> 实例是裸机，本身不需要嵌套虚拟化。</strong></p>
+<hr>
+<h2 id="七、Kata-与-Firecracker-的内核来源：谁自带、谁不自带">七、Kata 与 Firecracker 的内核来源：谁自带、谁不自带</h2>
+<table>
+<thead>
+<tr>
+<th>主体</th>
+<th>是否「自带」guest 内核</th>
+<th>内核来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Kata Containers</strong></td>
+<td>✅ <strong>自带，随包分发</strong></td>
+<td>基于 Linux LTS 精简编译，配套 mini-OS rootfs</td>
+</tr>
+<tr>
+<td><strong>Firecracker</strong></td>
+<td>❌ 二进制本身不含</td>
+<td><strong>但官方分发预编译 CI 内核</strong>（见下方更正）</td>
+</tr>
+<tr>
+<td><strong>QEMU / Cloud Hypervisor</strong></td>
+<td>❌ 不自带</td>
+<td>用户提供</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Kata 确实自带内核。</strong> 官方原文：</p>
+<blockquote>
+<p>Kata Containers is Apache 2 licensed software consisting of two main components: the Kata agent, and the Kata Containerd shim v2 runtime. <strong>It also packages a Linux kernel</strong> and versions of QEMU, Cloud Hypervisor and Firecracker hypervisors.</p>
+</blockquote>
+<blockquote>
+<p>The default kernel provided in Kata Containers is <strong>highly optimized for kernel boot time and minimal memory footprint, providing only those services required by a container workload. It is based on the latest Linux LTS</strong> kernel.</p>
+</blockquote>
+<p>打包后位于 <strong><code>/opt/kata/share/kata-containers/</code></strong>，内核文件形如 <code>vmlinuz.container</code> / <code>vmlinux.container</code>，rootfs 镜像为 <code>kata-containers.img</code>。</p>
+<p>而且**「mini-OS rootfs」就是 Kata 自己的叫法**：<em>“The default packaged rootfs image, <strong>sometimes referred to as the mini O/S</strong>, is a highly optimized container bootstrap system.”</em></p>
+<blockquote>
+<p>⚠️ <strong>Firecracker 那条只说了一半，而且末句不属实</strong>。</p>
+<p>原稿写「Firecracker 不自带内核，官方文档教你 <code>git clone torvalds/linux</code> 自己编译……<strong>它不维护、不分发内核镜像</strong>」。</p>
+<ul>
+<li><strong>自编译那条路径确实存在</strong>，但<strong>不在 getting-started 主文档里</strong>——它在 <code>docs/rootfs-and-kernel-setup.md</code>。</li>
+<li><strong>getting-started 主文档实际是让你下载官方预编译内核</strong>：<em>“This guide uses the <strong>latest kernel image and Ubuntu rootfs available in our CI</strong>… <code>S3=&quot;https://s3.amazonaws.com/spec.ccfc.min&quot;</code>”</em></li>
+<li><strong>「不分发内核镜像」不属实</strong>：官方 S3 桶 <code>firecracker-ci/</code> 里长期存放官方构建的 vmlinux（最新一批含 <code>vmlinux-5.10.271</code>、<code>6.1.188</code>、<code>6.18.56</code>），<code>kernel-policy.md</code> 还明确对特定内核版本提供<strong>至少 2 年</strong>的支持周期，并通过 Amazon Linux 提供 microVM 专用内核。</li>
+</ul>
+<p><strong>准确说法是</strong>：Firecracker 二进制本身不含内核，<strong>但项目维护内核支持策略、并分发官方预编译的 CI 内核</strong>。</p>
+<p>另外「Firecracker 只做四件事」也是过度简化——README 列出的 API 能力远不止四件（vCPU/内存配置、网络接口、块设备、限速器、vsock、entropy、pmem、内存热插拔、快照、MMDS……）。</p>
+</blockquote>
+<hr>
+<h2 id="八、回到最初的问题">八、回到最初的问题</h2>
+<p><strong>为什么 Ubuntu 镜像可以「看起来像 Ubuntu」却不需要内核？</strong></p>
+<p>因为「像 Ubuntu」只取决于用户态二进制——<code>apt</code> 能用、<code>/etc/os-release</code> 写着 Ubuntu、<code>ls</code> 输出长得像 Ubuntu。<strong>而 syscall 永远打到宿主机内核上</strong>，宿主机内核不关心上面跑的是 Ubuntu、Debian、Alpine 还是裸 bash，它只认 syscall 号和进程的 namespace 属性。</p>
+<p>这也解释了一个非常实际的现象：<strong>容器镜像无法「自带内核更新」</strong>。实测在 <code>ubuntu:22.04</code> 里跑 <code>apt-get -s upgrade</code>，只会列出 3 个包（apt / libapt-pkg / libpcre2），<strong>没有任何 <code>linux-image-*</code></strong>——因为镜像里根本没装内核包，也没有任何包把内核列为依赖，<strong>apt 根本不会去碰内核</strong>。</p>
+<p>（补充一句：用户当然可以手动 <code>apt install linux-image-generic</code>，apt 会把内核<strong>文件</strong>装进 <code>/boot</code> 和 <code>/lib/modules</code>——<strong>但装了也不会被使用</strong>，因为容器跑的是宿主内核，<code>uname -r</code> 不会变。所以更准确的说法是「装了也不用」。）</p>
+<blockquote>
+<p>⚠️ <strong>但「宿主机一升级所有容器立刻用上新内核」这句不严谨</strong>。常规内核升级要<strong>重启宿主机</strong>才生效——新内核在下次启动时才加载；不重启的话旧内核仍在内存里跑，所有容器继续用旧内核。</p>
+<p>唯一能「不重启就打内核补丁」的是 <strong>livepatch</strong>（内核官方文档：<em>“fixing critical functions <strong>without a system reboot</strong>”</em>），但它是特例、只覆盖部分函数。</p>
+<p>所以准确的说法是：<strong>宿主升级并重启后，所有容器才用上新内核</strong>（或走 livepatch 免重启，但覆盖有限）。这个性质既是容器部署的一大优势（内核安全修复一次到位），也是一大坑（内核行为变了，所有容器可能同时受影响）。</p>
+</blockquote>
+<p><strong>一句话总结</strong>：</p>
+<blockquote>
+<p><strong>镜像 ≠ 系统。镜像 = rootfs = 一份用户态。系统 = rootfs + 内核。容器只有前一半，所以它必须跟宿主机共享后一半</strong>——这不是「巧妙的设计」，这是 Linux namespace 机制天然的工作方式，Docker 只是把这个机制用到了极致。</p>
+</blockquote>
+<p>而当你需要把「不可信代码」和宿主机内核彻底隔开时，Kata / Firecracker 这类 VM-based 方案的意义就浮现了——<strong>用一份精简 guest kernel 重新划分边界，把 Linux 内核那 4000 万行代码的攻击面挡在 VM 层之外</strong>。</p>
+<blockquote>
+<p>✅ 「4000 万行」这个量级是对的：Linux 内核源码在 <strong>6.14-rc1（2025-01）突破 4000 万行</strong>，7.3-rc1（2026-08）约 <strong>4100 万行</strong>，其中<strong>约 60% 是 drivers</strong>。</p>
+</blockquote>
+<hr>
+<h2 id="附录-A：Kata-的隔离模型——微内核与-namespace-是分层协作，不是二选一">附录 A：Kata 的隔离模型——微内核与 namespace 是分层协作，不是二选一</h2>
+<p>一个常见的误解是「Kata 有微内核了，namespace 就不重要了」。实际上两者是<strong>纵深防御的两层</strong>。</p>
+<h3 id="第一层：微内核构建的「硬」边界">第一层：微内核构建的「硬」边界</h3>
+<p>Kata 引入独立内核的核心目的，是解决传统容器（runc）<strong>共享宿主内核</strong>带来的安全风险——在共享内核模型下，任何一个容器中的内核提权漏洞都可能危及整个宿主机。</p>
+<p>Kata 官方对此的定位非常明确，三处文档都用了同一表述：</p>
+<blockquote>
+<p>…provide stronger workload isolation using hardware <strong>virtualization technology as a second layer of defence</strong>.</p>
+<p>Kata Containers creates a <strong>second layer of isolation on top of traditional namespace-based containers</strong> using hardware virtualization.</p>
+<p>Kata Containers provides a <strong>second layer of isolation on top of those provided by traditional-containers</strong>.</p>
+</blockquote>
+<h3 id="第二层：namespace-实现的「软」隔离与容器语义">第二层：namespace 实现的「软」隔离与容器语义</h3>
+<p>微内核解决了「谁和谁之间需要一堵墙」，但在<strong>墙的内部</strong>，要让应用感觉自己运行在一个独立的 Linux 环境中，依然需要 namespace。Kata 的架构是 <strong>Hypervisor → 客户机内核 → 容器进程</strong>，容器进程运行在<strong>客户机内核</strong>之上。</p>
+<p>namespace 在 Kata 内部承担三个不可或缺的功能：</p>
+<ol>
+<li><strong>实现容器的视图隔离</strong> —— PID namespace 让容器内进程认为自己拥有独立 PID 空间；Mount namespace 提供独立 rootfs 视图；Network namespace 赋予独立网络栈。<strong>没有这些，微虚拟机内部跑的只是一个普通进程，而不是符合 OCI 标准的「容器」。</strong></li>
+<li><strong>Pod 内容器的隔离</strong> —— <strong>Kata 以 Pod 为边界创建微虚拟机</strong>，官方原文：<em>“the sandbox is carried out at the <strong>pod level</strong>”</em>、<em>“The shimv2 architecture allows <strong>running several containers per VM</strong>”</em>。当一个 Pod 内运行多个容器（如 Sidecar 模式）时，<strong>它们共享同一个客户机内核</strong>，必须依靠 namespace 和 cgroups 隔离：<em>“<strong>Linux cgroups and namespaces are created inside the VM by the guest kernel</strong> to isolate the workload from the VM environment.”</em></li>
+<li><strong>维持生态兼容性</strong> —— 使 Kata 容器能无缝接入 Kubernetes 与 containerd 生态，满足 CRI 和 OCI 标准。</li>
+</ol>
+<p><strong>一句话概括</strong>：</p>
+<blockquote>
+<p><strong>微内核负责「主机 vs 租户」的强安全边界，namespace 负责「租户内部」的容器资源视图隔离。</strong> 微内核取代的是<strong>主机内核</strong>在隔离中的角色，但并没有、也无法取代<strong>客户机内核</strong>内部 namespace 的作用。</p>
+</blockquote>
+<h3 id="一个补充细节">一个补充细节</h3>
+<p><strong><code>kata-agent</code> 在 VM 内</strong>，官方原文：<em>“written in the Rust programming language, is a <strong>long running process that runs inside the VM</strong>. It acts as the supervisor for managing the containers and the workload running within those containers. <strong>Only a single agent process is run for each VM</strong>.”</em>，与宿主机通过 <strong>ttRPC over VSOCK</strong> 通信。</p>
+<hr>
+<h2 id="附录-B：内核相关术语速查">附录 B：内核相关术语速查</h2>
+<table>
+<thead>
+<tr>
+<th>术语</th>
+<th>一句话定义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>rootfs</strong></td>
+<td>文件系统根目录的内容，即一份用户态，<strong>不含内核</strong></td>
+</tr>
+<tr>
+<td><strong>vmlinuz</strong></td>
+<td>编译好的 Linux 内核二进制镜像</td>
+</tr>
+<tr>
+<td><strong>syscall</strong></td>
+<td>用户态进程请求内核服务的唯一入口，Linux 的稳定 ABI</td>
+</tr>
+<tr>
+<td><strong>glibc</strong></td>
+<td>GNU C 库，用户态进程与内核之间的标准 syscall 包装层</td>
+</tr>
+<tr>
+<td><strong>namespace</strong></td>
+<td>内核提供的资源视图隔离机制（PID / Mount / Net / User 等）</td>
+</tr>
+<tr>
+<td><strong>cgroups</strong></td>
+<td>内核提供的资源限额与统计机制</td>
+</tr>
+<tr>
+<td><strong>KVM</strong></td>
+<td>Linux 内核内置的虚拟化模块，让宿主内核能创建 VM</td>
+</tr>
+<tr>
+<td><strong>VMM</strong></td>
+<td>Virtual Machine Monitor，用 KVM 创建 VM 的用户态程序（QEMU / Firecracker 等）</td>
+</tr>
+<tr>
+<td><strong>guest kernel</strong></td>
+<td>VM 里运行的内核，与宿主机内核独立</td>
+</tr>
+<tr>
+<td><strong>nested virtualization</strong></td>
+<td>VM 里再跑 VM，需要两层 KVM</td>
+</tr>
+<tr>
+<td><strong>kata-agent</strong></td>
+<td>运行在 Kata VM 内的进程，负责在 guest 里创建容器并与宿主机通信</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/">从冯·诺依曼到 Agent 沙箱：虚拟化隔离技术栈拆解</a>——syscall 路径的性能差异与三种沙箱的选型逻辑</li>
+<li><a href="/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/">x86 体系结构基础</a>——特权级、MMU 页表、DMA、PCIe 与 IOMMU 的完整链路</li>
+<li><a href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a>——Kata / gVisor / Firecracker 在运行时栈里的位置</li>
+<li><a href="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU</a>——本文的硬件侧续篇</li>
+<li><a href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</a>——microVM 沙盒的工程落地</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文的镜像内容与实测命令在 <code>ubuntu:22.04</code>（Docker 27.4.0）上真实执行；内核机制核对自 Linux man pages（namespaces / pid_namespaces / mount_namespaces / network_namespaces / user_namespaces / clone / reboot / modprobe）与内核文档（stable-api-nonsense、handling-regressions、livepatch）；<code>clone3</code> 事故核对自 moby/moby issue #42680、PR #42681、issue #42876、Red Hat Bug 1985525 与 glibc 2.34 源码 <code>clone-internal.c</code>；Ubuntu 内核版本核对自 <a target="_blank" rel="noopener" href="http://releases.ubuntu.com">releases.ubuntu.com</a> 的各版本 <code>.manifest</code>；Kata 与 Firecracker 核对自各自官方仓库文档。</p>
+<p><strong>原稿更正汇总</strong>：<strong><code>clone3</code> 的归因错了</strong>（glibc 对 <code>ENOSYS</code> 有回退，老内核不会失败；真实事故是 <strong>seccomp 返回 <code>EPERM</code></strong>，且发生在<strong>新内核</strong>上）、<strong><code>/boot</code> 是存在的空目录</strong>（不是「没有」）、<strong>「Ubuntu 22.04 ISO 是 5.15」对 22.04.2+ 桌面 ISO 不成立</strong>（HWE 内核）、<strong>Linus 原话是全大写 <code>WE DO NOT BREAK USERSPACE!</code></strong>（LKML 2012-12-23）、<strong>默认 Docker 不启用 user namespace</strong>（<code>uid_map</code> 是恒等映射）、<strong>Kata 的内存开销 <code>&lt;5 MiB</code> 是把 Firecracker 的数字用错了</strong>（Kata 官方量级是数十~数百 MiB，且官方明说「cannot ship a single correct value」）、<strong>Kata 启动 150-300ms 无官方来源</strong>（官方口径约 0.6—0.82s）、<strong>Firecracker 确实分发预编译内核</strong>（S3 桶 + 至少 2 年支持周期）、<strong>「宿主升级后容器立刻用新内核」需重启才生效</strong>（livepatch 例外）、<strong><code>modprobe</code> 失败的报错对应「找不到文件」而非「没有权限」</strong>（权限是下一道关）。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/">https://roger-lv.github.io/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E8%99%9A%E6%8B%9F%E5%8C%96/">虚拟化</a><a class="post-meta__tags" href="/tags/%E5%AE%B9%E5%99%A8/">容器</a><a class="post-meta__tags" href="/tags/%E5%86%85%E6%A0%B8/">内核</a><a class="post-meta__tags" href="/tags/Firecracker/">Firecracker</a><a class="post-meta__tags" href="/tags/Kata/">Kata</a><a class="post-meta__tags" href="/tags/namespace/">namespace</a><a class="post-meta__tags" href="/tags/syscall/">syscall</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/" title="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：从 IOMMU（硬件地址翻译与 DMA 隔离）→ VFIO（设备直通框架）→ SR-IOV（PCIe 级切分）→ MIG（硅片级硬切分）→ vGPU（软件时间片调度）这条链路，构成了 GPU 虚拟化的完整技术栈。「IOMMU 划边界、VFIO 做移交」这条直通链路，是所有 GPU 沙盒和具身仿真基础设施绕不开的地基。  本文按「技术原理 → 两大落地场景 → 一个真实落地案例 → 决策树」四层展开，并把各技术支持的功能以表格汇总。 所有技术描述核对自 Linux 内核文档、NVIDIA 官方文档、Intel/AMD 官方文档与各项目仓库。核对中发现原稿有二十余处需要更正，其中三处是实质性错误，已在文中以 ⚠️ 标注。  一、技术原理层：从 IOMMU 到 vGPU 1.1 IOMMU：硬件级安全边界 IOMMU 是提供地址翻译与设备隔离的硬件单元：对设备发出的 DMA 做 IOVA → HPA 翻译与访问保护，并提供中断重映射；隔离以 IOMMU group 为粒度。Intel 侧叫 VT-d，AMD 侧叫 AMD-Vi。  Linux VFIO 内核文档原文：  ...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E5%88%86%E5%B8%83%E5%BC%8F%E5%AD%98%E5%82%A8%E7%89%A9%E7%90%86%E5%AD%A6%E5%AF%B9%E8%B1%A1%E5%AD%98%E5%82%A8%E5%B9%B6%E8%A1%8C%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E4%B8%8ECheckpoint%E9%A3%8E%E6%9A%B4/" title="分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">分布式存储物理学：对象存储、POSIX 并行文件系统与 Checkpoint 存储风暴</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：对象存储（S3/OSS）以「扁平命名空间 + HTTP REST + 最终一致性」换取近乎无限的水平扩展与极低的单位容量成本；POSIX 并行文件系统（Lustre/GPFS/CephFS/JuiceFS）以「共享存储集群 + 元数据/数据分离 + 细粒度锁」换取微秒级延迟与聚合 TB/s 带宽。 这两套物理规律的碰撞，在大模型训练数百台机器同时写入 500GB Checkpoint 的瞬间被推向极限。  本文分两部分：上半场讲存储范式（对象存储原理 → 四类并行文件系统架构对比 → Checkpoint 风暴的成因与缓解），下半场落到工程（万卡集群如何设计异步保存，把对训练的影响压进 1%）。 所有架构描述核对自各系统官方文档与原始论文，性能数字核对自一手来源。核对中发现原稿有二十余处需要更正，其中两处是整段数字错误，已在文中以 ⚠️ 标注。  上半场：三种存储范式的物理学 一、对象存储：HTTP 语义构建的「无限货架」 1.1 扁平命名空间与 REST 接口 与文件系统「目录树 + inode」的层次化模型不同，对象存储把整个存储池抽象为 Bucket + Ob...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/" title="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</div></div><div class="info-2"><div class="info-item-1">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解 LLM Agent 正在把一个老问题重新推到台前:当代码由模型生成、且不可信时,你把它放在哪里执行? 容器的隔离撑不住对抗性负载;传统虚拟机又太重,扛不住每秒几十次的沙箱创建。于是一批沉寂多年的技术突然变得炙手可热——Firecracker、gVisor、Kata Containers、microVM。这些名词经常混在一起出现,但它们分处不同层次、解决不同问题。要真正理解它们的取舍,需要从最底层讲起:从冯·诺依曼架构的&quot;核心与外围&quot;,一路讲到 Agent infra 的选型决策。 本文分四部分:先梳理虚拟化技术栈的分层关系,再深入 QEMU 的设备模型理解&quot;外围设备&quot;的本质,然后分析性能差异的根源,最后落到 Agent 沙箱的实战选型。  一、技术栈全景:谁在谁的上面 先用一句话给所有主角定位:  KVM 是 Linux 内核提供的硬件虚拟化基础设施;QEMU 是基于 KVM 的传统全功能虚拟机监视器;Firecracker 是基于 KVM、专为 Serverless 设计的...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：kubelet 不直接创建容器，它只通过 CRI（Container Runtime Interface）下达指令；真正干活的是高级运行时（containerd / CRI-O）和低级运行时（runc / kata-agent / runsc）。沙盒选型的本质，就是在决定「谁来接 kubelet 的 CRI 调用」以及「容器进程最终跑在什么隔离边界里」。对具身智能公司而言，仿真训练、Agent 工具调用、强隔离 VM、真机设备接入这四类负载对应完全不同的运行时组合——不存在一个「万能沙盒」能同时满足。  这篇是 具身智能仿真场景的沙盒选型 的下层视角。上篇回答「该选哪个沙盒」，这篇回答「沙盒插在运行时栈的哪一层、跟 kubelet 怎么耦合」。 本文的架构描述逐条核对自 Kubernetes 官方文档、containerd 源码与文档、Kata/gVisor/Firecracker 官方文档与仓库。核对中发现原稿有十余处需要更正，已在文中以 ⚠️ 标注。  一、先立骨架：kubelet 之下的运行时栈分层 Kubernetes 的容器运行时体系是明确的两层结构，这个...</div></div></div></a><a class="pagination-related" href="/2024/09/20/2024-09-20-AI%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6/" title="AI资源调度"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/aiinfra.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-20</div><div class="info-item-2">AI资源调度</div></div><div class="info-2"><div class="info-item-1">AI资源调度 100道k8s面试题：https://zhuanlan.zhihu.com/p/721588398 [云原生 AI 的资源调度和 AI 工作流引擎设计分享_paddleflow-CSDN博客](https://blog.csdn.net/lihui49/article/details/129260286?ops_request_misc={&quot;request_id&quot;%3A&quot;81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&quot;%2C&quot;scm&quot;%3A&quot;20140713.130102334..&quot;}&amp;request_id=81C8FAB8-41BA-4FDC-A5E5-B7EF5F69A9D0&amp;biz_id=0&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-3-129260286-null-null.142^v100^pc_search_re...</div></div></div></a><a class="pagination-related" href="/2024/09/24/2024-09-24-%E4%B8%80%E7%A7%8D%E5%9F%BA%E4%BA%8E%E7%BB%8F%E9%AA%8C%E7%9A%84%E5%8A%A8%E6%80%81%E8%B5%84%E6%BA%90%E8%B0%83%E5%BA%A6%EF%BC%9AStraightLine-An-End-to-End-Resource-Aware-Scheduler-for-Machine-Learning-Application-Requests/" title="一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/dynamic.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-09-24</div><div class="info-item-2">一种基于经验的动态资源调度：StraightLine:An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests</div></div><div class="info-2"><div class="info-item-1">StraightLine: An End-to-End Resource-Aware Scheduler for Machine Learning Application Requests  摘要： 提出了一个端到端的资源感知调度器，用于在混合基础设施中调度机器学习应用请求的最优资源。 关键词： 机器学习部署、异构资源、资源放置、容器化、无服务器计算。 主要内容：  ML应用的生命周期包括模型开发和模型部署两个阶段。 传统ML系统通常只关注生命周期中的一个特定阶段或阶段。 StraightLine通过一个基于经验的动态放置算法，根据请求的独特特征（如请求频率、输入数据大小和数据分布）智能地放置请求。 包括三个层次：模型开发抽象、多种实现部署、实时资源调度。  模型容器化：   使用NVIDIA-Docker实现模型开发的容器化。   为模型训练构建了强大的NVIDIA-Docker，为模型验证构建了轻量级的NVIDIA-Docker。 深度学习docker环境配置之nvidia-docker安装使用_nvidia docker-CSDN博客   容器定制：  根据不同的压缩ML模...</div></div></div></a><a class="pagination-related" href="/2024/10/01/2024-10-01-CUDA%E5%AE%B9%E5%99%A8%E5%8C%96&Container-runtime%E7%9B%B8%E5%85%B3%E6%8A%80%E6%9C%AF%E6%A2%B3%E7%90%86/" title="CUDA容器化&amp;Container runtime相关技术梳理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-10-01</div><div class="info-item-2">CUDA容器化&amp;Container runtime相关技术梳理</div></div><div class="info-2"><div class="info-item-1">CUDA容器化&amp;Container runtime相关技术梳理 整体结构 CUDA API体系  CUDA Driver API：GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）； CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度； CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。 因此要实现 NVIDIA 容器化，也就是要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内应用程序内可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 NVIDIA CONTAINER TOOLKIT 具体结构  GPU 容器底层实现 GPU 容器相关概念 一些背景知识  什么是运行时？什么是高级运行时（high-level runtime）和低级运行时(low-level runtime):  参考：ht...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">309</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">489</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E6%8A%8A%E3%80%8CLinux-%E7%B3%BB%E7%BB%9F%E3%80%8D%E6%8B%86%E5%BC%80%E7%9C%8B%EF%BC%9A%E5%86%85%E6%A0%B8%E5%92%8C%E7%94%A8%E6%88%B7%E6%80%81%E6%98%AF%E4%B8%A4%E4%BB%B6%E4%BA%8B"><span class="toc-number">1.</span> <span class="toc-text">一、把「Linux 系统」拆开看：内核和用户态是两件事</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Ubuntu-%E9%95%9C%E5%83%8F%E9%87%8C%E5%88%B0%E5%BA%95%E6%9C%89%E4%BB%80%E4%B9%88%E3%80%81%E6%B2%A1%E4%BB%80%E4%B9%88"><span class="toc-number">2.</span> <span class="toc-text">二、Ubuntu 镜像里到底有什么、没什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81syscall-%E8%B7%AF%E5%BE%84%EF%BC%9A%E8%BF%9B%E7%A8%8B%E4%B8%BA%E4%BB%80%E4%B9%88%E3%80%8C%E5%80%9F%E3%80%8D%E5%AE%BF%E4%B8%BB%E6%9C%BA%E5%86%85%E6%A0%B8%E7%94%A8"><span class="toc-number">3.</span> <span class="toc-text">三、syscall 路径：进程为什么「借」宿主机内核用</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E8%B7%A8%E5%8F%91%E8%A1%8C%E7%89%88%E8%83%BD%E8%B7%91%EF%BC%9Asyscall-ABI-%E7%9A%84%E7%A8%B3%E5%AE%9A%E6%80%A7"><span class="toc-number">4.</span> <span class="toc-text">四、为什么跨发行版能跑：syscall ABI 的稳定性</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%85%B3%E4%BA%8E-clone3%EF%BC%9A%E4%B8%80%E4%B8%AA%E6%B5%81%E4%BC%A0%E5%BE%88%E5%B9%BF%E7%9A%84%E9%94%99%E8%AF%AF%E5%BD%92%E5%9B%A0"><span class="toc-number">4.1.</span> <span class="toc-text">4.1 关于 clone3：一个流传很广的错误归因</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E5%85%BC%E5%AE%B9%E6%80%A7%E7%9A%84%E8%BE%B9%E7%95%8C%EF%BC%9A%E9%95%9C%E5%83%8F%E4%B8%8D%E8%83%BD%E3%80%8C%E8%87%AA%E5%B8%A6%E3%80%8D%E4%BB%BB%E4%BD%95%E9%9C%80%E8%A6%81%E5%86%85%E6%A0%B8%E4%BE%A7%E9%85%8D%E5%90%88%E7%9A%84%E4%B8%9C%E8%A5%BF"><span class="toc-number">4.2.</span> <span class="toc-text">4.2 兼容性的边界：镜像不能「自带」任何需要内核侧配合的东西</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%AE%B9%E5%99%A8-vs-Kata-vs-VM%EF%BC%9A%E6%A0%88%E7%9A%84%E7%9C%9F%E6%AD%A3%E5%B7%AE%E5%BC%82"><span class="toc-number">5.</span> <span class="toc-text">五、容器 vs Kata vs VM：栈的真正差异</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E3%80%8C%E5%86%85%E6%A0%B8%E5%A5%97%E5%86%85%E6%A0%B8%E3%80%8D%E7%9A%84%E8%AF%AF%E8%A7%A3%EF%BC%9A%E6%A0%88%E9%95%BF-%E2%89%A0-%E5%B5%8C%E5%A5%97"><span class="toc-number">6.</span> <span class="toc-text">六、「内核套内核」的误解：栈长 ≠ 嵌套</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81Kata-%E4%B8%8E-Firecracker-%E7%9A%84%E5%86%85%E6%A0%B8%E6%9D%A5%E6%BA%90%EF%BC%9A%E8%B0%81%E8%87%AA%E5%B8%A6%E3%80%81%E8%B0%81%E4%B8%8D%E8%87%AA%E5%B8%A6"><span class="toc-number">7.</span> <span class="toc-text">七、Kata 与 Firecracker 的内核来源：谁自带、谁不自带</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E5%9B%9E%E5%88%B0%E6%9C%80%E5%88%9D%E7%9A%84%E9%97%AE%E9%A2%98"><span class="toc-number">8.</span> <span class="toc-text">八、回到最初的问题</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%E5%BD%95-A%EF%BC%9AKata-%E7%9A%84%E9%9A%94%E7%A6%BB%E6%A8%A1%E5%9E%8B%E2%80%94%E2%80%94%E5%BE%AE%E5%86%85%E6%A0%B8%E4%B8%8E-namespace-%E6%98%AF%E5%88%86%E5%B1%82%E5%8D%8F%E4%BD%9C%EF%BC%8C%E4%B8%8D%E6%98%AF%E4%BA%8C%E9%80%89%E4%B8%80"><span class="toc-number">9.</span> <span class="toc-text">附录 A：Kata 的隔离模型——微内核与 namespace 是分层协作，不是二选一</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E5%B1%82%EF%BC%9A%E5%BE%AE%E5%86%85%E6%A0%B8%E6%9E%84%E5%BB%BA%E7%9A%84%E3%80%8C%E7%A1%AC%E3%80%8D%E8%BE%B9%E7%95%8C"><span class="toc-number">9.1.</span> <span class="toc-text">第一层：微内核构建的「硬」边界</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AC%AC%E4%BA%8C%E5%B1%82%EF%BC%9Anamespace-%E5%AE%9E%E7%8E%B0%E7%9A%84%E3%80%8C%E8%BD%AF%E3%80%8D%E9%9A%94%E7%A6%BB%E4%B8%8E%E5%AE%B9%E5%99%A8%E8%AF%AD%E4%B9%89"><span class="toc-number">9.2.</span> <span class="toc-text">第二层：namespace 实现的「软」隔离与容器语义</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E8%A1%A5%E5%85%85%E7%BB%86%E8%8A%82"><span class="toc-number">9.3.</span> <span class="toc-text">一个补充细节</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%E5%BD%95-B%EF%BC%9A%E5%86%85%E6%A0%B8%E7%9B%B8%E5%85%B3%E6%9C%AF%E8%AF%AD%E9%80%9F%E6%9F%A5"><span class="toc-number">10.</span> <span class="toc-text">附录 B：内核相关术语速查</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/" title="容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界">容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界</a><time datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/" title="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</a><time datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

@@ -1,0 +1,1154 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从 IOMMU（硬件地址翻译与 DMA 隔离）、VFIO（设备直通框架）、SR-IOV（PCIe 级切分）、MIG（硅片级硬切分）到 vGPU（软件时间片）这条 GPU 虚拟化链路，向下延伸到 Agent 训练 sandbox 与具身仿真两大落地场景，构成一张完整的选型决策地图。附五种虚拟化技术、六类隔离技术、五个沙盒平台、六个仿真器的横向对比表，以及一个真实四模板架构的落地复盘。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从 IOMMU（硬件地址翻译与 DMA 隔离）、VFIO（设备直通框架）、SR-IOV（PCIe 级切分）、MIG（硅片级硬切分）到 vGPU（软件时间片）这条 GPU 虚拟化链路，向下延伸到 Agent 训练 sandbox 与具身仿真两大落地场景，构成一张完整的选型决策地图。附五种虚拟化技术、六类隔离技术、五个沙盒平台、六个仿真器的横向对比表，以及一个真实四模板架构的落地复盘。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-05T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-06T06:34:39.425Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="SR-IOV">
+<meta property="article:tag" content="GPU虚拟化">
+<meta property="article:tag" content="MIG">
+<meta property="article:tag" content="IOMMU">
+<meta property="article:tag" content="VFIO">
+<meta property="article:tag" content="vGPU">
+<meta property="article:tag" content="Agent沙盒">
+<meta property="article:tag" content="具身仿真">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真",
+  "url": "https://roger-lv.github.io/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-05T16:00:00.000Z",
+  "dateModified": "2026-11-06T06:34:39.425Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">309</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">489</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div><!-- 添加搜索按钮 ↓--><span class="search-button"><i class="fas fa-search" aria-hidden="true"></i></span></div></nav><div id="post-info"><h1 class="post-title">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-06T06:34:39.425Z" title="更新于 2026-11-06 14:34:39">2026-11-06</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/" data-flag-title="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：从 <strong>IOMMU</strong>（硬件地址翻译与 DMA 隔离）→ <strong>VFIO</strong>（设备直通框架）→ <strong>SR-IOV</strong>（PCIe 级切分）→ <strong>MIG</strong>（硅片级硬切分）→ <strong>vGPU</strong>（软件时间片调度）这条链路，构成了 GPU 虚拟化的完整技术栈。<strong>「IOMMU 划边界、VFIO 做移交」这条直通链路，是所有 GPU 沙盒和具身仿真基础设施绕不开的地基。</strong></p>
+</blockquote>
+<p>本文按「技术原理 → 两大落地场景 → 一个真实落地案例 → 决策树」四层展开，并把各技术支持的功能以表格汇总。</p>
+<p>所有技术描述核对自 Linux 内核文档、NVIDIA 官方文档、Intel/AMD 官方文档与各项目仓库。<strong>核对中发现原稿有二十余处需要更正，其中三处是实质性错误</strong>，已在文中以 ⚠️ 标注。</p>
+<hr>
+<h2 id="一、技术原理层：从-IOMMU-到-vGPU">一、技术原理层：从 IOMMU 到 vGPU</h2>
+<h3 id="1-1-IOMMU：硬件级安全边界">1.1 IOMMU：硬件级安全边界</h3>
+<p>IOMMU 是提供<strong>地址翻译与设备隔离</strong>的硬件单元：对设备发出的 DMA 做 IOVA → HPA 翻译与访问保护，并提供中断重映射；<strong>隔离以 IOMMU group 为粒度</strong>。Intel 侧叫 <strong>VT-d</strong>，AMD 侧叫 <strong>AMD-Vi</strong>。</p>
+<blockquote>
+<p>Linux VFIO 内核文档原文：</p>
+<blockquote>
+<p>This includes x86 hardware with <strong>AMD-Vi and Intel VT-d</strong>…<br>
+The IOMMU API therefore supports a notion of <strong>IOMMU groups</strong>. A group is a set of devices which is <strong>isolatable from all other devices in the system</strong>. Groups are therefore the unit of ownership used by VFIO.</p>
+</blockquote>
+</blockquote>
+<blockquote>
+<p>这部分原理（IOVA 翻译、DMA Remapping、中断重映射、IOMMU group 与 GPUDirect RDMA 的关系）在 <a href="/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/">x86 体系结构基础</a> §8 已经讲透，这里不重复。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>一处常见混淆</strong>：原稿写「BIOS 需开启 <code>intel_iommu=on iommu=pt</code>」。<strong>这两个是内核命令行参数，不是 BIOS 开关</strong>——BIOS 里开启的是 VT-d/AMD-Vi（IOMMU 硬件本身），内核参数只是让驱动去用它。而且 <strong><code>iommu=pt</code> 不是 VFIO 直通的必需条件</strong>：它只是主机侧默认 DMA 行为（让未直通的设备走恒等映射以提升性能），直通给 VM 的设备由 VFIO 单独建立 IOMMU 翻译域，与它无关。kernel-parameters 原文：<code>pt - Use passthrough mode by default (Equivalent to iommu.passthrough=1)</code>。</p>
+</blockquote>
+<h3 id="1-2-VFIO：把设备安全移交给用户态">1.2 VFIO：把设备安全移交给用户态</h3>
+<p>设备先从原生驱动解绑、再绑定到 <code>vfio-pci</code>，绑定后出现<strong>组字符设备 <code>/dev/vfio/$GROUP</code></strong>（<code>$GROUP</code> = IOMMU 组号）；容器设备是 <code>/dev/vfio/vfio</code>。VMM（QEMU / Cloud Hypervisor / crosvm）通过 <strong>ioctl</strong> 完成 IOMMU 映射、寄存器区域描述、中断注册。</p>
+<blockquote>
+<p>内核文档原文：</p>
+<blockquote>
+<p>By <strong>unbinding the device from the host driver and binding it to a VFIO driver</strong>, a new VFIO group will appear for the group as <strong>/dev/vfio/$GROUP</strong>…<br>
+The VFIO device API includes <strong>ioctls</strong> for describing the device, the <strong>I/O regions</strong> and their read/write/mmap offsets…, as well as mechanisms for describing and registering <strong>interrupt notifications</strong>.</p>
+</blockquote>
+</blockquote>
+<p><strong>直通链路</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">BIOS 开 VT-d/AMD-Vi → 设备解绑原驱动 → 绑定 vfio-pci → VMM 接管 → guest 装原生驱动</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>⚠️ <strong>安全论断有前提</strong>：原稿写「guest 内核即使被攻破也无法通过 GPU 的 DMA 通道越过边界读写宿主机内存」。这个论断<strong>成立的前提是 IOMMU group 隔离完整</strong>——内核文档明确警告隔离粒度可能被削弱：</p>
+<blockquote>
+<p>a <strong>non-PCI-ACS (Access Control Services) capable bridge allowing redirection without reaching the IOMMU</strong></p>
+</blockquote>
+</blockquote>
+<p>vfio-pci 绑定的是 <strong>PCI function 而非整张卡</strong>（官方示例分别绑 <code>06:0d.0</code> 与 <code>06:0d.1</code> 两个 function）；多功能卡需逐个绑定，且整个 IOMMU 组内的设备都要处理。</p>
+<h3 id="1-3-五种-GPU-虚拟化技术对比">1.3 五种 GPU 虚拟化技术对比</h3>
+<table>
+<thead>
+<tr>
+<th>技术方式</th>
+<th>切分层级</th>
+<th>隔离强度</th>
+<th>每卡并发实例</th>
+<th>性能损耗</th>
+<th>支持热迁移</th>
+<th>硬件要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>整卡直通</strong></td>
+<td>无切分，整个 PF 给一台 VM</td>
+<td>★★★★★</td>
+<td>1</td>
+<td>量级最低</td>
+<td>❌ 不支持</td>
+<td>任何支持直通的卡 + IOMMU</td>
+</tr>
+<tr>
+<td><strong>SR-IOV</strong></td>
+<td>PCIe function 级，硬件切</td>
+<td>★★★</td>
+<td>网卡 127/端口；GPU 视卡型</td>
+<td>量级较低</td>
+<td>❌ 基本不支持</td>
+<td>设备支持 SR-IOV + 上游 ACS</td>
+</tr>
+<tr>
+<td><strong>MIG</strong></td>
+<td>硅片级，硬件切算力/显存/带宽</td>
+<td>★★★★★（硬件强制隔离 + QoS）</td>
+<td><strong>最多 7</strong>（数据中心卡）</td>
+<td>量级较低</td>
+<td>❌ 不支持</td>
+<td>仅部分数据中心卡与 RTX PRO Blackwell</td>
+</tr>
+<tr>
+<td><strong>MIG-backed vGPU</strong></td>
+<td>MIG 硬切 + vGPU 软件调度</td>
+<td>★★★★</td>
+<td><strong>最多 12 VM/GPU</strong>（RTX PRO 6000 Blackwell）</td>
+<td>中等</td>
+<td>✅ 支持（有约束）</td>
+<td>RTX PRO Blackwell Server Edition 等</td>
+</tr>
+<tr>
+<td><strong>vGPU</strong></td>
+<td>软件时间片调度</td>
+<td>★★（时间片轮转）</td>
+<td>几十至数百</td>
+<td>中等</td>
+<td>✅ 支持（部分型号）</td>
+<td>L40S/L4/A16/RTX PRO Blackwell 等</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>性能损耗那三个百分比我删掉了</strong>。原稿写「整卡直通 &lt;5% / MIG &lt;10% / vGPU 5–15%」——<strong>在 NVIDIA 官方文档与内核文档里都找不到这三个数字的一手出处</strong>。NVIDIA 官方只给<strong>相对值</strong>，例如：</p>
+<blockquote>
+<p>at the 48 GB profile size, <strong>MIG-backed vGPU delivered 20% higher performance than time-sliced vGPU</strong></p>
+</blockquote>
+<p>这些百分比常见于第三方对比文章与论坛，<strong>不是官方数据</strong>。上表已改为「量级」表述，需要精确数字请自行实测。</p>
+</blockquote>
+<h4 id="几个关键差异点">几个关键差异点</h4>
+<p><strong>MIG 的独有优势是故障隔离和带宽 QoS。</strong> 每个 MIG instance 拥有独立的计算引擎、显存控制器、L2 cache、DRAM 地址总线——一个 instance 的故障或吵闹邻居影响不到隔壁，<strong>性能可预测性是所有方案中最好的</strong>。</p>
+<p><strong>MIG 的实例上限按卡型分档</strong>（官方 Supported GPUs 表）：</p>
+<table>
+<thead>
+<tr>
+<th>卡型</th>
+<th>架构</th>
+<th>MIG 实例上限</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A100 / H100 / H200 / B200 / GB200 / B300 / GB300</td>
+<td>Ampere — Blackwell</td>
+<td><strong>7</strong></td>
+</tr>
+<tr>
+<td><strong>RTX PRO 6000 Blackwell</strong>（Server / Workstation / Max-Q）</td>
+<td>GB202</td>
+<td><strong>4</strong></td>
+</tr>
+<tr>
+<td><strong>RTX PRO 5000 Blackwell</strong></td>
+<td>GB202</td>
+<td><strong>2</strong></td>
+</tr>
+<tr>
+<td><strong>RTX PRO 4500 Blackwell</strong></td>
+<td>GB203</td>
+<td><strong>2</strong></td>
+</tr>
+<tr>
+<td>Thor iGPU</td>
+<td>GB10B</td>
+<td>2</td>
+</tr>
+</tbody>
+</table>
+<p><strong>「MIG 支持范围扩大到 RTX PRO Blackwell」属实</strong>——这是 2026 年的重要变化，官方 MIG 支持型号表已明确列出这三款 RTX PRO。但要记住<strong>它们的上限是 4/2/2，不是 7</strong>，这直接影响单卡能切几份的容量规划。</p>
+<blockquote>
+<p>⚠️ <strong><code>+gfx</code> 和 <code>+me</code> 要拆开说</strong>。原稿把两者都算作「GB20X 架构的新特性」——<strong>只有 <code>+gfx</code> 是新的</strong>：</p>
+<ul>
+<li><strong><code>+gfx</code> 确实是 Blackwell（RTX PRO / Thor）上出现的新 profile 类型</strong>，官方原文：<em>“No graphics APIs are supported, <strong>except on +gfx profiles</strong> of RTX PRO 6000 Blackwell (all editions), RTX PRO 5000 Blackwell, RTX PRO 4500 Blackwell, and Thor iGPU (technology preview)”</em>，支持 OpenGL 与 Vulkan（含 EGL headless）。</li>
+<li><strong><code>+me</code> 不是新特性</strong>——A100（<strong>R470 驱动起</strong>）就有 <code>MIG 1g.5gb+me</code>，H100 也有 <code>1g.10gb+me</code>。</li>
+</ul>
+<p>而且官方还有一个分工要注明：<strong>「Video encode/decode is set by <code>+me</code>/<code>-me</code>, not <code>+gfx</code>」</strong>——编解码归 <code>+me</code>，图形 API 归 <code>+gfx</code>，两者不是一回事。</p>
+</blockquote>
+<p><strong>vGPU 支持多 GPU 聚合。</strong> 官方特性就叫 <strong>Multi-vGPU</strong>：</p>
+<blockquote>
+<p><strong>Multi-vGPU attaches several vGPU devices to one VM. Devices may be time-sliced or MIG-backed and can sit on different physical GPUs</strong> — you are not limited to slicing one physical GPU across many VMs.</p>
+</blockquote>
+<p><strong>SR-IOV 的设备生态严重倾斜于网卡。</strong> 一张 ConnectX <strong>每端口最多 127 个 VF</strong>（官方原文：“NVIDIA ConnectX adapters support up to <strong>127 VFs per port</strong>”）。</p>
+<blockquote>
+<p>⚠️ <strong>这条原稿写反了，而且是最严重的一处</strong>。原稿写「SR-IOV GPU 侧只在 NVIDIA 数据中心卡（<strong>A100/H100</strong>/BlueField DPU）上有限开放」——<strong>A100 和 H100 恰恰不支持 SR-IOV，它们走的是 MIG。</strong></p>
+<p>按 NVIDIA vGPU 的 Validated Platforms 矩阵：</p>
+<table>
+<thead>
+<tr>
+<th>架构</th>
+<th>是否支持 SR-IOV</th>
+<th>具体型号</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Blackwell</strong></td>
+<td>✅</td>
+<td>RTX PRO 系列</td>
+</tr>
+<tr>
+<td><strong>Ada Lovelace</strong></td>
+<td>✅</td>
+<td>L4 / L20 / L40 / L40S / RTX 6000 Ada</td>
+</tr>
+<tr>
+<td><strong>Ampere</strong></td>
+<td>✅</td>
+<td><strong>A40 / A16 / A10 / A2 / RTX A6000 / A5500 / A5000</strong>（<strong>不含 A100</strong>）</td>
+</tr>
+<tr>
+<td><strong>Turing</strong></td>
+<td>❌</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>A100 与 H100 的 vGPU 类型页<strong>全文 0 次出现 SR-IOV</strong>。所以准确的说法是：<strong>SR-IOV 开放的是一批图形/专业卡，数据中心计算卡 A100/H100 用的是 MIG。</strong> BlueField DPU 支持 SR-IOV 这点对，但它是网络/DPU 不是 GPU。</p>
+</blockquote>
+<p><strong>热迁移的分裂格局。</strong> SR-IOV 与整卡直通基本不支持（设备 DMA 状态是硬件实态，无法软件打包搬运）。</p>
+<blockquote>
+<p>⚠️ <strong>但 MIG-backed vGPU 的热迁移有强约束，不能只说「支持」</strong>。官方原文：</p>
+<blockquote>
+<p><strong>Live migration between different MIG profiles (for example, migrating a VM from a 1g.5gb instance to a 2g.10gb instance) is not supported. The target host must have a matching MIG configuration.</strong></p>
+</blockquote>
+<p>vGPU 热迁移本身也有前提：源/目标主机必须是<strong>同型号物理 GPU</strong>、相同显存配置/ECC、兼容的驱动与 hypervisor 版本。</p>
+<p>另外注意：<strong>MIG-backed vGPU 在 A30/A100/A800/H100/H200/B200/B300 上不支持 Windows guest</strong>（这些卡上只有 time-sliced vGPU）。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>ACS 的定位要精确</strong>。原稿写「主板 ACS」是 SR-IOV 的前提——<strong>ACS 不是 SR-IOV「能工作」的前提</strong>（SR-IOV 靠 PF/VF 硬件切分即可运行），而是「<strong>VF 能被安全分到独立 IOMMU group 并直通</strong>」的前提。Intel 官方把它归入 SR-IOV 与 VT-d 体系：<em>“ACS is part of SR-IOV… part of Intel Virtualization Technology for Directed I/O”</em>。</p>
+</blockquote>
+<hr>
+<h2 id="二、Agent-训练-Sandbox">二、Agent 训练 Sandbox</h2>
+<p><strong>核心矛盾</strong>：RL rollout / 代码执行 sandbox 里跑的是<strong>模型自己生成、未经人审的代码</strong>——可能被提示注入劫持去读环境变量里的 API key，或者写恶意 CUDA kernel 探测同卡其他进程的显存。传统 Docker/runc 容器共享宿主内核，<strong>对这类代码的隔离性被业界明确判定为不够用</strong>。</p>
+<h3 id="2-1-隔离栈架构">2.1 隔离栈架构</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Agent 框架（LangGraph / OpenHands / 自研 harness）</span><br><span class="line">        ↓ 调用 run_code() 工具</span><br><span class="line">   容器层（只是打包，不承担安全边界）</span><br><span class="line">        ↓</span><br><span class="line">  microVM 层（真正的隔离边界）</span><br><span class="line">  ├─ Firecracker：纯 CPU 场景</span><br><span class="line">  └─ QEMU/KVM 或 Cloud Hypervisor + VFIO：需要 GPU 的场景</span><br><span class="line">        ↓ VFIO 直通</span><br><span class="line">     物理 GPU / MIG slice / vGPU</span><br></pre></td></tr></table></figure>
+<h3 id="2-2-主流隔离技术对比">2.2 主流隔离技术对比</h3>
+<table>
+<thead>
+<tr>
+<th>隔离技术</th>
+<th>隔离原理</th>
+<th>启动时间</th>
+<th>性能开销</th>
+<th>GPU 直通</th>
+<th>典型场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Docker/runc</strong></td>
+<td>命名空间 + cgroups，共享宿主内核</td>
+<td>数十毫秒量级</td>
+<td>量级最低</td>
+<td>✅ nvidia-container-toolkit</td>
+<td>可信代码、内部开发环境</td>
+</tr>
+<tr>
+<td><strong>gVisor</strong></td>
+<td>用户态内核（Go）拦截 syscall</td>
+<td>量级较低</td>
+<td>I/O 密集场景明显</td>
+<td>✅ <strong>通过 nvproxy</strong>（见下）</td>
+<td>CPU-bound 或轻量 CUDA</td>
+</tr>
+<tr>
+<td><strong>Firecracker</strong></td>
+<td>Rust microVM，KVM 硬件隔离，每 workload 独立内核</td>
+<td><strong>≤125 ms</strong></td>
+<td><strong>&gt;95% 裸机性能</strong></td>
+<td>❌ 无 GPU/PCI 直通</td>
+<td>无 GPU 的 agent 代码执行</td>
+</tr>
+<tr>
+<td><strong>Kata Containers</strong></td>
+<td>K8s 集成，pod 跑在 VM 内</td>
+<td>未找到官方数字</td>
+<td>量级中等</td>
+<td>✅ 通过 QEMU/CH 支持 VFIO</td>
+<td>K8s 环境下微服务 + GPU 混合负载</td>
+</tr>
+<tr>
+<td><strong>QEMU/KVM</strong></td>
+<td>完整虚拟化，VFIO 直通最成熟</td>
+<td>未找到官方数字</td>
+<td>未找到官方数字</td>
+<td>✅ 最成熟</td>
+<td>GPU sandbox、需要完整 guest OS</td>
+</tr>
+<tr>
+<td><strong>Cloud Hypervisor</strong></td>
+<td>Rust 轻量 VMM，云原生设计</td>
+<td><strong>&lt;100 ms</strong></td>
+<td>未找到官方数字</td>
+<td>✅ 支持</td>
+<td>新型 microVM + GPU 场景</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>启动时间与开销那一列，只有两条有一手来源</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>数字</th>
+<th>来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Firecracker <strong>≤125 ms</strong></td>
+<td>官方 <a target="_blank" rel="noopener" href="http://SPECIFICATION.md">SPECIFICATION.md</a>：<em>“It takes <code>&lt;= 125 ms</code> to go from receiving the Firecracker InstanceStart API call to the start of the Linux guest user-space <code>/sbin/init</code> process.”</em>（注意这是 <strong>VMM 启动</strong>不是完整 OS boot；VMM 进程本身 “within 8 CPU ms”）</td>
+</tr>
+<tr>
+<td>Firecracker <strong>&gt;95% 裸机性能</strong></td>
+<td>同页：CPU 性能 “<code>&gt; 95%</code> of the equivalent bare-metal performance”</td>
+</tr>
+<tr>
+<td>Cloud Hypervisor <strong>&lt;100 ms</strong></td>
+<td>官网：<em>“Boot to userspace in less than 100ms with direct kernel boot”</em></td>
+</tr>
+</tbody>
+</table>
+<p>其余（Docker ~50ms、gVisor 50–100ms、Kata 150–300ms、QEMU/KVM 1–3s、以及那几个开销百分比）<strong>都找不到官方一手来源</strong>，属常见二手估值。上表已改为「量级」表述。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>两处必须更正</strong>：</p>
+<p><strong>其一，「Firecracker 无 PCI 总线」已过时。</strong> 原稿说它「设备模型仅 virtio-over-MMIO，无 PCI 总线」。<strong>新版 Firecracker 有 virtio-PCI 传输</strong>，官方 <code>docs/device-hotplug.md</code> 原文：<em>“<strong>PCI transport enabled</strong>: Firecracker must be started with the <code>--enable-pci</code> flag.”</em>，并进入 <strong>PCIe 热插拔 Developer Preview</strong>（支持 virtio-block / pmem / net）。<strong>「Firecracker 无 GPU 直通」仍然成立</strong>（无 VFIO/PCI passthrough），但理由是「不支持 PCI 设备直通」而不是「没有 PCI 总线」。</p>
+<p><strong>其二，「gVisor 与 GPU 直通互斥」是错的。</strong> 见下节。</p>
+</blockquote>
+<h4 id="gVisor-的-GPU-支持：nvproxy">gVisor 的 GPU 支持：nvproxy</h4>
+<blockquote>
+<p>⚠️ <strong>这是原稿最实质的一处错误</strong>。它写「gVisor 在用户态拦截 syscall，会阻断 PCIe 直通所需的 DMA 映射路径」，据此判定 gVisor 与 GPU 互斥。<strong>不属实。</strong></p>
+<p>gVisor 官方有专门的 GPU 支持文档：</p>
+<blockquote>
+<p>gVisor supports running most CUDA applications on preselected versions of NVIDIA’s open source driver. To achieve this, gVisor implements a proxy driver inside the sandbox, henceforth referred to as <strong>nvproxy</strong>. nvproxy is a <strong>passthrough driver that forwards <code>ioctl(2)</code> calls made to NVIDIA devices by the containerized application directly to the host NVIDIA driver</strong>.</p>
+</blockquote>
+<p><strong>官方支持的 GPU：T4、A100、A10G、L4、H100</strong>（共 <strong>5 款型号、4 个微架构</strong>——Turing / Ampere / Ada Lovelace / Hopper）。支持 Docker <code>--gpus</code>、NVIDIA k8s-device-plugin、CDI、GKE device plugin。</p>
+<p><strong>所以准确的表述是</strong>：gVisor <strong>不做 PCIe/VFIO 直通</strong>（不把物理 PCI 设备透传给 sandbox），但<strong>并非与 GPU 互斥</strong>——它靠 nvproxy 转发 NVIDIA 驱动的 ioctl 来跑 CUDA。而且 <strong>DMA 映射是宿主 NVIDIA 驱动做的</strong>，nvproxy 只转发 ioctl，所以「阻断 DMA 映射路径」这个因果也不成立。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>另一处旧认知要修正</strong>：nvproxy <strong>支持 Vulkan</strong>（不是「只转发计算类 ioctl」）。官方原文：<em>“gVisor also supports <strong>Vulkan</strong> and NVENC/NVDEC workloads”</em>，driver capability 里明确含 <code>graphics</code>。</p>
+<p><strong>真正的缺口在设备文件</strong>：nvproxy 只暴露 <code>/dev/nvidiactl</code>、<code>/dev/nvidia-uvm</code>、<code>/dev/nvidia#</code>，<strong>不暴露</strong> <code>/dev/nvidia-drm</code>、<code>/dev/nvidia-modeset</code>、<code>/dev/nvidia-caps/*</code>。所以 Isaac Sim 这类依赖<strong>完整显示/DRM 管线</strong>的图形栈确实跑不了——但理由不是「不支持图形 API」，而是「不暴露 DRM/modeset 设备节点」。</p>
+</blockquote>
+<p><strong>nvproxy 的版本耦合是长期运维负担。</strong> 官方文档讲得很直白：</p>
+<blockquote>
+<p>the lack of ABI stability guarantees in NVIDIA’s KMD, meaning ioctl definitions can change arbitrarily between releases… <strong>nvproxy must understand the ABI for each supported driver version</strong>, necessitating internal versioning logic for ioctls.</p>
+</blockquote>
+<blockquote>
+<p>The range of officially supported driver versions <strong>directly aligns with those available within GKE</strong>. As GKE incorporates newer drivers, nvproxy will extend support accordingly. Conversely, to manage versioning complexity, <strong>nvproxy will shrink the window as drivers are removed from GKE</strong>.</p>
+</blockquote>
+<p>查当前支持列表用 <code>runsc nvproxy list-supported-drivers</code>（版本清单硬编码在源码 <code>pkg/sentry/devices/nvproxy/version.go</code>）。<code>runsc</code> 是<strong>严格版本匹配</strong>，可用 <code>--nvproxy-driver-version</code> 强制指定但官方标注 “not officially supported”。</p>
+<blockquote>
+<p>⚠️ <strong>关于新卡与多卡，两处措辞要收</strong>：</p>
+<p><strong>新卡</strong>：官方只承诺「<strong>与上述相同微架构</strong>的其他 GPU 可能可用」（举例 RTX 3090/4090）。所以 <strong>L40S</strong>（Ada，与 L4 同架构）落在「可能可用」范围内；而 <strong>B200、RTX PRO 6000 Blackwell</strong> 属 <strong>Blackwell</strong>，不在已支持的四个微架构之列——文档对它们<strong>没有任何「可能工作」的承诺</strong>。原稿说三者都「可能工作但不被支持」，对 Blackwell 卡属无依据推断。</p>
+<p><strong>多卡 NCCL</strong>：原稿说「需要实测」。文档正文确实没提 NCCL，<strong>但 gVisor 的 CI 已经在跑多卡 NCCL 测试</strong>——<code>test/gpu/nccl_test.go</code> 覆盖 <code>all_reduce_perf</code> / <code>all_gather_perf</code> / <code>alltoall_perf</code> 等，且 <code>pkg/test/dockerutil/gpu.go</code> 用 <code>Count: -1</code> 请求<strong>全部 GPU</strong>。所以「需要实测」作为工程建议成立，但说「未验证」不准确。</p>
+</blockquote>
+<h3 id="2-3-主流-Agent-Sandbox-平台">2.3 主流 Agent Sandbox 平台</h3>
+<table>
+<thead>
+<tr>
+<th>平台</th>
+<th>底层隔离</th>
+<th>GPU 支持</th>
+<th>部署模式</th>
+<th>特殊能力</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>E2B</strong></td>
+<td><strong>Firecracker microVM</strong></td>
+<td>❌ <strong>托管版、OSS、BYOC 全部 CPU-only</strong></td>
+<td>托管云 + BYOC + 自托管</td>
+<td>开源（Apache-2.0）运行时</td>
+</tr>
+<tr>
+<td><strong>Modal</strong></td>
+<td><strong>gVisor</strong>（另有 VM 运行时）</td>
+<td>✅ 自有 GPU 池（T4/L4/A10/L40S/A100/RTX-PRO-6000/H100/H200/B200/B300）</td>
+<td>托管云</td>
+<td><strong>GPU Sandbox 仅支持 <code>runtime=&quot;gvisor&quot;</code></strong></td>
+</tr>
+<tr>
+<td><strong>Daytona</strong></td>
+<td><strong>默认 Linux 容器</strong>（namespace），可选 VM sandbox</td>
+<td>✅ NVIDIA + AMD</td>
+<td>托管 + 自托管</td>
+<td>持久化、快照、多语言 SDK</td>
+</tr>
+<tr>
+<td><strong>Northflank</strong></td>
+<td><strong>CPU = microVM；GPU = gVisor</strong></td>
+<td>✅ 有条件</td>
+<td>托管云</td>
+<td>K8s 原生集成</td>
+</tr>
+<tr>
+<td><strong>CodeSandbox</strong></td>
+<td><strong>Firecracker microVM</strong></td>
+<td>有限</td>
+<td>托管</td>
+<td>内存快照、fork、web preview</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>三处更正</strong>：</p>
+<p><strong>其一，E2B 的 GPU 情况比原稿更严格。</strong> 原稿写「托管版不支持（Firecracker 限制），<strong>OSS 版可自建</strong>」——这个说法<strong>有误导性</strong>。E2B 官方 FAQ 原文：</p>
+<blockquote>
+<p><strong>No. E2B sandboxes are CPU-only</strong>, sized by vCPU and RAM only, with no GPU option in the SDKs, CLI, API, or a template definition. <strong>BYOC does not change this</strong>, because BYOC sandboxes are created through the same API.</p>
+</blockquote>
+<p>而且底层 Firecracker 本身就没有 GPU 直通，<strong>「自建」也拿不到 GPU 支持</strong>。上表已改为「托管版、OSS、BYOC 全部 CPU-only」。</p>
+<p><strong>其二，Daytona 底层不是 gVisor。</strong> 官方文档写的是 <em>“Sandboxes run as <strong>Linux containers</strong> by default”</em>，另有 VM sandbox 与 GPU sandbox；隔离页只描述三类边界（Container / VM / GPU），<strong>全文未出现 gVisor/Kata/Firecracker</strong>。</p>
+<p><strong>其三，「唯一开源 Apache-2.0 运行时」不成立</strong>——gVisor、Kata、Firecracker、Cloud Hypervisor <strong>都是 Apache-2.0</strong>。</p>
+</blockquote>
+<blockquote>
+<p><strong>两处原稿说对了、值得保留</strong>：Northflank 官方口径确实是「<strong>Managed CPU sandboxes use microVMs, while GPU sandboxes use gVisor</strong>」（不过 CPU 侧官方没钉死在 Kata，Firecracker 也在选项内）；Modal 官方明确 <em>“<strong>GPU Sandboxes are only supported with runtime=“gvisor”</strong>”</em>。</p>
+</blockquote>
+<p><strong>关键坑点</strong>：</p>
+<ul>
+<li><strong>Firecracker 不支持 <code>volume_mounts</code> 是 virtio 设备模型的限制</strong> ✅。它的设备模型只有 virtio-block / vhost-user-block / virtio-pmem / virtio-net / virtio-vsock / virtio-rng / virtio-mem，<strong>没有 virtio-fs 也没有 9p</strong>——即不支持共享目录式挂载。官方 <code>design.md</code>：<em>“Firecracker emulated block devices are backed by files on the host. To be able to mount block devices in the guest, the backing files need to be pre-formatted…”</em></li>
+<li><strong>VFIO 直通 VM 的内存需要 pin/mlock</strong> ✅（机制对），但<strong>不是「全部内存」</strong>——只有被映射进 IOMMU 的 guest RAM 需要 pin，<strong>用 hugepage 是标准可配置项</strong>。而且「一张 H100 起步几十 GB 锁定内存」<strong>找不到权威来源</strong>——需要 pin 的是 guest 侧 RAM，<strong>由 VM 配置的内存大小决定，与 GPU 型号无关</strong>（H100 的 80GB HBM 不占 host RAM）。</li>
+<li><strong>普通 nvidia 容器的隔离模型</strong> ✅：NVIDIA Container Toolkit 把宿主设备节点与驱动用户态库<strong>注入</strong>容器，容器内 CUDA 应用通过 ioctl 直接走<strong>宿主 NVIDIA KMD</strong>，driver 攻击面巨大。gVisor 需要 nvproxy 正是因为这种「直连宿主驱动」的默认模型没有隔离。</li>
+</ul>
+<hr>
+<h2 id="三、具身仿真场景">三、具身仿真场景</h2>
+<p>具身仿真同时压榨<strong>三条 GPU 负载路径</strong>，而它们对 GPU 的需求形态完全不同：</p>
+<ul>
+<li><strong>物理引擎层</strong> —— Isaac Sim 的 PhysX、Genesis 的多求解器耦合、MuJoCo 的 GPU 后端：纯计算密集，<strong>不需要 RT Core</strong>，吃算力和显存带宽；</li>
+<li><strong>渲染管线层</strong> —— Isaac Sim 的 RTX 渲染器、传感器仿真：<strong>强依赖硬件光追单元</strong>；</li>
+<li><strong>并行环境层</strong> —— Isaac Lab 的向量化环境、ManiSkill3 的 GPU 并行：决定显存占用规模。</li>
+</ul>
+<p>这形成一个残酷约束：<strong>最强的训练卡恰恰渲染不了，最擅长渲染的卡计算密度又不如 H100。</strong></p>
+<h3 id="3-1-仿真器对比">3.1 仿真器对比</h3>
+<table>
+<thead>
+<tr>
+<th>仿真器</th>
+<th>物理引擎</th>
+<th>渲染引擎</th>
+<th>GPU 加速</th>
+<th>RT Core 依赖</th>
+<th>单卡 FPS / 并行环境数</th>
+<th>典型硬件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Isaac Sim/Lab</strong></td>
+<td>PhysX（GPU）+ <strong>Newton</strong>（新增，集成 MuJoCo Warp）</td>
+<td>RTX（硬件光追）</td>
+<td>✅</td>
+<td>✅ <strong>必需</strong></td>
+<td>数千 envs/GPU，基准用到 4096/8192 num_envs</td>
+<td>RTX 4080+（最低 16GB VRAM）、L40S、RTX PRO 6000</td>
+</tr>
+<tr>
+<td><strong>Genesis</strong></td>
+<td>Taichi 编译多求解器（刚体/柔体/流体/MPM/IPC）</td>
+<td>Nyx 光栅化</td>
+<td>✅ CUDA</td>
+<td>❌</td>
+<td><strong>43M FPS</strong>（见下方口径说明）</td>
+<td>RTX 4090 等消费级</td>
+</tr>
+<tr>
+<td><strong>MuJoCo</strong></td>
+<td>自研</td>
+<td>可选（OpenGL/EGL/OSMesa）</td>
+<td>✅（MJX）</td>
+<td>❌</td>
+<td>中等</td>
+<td>CPU 也能跑，GPU 加速可选</td>
+</tr>
+<tr>
+<td><strong>ManiSkill3</strong></td>
+<td>SAPIEN（GPU 并行）</td>
+<td>SAPIEN 并行渲染</td>
+<td>✅</td>
+<td>❌</td>
+<td><strong>30,000+ FPS，比同类省 2–3 倍显存</strong></td>
+<td>消费级卡即可</td>
+</tr>
+<tr>
+<td><strong>Habitat-Sim</strong></td>
+<td>Bullet（CPU）+ GPU 渲染</td>
+<td>OpenGL/EGL</td>
+<td>✅ 渲染加速</td>
+<td>❌</td>
+<td><strong>10,000+ FPS</strong>（多进程单 GPU）</td>
+<td>中端 GPU</td>
+</tr>
+<tr>
+<td><strong>CoppeliaSim</strong></td>
+<td>多引擎可切换（MuJoCo/Bullet/ODE/Newton/Vortex）</td>
+<td>内置</td>
+<td>部分</td>
+<td>❌</td>
+<td>中等</td>
+<td>CPU/GPU 均可</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>Isaac Sim 的 RT Core 清单要收一收</strong>。原稿写「官方明确标注：没有 RT Core 的 GPU（A100、H100、<strong>H20</strong>）不受支持」。官方 <strong>Requirements 文档</strong>原文只点了两款：</p>
+<blockquote>
+<p><strong>GPUs without RT Cores (A100, H100) are not supported.</strong></p>
+</blockquote>
+<p><strong>H20 只出现在 NVIDIA 官方开发者论坛的 NVIDIA 员工回复里</strong>，<strong>未进正式产品文档</strong>。说「官方明确标注 H20」不准确。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>Genesis 的 43M FPS：数字属实，但口径必须写清</strong>。原稿写「数千万 FPS（RTX 4090 <strong>单场景</strong>）」——「单场景」这个措辞<strong>容易误导</strong>。</p>
+<p>官方项目页原文：<em>“When simulating a manipulation scene (with a single plane and a Franka arm), Genesis runs at <strong>43 million FPS</strong>, which is <strong>430,000 times faster than in real time</strong>.”</em></p>
+<p><strong>关键限定</strong>：</p>
+<ol>
+<li>这个数字依赖 <strong>GPU 并行批量环境</strong> + 碰撞检测优化 + auto-hibernation + contact island，<strong>不是单环境串行 FPS</strong>；</li>
+<li>第三方基准指出：开启随机动作后同场景降到约 27M FPS；<strong>单个隔离环境串行只有几千 FPS，和 MuJoCo 差不多</strong>；</li>
+<li><strong>该句原文未标注 GPU 型号</strong>——「RTX 4090」是二手转述；</li>
+<li>新版 README 已不再出现该数字。</li>
+</ol>
+<p>正确口径是「<strong>单场景 + 数千并行环境批量吞吐</strong>下达 43M FPS」。</p>
+</blockquote>
+<blockquote>
+<p><strong>另外两条口径也要注明</strong>：ManiSkill3 的 30,000+ FPS 是 <strong>RGBD + 分割数据采集</strong>口径（非纯物理）；Habitat-Sim 的 10,000+ FPS 是<strong>多进程单 GPU 渲染</strong>口径（非单进程）。</p>
+</blockquote>
+<p><strong>Isaac Lab 的 Newton 后端属实</strong> ✅：官方文档描述 Newton 是 “a GPU-accelerated, extensible, differentiable physics simulation engine… <strong>built on NVIDIA Warp</strong> and <strong>integrates MuJoCo Warp</strong>”，由 Disney Research、Google DeepMind 与 NVIDIA 共同维护，可通过 <code>SimulationManager.switch_physics_engine(&quot;newton&quot;)</code> 切换。</p>
+<h3 id="3-2-具身场景-GPU-虚拟化选型矩阵">3.2 具身场景 GPU 虚拟化选型矩阵</h3>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>物理仿真</th>
+<th>RTX 渲染</th>
+<th>多环境并行</th>
+<th>典型卡型</th>
+<th>适用度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>整卡直通</strong></td>
+<td>✅ 满速</td>
+<td>✅ 满速</td>
+<td>1 卡 1 实例</td>
+<td>RTX PRO 6000、L40S、GeForce</td>
+<td>★★★★★ 单环境/高质量渲染</td>
+</tr>
+<tr>
+<td><strong>MIG</strong></td>
+<td>✅ 硬隔离</td>
+<td>❌ A100/H100 无 RT Core</td>
+<td>每卡最多 7（RTX PRO 为 4/2/2）</td>
+<td>A100/H100/H200/B200</td>
+<td>★★★ 训练侧首选，渲染弱</td>
+</tr>
+<tr>
+<td><strong>MIG-backed vGPU</strong></td>
+<td>✅</td>
+<td>✅ RTX PRO Blackwell 有 RT Core + <code>+gfx</code></td>
+<td>最多 12 VM/GPU</td>
+<td>RTX PRO 6000 Blackwell Server</td>
+<td>★★★★ 云端高密度混合负载</td>
+</tr>
+<tr>
+<td><strong>SR-IOV</strong></td>
+<td>⚠️ 数据中心卡<strong>不支持</strong>（走 MIG）</td>
+<td>⚠️ 看卡型</td>
+<td>—</td>
+<td>RTX PRO / Ada / A10/A16/A40</td>
+<td>★ 具身场景用得少</td>
+</tr>
+<tr>
+<td><strong>vGPU</strong></td>
+<td>✅</td>
+<td>✅ L40S/L4 有 RT Core</td>
+<td>单卡几十实例</td>
+<td>L40S、L4、RTX PRO</td>
+<td>★★★★ 云端多租户仿真</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ 表中 SR-IOV 那一行按 §1.3 的更正调整了——<strong>A100/H100 走 MIG 不走 SR-IOV</strong>。</p>
+</blockquote>
+<p><strong>2026 年的重要变化</strong>：<strong>RTX PRO 6000 Blackwell 同时支持 MIG 和硬件光追</strong>（<code>+gfx</code> profiles），首次打破了「MIG = 无渲染」的约束，让「训练 + 渲染统一」的单卡方案成为可能。</p>
+<p><strong>架构选择的分水岭</strong>：</p>
+<ul>
+<li><strong>纯训练（可信代码、追求吞吐）</strong> → <strong>单机多进程直通共享</strong>。RL 训练代码是自己写的，不需要硬件隔离，零虚拟化开销；</li>
+<li><strong>评测 benchmark / 多用户共享 / 跑模型生成的代码</strong> → <strong>microVM + MIG/vGPU 切分</strong>；</li>
+<li><strong>Sim2Real 部署前的最后验证</strong> → <strong>整卡直通</strong>，避免任何共享带来的时延抖动影响控制频率。</li>
+</ul>
+<hr>
+<h2 id="四、一个真实落地案例：四模板架构及其复盘">四、一个真实落地案例：四模板架构及其复盘</h2>
+<blockquote>
+<p>这一节是一个真实落地形态的复盘。架构本身的完整描述见 <a href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/">Agent 沙盒基础设施实践</a> 的 §3.12。</p>
+</blockquote>
+<h3 id="4-1-四个模板">4.1 四个模板</h3>
+<table>
+<thead>
+<tr>
+<th>模板</th>
+<th>后端</th>
+<th>隔离边界</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>cpu-*</code></strong></td>
+<td>AgentENV + Firecracker</td>
+<td>microVM 独立内核</td>
+<td>通用命令与工具；需要「暂停后进程还在」</td>
+</tr>
+<tr>
+<td><strong><code>gpu-light-*</code></strong></td>
+<td><strong>gVisor + nvproxy</strong></td>
+<td>Sentry 拦截 + 宿主内核</td>
+<td>CUDA / Ray 等轻量算子——<strong>不是渲染沙盒</strong></td>
+</tr>
+<tr>
+<td><strong><code>vm-*</code></strong></td>
+<td>Kata（独立内核）</td>
+<td>VM 独立内核</td>
+<td>需要特定 Linux 行为、又不需要 GPU</td>
+</tr>
+<tr>
+<td><strong><code>render-*</code></strong></td>
+<td>普通 NVIDIA 容器，<code>sandbox: false</code></td>
+<td>仅 namespace / cgroup</td>
+<td>Isaac 等图形栈仿真</td>
+</tr>
+</tbody>
+</table>
+<p><strong>方案整体是可行且务实的</strong>——它准确接受了三个现实约束（Firecracker 不支持 GPU、gVisor 撑不住完整渲染栈、Isaac 没有真正的沙盒方案），并且<strong>诚实地把 <code>render-*</code> 标注为 <code>sandbox: false</code></strong>，这比很多团队硬把 Docker 当 sandbox 用要诚实得多。</p>
+<h3 id="4-2-逐项对照技术现状">4.2 逐项对照技术现状</h3>
+<table>
+<thead>
+<tr>
+<th>模板</th>
+<th>技术现状对照</th>
+<th>评价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>cpu-*</code></strong></td>
+<td>Firecracker <strong>不支持 <code>volume_mounts</code> 属实</strong>（无 virtio-fs / 9p，块设备需宿主预格式化文件做后端），用 <code>/workspace</code> 替代是合理规避</td>
+<td>✅ 描述准确</td>
+</tr>
+<tr>
+<td><strong><code>gpu-light-*</code></strong></td>
+<td>nvproxy 支持 <strong>5 款 GPU / 4 微架构</strong>（T4/A100/A10G/L4/H100）；<strong>支持 Vulkan 与 graphics capability</strong>，但不暴露 <code>/dev/nvidia-drm</code>、<code>/dev/nvidia-modeset</code></td>
+<td>✅ 「不是渲染沙盒」的判断正确，但理由要改（见下）</td>
+</tr>
+<tr>
+<td><strong><code>vm-*</code></strong></td>
+<td><strong>Kata 支持 VFIO GPU 直通</strong>（cold-plug 模式，NVIDIA reference stack），所以「无需 GPU」<strong>不是 Kata 的技术限制</strong>，而是当前方案有意简化的选择</td>
+<td>⚠️ 描述有简化</td>
+</tr>
+<tr>
+<td><strong><code>render-*</code></strong></td>
+<td>普通 nvidia 容器共享宿主 NVIDIA KMD，driver 攻击面巨大</td>
+<td>✅ 定性诚实，但边界需明确</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong><code>gpu-light-*</code> 那一行的理由要改</strong>。原方案说它「不是渲染沙盒」是因为「gVisor 的 GPU 支持只覆盖轻量 CUDA 算子」——<strong>这个理由不准确</strong>。nvproxy <strong>支持 Vulkan</strong>，真正的缺口是<strong>不暴露 <code>/dev/nvidia-drm</code> 与 <code>/dev/nvidia-modeset</code></strong>，所以跑不了完整的显示/DRM 管线。<strong>结论不变，理由要换。</strong></p>
+</blockquote>
+<h3 id="4-3-四个值得推敲的点">4.3 四个值得推敲的点</h3>
+<p><strong>其一，<code>render-*</code> 的安全边界需要显式分层，不能只是一个 <code>sandbox: false</code> 标签。</strong></p>
+<p>普通 nvidia 容器的隔离模型是：应用通过 ioctl 直接调用宿主 NVIDIA kernel driver，<strong>driver 攻击面巨大</strong>。这里需要明确回答一个问题：<strong><code>render-*</code> 是只跑团队自己写的评测代码，还是也会跑 agent rollout 生成的代码？</strong></p>
+<ul>
+<li>如果只是前者 → 定位合理；</li>
+<li>如果是后者 → 当前方案在安全上有硬伤。至少要叠加 seccomp、user namespace、egress allowlist；更彻底的路径是给 render 任务配 <strong>Kata + VFIO 整卡直通</strong>，或者接受「每台物理机单任务」的成本。</li>
+</ul>
+<p>一个务实的折中是：<strong>把 <code>render-*</code> 进一步切分为 <code>render-trusted</code>（团队代码）与 <code>render-untrusted</code>（模型生成代码）</strong>，后者走 Kata GPU 直通或独立物理机。</p>
+<p><strong>其二，nvproxy 的版本锁定是长期运维负担。</strong></p>
+<p>如 §2.2 所述，nvproxy 的驱动版本支持窗口<strong>直接跟随 GKE 滚动</strong>。这意味着：</p>
+<ul>
+<li>host 驱动升级必须与 gVisor 版本严格对齐，否则 sandbox 启动直接失败；</li>
+<li>集群里混用新卡（L40S、RTX PRO 6000 Blackwell、B200），<strong>Blackwell 卡完全不在支持范围内</strong>（L40S 因与 L4 同属 Ada 而落在「可能可用」区间）。</li>
+</ul>
+<p>建议把版本耦合写进运维文档，<strong>锁死驱动版本 + 定期验证升级路径</strong>，避免「host 打了安全补丁 → gVisor 不认识 → 所有 <code>gpu-light-*</code> 模板挂掉」这种连锁故障。</p>
+<p><strong>其三，<code>vm-*</code> 用 Kata 的理由应该更精确。</strong></p>
+<p>Kata 和 Firecracker <strong>都是独立内核的 VM</strong>，真正的差异是：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Firecracker</th>
+<th>Kata</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>启动</td>
+<td><strong>≤125ms</strong>（官方数字）</td>
+<td>官方未给数字，量级更大</td>
+</tr>
+<tr>
+<td>K8s 集成</td>
+<td>需自建</td>
+<td><strong>RuntimeClass 原生、OCI 兼容</strong></td>
+</tr>
+<tr>
+<td>底层 VMM</td>
+<td>固定</td>
+<td><strong>可插拔</strong>（QEMU / Cloud Hypervisor / Firecracker / Dragonball）</td>
+</tr>
+<tr>
+<td>GPU 直通</td>
+<td>❌</td>
+<td>✅ <strong>VFIO，cold-plug 模式</strong></td>
+</tr>
+</tbody>
+</table>
+<p>所以 <code>vm-*</code> 的选型理由应该是「<strong>需要 K8s 生态集成、需要 OCI 兼容性、需要 systemctl/dkms 这类特定内核行为</strong>」，而不是单纯的「独立内核」。<strong>如果哪天需要跑「不可信代码 + GPU」，Kata + VFIO 是现成的升级路径</strong>——这个空间应该被预留出来。</p>
+<p><strong>其四，沙盒等级应该量化标注，而不是只有 true/false。</strong></p>
+<p>四个模板的实际隔离强度差距很大，建议在 API 响应里加一个 <code>isolation_level</code> 字段：</p>
+<table>
+<thead>
+<tr>
+<th>模板</th>
+<th>隔离原理</th>
+<th>隔离等级建议</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cpu-*</code></td>
+<td>Firecracker 硬件虚拟化，独立内核</td>
+<td><strong>L3</strong>（VM 级）</td>
+</tr>
+<tr>
+<td><code>gpu-light-*</code></td>
+<td>gVisor 用户态内核 + nvproxy ioctl 白名单</td>
+<td><strong>L2</strong>（Sentry 拦截）</td>
+</tr>
+<tr>
+<td><code>vm-*</code></td>
+<td>Kata VM 独立内核</td>
+<td><strong>L3</strong>（VM 级）</td>
+</tr>
+<tr>
+<td><code>render-*</code></td>
+<td>共享 host 内核，共享 NVIDIA KMD</td>
+<td><strong>L1</strong>（仅命名空间）</td>
+</tr>
+</tbody>
+</table>
+<p>上层 agent 框架拿到 <code>isolation_level</code> 后就能做策略路由——<strong>reward hacking 检测类任务强制 L3、内部工具调用 L2 即可、可视化评测 L1 警告但不阻断</strong>。没有量化等级，上层就只能在「是沙盒/不是沙盒」之间做二元决策，粒度太粗。</p>
+<h3 id="4-4-还缺什么">4.4 还缺什么</h3>
+<p><strong>其一，多 GPU / 分布式 GPU 训练。</strong> nvproxy 的多卡支持<strong>实际上 CI 已覆盖</strong>（见 §2.2），但生产规模仍需实测。另一条路是 <strong>Kata 的多 GPU 直通</strong>——官方文档逐字给出了这个能力：</p>
+<blockquote>
+<p>If you have machines supporting multi-GPU passthrough, use a pod deployment manifest which uses <strong>8 pgpu and 4 nvswitch</strong> resources. On the NVIDIA Hopper architecture multi-GPU passthrough uses protected PCIe (PPCIE) which claims exclusive use of the nvswitches for a single CVM… The NVIDIA Blackwell architecture uses <strong>NVLink encryption</strong> which places the switches outside of the Trusted Computing Base (TCB)…</p>
+</blockquote>
+<p>即 <strong>8 张 GPU + 4 颗 NVSwitch 作为一个直通单元</strong>（4 颗 NVSwitch 对应 H100/Hopper 机型；HGX A100 是 6 颗）。方案里目前没有对应模板。</p>
+<p><strong>其二，Isaac Lab headless 训练场景。</strong> Isaac Lab 支持纯物理仿真模式（不需要 RTX 渲染），这种任务理论上可以走 <code>gpu-light-*</code>（CUDA-only）。<strong>如果实测通过，可以显著降低 agent rollout 的隔离风险</strong>——只有需要传感器仿真/可视化的任务才落到 <code>render-*</code>。</p>
+<p><strong>其三，快照/暂停能力的统一定义。</strong> <code>cpu-*</code> 支持暂停恢复（E2B 官方数字：<strong>暂停约 4 秒/GiB RAM、恢复约 1 秒</strong>），其他三个模板呢？<strong>gVisor/Kata/普通容器的快照能力都弱于 Firecracker</strong>，上层如果假设「所有模板都能 pause/resume」，会在 <code>gpu-light-*</code> 和 <code>render-*</code> 上翻车。</p>
+<blockquote>
+<p>⚠️ <strong>顺带更正一处数字</strong>：原稿写「E2B Firecracker 快照恢复 <strong>5-30ms</strong>」——<strong>这个数字错了 2–3 个数量级</strong>。E2B 官方文档给的是：</p>
+<blockquote>
+<p>Pausing a sandbox takes approximately <strong>4 seconds per 1 GiB of RAM</strong>. Resuming a sandbox takes approximately <strong>1 second</strong>.</p>
+</blockquote>
+<p>状态保留那半是对的：<em>“both the sandbox’s filesystem and memory state will be saved.”</em></p>
+</blockquote>
+<h3 id="4-5-一个补充：CVE-2026-103916">4.5 一个补充：CVE-2026-103916</h3>
+<p>原稿提到「Docker Sandboxes 近期还爆出 CVE-2026-103916 符号链接逃逸」。<strong>这个 CVE 真实存在</strong>（我一开始怀疑是编造的，查了 NVD 后确认不是）：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>描述</td>
+<td>Docker Sandboxes <code>sbx cp</code> 未把宿主侧路径安全限制在共享工作区内，恶意沙盒可创建/替换 workspace 符号链接，使后续用户发起的拷贝读出工作区外的宿主文件、或以调用者权限写入工作区外的宿主路径</td>
+</tr>
+<tr>
+<td>弱点</td>
+<td><strong>CWE-59</strong>（Link Following）</td>
+</tr>
+<tr>
+<td>发布</td>
+<td>2026-11-03，sourceIdentifier <code>security@docker.com</code></td>
+</tr>
+<tr>
+<td>CVSS 4.0</td>
+<td><strong>8.4（HIGH）</strong></td>
+</tr>
+<tr>
+<td>受影响版本</td>
+<td><code>&gt;= 0.28.0, &lt; 0.51.0</code></td>
+</tr>
+<tr>
+<td>修复版本</td>
+<td>v0.51.0</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>另外，「NVIDIA Isaac OS 的 <a target="_blank" rel="noopener" href="http://SECURITY.md">SECURITY.md</a> 警告」出处也对不上</strong>。<strong>不存在叫「Isaac OS」的产品</strong>（NVIDIA 侧是 Isaac Sim / Isaac ROS / Isaac Lab），而且各 Isaac 仓库的 <a target="_blank" rel="noopener" href="http://SECURITY.md">SECURITY.md</a> 都是 NVIDIA PSIRT 标准模板，<strong>不含</strong>该警告。</p>
+<p>那句警告<strong>语义等价但措辞不同的版本确实存在</strong>，位置在 <strong>Isaac Sim 的容器安装文档</strong>里：</p>
+<blockquote>
+<p><strong>Warning</strong>: Isaac Sim and the web viewer are designed for use on private/trusted networks. They do not include authentication or encryption. If you need to expose them over the Internet, add a reverse proxy with HTTPS/TLS and authentication…</p>
+</blockquote>
+<p>引用时指向这个出处即可。</p>
+</blockquote>
+<hr>
+<h2 id="五、选型决策树">五、选型决策树</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">需要跑不可信代码吗？</span><br><span class="line">├─ 否（纯自研训练代码）</span><br><span class="line">│   └─ 单机多进程直通共享（Docker + nvidia-container-toolkit）</span><br><span class="line">│       性能最高，零隔离开销</span><br><span class="line">│</span><br><span class="line">└─ 是</span><br><span class="line">    ├─ 需要 GPU 吗？</span><br><span class="line">    │   ├─ 否</span><br><span class="line">    │   │   └─ Firecracker microVM（≤125ms 启动，硬件隔离，成本最低）</span><br><span class="line">    │   │</span><br><span class="line">    │   └─ 是</span><br><span class="line">    │       ├─ 代码危险等级高（红队 / reward hacking 检测）</span><br><span class="line">    │       │   └─ 整卡直通（QEMU/KVM + VFIO）</span><br><span class="line">    │       │</span><br><span class="line">    │       ├─ 大规模 RL rollout（可信度中等）</span><br><span class="line">    │       │   ├─ 物理仿真为主 → A100/H100/H200/B200 MIG 切分</span><br><span class="line">    │       │   ├─ 渲染 + 仿真混合 → RTX PRO 6000 Blackwell MIG-backed vGPU</span><br><span class="line">    │       │   └─ 仿真器是 Genesis/ManiSkill → 消费卡集群</span><br><span class="line">    │       │</span><br><span class="line">    │       └─ 多用户共享教学 / 平台服务</span><br><span class="line">    │           └─ L40S vGPU（有 RT Core + 云端实例充足）</span><br><span class="line">    │</span><br><span class="line">    └─ K8s 原生环境</span><br><span class="line">        └─ Kata Containers + QEMU/Cloud Hypervisor</span><br><span class="line">            RuntimeClass 集成，底层支持 VFIO</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="六、趋势">六、趋势</h2>
+<p><strong>训练卡与渲染卡的边界开始模糊。</strong> RTX PRO Blackwell 的 <code>+gfx</code> profiles 让单卡既能硬件切分（MIG）又能跑光追，B200/GB300 的 MIG profiles 也在持续扩展。未来「训练用 H100、渲染用 L40S」的双卡异构架构可能会被单卡统一方案逐步替代，但当前采购成本仍然极高。</p>
+<p><strong>Agent sandbox 生态在快速分化。</strong> E2B 开源 Firecracker 运行时、Modal 用 gVisor 挂自有 GPU 池、Northflank 混合 microVM + gVisor，各家都在试探「隔离强度 × GPU 支持 × 成本」这个三角的不同顶点。<strong>NVIDIA 的 Open Agent Safety Platform</strong> 这类硬件级方案也开始入场（核心组件含 <strong>NVIDIA OpenShell</strong> 开源运行时与跑在 BlueField-4 上做 in-silicon 策略执行的 <strong>NVIDIA Sentry</strong>）。</p>
+<p><strong>下一代隔离层在酝酿。</strong> <strong>Edera</strong> 这类容器原生 Type 1 hypervisor 试图消除共享内核风险而不引入 VM 开销。注意它的<strong>数字有两套口径</strong>：官方博客写「300ms container start times」，而它<strong>自己的论文</strong>（arXiv:2501.04580）给的是 <em>“a <strong>648 millisecond increase</strong> in startup time from Docker’s 177.4 milliseconds”</em>（约 825ms）——引用时宜注明。</p>
+<p><strong>但无论上层怎么变，「IOMMU 划边界、VFIO 做移交」这条直通链路，都是所有 GPU sandbox 和具身仿真基础设施绕不开的地基。</strong></p>
+<hr>
+<h2 id="附录：术语速查表">附录：术语速查表</h2>
+<table>
+<thead>
+<tr>
+<th>术语</th>
+<th>全称</th>
+<th>一句话定义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>IOMMU</strong></td>
+<td>Input-Output Memory Management Unit</td>
+<td>硬件 DMA 地址翻译与隔离单元；Intel 叫 VT-d，AMD 叫 AMD-Vi</td>
+</tr>
+<tr>
+<td><strong>VFIO</strong></td>
+<td>Virtual Function I/O</td>
+<td>Linux 内核把物理设备安全移交给用户态/虚拟机的框架</td>
+</tr>
+<tr>
+<td><strong>PF</strong></td>
+<td>Physical Function</td>
+<td>SR-IOV 中的完整物理设备，拥有全部配置能力</td>
+</tr>
+<tr>
+<td><strong>VF</strong></td>
+<td>Virtual Function</td>
+<td>SR-IOV 中由 PF 切出的轻量虚拟设备，有独立 Routing ID</td>
+</tr>
+<tr>
+<td><strong>MIG</strong></td>
+<td>Multi-Instance GPU</td>
+<td>NVIDIA 的硅片级硬件切分技术</td>
+</tr>
+<tr>
+<td><strong>vGPU</strong></td>
+<td>Virtual GPU</td>
+<td>NVIDIA 基于软件时间片调度的 GPU 共享方案</td>
+</tr>
+<tr>
+<td><strong>nvproxy</strong></td>
+<td>—</td>
+<td>gVisor 的 NVIDIA 驱动代理，把容器内 ioctl 转发给宿主驱动</td>
+</tr>
+<tr>
+<td><strong>ACS</strong></td>
+<td>Access Control Services</td>
+<td>PCIe 拓扑的 P2P DMA 隔离机制，是 VF <strong>安全直通</strong>的前提</td>
+</tr>
+<tr>
+<td><strong>IOVA</strong></td>
+<td>I/O Virtual Address</td>
+<td>设备使用的虚拟地址，由 IOMMU 翻译为物理地址</td>
+</tr>
+<tr>
+<td><strong>microVM</strong></td>
+<td>Micro Virtual Machine</td>
+<td>轻量级虚拟机，毫秒级启动</td>
+</tr>
+<tr>
+<td><strong>VMM</strong></td>
+<td>Virtual Machine Monitor</td>
+<td>虚拟机监视器，即 hypervisor</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<p><strong>相关阅读</strong></p>
+<ul>
+<li><a href="/2026/07/18/2026-07-18-x86%E4%BD%93%E7%B3%BB%E7%BB%93%E6%9E%84%E5%9F%BA%E7%A1%80/">x86 体系结构基础</a>——§8 讲透了 IOMMU、DMA Remapping、中断重映射与 IOMMU group</li>
+<li><a href="/2026/10/23/2026-10-23-Agent%E6%B2%99%E7%9B%92%E5%9F%BA%E7%A1%80%E8%AE%BE%E6%96%BD%E5%AE%9E%E8%B7%B5%EF%BC%9A%E4%BB%8EDSec%E4%B8%8EAgentENV%E7%9C%8B%E8%B0%83%E5%BA%A6%E5%B1%82%E7%9A%84%E9%80%89%E5%9E%8B%E4%B8%8E%E8%90%BD%E5%9C%B0/">Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地</a>——四模板架构的完整描述在 §3.12</li>
+<li><a href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a>——Kata/gVisor/Firecracker 在运行时栈里的位置</li>
+<li><a href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/">具身智能仿真场景的沙盒选型</a>——虚拟化层 GPU 转发的四条路径边界</li>
+<li><a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">K8s GPU 复用与 HAMi 异构架构全解</a>——设备插件层的 GPU 切分实现</li>
+</ul>
+<blockquote>
+<p><strong>核实说明</strong>：本文核对自 Linux 内核文档（VFIO、DMA-API、x86 IOMMU、kernel-parameters）、NVIDIA 官方文档（MIG User Guide 的 Supported GPUs / Profiles / Deployment Considerations、AI Enterprise 的 MIG-Backed vGPU / Multi-vGPU / Live Migration、vGPU Validated Platforms）、Intel ACS 说明、AMD ROCm IOMMU 文档、gVisor GPU 支持文档与源码、Firecracker SPECIFICATION/FAQ/device-api/device-hotplug、Kata Containers NVIDIA GPU passthrough 文档、E2B 官方文档与 FAQ、Modal/Daytona/Northflank/CodeSandbox 官方文档、各仿真器官方仓库与论文、NVD 的 CVE-2026-103916 记录。</p>
+<p><strong>原稿更正汇总</strong>：<strong>SR-IOV 的型号清单写反了</strong>（<strong>A100/H100 不支持 SR-IOV，走 MIG</strong>；SR-IOV 开放的是 Blackwell RTX PRO / Ada / Ampere 的 A10/A16/A40 等图形专业卡）、<strong><code>+me</code> 不是 GB20X 新特性</strong>（A100 R470 起已有，只有 <code>+gfx</code> 是新的）、<strong>性能损耗三个百分比无官方来源</strong>、<strong>MIG-backed vGPU 热迁移有强约束</strong>（目标机 MIG 配置需匹配、跨 profile 不可迁）、<strong>ACS 是安全直通的前提而非 SR-IOV 本身的前提</strong>、<strong><code>intel_iommu=on iommu=pt</code> 是内核参数不是 BIOS 开关且 <code>pt</code> 非必需</strong>、<strong>「gVisor 与 GPU 互斥」是错的</strong>（nvproxy 支持 GPU，且<strong>支持 Vulkan</strong>，真正缺口是不暴露 DRM/modeset 设备文件）、<strong>nvproxy 是 5 款卡 / 4 微架构</strong>（不是「四种卡」）、<strong>E2B 快照是 4s/GiB 暂停 + 1s 恢复</strong>（不是 5-30ms）、<strong>E2B 的 OSS/BYOC 同样 CPU-only</strong>、<strong>Daytona 底层不是 gVisor</strong>、<strong>Firecracker 已有 PCIe</strong>（<code>--enable-pci</code>，Developer Preview）、<strong>「唯一 Apache-2.0」不成立</strong>、<strong>Genesis 43M FPS 的口径是「数千并行环境批量吞吐」</strong>、<strong>Edera 的 300ms 是营销口径</strong>（论文为 648ms 增量）、<strong>「Isaac OS <a target="_blank" rel="noopener" href="http://SECURITY.md">SECURITY.md</a>」出处错</strong>（警告实际在 Isaac Sim 容器文档）、<strong>H20 未进 Isaac 官方 Requirements 文档</strong>、<strong>Kata 150-300ms 与若干开销百分比无一手来源</strong>。</p>
+<p><strong>两处核实为正确并保留</strong>：<strong>RTX PRO 6000/5000/4500 Blackwell 确实支持 MIG</strong>（上限 4/2/2）、<strong>Kata 的多 GPU 直通确实是「8 pgpu + 4 nvswitch」一个单元</strong>、<strong>CVE-2026-103916 真实存在</strong>（CWE-59，CVSS 8.4）。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/">https://roger-lv.github.io/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/SR-IOV/">SR-IOV</a><a class="post-meta__tags" href="/tags/GPU%E8%99%9A%E6%8B%9F%E5%8C%96/">GPU虚拟化</a><a class="post-meta__tags" href="/tags/MIG/">MIG</a><a class="post-meta__tags" href="/tags/IOMMU/">IOMMU</a><a class="post-meta__tags" href="/tags/VFIO/">VFIO</a><a class="post-meta__tags" href="/tags/vGPU/">vGPU</a><a class="post-meta__tags" href="/tags/Agent%E6%B2%99%E7%9B%92/">Agent沙盒</a><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/">具身仿真</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/" title="容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：Ubuntu 镜像里根本没有内核。 它不是一个「完整的 Linux 系统」，只是一份 rootfs——打包好的用户态二进制和库文件。容器里的进程发起的每一个 syscall 都直接打到宿主机内核上，namespace 只是给进程一个「看起来像独立系统」的视图，不是真的给它装了一个内核。 而 Kata 和 Firecracker 之所以「有自己的内核」，是因为它们在容器外多加了一层 VM，VM 里需要一份 guest kernel 来承载上面的容器——整个链路里只发生了一次虚拟化，不是嵌套。  本文的机制描述与实测数据核对自 Docker Registry 实际镜像内容、Linux 内核文档与 man pages、glibc 与 kmod 源码、Kata Containers 与 Firecracker 官方文档。核对中发现原稿有十余处需要更正，其中一处是流传很广的机制错误，已在文中以 ⚠️ 标注。  一、把「Linux 系统」拆开看：内核和用户态是两件事 日常说「Ubuntu 22.04」这个概念，其实打包了两个完全独立的东西：    组成部分 具体内容 来源 放在...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/10/09/2026-10-09-IPoIB%E4%B8%8Epkey%E5%AD%90%E6%8E%A5%E5%8F%A3InfiniBand%E4%B8%96%E7%95%8C%E9%87%8C%E7%9A%84IP%E7%BD%91%E5%8D%A1%E4%B8%8EVLAN/" title="IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;</div></div><div class="info-2"><div class="info-item-1">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot; IPoIB(IP over InfiniBand)接口是运行在 InfiniBand 物理网络之上的&quot;IP 网卡&quot;,pkey 子接口则是在这张 IP 网卡上按&quot;分区键&quot;虚拟出的子接口——两者的组合,就是 InfiniBand 世界里对&quot;IP 网卡 + VLAN 子接口&quot;的对应物。 之所以需要它们,根源在于 InfiniBand 与以太网是两套截然不同的 L2 体系。  一、前提:InfiniBand 不是以太网 理解 IPoIB + pkey,必须先放下以太网的思维惯性。InfiniBand 是一套独立的链路层协议,从硬件寻址开始就和以太网不同:    维度 以太网 InfiniBand     硬件地址 48 位 MAC 地址,烧录在网卡里 无 MAC;由 GUID(端口全局唯一 ID)+ LID(子网内本地 ID,由子网管理器动态分配)标识   单播地址概念 MAC GID(128 位,基于 GUID 生...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/" title="Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</div></div><div class="info-2"><div class="info-item-1">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道 在大模型分布式训练的 Kubernetes 集群里,macvlan 会被用到,但角色非常特定:它作为辅助网络为 Pod 提供访问高性能 RDMA 网络的&quot;共享&quot;通道,而不是承担集群默认网络的职责。 默认网络(控制面通信、Service 访问)通常由 Calico/Cilium/OVN 等标准 CNI 负责,macvlan 网卡通过 Multus 附加,专门承载 GPU 之间的训练数据流。  一、为什么大模型训练需要独立的 RDMA 网络 理解 macvlan 的定位,先要理解训练流量对网络的压力。在 PyTorch FSDP 或 DeepSpeed ZeRO 的分片训练中,每一层前向/反向传播前都要在全量 GPU 间 gather 分片权重,mini-batch 结束后要 all-reduce 梯度——这些集合通信在集群规模上可达数十 Gbit/s 的峰值流量。 如果这些流量走默认的 Overlay 网络(如 OVN-Kubernetes),内核协议栈的封解包、netfilter 处理...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Spiderpool%E5%A4%9A%E7%BD%91%E5%8D%A1IPAM%E6%96%B9%E6%A1%88%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图</div></div><div class="info-2"><div class="info-item-1">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图 Macvlan、ipvlan、SR-IOV 这几个 CNI 有个共同特点:数据面很漂亮,管理面近乎空白。它们能把 Pod 直接挂到物理网络上,省掉隧道封装的开销,但你问它&quot;这个 IP 能不能跟着 Pod 漂移到别的节点&quot;、“Pod 崩了 IP 怎么收回来”、“两张网卡的回包怎么别走错路由”,它们基本答不上来。 Spiderpool 要补的就是这块。它不是又一个新 CNI——它不碰数据面,而是给这些原生 Underlay CNI 配一套企业级的 IPAM、路由协调和连通性增强,让它们从&quot;能跑&quot;变成&quot;能生产&quot;。 这篇文章分四块:  为什么 Underlay 需要专门的 IPAM——Overlay 和 Underlay 对 IPAM 的需求差在哪; 架构与 CRD 体系——controller-agent 怎么分工,六个 CRD 各管什么; 多网卡 IPAM 全流程——从网卡划分、池选择到策略路由协调、垃圾回收; 实战与坑——部署示例,以及几...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/" title="具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：具身智能公司的仿真主力沙盒应当是「裸金属容器 + K8s GPU 调度」，而不是 DSec / AgentENV 那套 Firecracker microVM 层。只有轻量 Agent 工具调用和不可信代码执行才下沉到 microVM。这不是对多级运行时架构的否定，而是该框架在具身场景下的正确映射——仿真吃的是 NVIDIA 专有计算栈，而虚拟化层的 GPU 转发方案恰恰覆盖不到这里。  这篇是 Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地 的延伸。那篇里有一节（§3.5）讲具身仿真的 GPU 路线，结论是「虚拟化不是默认选项」；本文把那个结论展开成一份完整的选型依据——为什么 microVM 接不住仿真、虚拟化 GPU 的四条路径各自能到哪、以及三层负载该怎么分别匹配。  一、为什么这不是一个「通用沙盒」问题 讨论的对象是一类典型的具身智能公司：自研端到端具身大模型，部署轮式双臂仿人机器人与高自由度灵巧手，自建数据工厂沉淀了数万小时多模态具身数据集，机器人已规模化进入真实家庭。 这个形态决定了基础设施要同时承载三类性质完全...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 K8s 到 AI Infra：跨越五道技术鸿沟</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：K8s 把 GPU 当作 nvidia.com/gpu: 8 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「只分配、不感知」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。  上一讲（K8s 很熟，为什么月薪卡在三万）讲的是怎么看——nvidia-smi topo -m 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲怎么修：五道鸿沟各自的工程解法。 本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败，已在文中以 ⚠️ 标注。  五道鸿沟总览    维度 K8s 原生方案 AI 训练瓶颈 生产级方案 核心工具链     调度 kube-scheduler 逐 Pod 打分 部分 Pod 无法调度导致整组死锁 Gang 整组调度 + 多维配比 Volcano PodGroup   网络 TCP ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">309</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">489</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">78</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86%E5%B1%82%EF%BC%9A%E4%BB%8E-IOMMU-%E5%88%B0-vGPU"><span class="toc-number">1.</span> <span class="toc-text">一、技术原理层：从 IOMMU 到 vGPU</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-1-IOMMU%EF%BC%9A%E7%A1%AC%E4%BB%B6%E7%BA%A7%E5%AE%89%E5%85%A8%E8%BE%B9%E7%95%8C"><span class="toc-number">1.1.</span> <span class="toc-text">1.1 IOMMU：硬件级安全边界</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-2-VFIO%EF%BC%9A%E6%8A%8A%E8%AE%BE%E5%A4%87%E5%AE%89%E5%85%A8%E7%A7%BB%E4%BA%A4%E7%BB%99%E7%94%A8%E6%88%B7%E6%80%81"><span class="toc-number">1.2.</span> <span class="toc-text">1.2 VFIO：把设备安全移交给用户态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#1-3-%E4%BA%94%E7%A7%8D-GPU-%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E5%AF%B9%E6%AF%94"><span class="toc-number">1.3.</span> <span class="toc-text">1.3 五种 GPU 虚拟化技术对比</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E5%87%A0%E4%B8%AA%E5%85%B3%E9%94%AE%E5%B7%AE%E5%BC%82%E7%82%B9"><span class="toc-number">1.3.1.</span> <span class="toc-text">几个关键差异点</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Agent-%E8%AE%AD%E7%BB%83-Sandbox"><span class="toc-number">2.</span> <span class="toc-text">二、Agent 训练 Sandbox</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E9%9A%94%E7%A6%BB%E6%A0%88%E6%9E%B6%E6%9E%84"><span class="toc-number">2.1.</span> <span class="toc-text">2.1 隔离栈架构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E4%B8%BB%E6%B5%81%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E5%AF%B9%E6%AF%94"><span class="toc-number">2.2.</span> <span class="toc-text">2.2 主流隔离技术对比</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#gVisor-%E7%9A%84-GPU-%E6%94%AF%E6%8C%81%EF%BC%9Anvproxy"><span class="toc-number">2.2.1.</span> <span class="toc-text">gVisor 的 GPU 支持：nvproxy</span></a></li></ol></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E4%B8%BB%E6%B5%81-Agent-Sandbox-%E5%B9%B3%E5%8F%B0"><span class="toc-number">2.3.</span> <span class="toc-text">2.3 主流 Agent Sandbox 平台</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF"><span class="toc-number">3.</span> <span class="toc-text">三、具身仿真场景</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E4%BB%BF%E7%9C%9F%E5%99%A8%E5%AF%B9%E6%AF%94"><span class="toc-number">3.1.</span> <span class="toc-text">3.1 仿真器对比</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E5%85%B7%E8%BA%AB%E5%9C%BA%E6%99%AF-GPU-%E8%99%9A%E6%8B%9F%E5%8C%96%E9%80%89%E5%9E%8B%E7%9F%A9%E9%98%B5"><span class="toc-number">3.2.</span> <span class="toc-text">3.2 具身场景 GPU 虚拟化选型矩阵</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%80%E4%B8%AA%E7%9C%9F%E5%AE%9E%E8%90%BD%E5%9C%B0%E6%A1%88%E4%BE%8B%EF%BC%9A%E5%9B%9B%E6%A8%A1%E6%9D%BF%E6%9E%B6%E6%9E%84%E5%8F%8A%E5%85%B6%E5%A4%8D%E7%9B%98"><span class="toc-number">4.</span> <span class="toc-text">四、一个真实落地案例：四模板架构及其复盘</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%9B%9B%E4%B8%AA%E6%A8%A1%E6%9D%BF"><span class="toc-number">4.1.</span> <span class="toc-text">4.1 四个模板</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-%E9%80%90%E9%A1%B9%E5%AF%B9%E7%85%A7%E6%8A%80%E6%9C%AF%E7%8E%B0%E7%8A%B6"><span class="toc-number">4.2.</span> <span class="toc-text">4.2 逐项对照技术现状</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E5%9B%9B%E4%B8%AA%E5%80%BC%E5%BE%97%E6%8E%A8%E6%95%B2%E7%9A%84%E7%82%B9"><span class="toc-number">4.3.</span> <span class="toc-text">4.3 四个值得推敲的点</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E8%BF%98%E7%BC%BA%E4%BB%80%E4%B9%88"><span class="toc-number">4.4.</span> <span class="toc-text">4.4 还缺什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-5-%E4%B8%80%E4%B8%AA%E8%A1%A5%E5%85%85%EF%BC%9ACVE-2026-103916"><span class="toc-number">4.5.</span> <span class="toc-text">4.5 一个补充：CVE-2026-103916</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E9%80%89%E5%9E%8B%E5%86%B3%E7%AD%96%E6%A0%91"><span class="toc-number">5.</span> <span class="toc-text">五、选型决策树</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E8%B6%8B%E5%8A%BF"><span class="toc-number">6.</span> <span class="toc-text">六、趋势</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%E5%BD%95%EF%BC%9A%E6%9C%AF%E8%AF%AD%E9%80%9F%E6%9F%A5%E8%A1%A8"><span class="toc-number">7.</span> <span class="toc-text">附录：术语速查表</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/" title="容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界">容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界</a><time datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/" title="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</a><time datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E6%B2%99%E7%9B%92%E7%9A%84%E7%AC%AC%E4%BA%8C%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2AgentENV%E4%B8%8ECubeSandbox%E4%B8%BA%E4%BD%95%E7%BB%95%E8%BF%87kubelet%E8%87%AA%E5%BB%BA%E8%B0%83%E5%BA%A6%E5%99%A8/" title="沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器">沙盒的「第二控制平面」：AgentENV 与 CubeSandbox 为什么要绕过 kubelet 自建调度器</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟">从 K8s 到 AI Infra：跨越五道技术鸿沟</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a><time datetime="2026-11-04T16:00:00.000Z" title="发表于 2026-11-05 00:00:00">2026-11-05</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
