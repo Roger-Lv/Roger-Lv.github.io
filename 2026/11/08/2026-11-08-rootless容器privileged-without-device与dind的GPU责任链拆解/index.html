@@ -1,0 +1,1195 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="原篇把 runc create 之后的世界切成权限、记账、I&#x2F;O、退出四个侧面；这篇顺着责任链往下走，回答三个高频追问——rootless 容器里 nvidia.com&#x2F;gpu 的 request&#x2F;limit 到底在哪一层生效、privileged 但不带 --device 的权限模型长什么样、dind 里的 --gpus all 为什么「看不全八张卡」。文中把 containerd &#x2F; nerd">
+<meta property="og:type" content="article">
+<meta property="og:title" content="runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="原篇把 runc create 之后的世界切成权限、记账、I&#x2F;O、退出四个侧面；这篇顺着责任链往下走，回答三个高频追问——rootless 容器里 nvidia.com&#x2F;gpu 的 request&#x2F;limit 到底在哪一层生效、privileged 但不带 --device 的权限模型长什么样、dind 里的 --gpus all 为什么「看不全八张卡」。文中把 containerd &#x2F; nerd">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-07T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-08T14:17:14.896Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="containerd">
+<meta property="article:tag" content="GPU调度">
+<meta property="article:tag" content="DevicePlugin">
+<meta property="article:tag" content="容器运行时">
+<meta property="article:tag" content="runc">
+<meta property="article:tag" content="rootless">
+<meta property="article:tag" content="userns">
+<meta property="article:tag" content="CDI">
+<meta property="article:tag" content="dind">
+<meta property="article:tag" content="privileged">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链",
+  "url": "https://roger-lv.github.io/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-07T16:00:00.000Z",
+  "dateModified": "2026-11-08T14:17:14.896Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">313</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">507</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-07T16:00:00.000Z" title="发表于 2026-11-08 00:00:00">2026-11-08</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-08T14:17:14.896Z" title="更新于 2026-11-08 22:17:14">2026-11-08</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/" data-flag-title="runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p><strong>一句话结论</strong>：GPU 在容器里的可见性，<strong>不是由 <code>--gpus</code> 或 <code>--device</code> 这一层的写法决定的，而是由最外层那一次分配定死的</strong>——下游每一层都只能在集合内部重分配，一张也变不出来。</p>
+<p>三条推论：</p>
+<ol>
+<li><strong>rootless 影响的不是 request/limit 生效</strong>（那发生在宿主机的 kubelet / device plugin 进程里），而是<strong>运行时能不能把设备节点塞进去</strong>；</li>
+<li><strong><code>privileged</code> 与 <code>device</code> 是两条正交的轴</strong>，且 <code>privileged</code> 的<strong>默认行为是连设备一起给你</strong>——「门全开但屋里没东西」必须靠显式 opt-out 才能达成；</li>
+<li><strong>dind 里 <code>--gpus all</code> 的 <code>all</code> 永远是局部 all</strong>——它能重分配外层给它的集合，但一张也变不出来。</li>
+</ol>
+</blockquote>
+<p>这篇是《容器运行时拆解·补篇》的<strong>续篇</strong>。原篇把 <code>runc create</code> 之后的世界切成四个侧面——权限、记账、I/O、退出；这篇顺着同一条责任链往下走，聚焦读者最常追问的三个场景。</p>
+<h3 id="本文路线">本文路线</h3>
+<p>全文分四段，可以按需跳读：</p>
+<table>
+<thead>
+<tr>
+<th>段落</th>
+<th>章节</th>
+<th>回答什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>① 原理</strong></td>
+<td>一 ~ 六</td>
+<td>三个时刻怎么切；<code>privileged</code> 与 <code>device</code> 到底是不是正交；<code>mknod</code> 能不能造设备；devices cgroup 有几档；rootless 换的是什么坐标系；legacy 与 CDI 差在哪</td>
+</tr>
+<tr>
+<td><strong>② 三问</strong></td>
+<td>七 ~ 九</td>
+<td><strong>Q1</strong> GPU 的 request/limit 在哪一层生效；<strong>Q2</strong> <code>privileged</code> 但不带 <code>--device</code> 的权限模型；<strong>Q3</strong> dind 里 <code>--gpus all</code> 为什么是「局部 all」</td>
+</tr>
+<tr>
+<td><strong>③ 取舍</strong></td>
+<td>十</td>
+<td>把镜头拉远，看这套实现整体上做过的三个设计选择</td>
+</tr>
+<tr>
+<td><strong>④ 收束</strong></td>
+<td>十一 ~ 十三</td>
+<td>一张责任链总图、一份踩坑清单、以及回到原篇的那句修正</td>
+</tr>
+</tbody>
+</table>
+<p>为了让讨论不悬空，本文对照了一套<strong>生产级托管 dind 的真实实现</strong>——一个跑在 K8s 上的开发机容器平台，下文称 <strong>Sky-DevBox</strong>。它的方案和教科书路径都不一样，恰好把责任链上几个「想当然」的地方照了出来；第三、七、八、九、十节都会用到它，其中第十节还会讲到一处「<strong>设计稿里想做、最后没做</strong>」的取舍。为便于公开讨论，下文中该项目的内网 API 组统一写作 <code>&lt;api-group&gt;</code>，镜像仓库地址一律隐去。</p>
+<blockquote>
+<p><strong>核对说明</strong>：本文所有关于 containerd / nerdctl / 内核 / Kubernetes / NVIDIA 的结论，均逐条核对自对应版本的<strong>源码或官方文档</strong>，关键处附原文。核对过程中发现原稿有 <strong>六处需要更正</strong>，已在文中以 ⚠️ 标出。所有源码引用基于 containerd v1.7.27、nerdctl v1.7.7、CDI v0.7.2。</p>
+</blockquote>
+<hr>
+<blockquote>
+<p><strong>① 原理</strong> · 一 ~ 六 —— 先把坐标系立起来：谁在什么时刻决定了什么。</p>
+</blockquote>
+<h2 id="一、先把责任链的三个时刻钉死">一、先把责任链的三个时刻钉死</h2>
+<p>原篇的收束句是「<strong>runc 只在 create 的那一刻存在，之后的一切都由其他组件接手</strong>」。这句话对，但如果把它读成「create 之后就定型了」，就会踩坑。准确的说法是把 GPU 的一生切成<strong>三个时刻</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>时刻</th>
+<th>谁在做</th>
+<th>决定了什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>create 之前</strong></td>
+<td>kubelet + device plugin</td>
+<td>这个 Pod <strong>被分配了哪几张卡</strong>（记账、调度、准入）</td>
+</tr>
+<tr>
+<td><strong>create 那一刻</strong></td>
+<td>运行时（含运行时包装器）+ runc</td>
+<td>这些卡<strong>以什么形式出现在容器的 /dev 里</strong>（设备节点、cgroup 规则、env、驱动库）</td>
+</tr>
+<tr>
+<td><strong>create 之后</strong></td>
+<td>节点上的监控 / 运维组件</td>
+<td>这些卡<strong>怎么被观测、怎么被回收</strong>——runc 早已退出</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>更正一（原稿最根本的一处）</strong>：原稿写「GPU 的可见性是 <code>runc create</code> 时一次性注入到容器 spec 里的……之后 kubelet 不再介入、runc 也早已退出……它能看到的 /dev 就被这一刻固定了」。</p>
+<p><strong>设备节点在 create 之后仍然可以被增删。</strong> 只要有一个进程能进入容器的 mount namespace，它就可以在里面 <code>mknod</code> 出新节点、或 <code>rm</code> 掉旧节点——<strong>这不需要容器重启，也不需要重新 create</strong>。本文第七、九节要讲的 Sky-DevBox，其 GPU 热插拔功能就建立在这一点上：它 <code>nsenter</code> 进正在运行的容器，<code>mknod</code> 一个 <code>/dev/nvidiaN</code> 出来，GPU 立刻可用。</p>
+<p>所以真正被「固定」的不是 <code>/dev</code> 的内容，而是<strong>最外层那一次分配给出的集合</strong>。下游每一层都只能在这个集合<strong>内部重新分配</strong>，不能把它撑大。这个区别是本文后面所有讨论的基石。</p>
+</blockquote>
+<p>三个时刻里，第一个时刻发生在<strong>宿主机侧的 root 进程</strong>里，与容器内进程是谁完全无关；第二个时刻才是运行时真正「动手」的地方；第三个时刻属于观测平面。三个问题分别落在这三个时刻上。</p>
+<hr>
+<h2 id="二、privileged-与-device：两条正交的轴">二、privileged 与 device：两条正交的轴</h2>
+<p>这是原稿问题最大的一节，我们直接从 containerd 的源码看起。</p>
+<h3 id="2-1-containerd-CRI-的-privileged-分支">2.1 containerd CRI 的 privileged 分支</h3>
+<p><code>pkg/cri/server/container_create_linux.go</code>（containerd v1.7.27）里，privileged 的处理是<strong>三段式</strong>的：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> securityContext.GetPrivileged() &#123;</span><br><span class="line">    <span class="keyword">if</span> !sandboxConfig.GetLinux().GetSecurityContext().GetPrivileged() &#123;</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">nil</span>, errors.New(<span class="string">&quot;no privileged container allowed in sandbox&quot;</span>)</span><br><span class="line">    &#125;</span><br><span class="line">    specOpts = <span class="built_in">append</span>(specOpts, oci.WithPrivileged)</span><br><span class="line">    <span class="keyword">if</span> !ociRuntime.PrivilegedWithoutHostDevices &#123;</span><br><span class="line">        specOpts = <span class="built_in">append</span>(specOpts, oci.WithHostDevices, oci.WithAllDevicesAllowed)</span><br><span class="line">    &#125; <span class="keyword">else</span> <span class="keyword">if</span> ociRuntime.PrivilegedWithoutHostDevicesAllDevicesAllowed &#123;</span><br><span class="line">        <span class="comment">// allow rwm on all devices for the container</span></span><br><span class="line">        specOpts = <span class="built_in">append</span>(specOpts, oci.WithAllDevicesAllowed)</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>注意这里：<strong><code>oci.WithPrivileged</code> 本身一个设备都不碰</strong>。它展开是这八个（<code>oci/spec_opts.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">var</span> WithPrivileged = Compose(</span><br><span class="line">	WithAllCurrentCapabilities,</span><br><span class="line">	WithMaskedPaths(<span class="literal">nil</span>),</span><br><span class="line">	WithReadonlyPaths(<span class="literal">nil</span>),</span><br><span class="line">	WithWriteableSysfs,</span><br><span class="line">	WithWriteableCgroupfs,</span><br><span class="line">	WithSelinuxLabel(<span class="string">&quot;&quot;</span>),</span><br><span class="line">	WithApparmorProfile(<span class="string">&quot;&quot;</span>),</span><br><span class="line">	WithSeccompUnconfined,</span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+<p>设备是<strong>另外两个 opt</strong> 加上去的，而它们挂在 <code>!PrivilegedWithoutHostDevices</code> 这个条件上——也就是说：</p>
+<blockquote>
+<p>⚠️ <strong>更正二（原稿的核心错误）</strong>：原稿写「privileged 不打开的部分：<strong><code>/dev</code> 里的设备节点本身</strong>。privileged 只是说’如果 /dev 里有什么，你都能访问’」。</p>
+<p><strong>这是反的。<code>privileged_without_host_devices</code> 的默认值是 <code>false</code>，意思是「privileged 容器默认拿到宿主机全部设备」。</strong> containerd 官方 CRI 配置文档原文：</p>
+<blockquote>
+<p><code>privileged_without_host_devices</code> — 「allows overloading the default behaviour of <strong>passing host devices through to privileged containers</strong>」 / 「<strong>Defaults to false - i.e pass host devices through to privileged containers.</strong>」</p>
+</blockquote>
+<p>所以一个<strong>默认配置下</strong>的 privileged 容器，<code>/dev</code> 里<strong>是有</strong>宿主机全部设备节点的（<code>oci.WithHostDevices</code> 把宿主机设备全量灌进 <code>spec.Linux.Devices</code>），devices cgroup 也是全开的。「门全开但屋里没东西」<strong>不是 privileged 的默认形态，而是一个需要显式 opt-out 才能达成的特殊形态</strong>——恰恰是 Sky-DevBox 刻意选择的那一种（见第八节）。</p>
+</blockquote>
+<h3 id="2-2-「privileged-看不到新设备」的正确读法">2.2 「privileged 看不到新设备」的正确读法</h3>
+<p>原稿引用的 moby issue 是真实存在的，但结论要精确化。issue #16160 的标题就是 <strong>「New devices on host are not exposed to privileged container」</strong>，报告者说得很清楚：脚本在容器里挂载 EBS 卷，宿主机的 <code>/dev/xvdc</code> 出现了，容器里没有。社区结论是容器的 <code>/dev</code> 是一份<strong>在创建时装配好的快照</strong>，不是宿主机 <code>/dev</code> 的实时镜像——有人形容它 「looks like a manually assembled <code>/dev/</code>, and not inherited from the hosts」。</p>
+<p>所以准确的表述是：</p>
+<ul>
+<li><strong>创建时就存在的设备</strong> → privileged 容器<strong>默认就有</strong>；</li>
+<li><strong>创建之后才出现的设备</strong>（热插拔硬盘、后加载的驱动建出来的节点）→ <strong>不会有</strong>，因为 <code>/dev</code> 已经装配完了；</li>
+<li>想绕开，社区土办法是 <code>-v /dev:/dev --privileged</code>（把宿主机 <code>/dev</code> 整个 bind 进来），但 fabiand 在同帖里指出 <code>/dev/pts</code>、<code>/dev/ptmx</code>、<code>/dev/mqueue</code>、<code>/dev/shm</code> 会有诡异问题。</li>
+</ul>
+<p>这条「快照语义」正是热插拔功能存在的原因：<strong>要么在创建时把设备给全，要么在创建后想办法把节点补进去</strong>。</p>
+<h3 id="2-3-nerdctl：同名开关的-CLI-形态">2.3 nerdctl：同名开关的 CLI 形态</h3>
+<p>Docker / nerdctl 这一侧走的是另一条路，但内核完全一样。nerdctl v1.7.7 的 <code>pkg/cmd/container/run_security_linux.go</code>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">var</span> privilegedOpts = []oci.SpecOpts&#123;</span><br><span class="line">	oci.WithPrivileged,</span><br><span class="line">	oci.WithAllDevicesAllowed,</span><br><span class="line">	oci.WithHostDevices,</span><br><span class="line">	oci.WithNewPrivileges,</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">var</span> privilegedWithoutDevicesOpts = []oci.SpecOpts&#123;</span><br><span class="line">	oci.WithPrivileged,</span><br><span class="line">	oci.WithNewPrivileges,</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>差集一目了然：<code>privileged-without-host-devices=true</code> 拿掉的就是 <code>WithAllDevicesAllowed</code>（devices cgroup 全开）和 <code>WithHostDevices</code>（全量宿主设备节点）。而且这个开关<strong>必须配合 <code>--privileged</code> 使用</strong>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> privilegedWithoutHostDevices &amp;&amp; !privileged &#123;</span><br><span class="line">	<span class="keyword">return</span> <span class="literal">nil</span>, errors.New(<span class="string">&quot;flag `--security-opt privileged-without-host-devices` can&#x27;t be used without `--privileged` enabled&quot;</span>)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p><strong>一个容易踩的坑</strong>：这里有两个<strong>同名但不同层</strong>的开关。</p>
+<table>
+<thead>
+<tr>
+<th>形态</th>
+<th>出现位置</th>
+<th>作用对象</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>privileged_without_host_devices</code>（<strong>下划线</strong>）</td>
+<td>containerd 的 <code>config.toml</code>，<code>runtimes.&lt;name&gt;</code> 段</td>
+<td><strong>CRI</strong> 创建的容器（即 K8s Pod）</td>
+</tr>
+<tr>
+<td><code>privileged-without-host-devices</code>（<strong>连字符</strong>）</td>
+<td>Docker / nerdctl 的 <code>--security-opt</code></td>
+<td><strong>dockerd/nerdctl</strong> 创建的容器</td>
+</tr>
+</tbody>
+</table>
+<p>一个管 K8s 那条路，一个管 docker 那条路。在 dind 场景里两者会<strong>同时出现</strong>——这本身就是一条线索（见第八节）。</p>
+</blockquote>
+<h3 id="2-4-小结：两条轴，四个象限">2.4 小结：两条轴，四个象限</h3>
+<p>把「权限」和「设备」拆成两条轴，四个象限就清楚了：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>无设备注入</th>
+<th>有设备注入</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>非 privileged</strong></td>
+<td>默认容器：<code>/dev</code> 只有基础节点，devices cgroup 是白名单</td>
+<td>标准 GPU 容器：<code>--device</code> / device plugin 注入</td>
+</tr>
+<tr>
+<td><strong>privileged</strong></td>
+<td><strong>需要显式 opt-out</strong>：<code>privileged-without-host-devices</code></td>
+<td><strong>privileged 的默认形态</strong>：全量宿主设备 + cgroup 全开</td>
+</tr>
+</tbody>
+</table>
+<p>原稿把左下角当成了右下角，这是它后面 Q2、Q3 推理跑偏的源头。</p>
+<hr>
+<h2 id="三、mknod-不是空壳：设备节点的真相">三、mknod 不是空壳：设备节点的真相</h2>
+<blockquote>
+<p>⚠️ <strong>更正三</strong>：原稿写「即使 privileged + 所有 capabilities 都在，容器内 <code>mknod /dev/nvidia0 c 195 0</code> 也<strong>造不出一个可用的 GPU 设备</strong>——设备节点只是个入口……而 mknod 出来的节点只是个空壳。所以 privileged-without-device 在 GPU 场景下等价于<strong>完全无 GPU</strong>」。</p>
+<p><strong>设备节点不是空壳，它就是设备的入口本身。</strong> 一个字符设备节点的全部内容就是 <code>(type, major, minor)</code> 三元组——内核拿到这三个数就去 <code>cdev</code> 表里找对应的驱动。只要驱动已加载、devices cgroup 放行，<code>mknod</code> 出来的节点<strong>和 <code>--device</code> 挂进来的节点在功能上没有任何区别</strong>。</p>
+<p>这一点不是我推理出来的，是 Sky-DevBox 的生产代码在依赖它：它的 GPU 热插拔实现就是「读宿主节点的主次设备号 → 在容器里 <code>mknod</code> 一个同号的节点」。</p>
+</blockquote>
+<h3 id="3-1-真正拦人的是-capability-的坐标系">3.1 真正拦人的是 capability 的坐标系</h3>
+<p><code>mknod</code> 系统调用对字符/块设备节点要求 <code>CAP_MKNOD</code>。关键在于<strong>这个检查用哪个 user namespace</strong>。<code>user_namespaces(7)</code> 把 <code>CAP_MKNOD</code> 和 <code>CAP_SYS_TIME</code>、<code>CAP_SYS_MODULE</code> 归为一类：</p>
+<blockquote>
+<p>「Only a process with privileges in the <strong>initial user namespace</strong> can perform such operations.」</p>
+</blockquote>
+<p>也就是说，内核用的是 <code>capable(CAP_MKNOD)</code>（对照 init userns），<strong>不是</strong> <code>ns_capable()</code>（对照容器自己的 userns）。这解释了两件事：</p>
+<ul>
+<li><strong>rootless 容器里 <code>mknod</code> 设备节点一定失败</strong>，哪怕容器内的进程「是 root」、capability 全在——因为它的 capability 只在自己的 userns 里有效。</li>
+<li><strong>但「从外面伸手进去 <code>mknod</code>」可以成功</strong>，只要伸手的那个进程在 init userns 里有 <code>CAP_MKNOD</code>。</li>
+</ul>
+<p><strong>runc 自己的代码是这条规则最直白的注脚</strong>（<code>libcontainer/rootfs_linux.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">createDevices</span><span class="params">(config *configs.Config)</span></span> <span class="type">error</span> &#123;</span><br><span class="line">	useBindMount := userns.RunningInUserNS() || config.Namespaces.Contains(configs.NEWUSER)</span><br><span class="line">	<span class="keyword">for</span> _, node := <span class="keyword">range</span> config.Devices &#123;</span><br><span class="line">		<span class="comment">// ...</span></span><br><span class="line">		<span class="comment">// containers running in a user namespace are not allowed to mknod</span></span><br><span class="line">		<span class="comment">// devices so we can just bind mount it from the host.</span></span><br><span class="line">		<span class="keyword">if</span> err := createDeviceNode(config.Rootfs, node, useBindMount); err != <span class="literal">nil</span> &#123;</span><br><span class="line">			<span class="keyword">return</span> err</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>而 <code>createDeviceNode</code> 是三分支的：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> bind &#123;</span><br><span class="line">	<span class="keyword">return</span> bindMountDeviceNode(rootfs, dest, node)</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">if</span> err := mknodDevice(dest, node); err != <span class="literal">nil</span> &#123;</span><br><span class="line">	<span class="keyword">if</span> errors.Is(err, os.ErrExist) &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">nil</span></span><br><span class="line">	&#125; <span class="keyword">else</span> <span class="keyword">if</span> errors.Is(err, os.ErrPermission) &#123;</span><br><span class="line">		<span class="keyword">return</span> bindMountDeviceNode(rootfs, dest, node)   <span class="comment">// 撞 EPERM 就退回 bind mount</span></span><br><span class="line">	&#125;</span><br><span class="line">	<span class="comment">// ...</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>三件事一次说清了：<strong>非 userns → <code>mknod</code>；userns → bind mount；<code>mknod</code> 撞 <code>EPERM</code> → 自动退回 bind mount。</strong></p>
+<blockquote>
+<p>⚠️ <strong>这里要补一句前面说得太绝对的话</strong>：userns 容器拿不到 <code>mknod</code> 能力，<strong>不等于它拿不到设备节点</strong>。runc 会替它把宿主机上的节点 <strong>bind mount</strong> 进去——bind mount 是一次挂载操作，受 mount 权限管辖，不是 <code>CAP_MKNOD</code>。</p>
+<p>所以第五节那张表里的「rootless 容器：容器内无法 <code>mknod</code>」，准确读法是「<strong>无法自己造节点</strong>」；节点仍然进得来，只是<strong>必须由外面的运行时替它挂</strong>。这也正好解释了 CDI 为什么在 rootless 下能工作——它走的就是「运行时替你把节点和库配好」这条路，而不是让容器自己 <code>mknod</code>。</p>
+</blockquote>
+<h3 id="3-2-nsenter-的-flag-里没有-U">3.2 nsenter 的 flag 里没有 <code>-U</code></h3>
+<p>Sky-DevBox 的热插拔实现（<code>pkg/dind/server/gpu_hotplug.go</code>）是这样的：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">cmd := exec.Command(<span class="string">&quot;nsenter&quot;</span>, <span class="string">&quot;-m&quot;</span>, <span class="string">&quot;-p&quot;</span>, <span class="string">&quot;-u&quot;</span>, <span class="string">&quot;-i&quot;</span>, <span class="string">&quot;-n&quot;</span>, <span class="string">&quot;-t&quot;</span>, fmt.Sprintf(<span class="string">&quot;%d&quot;</span>, pid), <span class="string">&quot;sh&quot;</span>, <span class="string">&quot;-c&quot;</span>,</span><br><span class="line">	fmt.Sprintf(<span class="string">&quot;rm -f %s; mknod %s c %s %s; chmod 666 %s&quot;</span>, device, device, major, minor, device))</span><br></pre></td></tr></table></figure>
+<p>数一下 flag：<code>-m</code> mount、<code>-p</code> pid、<code>-u</code> uts、<code>-i</code> ipc、<code>-n</code> net——<strong>没有 <code>-U</code>（user），也没有 <code>-a</code>（all）</strong>。</p>
+<p>这是个非常刻意的设计：</p>
+<ul>
+<li>进入 <strong>mount namespace</strong>，所以 <code>mknod</code> 创建的文件落在<strong>容器的 <code>/dev</code></strong> 里；</li>
+<li><strong>不进入 user namespace</strong>，所以进程的凭据仍是宿主 root，<code>capable(CAP_MKNOD)</code> 检查通过；</li>
+<li>主次设备号是先从宿主机的同名节点上读出来的（<code>ls -l</code> 取第 5、6 字段），保证造出来的节点指向同一个设备。</li>
+</ul>
+<p><code>-m</code> 和 <code>-U</code> 的取舍不是可有可无的细节——如果顺手加了 <code>-a</code>，这个功能就会立刻失效：进程会掉进容器的 userns，<code>capable(CAP_MKNOD)</code> 随即失败。</p>
+<blockquote>
+<p>顺带说，同一个仓库里另一处 <code>nsenter</code> 用法（<code>pkg/utils/cmd_runner.go</code> 里的 <code>HostNSEnterCommandRunner</code>）用的是 <code>--mount --pid --net --ipc --uts --cgroup --target 1</code>——<strong>同样没有 <code>--user</code></strong>。在一个代码库里两次独立地做出同一个选择，基本可以确认这是有意为之。</p>
+</blockquote>
+<h3 id="3-3-一个能跑的-GPU-到底需要什么">3.3 一个能跑的 GPU 到底需要什么</h3>
+<p>反过来，也要说清 <code>mknod</code> 单独<strong>不够</strong>的地方。<code>/dev/nvidia0</code> 只是入口，一个 CUDA 程序要真正跑起来还需要：</p>
+<table>
+<thead>
+<tr>
+<th>要素</th>
+<th>谁提供</th>
+<th>缺了会怎样</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/dev/nvidiaN</code></td>
+<td>设备节点（<code>mknod</code> 或 <code>--device</code>）</td>
+<td><code>nvidia-smi</code> 看不到这张卡</td>
+</tr>
+<tr>
+<td><code>/dev/nvidiactl</code></td>
+<td>驱动控制节点</td>
+<td>NVML 初始化失败</td>
+</tr>
+<tr>
+<td><code>/dev/nvidia-uvm</code>、<code>/dev/nvidia-uvm-tools</code></td>
+<td>UVM 节点</td>
+<td>CUDA 上下文创建失败（<code>Failed to initialize NVML</code> / <code>cudaErrorNoDevice</code> 类症状）</td>
+</tr>
+<tr>
+<td>devices cgroup 放行</td>
+<td><code>spec.Linux.Resources.Devices</code></td>
+<td><code>open()</code> 被 <code>EPERM</code> 拒绝</td>
+</tr>
+<tr>
+<td>用户态驱动库（<code>libcuda.so</code>、<code>libnvidia-ml.so</code>…）</td>
+<td>NVIDIA Container Toolkit 注入</td>
+<td>二进制找不到库</td>
+</tr>
+<tr>
+<td>环境变量（<code>NVIDIA_VISIBLE_DEVICES</code> 等）</td>
+<td>device plugin 的 <code>Allocate</code> 响应</td>
+<td>运行时不知道该注入哪些卡</td>
+</tr>
+</tbody>
+</table>
+<p>所以正确的结论是：<strong><code>mknod</code> 出来的节点是可用的，但只 <code>mknod</code> 一张 <code>nvidia0</code> 通常不够用</strong>——因为 <code>nvidiactl</code> / <code>nvidia-uvm</code> 和用户态库往往不在。手工挂 <code>/dev/nvidia0</code> 之所以「看起来不行」，原因在缺少其余几项，而不是节点本身是假的。</p>
+<hr>
+<h2 id="四、devices-cgroup：三档，不是两档">四、devices cgroup：三档，不是两档</h2>
+<p>设备访问控制有两套独立机制，经常被混为一谈：</p>
+<ol>
+<li><strong>设备节点是否存在</strong>（mount namespace 里的文件）；</li>
+<li><strong>devices cgroup 是否放行</strong>（<code>open()</code> 时的检查）。</li>
+</ol>
+<p>第 2 条在 OCI spec 里是 <code>linux.resources.devices</code>，元素类型是 <code>LinuxDeviceCgroup</code>。containerd 的 <code>oci.WithDevices</code> 一次写两处：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> i := <span class="keyword">range</span> devs &#123;</span><br><span class="line">	s.Linux.Devices = <span class="built_in">append</span>(s.Linux.Devices, devs[i])</span><br><span class="line">	s.Linux.Resources.Devices = <span class="built_in">append</span>(s.Linux.Resources.Devices, specs.LinuxDeviceCgroup&#123;</span><br><span class="line">		Allow:  <span class="literal">true</span>,</span><br><span class="line">		Type:   devs[i].Type,</span><br><span class="line">		Major:  &amp;devs[i].Major,</span><br><span class="line">		Minor:  &amp;devs[i].Minor,</span><br><span class="line">		Access: permissions,</span><br><span class="line">	&#125;)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>这就是为什么 <code>--device</code> 能同时解决「看得见」和「打得开」</strong>——它不是一个开关，是两个。</p>
+<p>三档状态：</p>
+<table>
+<thead>
+<tr>
+<th>档位</th>
+<th><code>linux.resources.devices</code> 的值</th>
+<th>效果</th>
+<th>谁在这一档</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>基础白名单</strong></td>
+<td>containerd 默认追加的一组 allow：<code>/dev/null</code>(1:3)、<code>/dev/zero</code>(1:5)、<code>/dev/full</code>(1:7)、<code>/dev/random</code>(1:8)、<code>/dev/urandom</code>(1:9)、<code>/dev/tty</code>(5:0)、<code>/dev/console</code>(5:1)、<code>/dev/ptmx</code>(5:2)、<code>/dev/pts/*</code>(136:*)</td>
+<td>叠加在运行时的<strong>隐式 deny-all</strong> 之上，只放行这几个</td>
+<td>默认容器；<code>privileged-without-host-devices</code></td>
+</tr>
+<tr>
+<td><strong>白名单 + 注入</strong></td>
+<td>上面那组<strong>追加</strong>（<code>append</code>）上逐条 <code>&#123;Allow:true, Type, Major, Minor, Access&#125;</code></td>
+<td>基础设备 + 指定设备</td>
+<td><code>--device</code> / device plugin 注入</td>
+</tr>
+<tr>
+<td><strong>全开</strong></td>
+<td><code>[&#123;Allow:true, Access:&quot;rwm&quot;&#125;]</code>（<code>oci.WithAllDevicesAllowed</code>，注意是<strong>整体赋值覆盖</strong>，不是追加）</td>
+<td>所有设备可访问</td>
+<td>privileged 的默认路径</td>
+</tr>
+</tbody>
+</table>
+<p>所以 <code>privileged</code> 的默认路径落到第三档；<code>privileged-without-host-devices</code> 则<strong>停在基础白名单</strong>——注意它<strong>不是「没有规则」</strong>，containerd 的 <code>oci.WithDefaultUnixDevices</code> 已经放行了 <code>/dev/null</code>、<code>/dev/tty</code>、<code>/dev/ptmx</code> 这一组。</p>
+<blockquote>
+<p><strong>一个真实世界的边角案例</strong>：Sky-DevBox 全仓库<strong>唯一</strong>一处写 devices cgroup 的地方，是 cgroup v1 下的这一行（<code>pkg/cgroups/cgroupv1.go</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">err := cgroups.WriteFile(path, 「devices.allow」, 「c <span class="number">5</span>:<span class="number">1</span> rwm」)</span><br></pre></td></tr></table></figure>
+<p><code>c 5:1</code> 是字符设备 5 号主设备、1 号次设备——<strong><code>/dev/console</code></strong>。它同时写在 <strong>Pod 的 cgroup</strong> 和其下新建的 <strong><code>dind-containers</code> 子 cgroup</strong> 上。</p>
+<p>这里有个值得较真的细节：<code>/dev/console</code> <strong>本来就在</strong> containerd 的默认列表里（见上表）。所以这行代码不是在「补一个默认缺失的设备」，而是在给<strong>两类拿不到 containerd 容器级默认规则的 cgroup</strong> 开口子——Pod 层的 cgroup，以及 dind 里那些内层容器将要挂进去的 <code>dind-containers</code> 父 cgroup。</p>
+<p>它是「这套实现确实没走 allow-all」的一条<strong>旁证</strong>：如果 privileged 走的是默认路径（<code>[&#123;Allow:true, Access:&quot;rwm&quot;&#125;]</code> 整体覆盖），这两处 <code>devices.allow</code> 就完全没有必要存在。</p>
+</blockquote>
+<hr>
+<h2 id="五、rootless：换的是坐标系，不是权限大小">五、rootless：换的是坐标系，不是权限大小</h2>
+<p>第二节讲的是<strong>权限轴</strong>，这一节讲<strong>坐标系轴</strong>。rootless 的关键不是“权限更小”，而是<strong>换了一套 uid 映射</strong>——理解了这一点，后面所有的“为什么这里会 EPERM”都好解释了。</p>
+<h3 id="5-1-机制：容器内的-0-是宿主机的另一个数">5.1 机制：容器内的 0 是宿主机的另一个数</h3>
+<p>rootless 的本质是 user namespace 的 ID 映射。容器内的 uid 0 被映射到宿主机上的一个高位 uid（典型的 <code>/etc/subuid</code> 布局是 <code>alice:100000:65536</code>），于是：</p>
+<ul>
+<li>容器内进程 <code>id</code> 显示 <code>uid=0(root)</code>，自我感觉良好；</li>
+<li>宿主机上 <code>ps aux</code> 看到的是 uid 100000；</li>
+<li><strong>所有 capability 检查都发生在初始 user namespace</strong>，容器内那个「root」在宿主机上什么特权都没有。</li>
+</ul>
+<h3 id="5-2-K8s-里的-rootless-长什么样">5.2 K8s 里的 rootless 长什么样</h3>
+<p>这里要补一个原稿没提、但很关键的事实：<strong>Kubernetes 官方并不叫它「rootless 容器」，它叫 user namespaces，入口是 <code>spec.hostUsers</code></strong>。官方文档原文：</p>
+<blockquote>
+<p>「A pod can opt-in to use user namespaces by setting the <code>pod.spec.hostUsers</code> field to <code>false</code>.」</p>
+</blockquote>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Pod</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">secured-pod</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">hostUsers:</span> <span class="literal">false</span>          <span class="comment"># 这一个字段就是&quot;K8s 里的 rootless&quot;</span></span><br><span class="line">  <span class="attr">containers:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">worker</span></span><br><span class="line">    <span class="attr">image:</span> <span class="string">nvcr.io/nvidia/cuda:12.4.0-base-ubuntu22.04</span></span><br></pre></td></tr></table></figure>
+<p>它的版本线是：<strong>1.25 alpha → 1.30 beta → 1.33 默认开启 → 1.36 GA（feature gate 已锁定，无法关闭）</strong>。</p>
+<blockquote>
+<p>⚠️ <strong>更正六（概念混淆，但很常见）</strong>：原稿给的 Pod YAML 里，把「租户容器不给 root」的实现点写成了：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">securityContext:</span></span><br><span class="line">  <span class="attr">runAsNonRoot:</span> <span class="literal">true</span>       <span class="comment"># 原稿注释：「这里是&#x27;租户容器不给 root&#x27;的实现点」</span></span><br></pre></td></tr></table></figure>
+<p><strong><code>runAsNonRoot</code> 不是 rootless。</strong> 它是 kubelet 的一个<strong>准入检查</strong>——如果镜像的 <code>USER</code> 是 root（或没写 <code>USER</code>），容器会被拒绝启动。它只回答「这个容器以哪个 uid 运行」，<strong>完全不涉及 user namespace</strong>。容器内 uid 1000 在宿主机上仍然是 uid 1000；文件权限、capability 检查、<code>mknod</code> 规则统统没变。</p>
+<p>真正打开 user namespace 的是 <code>hostUsers: false</code>。两者可以叠加，但作用完全不同：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>作用层</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runAsNonRoot: true</code></td>
+<td>kubelet 准入 + 进程 uid</td>
+<td>容器不以 uid 0 运行</td>
+</tr>
+<tr>
+<td><code>hostUsers: false</code></td>
+<td>内核 user namespace</td>
+<td>容器内的 0 被映射到宿主机的高位 uid</td>
+</tr>
+</tbody>
+</table>
+<p>原稿后面所有「rootless 下 <code>mknod</code> / BPF 会被拒」的推理，<strong>前提是 <code>hostUsers: false</code>，不是 <code>runAsNonRoot</code></strong>。如果只写了 <code>runAsNonRoot</code>，容器仍然跑在初始 user namespace 里，那些限制一个都不会出现。</p>
+</blockquote>
+<p>前置条件不是免费的：</p>
+<ul>
+<li><strong>内核 ≥ 6.3</strong>（tmpfs 从 6.3 起支持 idmap mount，而 ServiceAccount token、Secret 都走 tmpfs）；</li>
+<li>节点上 <code>/var/lib/kubelet/pods/</code> 所在的文件系统要支持 idmap mount（ext4 / xfs(ftype=1) / btrfs / tmpfs / overlayfs）；</li>
+<li><strong>containerd ≥ 2.0</strong> 或 <strong>CRI-O ≥ 1.25</strong>；<strong>runc ≥ 1.2</strong> 或 crun ≥ 1.9（推荐 1.13+）。</li>
+</ul>
+<p>capability 的行为也被官方点明了：</p>
+<blockquote>
+<p>「<code>CAP_SYS_MODULE</code> does not have any effect if granted to a pod using user namespaces, the pod isn’t able to load kernel modules.」</p>
+<p>「<code>CAP_SYS_ADMIN</code> is limited to the pod’s user namespace and invalid outside of it.」</p>
+</blockquote>
+<h3 id="5-3-三道关卡">5.3 三道关卡</h3>
+<p>把前面几节的结论合起来，rootless 下的 GPU 有三道<strong>互相独立</strong>的关卡：</p>
+<table>
+<thead>
+<tr>
+<th>关卡</th>
+<th>root 容器</th>
+<th>rootless 容器</th>
+<th>卡在哪</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>设备节点可见性</strong></td>
+<td>可 <code>mknod</code>、可 bind mount、可 CDI</td>
+<td><strong>容器内无法 <code>mknod</code></strong>（<code>capable(CAP_MKNOD)</code> 在 init userns）</td>
+<td>只能用「外面伸进来」或「创建时注入」的现成节点</td>
+</tr>
+<tr>
+<td><strong>devices cgroup 写权限</strong></td>
+<td>运行时以 root 写 <code>devices.allow</code> / 加载 BPF</td>
+<td><strong>无 <code>CAP_BPF</code> / <code>CAP_SYS_ADMIN</code></strong></td>
+<td><code>bpf_prog_query(BPF_CGROUP_DEVICE): operation not permitted</code></td>
+</tr>
+<tr>
+<td><strong>驱动 ioctl 权限</strong></td>
+<td>capabilities 全开</td>
+<td>capability 只在本 userns 有效</td>
+<td>个别 ioctl 仍可能被拒</td>
+</tr>
+</tbody>
+</table>
+<p>第二道就是下一节的主角。</p>
+<hr>
+<h2 id="六、legacy-与-CDI：为什么-rootless-下-legacy-会崩">六、legacy 与 CDI：为什么 rootless 下 legacy 会崩</h2>
+<p>换了坐标系之后，第一个撞墙的是 NVIDIA 那一层。这一节讲清墙在哪、以及 CDI 是怎么绕过去的——它也是后文讨论“这套实现为什么不用 CDI”时的参照系。</p>
+<h3 id="6-1-legacy-模式：prestart-hook-要改-cgroup">6.1 legacy 模式：prestart hook 要改 cgroup</h3>
+<p>NVIDIA Container Toolkit 的 <strong>legacy 模式</strong>下，<code>nvidia-container-runtime</code> 会在 OCI spec 里注入一个 prestart hook，容器创建时由 <code>nvidia-container-cli</code> 去挂驱动库、<strong>并把设备规则写进 devices cgroup</strong>。</p>
+<p>在 cgroup v2 上，devices controller 是 <strong>eBPF 程序</strong>。要往里面追加规则，得先查询当前挂载的过滤器——这一步需要调用方在<strong>初始 user namespace</strong> 里有 <code>CAP_BPF</code>/<code>CAP_SYS_ADMIN</code>。rootless 下没有，于是整个容器创建失败。</p>
+<h3 id="6-2-两次真实回归（不是一次）">6.2 两次真实回归（不是一次）</h3>
+<blockquote>
+<p>⚠️ <strong>更正四</strong>：原稿写「NVIDIA Container Toolkit <strong>1.18.0</strong> 在 rootless docker 上曾因此大面积崩溃，降回 <strong>1.17.x</strong> 才能跑」。</p>
+<p><strong>这个错误本身是对的，但它不是唯一一次，而且 1.17.x 并不是安全区。</strong> 实际有<strong>两次独立的回归</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>版本</th>
+<th>影响面</th>
+<th>现象</th>
+<th>出处</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1.17.7</strong></td>
+<td>Slurm + Pyxis/Enroot、LXC/Proxmox</td>
+<td>同一句 <code>bpf_prog_query</code> 报错；LXC 下还有 <code>open failed: /proc/1/root/: permission denied</code></td>
+<td>nvidia-container-toolkit issue <strong>#1093</strong> 「Update to version 1.17.7-1 on Ubuntu breaks pyxis/enroot in Slurm」</td>
+</tr>
+<tr>
+<td><strong>1.18.0</strong></td>
+<td><strong>rootless Docker</strong></td>
+<td>「Docker Rootless fails with v1.18.0 due to cgroup BPF permission error (bpf_prog_query)，regression from v1.17.8」</td>
+<td>issue <strong>#1487</strong></td>
+</tr>
+</tbody>
+</table>
+<p>完整报错原文是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">nvidia-container-cli: mount error: failed to add device rules:</span><br><span class="line">unable to find any existing device filters attached to the cgroup:</span><br><span class="line">bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted</span><br></pre></td></tr></table></figure>
+<p>所以「降回 1.17.x」这个建议本身是<strong>有坑的</strong>——1.17.7 也坏，得降到 <strong>1.17.6</strong>；而 1.18.0 是相对 1.17.8 的<strong>新</strong>回归。给生产环境的建议应该是「锁在已知可用的具体小版本」，而不是「降到某个大版本」。</p>
+</blockquote>
+<h3 id="6-3-CDI：把特权操作换成纯数据合并">6.3 CDI：把特权操作换成纯数据合并</h3>
+<p><strong>CDI（Container Device Interface）</strong> 的思路完全不同：把「访问一个设备需要什么」（设备节点、挂载、env、附加 GID）写成一份 YAML，运行时在 create 时<strong>读这份 spec 并合并进 OCI spec</strong>。这是一次<strong>纯数据合并</strong>，不需要 <code>mknod</code>、不需要写 cgroup、不需要 BPF。</p>
+<p>NVIDIA 官方文档里那句关键的话是：</p>
+<blockquote>
+<p>「CDI also improves the compatibility of the NVIDIA container stack with certain features such as <strong>rootless containers</strong>.」</p>
+</blockquote>
+<p>版本线（均出自官方 release notes / CDI 文档）：</p>
+<ul>
+<li><strong>1.12.0</strong>：开始支持生成 CDI spec；</li>
+<li><strong>1.18.0</strong>：<strong>默认模式改为 JIT-CDI</strong>——「The default mode of the NVIDIA Container Runtime has been updated to make use of a just-in-time-generated CDI specification」，同时 legacy 模式被标记为 <strong>deprecated</strong>；</li>
+<li><strong>1.19.1</strong>：CDI spec schema 默认升到 <strong>v0.7.0</strong>，会让老运行时（containerd &lt; 1.7.16、docker &lt; 26.1.0、podman &lt; 5.1.0、crio &lt; 1.30.0）不认，需要 <code>no-additional-gids-for-device-nodes</code> 特性开关。</li>
+</ul>
+<p>切换命令与产物路径（官方原文）：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">sudo</span> nvidia-ctk config --in-place --<span class="built_in">set</span> nvidia-container-runtime.mode=cdi</span><br></pre></td></tr></table></figure>
+<ul>
+<li>CDI spec 写在 <strong><code>/var/run/cdi/nvidia.yaml</code></strong>；</li>
+<li>由 <strong><code>nvidia-cdi-refresh</code></strong> 这个 systemd service（<code>.path</code> + <code>.service</code> 两个 unit）自动生成；</li>
+<li>运行时在<strong>设备以 CDI 名请求时也会自动切到该模式</strong>。</li>
+</ul>
+<blockquote>
+<p><strong>一个容易忽略的版本细节</strong>：containerd <strong>1.7 默认 <code>enable_cdi = false</code></strong>，<strong>2.0 起才默认启用</strong>——所以 2.0 的配置参考里已经看不到这个开关。跨版本排查设备注入问题时很容易在这里卡住。</p>
+</blockquote>
+<hr>
+<blockquote>
+<p><strong>② 三问</strong> · 七 ~ 九 —— 原理铺完了，正面回答三个高频追问。</p>
+</blockquote>
+<h2 id="七、Q1：GPU-的-request-limit-到底在哪一层生效">七、Q1：GPU 的 request/limit 到底在哪一层生效</h2>
+<p>原理铺完了，从这一节开始正面回答三个问题。第一问最常被问到：写下 <code>resources.limits.nvidia.com/gpu: 2</code> 之后，<strong>这个 2 是在哪一层被兑现的</strong>？</p>
+<h3 id="7-1-标准答案：生效在-create-之前，与容器内-uid-无关">7.1 标准答案：生效在 create 之前，与容器内 uid 无关</h3>
+<p>把链路铺平：</p>
+<ol>
+<li><strong>调度</strong>：<code>resources.limits.nvidia.com/gpu: 2</code> 让调度器只看 node 的 allocatable；</li>
+<li><strong>准入</strong>：kubelet 的 Device Manager 调 device plugin 的 <code>Allocate</code>；</li>
+<li><strong>注入</strong>：<code>Allocate</code> 的返回值被塞进 CRI 的 <code>ContainerConfig</code>，containerd 构造 OCI spec；</li>
+<li><strong>落地</strong>：运行时（runc，或被包装的 runc）在 create 时把 <code>linux.devices</code>、<code>linux.resources.devices</code>、env、mounts 写进新容器。</li>
+</ol>
+<p>官方文档对 <code>Allocate</code> 返回值的描述是：</p>
+<blockquote>
+<p>「An <code>AllocateResponse</code> contains zero or more <code>ContainerAllocateResponse</code> objects. In these, the device plugin defines modifications that must be made to a container’s definition to provide access to the device. These modifications include: Annotations / device nodes / environment variables / mounts / <strong>fully-qualified CDI device names</strong>.」</p>
+</blockquote>
+<p><strong>第 1、2 步都发生在宿主机侧的 kubelet / plugin 进程里，它们以 root 身份运行。</strong> 容器内进程是 root 还是 alice，对这两步<strong>没有任何影响</strong>。</p>
+<p>另外两条硬约束（K8s 官方文档原文）：</p>
+<blockquote>
+<p>「The API server restricts quantities of extended resources to <strong>whole numbers</strong>.」</p>
+<p>「Extended resources <strong>cannot be overcommitted</strong>, so request and limit must be equal if both are present in a container spec.」</p>
+</blockquote>
+<p>所以 <code>limits: 2</code> = 独占两张卡；想做「一卡多人」必须换机制（MIG / time-slicing / MPS），不能靠 request/limit。</p>
+<p><strong>rootless 真正影响的是第 3、4 步</strong>——能不能把设备塞进去。这就回到第六节：CDI 能，legacy 在 rootless 下会崩。</p>
+<h3 id="7-2-第三条路：让运行时自己去调-device-plugin">7.2 第三条路：让运行时自己去调 device plugin</h3>
+<p>到这里教科书答案就结束了。但 Sky-DevBox 的做法提示了<strong>还有第三条路</strong>——它既不用 CDI，也不依赖 containerd CRI 的默认注入，而是<strong>在运行时包装器里重新走了一遍设备分配</strong>。</p>
+<p>先看它的位置。它的 containerd 配置里，<code>sky</code> runtime 的 <code>BinaryName</code> 指向一个自研包装器：</p>
+<figure class="highlight toml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="section">[plugins.&quot;io.containerd.grpc.v1.cri&quot;.containerd.runtimes.sky.options]</span></span><br><span class="line">  <span class="attr">BinaryName</span> = <span class="string">&quot;/opt/sky/bin/sky-devbox-runtime&quot;</span></span><br></pre></td></tr></table></figure>
+<p>这个包装器在 <code>runc</code> 之前介入，读 bundle 里的 <code>config.json</code>、改完再写回、然后 exec 真正的低层运行时。它注册的 spec modifier 链是：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">originalProvider := providers.NewDevicesProvider(logger, kc)          <span class="comment">// 直接问 kubelet</span></span><br><span class="line">odm := modifier.NewDevicesModifier(logger, <span class="literal">nil</span>, originalProvider)</span><br><span class="line"></span><br><span class="line">containerProvider := providers.NewContainerSync(logger, kc)           <span class="comment">// 从别的容器&quot;同步&quot;设备</span></span><br><span class="line">podProvider := providers.NewPodSync(logger, kc)                       <span class="comment">// 从整个 Pod 聚合</span></span><br><span class="line">directProvider := providers.NewDirect(logger)                         <span class="comment">// 从注解直接读</span></span><br><span class="line">provider := providers.Merge(containerProvider, podProvider, directProvider)</span><br><span class="line">dm := modifier.NewDevicesModifier(logger, dpFactory, provider)</span><br><span class="line">rdm := modifier.Repeat(dm)                                            <span class="comment">// 迭代到不动点</span></span><br><span class="line"></span><br><span class="line">rmm := modifier.NewReplaceMountsModifier(logger)                      <span class="comment">// 与设备无关，一并列出</span></span><br><span class="line">csm := modifier.NewContainerServiceModifier(logger)</span><br><span class="line">gm := modifier.NewGenericModifier(logger, <span class="literal">nil</span>)</span><br><span class="line"></span><br><span class="line"><span class="keyword">return</span> modifier.Merge(odm, rdm, rmm, csm, gm, newCPUSetModdifier()), <span class="literal">nil</span></span><br></pre></td></tr></table></figure>
+<p>拆开看，它做了三件标准路径不做的事。</p>
+<p><strong>(a) 它自己问 kubelet 要设备清单。</strong> 通过 kubelet 的 <strong>PodResources API</strong>（socket 在 <code>/var/lib/kubelet/pod-resources/kubelet.sock</code>）按 <code>namespace/name/container</code> 查出这个容器被分配了哪些设备 ID。</p>
+<p><strong>(b) 它自己调 device plugin 的 <code>Allocate</code>。</strong> 拿到设备 ID 后，直接连 device plugin 的 socket（<code>/var/lib/kubelet/device-plugins/*.sock</code>），发起标准 gRPC：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">req := &amp;devicepluginapi.AllocateRequest&#123;</span><br><span class="line">	ContainerRequests: []*devicepluginapi.ContainerAllocateRequest&#123;</span><br><span class="line">		&#123;DevicesIDs: deviceids&#125;,</span><br><span class="line">	&#125;,</span><br><span class="line">&#125;</span><br><span class="line">resp, err := c.client.Allocate(ctx, req)</span><br></pre></td></tr></table></figure>
+<p>然后把 <code>ContainerAllocateResponse</code> 的四类内容分别合并进 OCI spec：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">mergeEnv(containerInfo.Envs, &amp;spec.Process.Env)              <span class="comment">// NVIDIA_VISIBLE_DEVICES 等</span></span><br><span class="line">mergeAnnotation(containerInfo.Annotations, &amp;spec.Annotations)</span><br><span class="line">mergeMount(containerInfo.Mounts, &amp;spec.Mounts)               <span class="comment">// 驱动库等</span></span><br><span class="line">mergeDevice(containerInfo.Devices, spec)                     <span class="comment">// 设备节点 + cgroup 规则</span></span><br></pre></td></tr></table></figure>
+<p>注意最后一行——<code>mergeDevice</code> 内部调的是 containerd CRI 自己的 <code>opts.WithDevices</code>，也就是<strong>和 containerd 官方路径用的是同一个函数</strong>，最终仍然落到第四节的「节点 + cgroup 规则」两处。</p>
+<p><strong>© 它用不动点迭代解决链式引用。</strong> 这是最巧的一处。<code>Repeat</code> 修饰器的实现是：把 spec 序列化成 JSON，反复跑 modifier，直到<strong>序列化结果不再变化</strong>为止：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> &#123;</span><br><span class="line">	err = m.modifier.Modify(spec)</span><br><span class="line">	...</span><br><span class="line">	newdata, err := json.Marshal(spec)</span><br><span class="line">	<span class="keyword">if</span> reflect.DeepEqual(olddata, newdata) &#123;</span><br><span class="line">		<span class="keyword">break</span></span><br><span class="line">	&#125;</span><br><span class="line">	olddata = newdata</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>为什么要迭代？因为设备引用可以<strong>链式</strong>。代码注释里列了三种真实场景，以 <code>spot+dind</code> 为例：</p>
+<ul>
+<li><strong>第 1 轮</strong>：从主容器同步「抢占实例」的设备 ID，形如 <code>GPU-xxxx-spot</code>，调 spot GPU 的 device plugin，得到一条注解 <code>&#123;&quot;nvidia.com/gpu&quot;:[&quot;GPU-xxxx&quot;]&#125;</code>；</li>
+<li><strong>第 2 轮</strong>：<code>direct</code> provider 读到这条注解，拿<strong>真实</strong> GPU ID 去调 nvidia 的 device plugin，才拿到最终的设备节点。</li>
+</ul>
+<p>一轮解不出最终形态，所以要迭代到收敛。这是把「设备 ID 的解析」当成一个<strong>重写系统</strong>来做的。</p>
+<p><strong>这条路线的意义</strong>：它证明了「GPU request/limit 生效」并不必然绑定在 containerd CRI 的标准注入路径上。当平台需要做<strong>跨容器设备同步</strong>（把 A 容器的设备给 B 容器用）、<strong>抢占实例的设备重映射</strong>（spot → 真实卡）这类标准 K8s 表达不了的事情时，把设备解析搬到运行时包装器里是一个可行解。</p>
+<p>代价也很明显：<strong>运行时要自己保证幂等与收敛</strong>（<code>Repeat</code> 的 JSON 比较是有成本的），<strong>要自己处理 kubelet / plugin 不可用时的降级</strong>（代码里 <code>Allocate</code> 失败时是 <code>return nil</code> 跳过而不是报错——这个取舍值得单独讨论），而且<strong>设备记账的事实来源变成了两处</strong>（kubelet 的分配 + 运行时的解析），排查时需要同时看两边。</p>
+<h3 id="7-3-排查清单">7.3 排查清单</h3>
+<p><code>nvidia-smi</code> 报 <code>Failed to initialize NVML</code> 时，按这个顺序切：</p>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>大概率原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kubectl describe node</code> 里没有 <code>nvidia.com/gpu</code></td>
+<td>device plugin 没注册成功（看 <code>/var/lib/kubelet/device-plugins/</code> 下的 socket）</td>
+</tr>
+<tr>
+<td><code>kubectl get events</code> 有 <code>Allocate</code> 失败</td>
+<td>plugin 与驱动 / toolkit 版本不匹配</td>
+</tr>
+<tr>
+<td>容器内 <code>ls /dev/nvidia*</code> 为空</td>
+<td>注入没发生：CDI spec 没生成、没切 CDI 模式、或运行时侧解析失败</td>
+</tr>
+<tr>
+<td>容器内 <code>nvidia-smi</code> 报 <code>operation not permitted</code></td>
+<td>大概率还在 legacy 模式，prestart hook 在 rootless 下改 devices cgroup 被拒</td>
+</tr>
+<tr>
+<td>有 <code>/dev/nvidia0</code> 但 CUDA 报错</td>
+<td>缺 <code>nvidiactl</code> / <code>nvidia-uvm</code> / 用户态库（见 3.3 表）</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="八、Q2：privileged-without-device-的权限模型">八、Q2：privileged-without-device 的权限模型</h2>
+<p>Q1 的答案是“生效在 create 之前，与容器内 uid 无关”。但还有个更基础的问题没答：如果一个容器 <strong><code>privileged</code> 却不带 <code>--device</code></strong>，它到底能干什么、不能干什么？</p>
+<h3 id="8-1-逐项拆开">8.1 逐项拆开</h3>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>有 / 没有</th>
+<th>由哪个 opt 提供</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>capabilities</td>
+<td>✅ 全开（<code>WithAllCurrentCapabilities</code>）</td>
+<td><code>oci.WithPrivileged</code></td>
+</tr>
+<tr>
+<td>seccomp</td>
+<td>✅ 关闭（<code>WithSeccompUnconfined</code>）</td>
+<td>同上</td>
+</tr>
+<tr>
+<td>AppArmor / SELinux</td>
+<td>✅ 不应用</td>
+<td>同上</td>
+</tr>
+<tr>
+<td><code>/proc</code>、<code>/sys</code> 的 masked / readonly paths</td>
+<td>✅ 清空</td>
+<td>同上</td>
+</tr>
+<tr>
+<td><code>/sys</code>、<code>/sys/fs/cgroup</code> 可写</td>
+<td>✅</td>
+<td><code>WithWriteableSysfs</code> / <code>WithWriteableCgroupfs</code></td>
+</tr>
+<tr>
+<td><strong>devices cgroup 全开</strong></td>
+<td>❌ <strong>没有</strong></td>
+<td>被 opt-out 掉的 <code>WithAllDevicesAllowed</code></td>
+</tr>
+<tr>
+<td><strong>全量宿主设备节点</strong></td>
+<td>❌ <strong>没有</strong></td>
+<td>被 opt-out 掉的 <code>WithHostDevices</code></td>
+</tr>
+<tr>
+<td><strong><code>mknod</code> 系统调用</strong></td>
+<td>✅ 可以调用</td>
+<td>capabilities 里有 <code>CAP_MKNOD</code></td>
+</tr>
+</tbody>
+</table>
+<p>最后一行是这个形态最微妙的地方：<strong>容器内可以 <code>mknod</code>，但能不能 <code>mknod</code> 出设备节点，取决于它在不在初始 user namespace</strong>。在一个没有 userns remap 的 privileged 容器里（容器 root = 宿主 root），<code>mknod</code> 设备节点<strong>是能成功的</strong>——<code>privileged-without-device</code> 只是不<strong>主动给你</strong>设备，并不阻止你<strong>自己造</strong>。</p>
+<p>这也解释了为什么这个形态的隔离强度是有限的：它是「减少默认暴露面」，不是「阻断设备访问」。真正的强隔离需要 userns（第五节）或 VM 级隔离。</p>
+<h3 id="8-2-一个真实的生产形态">8.2 一个真实的生产形态</h3>
+<p>Sky-DevBox 里托管 dind 的创建参数（<code>pkg/dind/controller/create_helpers.go</code>，已隐去镜像地址）是：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">createOptions := types.ContainerCreateOptions&#123;</span><br><span class="line">	Runtime:     <span class="string">&quot;/opt/sky/bin/sky-devbox-runtime&quot;</span>,</span><br><span class="line">	Cgroupns:    <span class="string">&quot;host&quot;</span>,</span><br><span class="line">	Privileged:  <span class="literal">true</span>,</span><br><span class="line">	SecurityOpt: []<span class="type">string</span>&#123;</span><br><span class="line">		<span class="string">&quot;seccomp=unconfined&quot;</span>,</span><br><span class="line">		<span class="string">&quot;apparmor=unconfined&quot;</span>,</span><br><span class="line">		<span class="string">&quot;privileged-without-host-devices=true&quot;</span>,</span><br><span class="line">	&#125;,</span><br><span class="line">	CapAdd: []<span class="type">string</span>&#123;<span class="string">&quot;SYS_ADMIN&quot;</span>, <span class="string">&quot;NET_ADMIN&quot;</span>&#125;,</span><br><span class="line">	<span class="comment">// 其余字段（日志驱动、镜像拉取策略、内存/CPU 上限等）与本节结论无关，略</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>这就是本文 Q2 讨论的那个组合的生产实例</strong>：<code>privileged: true</code> + 显式 opt-out 设备。dockerd 要 <code>SYS_ADMIN</code>（挂载、网络命名空间、cgroup），要关 seccomp/AppArmor（要跑 <code>mount</code>、<code>iptables</code>、<code>mknod</code>），但平台<strong>不想让它默认拿到宿主机的全部设备</strong>——因为那等于把整台机器的 <code>/dev</code> 交给租户。</p>
+<blockquote>
+<p><strong>为什么是 <code>privileged</code> 而不是 rootless？</strong> 这不是随手选的默认值——设计稿里原本写的是 rootless，最后没落地。原因、证据和取舍见<strong>第十节 10.3</strong>。</p>
+</blockquote>
+<p>设备从哪里来？只有一条路：<strong>显式继承</strong>。创建 dind 容器时，它的 spec 会把主容器的设备列表<strong>原样复制</strong>过去：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">dindSpec.Linux.Devices = <span class="built_in">append</span>(dindSpec.Linux.Devices, mainSpec.Linux.Devices...)</span><br></pre></td></tr></table></figure>
+<p>也就是说，<strong>dind 能看到的 GPU，严格等于外层 Pod 被分配的那几张</strong>。这句话不是推断，是代码里的一行 append。</p>
+<h3 id="8-3-更狠的一层：把-docker-API-也管起来">8.3 更狠的一层：把 docker API 也管起来</h3>
+<p>光靠启动参数约束不住租户——租户在 dind 里跑 <code>docker run</code> 时还能自己加参数。所以这套实现还在 dind 里放了一个 <strong>HTTP 反向代理</strong>，拦在 <code>/run/docker.sock</code> 前面，对 Docker API 的请求体做改写与校验（<code>pkg/dind/server/hijack*.go</code>）。</p>
+<p>它<strong>拒绝</strong>的东西（<code>CreateConfig.Verify()</code>）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> config.HostConfig.Privileged &#123; <span class="keyword">return</span> ErrPrivilegedNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> <span class="built_in">len</span>(config.HostConfig.CapAdd) &gt; <span class="number">0</span> &#123; <span class="keyword">return</span> ErrCapabilitiesSettingNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> <span class="built_in">len</span>(config.HostConfig.CapDrop) &gt; <span class="number">0</span> &#123; <span class="keyword">return</span> ErrCapabilitiesSettingNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> <span class="built_in">len</span>(config.HostConfig.SecurityOpt) &gt; <span class="number">0</span> &#123; <span class="keyword">return</span> ErrSecurityOptionsNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> config.HostConfig.Resources.CgroupParent != <span class="string">&quot;&quot;</span> &#123; <span class="keyword">return</span> ErrCgroupParentNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> config.HostConfig.NetworkMode.IsBridge() &#123; <span class="keyword">return</span> ErrBridgeNetworkNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> config.HostConfig.PidMode.IsHost() &#123; <span class="keyword">return</span> ErrHostPidNsNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> config.HostConfig.UsernsMode.IsHost() &#123; <span class="keyword">return</span> ErrHostUserNsNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> config.HostConfig.UTSMode.IsHost() &#123; <span class="keyword">return</span> ErrHostUTSNsNotSupported &#125;</span><br><span class="line"><span class="keyword">if</span> config.HostConfig.Runtime != <span class="string">&quot;&quot;</span> &#123; <span class="keyword">return</span> ErrRuntimeNotSupported &#125;</span><br></pre></td></tr></table></figure>
+<p>它<strong>改写</strong>的东西：</p>
+<ul>
+<li><strong>挂载路径重写</strong>：把所有 bind mount 的 source 加上 <code>/mainroot</code> 前缀——<code>/mainroot</code> 是主容器 overlay rootfs 在 dind 里的挂载点，dockerd 眼中的「宿主机路径」实际是这个前缀下的路径。错误信息里再把这个前缀抹掉（<code>strings.ReplaceAll(err, &quot; /mainroot/&quot;, &quot; /&quot;)</code>），对租户保持透明。</li>
+<li><strong>GPU 请求自动补全</strong>：带 <code>gpu-hotplug=true</code> 标签的容器，如果没有显式 <code>DeviceRequests</code>，自动补一条：</li>
+</ul>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">config.HostConfig.DeviceRequests = []container.DeviceRequest&#123;</span><br><span class="line">	&#123;Driver: <span class="string">&quot;nvidia&quot;</span>, Count: <span class="number">-1</span>, Capabilities: [][]<span class="type">string</span>&#123;&#123;<span class="string">&quot;gpu&quot;</span>&#125;&#125;&#125;,</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>（<code>Count: -1</code> 在 Docker API 里表示「全部可用设备」。）</p>
+<p><strong>这一层是整个设计的枢纽</strong>：启动参数决定了 dind 容器<strong>能</strong>做什么，hijack 层决定了租户<strong>被允许</strong>做什么。前者是能力边界，后者是策略边界。而它拦住 <code>privileged</code> 的意义在于——如果租户能在 dind 里跑 <code>docker run --privileged</code>，那前面所有关于 <code>privileged-without-host-devices</code> 的努力都会被绕过一层。</p>
+<blockquote>
+<p>注意这里出现了一个有趣的对称：<strong>平台对 dind 容器自己用了 <code>privileged</code> + opt-out 设备，却对租户容器完全禁止 <code>privileged</code></strong>。这说明 <code>privileged</code> 不是「好」或「坏」，而是<strong>信任层级</strong>的表达——dockerd 是被信任的基础设施组件，租户工作负载不是。</p>
+</blockquote>
+<hr>
+<h2 id="九、Q3：dind-里的-gpus-all-为什么是「局部-all」">九、Q3：dind 里的 <code>--gpus all</code> 为什么是「局部 all」</h2>
+<p>前两问都在<strong>单个容器</strong>的尺度上。第三问把尺度放大到嵌套——一个容器里再跑一个容器，GPU 的边界是怎么一层层传下去的？</p>
+<h3 id="9-1-闭集是一层层传下来的">9.1 闭集是一层层传下来的</h3>
+<p>场景：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">宿主机（8 张卡）</span><br><span class="line"> └── 租户开发机容器（K8s Pod，通过 device plugin 拿到 2 张）</span><br><span class="line">      └── dind 容器（privileged + privileged-without-host-devices）</span><br><span class="line">           └── 用户在 dind 里跑 docker run --gpus all</span><br></pre></td></tr></table></figure>
+<p>现象：<code>--gpus all</code> 只挂到 2 张卡。三层原因，逐层回溯：</p>
+<p><strong>第一层：外层 Pod 的 <code>/dev</code> 是闭集。</strong> kubelet 调 <code>Allocate</code> 拿到的是<strong>具体的设备节点</strong>，这些节点被写进 OCI spec 的 <code>linux.devices</code>，由运行时在 create 时创建/挂载进容器。外层容器的 <code>/dev</code> 里<strong>只有这 2 张卡的节点</strong>，<code>/dev/nvidia2</code> ~ <code>/dev/nvidia7</code> 根本不存在。</p>
+<p><strong>第二层：dind 继承外层的集合。</strong> 这就是第八节那行代码——<code>dindSpec.Linux.Devices = append(..., mainSpec.Linux.Devices...)</code>。dind 即使 <code>privileged: true</code>，<strong>也只能看到外层给它的那 2 张</strong>。<code>privileged</code> 不创造设备节点，它只（默认）搬运已存在的节点。</p>
+<p><strong>第三层：<code>--gpus all</code> 的 <code>all</code> 是「当前可见的全部」。</strong> NVIDIA 文档对 <code>NVIDIA_VISIBLE_DEVICES</code> 的定义是「controls which GPUs are accessible inside the container」，取值 <code>all</code> = 「All GPUs are accessible」、<code>none</code> = 「No GPU is accessible, but driver capabilities are enabled」、<code>void</code>/未设置 = 「same behavior as <code>runc</code>」。所以 <code>all = 2</code>——但**「当前可见」到底是谁在数、怎么数**，值得单独拆一节（见 9.2）。</p>
+<h3 id="9-2-all-到底是谁在数：一条七步链路">9.2 <code>all</code> 到底是谁在数：一条七步链路</h3>
+<p>「运行时枚举的依据是设备节点」这个说法方向对，但太粗——<strong>Docker 自己一张卡都不数</strong>。把链路拆开：</p>
+<p><strong>① <code>--gpus all</code> 被翻译成一个结构体。</strong> Docker CLI 把它变成：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">DeviceRequest&#123;Driver: <span class="string">&quot;nvidia&quot;</span>, Count: <span class="number">-1</span>, Capabilities: [][]<span class="type">string</span>&#123;&#123;<span class="string">&quot;gpu&quot;</span>&#125;&#125;&#125;</span><br></pre></td></tr></table></figure>
+<p>（<code>Count: -1</code> 在 Docker API 里表示「全部可用设备」。）</p>
+<p><strong>② dockerd 不枚举，只写一个字符串加一个 hook。</strong> <code>daemon/nvidia_linux.go</code>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">const</span> nvidiaHook = <span class="string">&quot;nvidia-container-runtime-hook&quot;</span></span><br><span class="line">...</span><br><span class="line">&#125; <span class="keyword">else</span> <span class="keyword">if</span> req.Count &lt; <span class="number">0</span> &#123;</span><br><span class="line">	s.Process.Env = <span class="built_in">append</span>(s.Process.Env, <span class="string">&quot;NVIDIA_VISIBLE_DEVICES=all&quot;</span>)</span><br><span class="line">&#125;</span><br><span class="line">...</span><br><span class="line">s.Hooks.Prestart = <span class="built_in">append</span>(s.Hooks.Prestart, specs.Hook&#123;</span><br><span class="line">	Path: path,</span><br><span class="line">	Args: []<span class="type">string</span>&#123;nvidiaHook, <span class="string">&quot;prestart&quot;</span>&#125;,</span><br><span class="line">&#125;)</span><br></pre></td></tr></table></figure>
+<p><strong>Docker 只往内层容器的 OCI spec 里塞了「<code>NVIDIA_VISIBLE_DEVICES=all</code>」这个字符串和一个 prestart hook 的路径。它不知道这台机器上有几张卡，也不打算知道。</strong></p>
+<blockquote>
+<p>同一个文件的 <code>init()</code> 里藏着一条部署约束：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> _, err := exec.LookPath(nvidiaHook); err != <span class="literal">nil</span> &#123;</span><br><span class="line">	<span class="comment">// do not register Nvidia driver if helper binary is not present.</span></span><br><span class="line">	<span class="keyword">return</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>hook 不在 PATH 上，<code>nvidia</code> device driver 根本不注册</strong>，<code>--gpus</code> 会直接报 <code>could not select device driver &quot;&quot; with capabilities: [[gpu]]</code>。dind 镜像必须装 NVIDIA Container Toolkit，原因就在这一行。</p>
+</blockquote>
+<p><strong>③ hook 跑在 dind 的 namespace 里。</strong> prestart hook 由 runc 在 create 时执行（rootfs 就绪、容器进程启动之前），它是 dockerd 的子进程——<strong>所以它继承的是 dind 容器的 mount namespace</strong>。这一步决定了「可见」的范围。</p>
+<p><strong>④ hook 调 <code>nvidia-container-cli</code>，后者用 NVML 枚举。</strong> libnvidia-container 的 <code>src/driver.c</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">call_nvml(err, ctx, nvmlDeviceGetCount_v2, &amp;count)            <span class="comment">/* driver_get_device_count */</span></span><br><span class="line">call_nvml(err, ctx, nvmlDeviceGetHandleByIndex_v2, idx, &amp;h)   <span class="comment">/* driver_get_device      */</span></span><br></pre></td></tr></table></figure>
+<p><strong>没有 procfs 回退</strong>——它不走 <code>/proc/driver/nvidia/gpus</code>。</p>
+<p><strong>⑤ NVML 的 count 是「可访问设备数」。</strong> 这是整条链的枢纽，NVML 官方文档原文：</p>
+<blockquote>
+<p>「On some platforms not all devices may be accessible due to permission restrictions. In these cases <strong>the device count will reflect only the GPUs that NVML has access to</strong>.」</p>
+</blockquote>
+<p>而「可访问」的判据，就是 <code>/dev/nvidiaN</code> 节点在<strong>这个进程的 mount namespace 里存不存在</strong>。</p>
+<p><strong>⑥ 于是 <code>all</code> 在 dind 里被解析成 2。</strong> 注入的 2 个设备节点、驱动库挂载、devices cgroup 规则，被写进<strong>内层容器</strong>的 OCI spec。</p>
+<p><strong>⑦ 内层容器的 runc 把节点造出来。</strong> 走 3.1 节那三分支：非 userns 用 <code>mknod</code>，userns 用 bind mount。</p>
+<p>串起来：</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    A[&quot;docker run --gpus all&quot;] --&gt; B[&quot;dockerd&lt;br&#x2F;&gt;DeviceRequest{Count:-1}&lt;br&#x2F;&gt;只写 env + prestart hook&lt;br&#x2F;&gt;不枚举任何 GPU&quot;]
+    B --&gt; C[&quot;runc 在 create 时执行 hook&lt;br&#x2F;&gt;hook 进程在 dind 的 mount ns 里&quot;]
+    C --&gt; D[&quot;nvidia-container-cli&lt;br&#x2F;&gt;NVML: nvmlDeviceGetCount&quot;]
+    D --&gt; E[&quot;count &#x3D; dind 里存在的&lt;br&#x2F;&gt;&#x2F;dev&#x2F;nvidiaN 个数&quot;]
+    E --&gt; F[&quot;注入节点 + 驱动库 + cgroup 规则&lt;br&#x2F;&gt;到内层容器的 OCI spec&quot;]
+    F --&gt; G[&quot;内层 runc 创建节点&quot;]</pre></div>
+<p><strong>所以「卡数一样」不是「dind 把主容器的分配转发下去了」，而是「dind 自己只看得见 2 张，而 <code>all</code> 就是它看得见的全部」。</strong> 内层容器数出 2，是因为它站在 dind 的肩膀上数。</p>
+<p>反事实很干脆：把 9.1 节那行 <code>dindSpec.Linux.Devices = append(...)</code> 删掉，NVML 在 dind 里就数出 0，<code>--gpus all</code> 注入空集，内层 <code>nvidia-smi</code> 报 <code>No devices were found</code>。</p>
+<blockquote>
+<p><strong>一个容易混淆的对照</strong>：<code>/proc/driver/nvidia/gpus</code> <strong>不按设备可见性分区</strong>——它反映的是宿主内核状态，容器里照样能列出全部 8 张（它不在 containerd 的默认 masked paths 里）。这正是为什么平台自己的 CLI 能靠它把 GPU UUID 解析成 <code>/dev/nvidiaN</code>，而运行时那边只数得出 2 张。<strong>两套枚举、两种口径</strong>：排查时不要拿 <code>/proc</code> 的结果去推断容器里能看到几张。</p>
+</blockquote>
+<blockquote>
+<p>⚠️ <strong>更正五</strong>：原稿说「如果 dind 里配了 CDI 模式……即便 spec 说有 8 张，实际能访问的还是由外层注入的 /dev 节点数决定，因为 CDI spec 里的设备节点路径在外层容器里不存在，<strong>create 时会失败或者被忽略</strong>」。</p>
+<p>「失败」和「被忽略」是两种完全不同的行为，不能含糊。<strong>CDI spec 只是数据</strong>；注入时运行时要在<strong>它自己的文件系统里</strong>解析 <code>deviceNodes[].path</code>。路径不存在时，这是<strong>一个硬错误</strong>，不是静默忽略。NVIDIA 仓库里 rootless + CDI 的 issue <strong>#434</strong> 报的就是这一类：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Rootless Docker CDI Injection: error modifying OCI spec:</span><br><span class="line">failed to inject CDI devices: unresolvable CDI devices nvidia.com/gpu=all: unknown.</span><br></pre></td></tr></table></figure>
+<p><code>unresolvable</code> 这个词用得很准——CDI 名解析不到实体，注入直接失败。所以「挂个完整 spec 进去就能看到 8 张卡」是不成立的，<strong>挂进去只会让容器起不来</strong>。</p>
+</blockquote>
+<h3 id="9-3-但集合可以在内部重分配">9.3 但集合可以在内部重分配</h3>
+<p>第一节说过「设备节点在 create 之后仍可增删」，Sky-DevBox 把它做成了产品功能。</p>
+<p><strong>控制面</strong>：一个 CLI 命令写一份 YAML。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">containers:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">my-container</span></span><br><span class="line">    <span class="attr">gpus:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">/dev/nvidia0</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">/dev/nvidia3</span></span><br></pre></td></tr></table></figure>
+<p>CLI 跑在<strong>主容器</strong>里，写的是 <code>/gpu-hotplug</code>，写入用 flock（<code>/gpu-hotplug.lock</code>）串行化。而 dind 侧的 reconciler 监听的是 <strong><code>/mainroot/gpu-hotplug</code></strong>——<code>/mainroot</code> 是主容器 rootfs 在 dind 里的挂载点，<strong>两者是同一个文件</strong>。这个「同一文件、两个路径」的对应关系，正是第八节那套 <code>/mainroot</code> 路径重写机制的产物。</p>
+<p>用户给的是 GPU UUID 时，它从 <code>/proc/driver/nvidia/gpus/*/information</code> 里读出 <code>GPU UUID:</code> 和 <code>Device Minor:</code> 两行，拼成 <code>/dev/nvidia&lt;minor&gt;</code>。</p>
+<p><strong>数据面</strong>：dind 里常驻一个 reconciler，两个触发源——</p>
+<ul>
+<li><code>fsnotify</code> 监听那个 YAML 文件的 <code>Write</code> 事件；</li>
+<li>Docker events 流，过滤 <code>type=container</code> + <code>event=start</code> + <code>label=gpu-hotplug=true</code>（容器启动后要等它真正 ready 再补设备，代码里会轮询 <code>State.Running &amp;&amp; State.Pid != 0</code>，最多 60 次、每次 1 秒）。</li>
+</ul>
+<p><strong>协调逻辑</strong>是标准的 desired vs current 三段式（为突出主干，下面省略了逐条错误处理）：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> containerName, desiredDevices := <span class="keyword">range</span> desiredState &#123;</span><br><span class="line">	currentDevices := currentState[containerName]</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 设备在配置中但不在容器中 → attach</span></span><br><span class="line">	<span class="keyword">for</span> _, device := <span class="keyword">range</span> desiredDevices &#123;</span><br><span class="line">		<span class="keyword">if</span> !slices.Contains(currentDevices, device) &#123;</span><br><span class="line">			gm.attachGPUDevice(containerName, device)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">// 设备不在配置中但在容器中 → detach</span></span><br><span class="line">	<span class="keyword">for</span> _, device := <span class="keyword">range</span> currentDevices &#123;</span><br><span class="line">		<span class="keyword">if</span> !slices.Contains(desiredDevices, device) &#123;</span><br><span class="line">			gm.detachGPUDevice(containerName, device)</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 容器不在配置中 → 全部 detach</span></span><br><span class="line"><span class="keyword">for</span> containerName := <span class="keyword">range</span> currentState &#123; ... &#125;</span><br></pre></td></tr></table></figure>
+<p><strong>current 状态怎么来的</strong>很有意思：先 <code>ls /dev | grep -E 'nvidia[0-9]+'</code> 列出 <strong>dind 自己</strong>的 GPU 节点，再对每个带标签的容器用 <code>nsenter ... test -e &lt;device&gt;</code> 探测这个节点在不在容器里。也就是说，「当前状态」是<strong>探测出来的</strong>，不是记账来的。</p>
+<blockquote>
+<p><strong>这正好是 9.2 那条链的镜像</strong>：<code>--gpus all</code> 走的是「NVML 枚举」，热插拔走的是「<code>ls /dev</code> 探测」。两者口径一致（都以 dind 的 <code>/dev</code> 为准），所以能互相配合——<strong>热插拔能补的，恰好就是 <code>all</code> 能看见的</strong>。</p>
+</blockquote>
+<p><strong>attach / detach 的实现</strong>：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// attach</span></span><br><span class="line">nsenter -m -p -u -i -n -t &lt;pid&gt; sh -c <span class="string">&quot;rm -f D; mknod D c MAJ MIN; chmod 666 D&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// detach</span></span><br><span class="line">nsenter -m -p -u -i -n -t &lt;pid&gt; sh -c <span class="string">&quot;umount D&quot;</span>   <span class="comment">// 失败只告警</span></span><br><span class="line">nsenter -m -p -u -i -n -t &lt;pid&gt; sh -c <span class="string">&quot;rm -f D&quot;</span>    <span class="comment">// 失败只告警</span></span><br></pre></td></tr></table></figure>
+<p><code>umount</code> 先试、失败只记日志，是因为设备可能正被占用（挂载点还在），此时直接 <code>rm</code> 也删不掉。这是很务实的写法。</p>
+<blockquote>
+<p><strong>这个功能恰好证明了第 3.1 节的结论</strong>：<code>nsenter</code> 的 flag 里没有 <code>-U</code>，进程保持宿主 root 凭据，<code>capable(CAP_MKNOD)</code> 通过，<code>mknod</code> 成功。如果当初顺手写了 <code>-a</code>（进入所有 namespace，含 user），这个功能一行都跑不起来。</p>
+</blockquote>
+<p><strong>一个实践上的边界</strong>：<code>mknod</code> 补进去的节点，对<strong>之后新启动的进程</strong>立刻生效（新敲一条 <code>nvidia-smi</code>、新起的训练进程都会看到它）；但<strong>已经在跑、且已经初始化过 NVML 的进程</strong>通常感知不到——NVML 是在进程内初始化时确定设备列表的。所以这个功能定位是「给运行中的开发容器补卡」，而不是「给运行中的训练任务动态加卡」。这也和 9.2 的结论闭环：<strong>卡数在进程初始化那一刻就被 NVML 数完了。</strong></p>
+<p><strong>但它改变不了集合的边界。</strong> reconciler 的输入 <code>ls /dev | grep nvidia</code> 列的是 dind 自己的 <code>/dev</code>——也就是外层 Pod 给它的那 2 张卡。它能在 2 张里做任意分配（给 A 容器 1 张、B 容器 1 张、或都给 A），但<strong>一张也变不出来</strong>。</p>
+<p>这就是本文最核心的那句话：<strong>闭集不是「create 时定死的」，而是「由最外层那一次分配定死的」；下游每一层都只能在内部重分配，不能扩张。</strong></p>
+<h3 id="9-4-两条路径与一条不推荐">9.4 两条路径与一条不推荐</h3>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>做法</th>
+<th>适用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A（推荐）</strong></td>
+<td><strong>不在 dind 里控卡，让外层 K8s 控</strong></td>
+<td>外层 Pod 直接申请 N 张，dind 里 <code>--gpus all</code> 继承子集。责任链最干净，记账不漂移</td>
+</tr>
+<tr>
+<td><strong>B</strong></td>
+<td>dind 里用 CDI 名 / <code>NVIDIA_VISIBLE_DEVICES</code> 精确指定</td>
+<td>需要外层挂载设备节点；可选范围仍被外层注入集合封顶</td>
+</tr>
+<tr>
+<td><strong>C（不推荐）</strong></td>
+<td>外层 hostPath 挂全 <code>/dev</code></td>
+<td>见下</td>
+</tr>
+</tbody>
+</table>
+<p>路径 C 的问题不只是安全：</p>
+<ul>
+<li>它<strong>绕过了 K8s 的记账</strong>。这 8 张卡在 device plugin 眼里仍然是「已分配给这个 Pod 2 张」，剩下 6 张在调度器看来是<strong>空闲的</strong>，可以被别的 Pod 抢走——于是两个 Pod 同时用同一张卡，<strong>双重记账 / 记账漂移</strong>就此发生。</li>
+<li>在托管 dind 里这条路通常<strong>已经被堵死</strong>：Sky-DevBox 的 hijack 层拒绝 <code>IpcMode == &quot;host&quot;</code>，并把所有 mount source 重写到 <code>/mainroot</code> 前缀下——你想挂宿主机的 <code>/dev</code>，挂到的是主容器的 <code>/dev</code>。</li>
+</ul>
+<hr>
+<blockquote>
+<p><strong>③ 取舍</strong> · 十 —— 从一个真实实现往回看，设计是怎么被约束反推出来的。</p>
+</blockquote>
+<h2 id="十、把镜头拉远：这套实现的三个设计取舍">十、把镜头拉远：这套实现的三个设计取舍</h2>
+<p>三问答完了。七、八、九节分别讲了「运行时怎么把设备拿到手」「权限模型长什么样」「嵌套之后边界怎么传」——但它们都是<strong>局部视角</strong>。这一节退一步，看这套实现整体上做过的三个取舍。它们都不是实现细节，而是<strong>在 K8s 的能力边界之外做选择</strong>——也正是本文标题里「责任链」三个字最具体的含义。</p>
+<h3 id="10-1-为什么会有这套东西：从-sidecar-到-sibling">10.1 为什么会有这套东西：从 sidecar 到 sibling</h3>
+<p>最初的 dind 是一个 <strong>sidecar 容器</strong>，和主容器同处一个 Pod：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Pod</span><br><span class="line">├── 主容器（用户工作空间）</span><br><span class="line">└── dind sidecar（跑 dockerd）</span><br><span class="line">     ↑ 用户通过网络端口访问它</span><br></pre></td></tr></table></figure>
+<p>重构方案的设计稿把它的限制列成了四条：</p>
+<table>
+<thead>
+<tr>
+<th>限制</th>
+<th>具体问题</th>
+<th>用户感受</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>文件系统隔离</strong></td>
+<td>sidecar 挂不到主容器的根目录，只能同步共享存储路径</td>
+<td><code>docker run -v</code> 的挂载路径受限</td>
+</tr>
+<tr>
+<td><strong>可观测性缺失</strong></td>
+<td>用户看不见、也控制不了 sidecar 容器</td>
+<td>出问题拿不到反馈，没法自查自修</td>
+</tr>
+<tr>
+<td><strong>配置不可控</strong></td>
+<td>改不了 dockerd 配置（比如代理设置）</td>
+<td>无法定制，体验差</td>
+</tr>
+<tr>
+<td><strong>资源不互通</strong></td>
+<td>sidecar 与主容器各有各的 CPU/内存限额</td>
+<td>配额不能互相借用，用不灵活</td>
+</tr>
+</tbody>
+</table>
+<p>设计稿的结论很干脆：<strong>这四条归根结底是 K8s 框架本身的限制</strong>——K8s 无法单独管理 Pod 内某个容器的生命周期，也无法绕过自己的资源分配体系让容器之间共享配额。所以方向定为<strong>脱离 K8s，从宿主机侧提供 dind 服务</strong>。</p>
+<p>dind 因此从 sidecar 变成了 <strong>sibling</strong>：由宿主机的 agent 直接在 containerd 里创建，与主容器平级，K8s 完全不知情。</p>
+<p><strong>这一步是理解后面所有设计的钥匙。</strong> 一旦 dind 不再是 K8s 管理的容器，K8s 就管不了它——没有 Pod 边界、没有 <code>securityContext</code>、没有 ResourceQuota 覆盖它。<strong>平台必须自己把这套治理补回来。</strong> 第八节那个 HTTP 劫持层、下面 10.2 的 cgroup 嵌套、dockerctl 的 token 鉴权，全都是在补这一课。</p>
+<h3 id="10-2-cgroup-嵌套：让-dind-花主容器的预算">10.2 cgroup 嵌套：让 dind 花主容器的预算</h3>
+<p>资源互通这一条，落地形态是 <strong>cgroup 嵌套</strong>。当前代码里的布局是：</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    POD[&quot;kubepods-burstable-podXXX.slice&lt;br&#x2F;&gt;（Pod cgroup，K8s 记账在这一层）&quot;]
+    MAIN[&quot;cri-containerd-{main}.scope&lt;br&#x2F;&gt;主容器，limits 4C&#x2F;8G 写在这&quot;]
+    INNER[&quot;dind-containers&#x2F;&lt;br&#x2F;&gt;用户在 dind 里跑的容器&quot;]
+    DIND[&quot;kubepods-...-podXXX-dind.slice&lt;br&#x2F;&gt;→ nerdctl-{dind}.scope&quot;]
+    POD --&gt; MAIN
+    MAIN --&gt; INNER
+    POD --&gt; DIND</pre></div>
+<p>两行代码决定了这个布局：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// dind 容器本身：把 Pod slice 的名字改造成同级的 -dind.slice</span></span><br><span class="line">dindParentCgroupSlice := strings.ReplaceAll(podCgroupSlice, <span class="string">&quot;.slice&quot;</span>, <span class="string">&quot;-dind.slice&quot;</span>)</span><br><span class="line">createOptions.CgroupParent = dindParentCgroupSlice</span><br><span class="line"></span><br><span class="line"><span class="comment">// dind 里的用户容器：父级指向主容器的 cgroup</span></span><br><span class="line">dindContianersCgroupParent := filepath.Join(mainContainerCgroupPath, <span class="string">&quot;dind-containers&quot;</span>)</span><br><span class="line"><span class="comment">// → 以 CONTAINERS_CGROUP_PARENT 环境变量传给 dind 容器，</span></span><br><span class="line"><span class="comment">//   由入口脚本变成 dockerd 的 --cgroup-parent</span></span><br></pre></td></tr></table></figure>
+<p>关键在第二段：<strong>用户在 dind 里 <code>docker run</code> 起的容器，cgroup 父级是主容器</strong>。于是它消耗的 CPU/内存直接记在主容器账上——主容器那 4C8G 的限额，被「主容器里的进程」和「dind 里的容器」<strong>共同瓜分</strong>。这正是设计稿里「二者共享同一资源配额、使用无区别」的落地方式，也是 K8s 原生表达不了的东西。</p>
+<p>代码里还留了 <strong>old mode</strong> 的兼容路径：早期 dind 容器直接作为主容器 cgroup 的子节点（<code>nerdctl-&lt;id&gt;.scope</code>），<code>findDindContainersByCgroup</code> 两种布局都扫。<strong>双模式并存本身就是「布局换过」的证据</strong>。</p>
+<p>副作用是 cgroup v2 的 <code>cgroup.subtree_control</code>：要让新建的子 cgroup 真正生效，父级必须打开对应控制器。所以代码里先清空 Pod cgroup 的 subtree_control，再按 Pod 注解 <code>&lt;api-group&gt;/cgroup-subtree-control</code> 重新打开，并把 <code>dind-containers</code> 标成 <code>cgroup.type = threaded</code>。第四节提到的那两个动作，动机就在这里。</p>
+<h3 id="10-3-设计稿里的-rootless，为什么没有落地">10.3 设计稿里的 rootless，为什么没有落地</h3>
+<p>这是最能说明「<strong>设计意图 ≠ 落地形态</strong>」的一处，也是它和第六节的直接呼应。</p>
+<p>重构方案的设计稿里，dind 的启动流程<strong>明确带 rootless</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">以 root 身份启动 dind 容器</span><br><span class="line">  → 配置 rootless 用户</span><br><span class="line">  → 创建 /run/docker、/var/lib/docker 等目录并改权限</span><br><span class="line">  → 读取主容器的 daemon.json 初始化配置</span><br><span class="line">  → 初始化系统目录与网络</span><br><span class="line">  → 启动 Docker Hijack 服务</span><br><span class="line">  → 切换到 rootless 身份        ← 关键的一步</span><br><span class="line">  → 启动 dockerd</span><br></pre></td></tr></table></figure>
+<p><strong>但落地的代码里没有 rootless。</strong> 三条证据：</p>
+<ol>
+<li><strong>入口脚本以当前身份直接起 dockerd</strong>——<code>dist/dind/entrypoint-slim.sh</code> 里没有任何 <code>setuid</code> / <code>su</code> / <code>rootlesskit</code> 的影子；只剩 <code>uid=&quot;$(id -u)&quot;</code> 这一行和一句提到 「both standard or rootless」 的注释，都是<strong>残留</strong>。</li>
+<li><strong>socket 探测保留了 rootless 路径</strong>——<code>findDockerSocket()</code> 在找不到 <code>/run/docker.sock</code> 时，会去扫 <code>/run/user/&lt;uid&gt;/docker.sock</code>，而这正是 rootless docker 的 socket 位置。说明代码要兼容两种形态，但默认走前者。</li>
+<li><strong>daemon 配置校验明确拒绝 userns remap</strong>——<code>hijack_init.go</code> 里：</li>
+</ol>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> config.RemappedRoot != <span class="string">&quot;&quot;</span> &#123;</span><br><span class="line">	<span class="keyword">return</span> ErrRemappedRootNotSupported</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>为什么放弃？把前几节的结论拼起来就很清楚：</p>
+<ul>
+<li><strong>dockerd 要的能力和 rootless 正面冲突</strong>：挂载、<code>iptables</code>、建网络命名空间、<code>mknod</code>——都要 <code>CAP_SYS_ADMIN</code>，而 userns 里的 <code>CAP_SYS_ADMIN</code> 只在 pod 自己的 userns 内有效（§5.2 的官方原文）。dind 要的恰恰是「对外部世界生效」的那部分特权。</li>
+<li><strong>rootless dockerd 自己就要一整套配套</strong>：rootlesskit、slirp4netns、<code>/etc/subuid</code> 映射，外加 cgroup v2 的委派链。</li>
+<li><strong>NVIDIA 那一层当时还没准备好</strong>：6.2 节那两次回归全都出在 rootless 路径上，legacy 模式在 rootless 下直接崩。</li>
+</ul>
+<p>于是这套实现选了另一条路：<strong>容器 privileged（要 <code>SYS_ADMIN</code> 就给全），但把设备默认收走</strong>（<code>privileged-without-host-devices</code>），再用<strong>运行时侧的设备解析</strong>（7.2 节）把该给的设备精确补回来，最后用 <strong>API 策略层</strong>（8.3 节）把租户能做的事框住。</p>
+<p>换句话说——<strong>它用「显式白名单 + 策略层」换掉了「userns 隔离」</strong>。隔离强度不如 userns，但工程上可落地、和 GPU 生态兼容。这是个很务实的取舍，也是本文想传达的核心：<strong>责任链上的每一层都在做这种取舍，没有免费的隔离。</strong></p>
+<blockquote>
+<p><strong>一个排查时值得记住的小漂移</strong>：设计稿的伪代码写的是 <code>pod.Annotations[&quot;&lt;api-group&gt;/dind-enabled&quot;] == &quot;true&quot;</code>，而代码里实际是 <code>pod.Annotations[&quot;&lt;api-group&gt;/dind&quot;] == &quot;enabled&quot;</code>。设计稿在前、实现在后，这类漂移很正常，但<strong>排查时永远以代码为准</strong>。</p>
+</blockquote>
+<hr>
+<blockquote>
+<p><strong>④ 收束</strong> · 十一 ~ 十三 —— 一张图、一份清单、一句修正。</p>
+</blockquote>
+<h2 id="十一、把三问放进一张责任链总图">十一、把三问放进一张责任链总图</h2>
+<p>把三问的结论画进同一张图。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TB
+    subgraph host[&quot;宿主机（初始 user namespace）&quot;]
+        H1[&quot;8x GPU 物理卡&quot;]
+        H2[&quot;device plugin&lt;br&#x2F;&gt;DaemonSet, privileged&quot;]
+        H3[&quot;containerd&lt;br&#x2F;&gt;+ 运行时包装器&quot;]
+    end
+    subgraph pod[&quot;租户开发机容器（K8s Pod）&quot;]
+        P1[&quot;resources.limits:&lt;br&#x2F;&gt;nvidia.com&#x2F;gpu: 2&quot;]
+        P2[&quot;&#x2F;dev&#x2F;nvidia0, &#x2F;dev&#x2F;nvidia1&lt;br&#x2F;&gt;linux.devices + resources.devices&quot;]
+        P3[&quot;hostUsers: false 时&lt;br&#x2F;&gt;容器内 uid0 &#x3D; 宿主 uid 100000&quot;]
+    end
+    subgraph dind[&quot;dind 容器&quot;]
+        D1[&quot;privileged: true&lt;br&#x2F;&gt;+ privileged-without-host-devices&quot;]
+        D2[&quot;Linux.Devices &#x3D;&lt;br&#x2F;&gt;mainSpec.Linux.Devices 的复制&quot;]
+        D3[&quot;reconciler: nsenter + mknod&lt;br&#x2F;&gt;在集合内重分配&quot;]
+    end
+    subgraph inner[&quot;dind 内的租户容器&quot;]
+        I1[&quot;可见性 &#x3D; dind &#x2F;dev 的闭集&lt;br&#x2F;&gt;&#x3D; 外层 Pod 的分配&quot;]
+    end
+    H1 --&gt; H2
+    H2 --&gt;|&quot;ListAndWatch 上报容量&quot;| K[&quot;kubelet&quot;]
+    K --&gt;|&quot;Allocate 返回&lt;br&#x2F;&gt;设备节点 &#x2F; env &#x2F; mounts &#x2F; CDI 名&quot;| H3
+    H3 --&gt;|&quot;create 时注入&quot;| P2
+    P1 --&gt; P2
+    P2 --&gt;|&quot;创建 dind 时整份复制&quot;| D2
+    D1 --&gt; D2
+    D2 --&gt; D3
+    D3 --&gt;|&quot;mknod 进运行中的容器&quot;| I1
+    P3 -.-&gt;|&quot;只约束 mknod &#x2F; BPF&lt;br&#x2F;&gt;不影响 request&#x2F;limit 生效&quot;| P1</pre></div>
+<p>图里三个结论：</p>
+<ul>
+<li><strong>rootless 的 request/limit 生效在 kubelet / device plugin 这一层</strong>，与容器内 uid 无关；rootless 真正约束的是<strong>注入能力</strong>（<code>mknod</code>、写 devices cgroup / BPF）。</li>
+<li><strong>privileged 与 device 是两条独立的轴</strong>，且 privileged 的<strong>默认</strong>行为是连设备一起给；「privileged 但无设备」必须显式 opt-out。</li>
+<li><strong>dind 的 GPU 集合是层层闭集</strong>：外层给 N 张 → dind 里就是 N 张 → dind 内的容器最多也是 N 张。<code>all</code> 是局部 <code>all</code>。</li>
+</ul>
+<hr>
+<h2 id="十二、踩坑清单">十二、踩坑清单</h2>
+<p>按症状查，每条都指回正文对应的小节。</p>
+<ul>
+<li><strong>「rootless + legacy nvidia-container-cli = 启动失败」</strong>：症状是 <code>bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted</code>。根治是切 CDI 模式（<code>nvidia-ctk config --in-place --set nvidia-container-runtime.mode=cdi</code>，1.18.0 起已默认 JIT-CDI）。<strong>版本要锁到具体小版本</strong>——1.17.7 和 1.18.0 都踩过这个坑（见 6.2）。</li>
+<li><strong>「privileged 但 nvidia-smi 看不到卡」</strong>：先确认是不是真的「privileged 且无设备」。<strong>默认 privileged 是带全量宿主设备的</strong>；看不到卡，说明有人显式开了 <code>privileged_without_host_devices</code> / <code>privileged-without-host-devices</code>，那就得走 <code>--device</code> 或 CDI 显式注入。别在 <code>privileged</code> 本身找原因。</li>
+<li><strong>「容器里有 <code>/dev/nvidia0</code>，CUDA 还是报错」</strong>：检查 <code>nvidiactl</code>、<code>nvidia-uvm</code>、<code>nvidia-uvm-tools</code> 和用户态驱动库是否齐全（见 3.3）。手工 <code>mknod</code> 一张卡通常不够。</li>
+<li><strong>「dind 里 <code>--gpus all</code> 只看到一部分」</strong>：不是 bug，是外层注入的闭集。想扩，改外层 Pod 的 request；想在 dind 里控，走 CDI 或热插拔。</li>
+<li><strong>「CDI 名解析失败」</strong>：<code>unresolvable CDI devices</code> 说明 spec 里的设备节点路径在<strong>运行时自己的文件系统里</strong>不存在。CDI spec 不是「挂进去就生效」的配置，它是需要在当前文件系统里解析的实体引用。</li>
+<li><strong>「containerd 1.7 上 CDI 不生效」</strong>：1.7 默认 <code>enable_cdi = false</code>，2.0 起才默认启用。</li>
+<li><strong>「kubelet 重启后 <code>nvidia.com/gpu</code> 从 node status 消失」</strong>：这是 device plugin 的已知重启语义（kubelet 重建 socket 目录、插件需要重新注册），排查思路见 <a href="/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/">为什么 Device Plugin 不必比 kubelet 先启动</a>。</li>
+<li><strong>「Pod 里写了 limits 但没生效」</strong>：先看 cgroup driver 是否两边一致，再看 GPU 是否走了 device plugin 之外的旁路（例如 hostPath 挂 <code>/dev</code>，导致 kubelet 完全不记账）。</li>
+</ul>
+<hr>
+<h2 id="十三、回到原篇">十三、回到原篇</h2>
+<p>原篇的收束句是「runc 只在 create 的那一刻存在，之后的一切都由其他组件接手」。套到 GPU 上，可以再具体一层——<strong>但要修正一处</strong>：</p>
+<ul>
+<li><strong>GPU 的 request/limit 生效</strong>发生在 create <strong>之前</strong>（kubelet 调 <code>Allocate</code> 拿到设备清单）。它根本不经过 runc；在 Sky-DevBox 那条路线上，它甚至还会在 create <strong>期间</strong>被运行时包装器<strong>重放一遍</strong>。</li>
+<li><strong>GPU 的可见性</strong>发生在 create <strong>那一刻</strong>，但<strong>不止于那一刻</strong>。runc 在这里只做「注入」，不做「决策」；而注入进来的节点，之后还可以被 <code>nsenter</code> + <code>mknod</code> 增删。</li>
+<li><strong>GPU 的记账与观测</strong>发生在 create <strong>之后</strong>（DCGM / NVML 采样、cgroup 读数），runc 已经退出。</li>
+</ul>
+<p>所以「每一层的能与不能，都是某一次 create 时注入的闭集决定的」这句话，应该改成：</p>
+<blockquote>
+<p><strong>每一层的能与不能，都是由最外层那一次分配给出的闭集决定的。下游可以在这个集合内部任意重分配，但没有任何一层能把它撑大。</strong></p>
+</blockquote>
+<p>这个修正看起来只是措辞，实际影响排查方向：当你在 dind 里发现少了两张卡，<strong>不要往下游找</strong>——下游（reconciler、<code>--gpus</code>、CDI）都只能重分配。要往<strong>上游</strong>找，去找那一次 <code>Allocate</code> 给了几张。</p>
+<p>这也解释了为什么「谁在什么时刻决定了什么」这个结构比任何具体命令都重要：命令会变（legacy → CDI → JIT-CDI），版本会回归（1.17.7、1.18.0），坐标系会换（rootless 与否），但<strong>闭集的边界由最外层分配决定</strong>这件事不会变。</p>
+<p>最后补一句第十节留下的结论：<strong>责任链上的每一层都在做取舍，而取舍会被上游的约束反推着走。</strong> Sky-DevBox 的设计稿写了 rootless，落地时换成了 <code>privileged</code> + opt-out 设备 + 运行时侧设备解析 + API 策略层——不是因为 rootless 不好，而是因为 dockerd 要的特权、rootless 的配套成本、以及当时 NVIDIA 在 rootless 路径上的两次回归，共同把这个选项排除了。看懂这种「<strong>约束反推设计</strong>」的链条，比记住任何一层的具体配置都更有用。</p>
+<hr>
+<h2 id="参考来源">参考来源</h2>
+<p><strong>源码（本地版本）</strong></p>
+<ul>
+<li>containerd v1.7.27 — <code>pkg/cri/server/container_create_linux.go</code>（privileged 分支）、<code>oci/spec_opts.go</code>（<code>WithPrivileged</code> / <code>WithAllDevicesAllowed</code>）、<code>oci/spec_opts_linux.go</code>（<code>WithDevices</code> / <code>WithHostDevices</code>）、<code>pkg/cri/opts/spec_linux_opts.go</code></li>
+<li>nerdctl v1.7.7 — <code>pkg/cmd/container/run_security_linux.go</code>（<code>privilegedOpts</code> / <code>privilegedWithoutDevicesOpts</code>）</li>
+<li>containerd v1.7.x — <code>docs/cri/config.md</code>（<code>privileged_without_host_devices</code>、<code>cdi_spec_dirs</code>）</li>
+<li>CDI v0.7.2 — <code>pkg/cdi/spec.go</code></li>
+<li>runc v1.2.6 — <code>libcontainer/rootfs_linux.go</code>（<code>createDevices</code> / <code>createDeviceNode</code> / <code>mknodDevice</code>：userns 走 bind mount 的三分支逻辑）</li>
+<li>docker v26.1.3 — <code>daemon/nvidia_linux.go</code>（<code>setNvidiaGPUs</code>：<code>Count &lt; 0</code> → <code>NVIDIA_VISIBLE_DEVICES=all</code> + prestart hook 注入）</li>
+</ul>
+<p><strong>内核 / 官方文档</strong></p>
+<ul>
+<li><code>user_namespaces(7)</code> — 「Only a process with privileges in the initial user namespace can perform such operations.」（<code>CAP_MKNOD</code> 的坐标系）</li>
+<li>Kubernetes — <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/">Device Plugins</a>（<code>Allocate</code> 返回值、注册与 socket 路径）</li>
+<li>Kubernetes — <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/">Resource Management for Pods and Containers</a>（extended resources 整数约束与不可超卖）</li>
+<li>Kubernetes — <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/workloads/pods/user-namespaces/">User Namespaces</a>（<code>hostUsers</code>、前置条件、capability 行为）</li>
+<li>Kubernetes Blog — <a target="_blank" rel="noopener" href="https://kubernetes.io/blog/2026/04/23/kubernetes-v1-36-userns-ga/">v1.36: User Namespaces are finally GA</a>（版本线）</li>
+<li>NVIDIA Container Toolkit — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html">Support for Container Device Interface</a>（rootless 兼容性、<code>nvidia-ctk config</code>、spec 路径与 <code>nvidia-cdi-refresh</code>）</li>
+<li>NVIDIA Container Toolkit — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/release-notes.html">Release Notes</a>（1.18.0 默认 JIT-CDI、1.19.1 schema v0.7.0）</li>
+<li>NVIDIA Container Toolkit — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html">Docker 专用说明</a>（<code>NVIDIA_VISIBLE_DEVICES</code> 取值语义）</li>
+<li>NVIDIA GPU Operator — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-sharing.html">Time-Slicing GPUs</a>（ConfigMap <code>sharing.timeSlicing.resources[].replicas</code>）</li>
+<li>NVML API Reference — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/nvml-api/group__nvmlDeviceQueries.html"><code>nvmlDeviceGetCount</code></a>（「the device count will reflect only the GPUs that NVML has access to」——<code>all</code> 的边界从哪来）</li>
+<li>libnvidia-container — <a target="_blank" rel="noopener" href="https://github.com/NVIDIA/libnvidia-container/blob/main/src/driver.c"><code>src/driver.c</code></a>（<code>driver_get_device_count</code> → <code>nvmlDeviceGetCount_v2</code>，无 procfs 回退）</li>
+</ul>
+<p><strong>Issue 与实证</strong></p>
+<ul>
+<li>moby/moby <strong>#16160</strong> — 「New devices on host are not exposed to privileged container」</li>
+<li>NVIDIA/nvidia-container-toolkit <strong>#1093</strong> — 1.17.7 破坏 Slurm/Pyxis（<code>bpf_prog_query</code>）</li>
+<li>NVIDIA/nvidia-container-toolkit <strong>#1487</strong> — 1.18.0 rootless Docker 回归（<code>bpf_prog_query</code>）</li>
+<li>NVIDIA/nvidia-container-toolkit <strong>#434</strong> — rootless Docker CDI 注入 <code>unresolvable CDI devices</code></li>
+</ul>
+<p><strong>对照实现（Sky-DevBox）</strong></p>
+<ul>
+<li>该项目的 dind 重构方案设计稿（sidecar → sibling 的四条限制、cgroup 嵌套目标、含 rootless 的启动流程）</li>
+<li>该项目的 DinD 重构技术详解（三层架构、HTTP 劫持、GPU 热插拔、<code>privileged-without-host-devices</code> 的使用）</li>
+<li>其源码：<code>pkg/dind/controller/</code>（创建与生命周期）、<code>pkg/dind/server/</code>（HTTP 劫持 + GPU 热插拔）、<code>pkg/runtime/</code>（运行时包装器与设备解析）、<code>pkg/cgroups/</code></li>
+</ul>
+<p><strong>站内相关</strong></p>
+<ul>
+<li>《容器运行时拆解·补篇》——原篇，本文的上下文（未在此仓库，故不作链接）</li>
+<li><a href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</a></li>
+<li><a href="/2026/11/05/2026-11-05-%E4%B8%BA%E4%BB%80%E4%B9%88Device-Plugin%E4%B8%8D%E5%BF%85%E6%AF%94kubelet%E5%85%88%E5%90%AF%E5%8A%A8/">为什么 Device Plugin 不必比 kubelet 先启动</a></li>
+<li><a href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</a></li>
+<li><a href="/2026/07/22/2026-07-22-%E5%AE%B9%E5%99%A8PID1%E4%B8%8E%E5%83%B5%E5%B0%B8%E8%BF%9B%E7%A8%8B-dumb-init-tini-pause/">容器 PID1 与僵尸进程：dumb-init / tini / pause</a></li>
+<li><a href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/">容器运行时扩展方案技术解析</a></li>
+<li><a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">K8s GPU 复用与 HAMi 异构架构全解</a></li>
+<li><a href="/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/">容器到底有没有内核：拆解 Docker / Kata / Firecracker 的内核边界</a></li>
+</ul>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/">https://roger-lv.github.io/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/containerd/">containerd</a><a class="post-meta__tags" href="/tags/GPU%E8%B0%83%E5%BA%A6/">GPU调度</a><a class="post-meta__tags" href="/tags/DevicePlugin/">DevicePlugin</a><a class="post-meta__tags" href="/tags/%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6/">容器运行时</a><a class="post-meta__tags" href="/tags/runc/">runc</a><a class="post-meta__tags" href="/tags/rootless/">rootless</a><a class="post-meta__tags" href="/tags/userns/">userns</a><a class="post-meta__tags" href="/tags/CDI/">CDI</a><a class="post-meta__tags" href="/tags/dind/">dind</a><a class="post-meta__tags" href="/tags/privileged/">privileged</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/" title="推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：所谓「推理调度」，不是一个调度器，而是五层彼此看不见的决策。每一层能做什么，完全由它能看见什么信息决定——把决策放错层，不是效果差一点，而是根本做不成。  K8s 调度器只看得见整数设备：它知道「还剩几张卡」，不知道每张卡的 KV Cache 水位、队列深度、模型是否加载完； Gang 层保证多卡模型「一起上车」，但它读不到 PodGroup 的调度结果； 拓扑层约束落点，而 GPU 互联的约束（TP 整除、MIG 不可跨实例通信）是硬约束，不是偏好； 路由器是唯一能看见「请求」的一层——公共前缀、活动请求数、队列深度只有它知道； 引擎内部再决定请求进哪个 batch，这一层 K8s 完全看不见。   这篇是一次「责任边界」的梳理。主线是一次推理请求穿过五层调度器时，每一层的可见性与决策权；对照组是 Kthena（Volcano 子项目，v1.0）的源码——它的每一层都做了明确取舍，恰好把边界照了出来。 同时，近期有一篇流传较广的公众号文章《从部署 vLLM 到 AI 基础设施：Kubernetes 推理平台生产级落地、容量设计与性能优化》，整体框架（容量、调度、弹...</div></div></div></a><a class="pagination-related" href="/2026/11/06/2026-11-06-%E9%87%8D%E5%BA%86%E9%80%82%E5%90%88%E8%A7%A3%E9%A6%8B/" title="重庆适合解馋"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">重庆适合解馋</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：重庆不是我的退路，是我的解馋点。这两件事我花了很久才分清。  一、卤鹅 2025 年 4 月，我老家荣昌突然出名了。 起因是一个被叫作「卤鹅哥」的人，追着来中国的外国网红投喂卤鹅。事情本身很荒诞，效果很实在——那阵子荣昌的卤鹅店销量翻了 4000%，五一还没到我就在猜人流量要爆。 我当时在外地。看到消息的第一反应不是自豪，是困惑。因为我发现自己跟卤鹅哥是小学校友。这条信息对我没有任何用处，但那天我盯着屏幕看了很久。 荣昌是个什么样的地方？在 2025 年之前，它的名片是猪。荣昌猪，中国三大地方猪种之一，我从小听这个词听到麻木。卤鹅当然也吃，但说实话，我从来没觉得它是我们那儿最值得说出口的东西——因为它太不家常了。家常的是猪油、是腊肉、是外婆坛子里的东西。卤鹅是要专门去买的，是逢年过节、有人从老家来、或者自己馋得受不了的时候，才会想起来的那一类。 结果它火了。 那之后我每次回家，行李箱里都要塞两只。北京的朋友吃过一次之后开始点名要。我后来总结出一句：提个卤鹅堪比偷渡——真空包装、冰袋、泡沫箱，过安检的时候总觉得会有人拦我。 二、解馋 我给重庆下过一个很刻薄的判断：重庆...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8Ekubelet%E5%88%B0%E6%B2%99%E7%9B%92%E9%AB%98%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E4%B8%8E%E4%BD%8E%E7%BA%A7%E8%BF%90%E8%A1%8C%E6%97%B6%E7%9A%84%E6%98%A0%E5%B0%84%E5%85%A8%E6%99%AF/" title="从 kubelet 到沙盒：高级运行时与低级运行时的映射全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 kubelet 到沙盒：高级运行时与低级运行时的映射全景</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：kubelet 不直接创建容器，它只通过 CRI（Container Runtime Interface）下达指令；真正干活的是高级运行时（containerd / CRI-O）和低级运行时（runc / kata-agent / runsc）。沙盒选型的本质，就是在决定「谁来接 kubelet 的 CRI 调用」以及「容器进程最终跑在什么隔离边界里」。对具身智能公司而言，仿真训练、Agent 工具调用、强隔离 VM、真机设备接入这四类负载对应完全不同的运行时组合——不存在一个「万能沙盒」能同时满足。  这篇是 具身智能仿真场景的沙盒选型 的下层视角。上篇回答「该选哪个沙盒」，这篇回答「沙盒插在运行时栈的哪一层、跟 kubelet 怎么耦合」。 本文的架构描述逐条核对自 Kubernetes 官方文档、containerd 源码与文档、Kata/gVisor/Firecracker 官方文档与仓库。核对中发现原稿有十余处需要更正，已在文中以 ⚠️ 标注。  一、先立骨架：kubelet 之下的运行时栈分层 Kubernetes 的容器运行时体系是明确的两层结构，这个...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/" title="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：Device Plugin 的本质，是把「让 Kubernetes 认识一种新硬件」这件事，从改内核代码降维成了写一个 gRPC 服务。而它的边界与局限——只能表达整数、调度决策黑盒、无拓扑感知、无故障协同——恰好勾勒出了大模型时代算力调度的完整问题域。 今天做 AI Infra，大概率不会从零写一个 device plugin，但一定会在这套机制的边界上做选型：训练集群选 Volcano 还是 KAI、推理集群选 HAMi 还是 MIG、要不要切 DRA、边缘具身用 KubeEdge 还是裸 K8s。  本文的机制描述逐条核对自 Kubernetes 官方文档与 proto 源码、NVIDIA/昇腾/HAMi/KubeEdge 各项目仓库。核对中发现原稿有十余处需要更正，其中两处是硬伤，已在文中以 ⚠️ 标注。  一、设计动机：为什么要有 Device Plugin Kubernetes 原生只认识 CPU、内存和本地存储。让每一种硬件的枚举、健康检查、分配逻辑都进 kubelet 主干，在工程上是不可持续的——每出一个新硬件就要改一次核心代码。 设计提案里说得很...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a><a class="pagination-related" href="/2026/10/24/2026-10-24-containerd-Snapshotter%E6%8E%A5%E5%8F%A3%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%EF%BC%9A%E6%87%92%E5%8A%A0%E8%BD%BD%E9%95%9C%E5%83%8F%E6%96%B9%E6%A1%88%E7%9A%84%E6%8A%80%E6%9C%AF%E5%9F%BA%E7%9F%B3/" title="containerd Snapshotter 接口深度解析：懒加载镜像方案的技术基石"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-24</div><div class="info-item-2">containerd Snapshotter 接口深度解析：懒加载镜像方案的技术基石</div></div><div class="info-2"><div class="info-item-1">containerd Snapshotter 接口深度解析：懒加载镜像方案的技术基石 在《容器镜像加速全景指南》中我们反复提到一个结论：Nydus / eStargz / SOCI 等懒加载方案之所以能在 containerd 生态落地，根本原因是 containerd 把&quot;文件系统准备&quot;抽象成了一个可插拔接口，并且这个接口的契约里留了一个&quot;关键的后门&quot;——它只要求返回有效的挂载配置，并不要求层数据已经下载到本地。 本文把这个抽象彻底拆开讲透。理解了它，你就理解了所有 remote snapshotter 方案的设计原理。  一、问题域：从 blob 到 rootfs 之间缺失的一环 先看 containerd 内部从 pull 到 run 的完整数据流： 1234567891011121314151617┌──────────────┐   pull    ┌───────────────┐│   Registry   │ ────────► │ Content Store  │  ← 第一站：内容寻址 blob 存储│ (OCI 镜像)...</div></div></div></a><a class="pagination-related" href="/2026/10/24/2026-10-24-%E5%AE%B9%E5%99%A8%E9%95%9C%E5%83%8F%E5%8A%A0%E9%80%9F%E5%85%A8%E6%99%AF%E6%8C%87%E5%8D%97%EF%BC%9A%E6%9E%84%E5%BB%BA%E3%80%81%E7%BC%93%E5%AD%98%E3%80%81%E6%87%92%E5%8A%A0%E8%BD%BD%E4%B8%8E%E5%88%86%E5%8F%91%E4%BC%98%E5%8C%96/" title="容器镜像加速全景指南：构建、缓存、懒加载与分发优化"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-24</div><div class="info-item-2">容器镜像加速全景指南：构建、缓存、懒加载与分发优化</div></div><div class="info-2"><div class="info-item-1">容器镜像加速全景指南：构建、缓存、懒加载与分发优化  容器启动慢，76% 的时间花在&quot;拉镜像&quot;上，而拉下来的数据平均只有 6.4% 会被真正读到。这组来自 AWS 的测量数据，揭示了容器启动优化最核心的矛盾：我们在为&quot;用不到的数据&quot;付出高昂的时间成本。 这篇文章从底层概念讲起，沿着&quot;构建期瘦身 → 本地缓存复用 → 按需懒加载 → 网络分发加速&quot;的完整链路，系统拆解容器快速启动与镜像快速拉取的所有主流方案。   第一部分：先补齐底层概念——镜像到底是个什么东西 要理解所有加速方案，必须先理解容器镜像的物理本质。这一部分是后面所有内容的地基。 1.1 容器 = Namespace + Cgroups + Rootfs Linux 容器本质上并不神秘，它是三个内核机制的组合：  Namespace（如 mount、pid、net、uts）给进程一个&quot;隔离的视野&quot;——容器内看到的文件系统、进程列表、网络栈都是独立的； Cgroups 限制进程能用的 CPU、内存等资源额度； Rootfs（根文件系统）则是容...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战</div></div><div class="info-2"><div class="info-item-1">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战 这篇长文写给算法工程师和平台工程师,从最基础的&quot;一张 GPU 卡怎么被 K8s 认识&quot;讲起,到&quot;一万张卡怎么不崩&quot;,再到&quot;大模型服务怎么在集群上跑起来&quot;,最后聊 Slurm。六大主题:K8s GPU 调度原理、万卡集群治理、资源池化、弹性伸缩、vLLM/SGLang 集群化部署、Slurm 实战。  一、开篇:为什么 GPU 调度比 CPU 调度难十倍 如果你做过 K8s 的 CPU/内存调度,可能觉得资源调度就是&quot;分配数字资源,加个 request/limit 完事&quot;。但当资源变成 GPU 之后,画风完全变了,原因有五个: 1. GPU 不可分割(默认情况下)。 CPU 可以按 0.1 核这样细粒度分配,内存可以按 MB 分配,但一张物理 GPU 卡,默认情况下,K8s 只能把它当作一个&quot;整数资源&quot;分配给一个容器——要么给你一整张卡,要么不给。这就导致一个尴尬场景:推理服...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">313</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">507</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%AC%E6%96%87%E8%B7%AF%E7%BA%BF"><span class="toc-number">1.</span> <span class="toc-text">本文路线</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E6%8A%8A%E8%B4%A3%E4%BB%BB%E9%93%BE%E7%9A%84%E4%B8%89%E4%B8%AA%E6%97%B6%E5%88%BB%E9%92%89%E6%AD%BB"><span class="toc-number"></span> <span class="toc-text">一、先把责任链的三个时刻钉死</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81privileged-%E4%B8%8E-device%EF%BC%9A%E4%B8%A4%E6%9D%A1%E6%AD%A3%E4%BA%A4%E7%9A%84%E8%BD%B4"><span class="toc-number"></span> <span class="toc-text">二、privileged 与 device：两条正交的轴</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-containerd-CRI-%E7%9A%84-privileged-%E5%88%86%E6%94%AF"><span class="toc-number">1.</span> <span class="toc-text">2.1 containerd CRI 的 privileged 分支</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E3%80%8Cprivileged-%E7%9C%8B%E4%B8%8D%E5%88%B0%E6%96%B0%E8%AE%BE%E5%A4%87%E3%80%8D%E7%9A%84%E6%AD%A3%E7%A1%AE%E8%AF%BB%E6%B3%95"><span class="toc-number">2.</span> <span class="toc-text">2.2 「privileged 看不到新设备」的正确读法</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-nerdctl%EF%BC%9A%E5%90%8C%E5%90%8D%E5%BC%80%E5%85%B3%E7%9A%84-CLI-%E5%BD%A2%E6%80%81"><span class="toc-number">3.</span> <span class="toc-text">2.3 nerdctl：同名开关的 CLI 形态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-4-%E5%B0%8F%E7%BB%93%EF%BC%9A%E4%B8%A4%E6%9D%A1%E8%BD%B4%EF%BC%8C%E5%9B%9B%E4%B8%AA%E8%B1%A1%E9%99%90"><span class="toc-number">4.</span> <span class="toc-text">2.4 小结：两条轴，四个象限</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81mknod-%E4%B8%8D%E6%98%AF%E7%A9%BA%E5%A3%B3%EF%BC%9A%E8%AE%BE%E5%A4%87%E8%8A%82%E7%82%B9%E7%9A%84%E7%9C%9F%E7%9B%B8"><span class="toc-number"></span> <span class="toc-text">三、mknod 不是空壳：设备节点的真相</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E7%9C%9F%E6%AD%A3%E6%8B%A6%E4%BA%BA%E7%9A%84%E6%98%AF-capability-%E7%9A%84%E5%9D%90%E6%A0%87%E7%B3%BB"><span class="toc-number">1.</span> <span class="toc-text">3.1 真正拦人的是 capability 的坐标系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-nsenter-%E7%9A%84-flag-%E9%87%8C%E6%B2%A1%E6%9C%89-U"><span class="toc-number">2.</span> <span class="toc-text">3.2 nsenter 的 flag 里没有 -U</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E4%B8%80%E4%B8%AA%E8%83%BD%E8%B7%91%E7%9A%84-GPU-%E5%88%B0%E5%BA%95%E9%9C%80%E8%A6%81%E4%BB%80%E4%B9%88"><span class="toc-number">3.</span> <span class="toc-text">3.3 一个能跑的 GPU 到底需要什么</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81devices-cgroup%EF%BC%9A%E4%B8%89%E6%A1%A3%EF%BC%8C%E4%B8%8D%E6%98%AF%E4%B8%A4%E6%A1%A3"><span class="toc-number"></span> <span class="toc-text">四、devices cgroup：三档，不是两档</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81rootless%EF%BC%9A%E6%8D%A2%E7%9A%84%E6%98%AF%E5%9D%90%E6%A0%87%E7%B3%BB%EF%BC%8C%E4%B8%8D%E6%98%AF%E6%9D%83%E9%99%90%E5%A4%A7%E5%B0%8F"><span class="toc-number"></span> <span class="toc-text">五、rootless：换的是坐标系，不是权限大小</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E6%9C%BA%E5%88%B6%EF%BC%9A%E5%AE%B9%E5%99%A8%E5%86%85%E7%9A%84-0-%E6%98%AF%E5%AE%BF%E4%B8%BB%E6%9C%BA%E7%9A%84%E5%8F%A6%E4%B8%80%E4%B8%AA%E6%95%B0"><span class="toc-number">1.</span> <span class="toc-text">5.1 机制：容器内的 0 是宿主机的另一个数</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-K8s-%E9%87%8C%E7%9A%84-rootless-%E9%95%BF%E4%BB%80%E4%B9%88%E6%A0%B7"><span class="toc-number">2.</span> <span class="toc-text">5.2 K8s 里的 rootless 长什么样</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E4%B8%89%E9%81%93%E5%85%B3%E5%8D%A1"><span class="toc-number">3.</span> <span class="toc-text">5.3 三道关卡</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81legacy-%E4%B8%8E-CDI%EF%BC%9A%E4%B8%BA%E4%BB%80%E4%B9%88-rootless-%E4%B8%8B-legacy-%E4%BC%9A%E5%B4%A9"><span class="toc-number"></span> <span class="toc-text">六、legacy 与 CDI：为什么 rootless 下 legacy 会崩</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-legacy-%E6%A8%A1%E5%BC%8F%EF%BC%9Aprestart-hook-%E8%A6%81%E6%94%B9-cgroup"><span class="toc-number">1.</span> <span class="toc-text">6.1 legacy 模式：prestart hook 要改 cgroup</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-%E4%B8%A4%E6%AC%A1%E7%9C%9F%E5%AE%9E%E5%9B%9E%E5%BD%92%EF%BC%88%E4%B8%8D%E6%98%AF%E4%B8%80%E6%AC%A1%EF%BC%89"><span class="toc-number">2.</span> <span class="toc-text">6.2 两次真实回归（不是一次）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-CDI%EF%BC%9A%E6%8A%8A%E7%89%B9%E6%9D%83%E6%93%8D%E4%BD%9C%E6%8D%A2%E6%88%90%E7%BA%AF%E6%95%B0%E6%8D%AE%E5%90%88%E5%B9%B6"><span class="toc-number">3.</span> <span class="toc-text">6.3 CDI：把特权操作换成纯数据合并</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81Q1%EF%BC%9AGPU-%E7%9A%84-request-limit-%E5%88%B0%E5%BA%95%E5%9C%A8%E5%93%AA%E4%B8%80%E5%B1%82%E7%94%9F%E6%95%88"><span class="toc-number"></span> <span class="toc-text">七、Q1：GPU 的 request&#x2F;limit 到底在哪一层生效</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E6%A0%87%E5%87%86%E7%AD%94%E6%A1%88%EF%BC%9A%E7%94%9F%E6%95%88%E5%9C%A8-create-%E4%B9%8B%E5%89%8D%EF%BC%8C%E4%B8%8E%E5%AE%B9%E5%99%A8%E5%86%85-uid-%E6%97%A0%E5%85%B3"><span class="toc-number">1.</span> <span class="toc-text">7.1 标准答案：生效在 create 之前，与容器内 uid 无关</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-%E7%AC%AC%E4%B8%89%E6%9D%A1%E8%B7%AF%EF%BC%9A%E8%AE%A9%E8%BF%90%E8%A1%8C%E6%97%B6%E8%87%AA%E5%B7%B1%E5%8E%BB%E8%B0%83-device-plugin"><span class="toc-number">2.</span> <span class="toc-text">7.2 第三条路：让运行时自己去调 device plugin</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-%E6%8E%92%E6%9F%A5%E6%B8%85%E5%8D%95"><span class="toc-number">3.</span> <span class="toc-text">7.3 排查清单</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81Q2%EF%BC%9Aprivileged-without-device-%E7%9A%84%E6%9D%83%E9%99%90%E6%A8%A1%E5%9E%8B"><span class="toc-number"></span> <span class="toc-text">八、Q2：privileged-without-device 的权限模型</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E9%80%90%E9%A1%B9%E6%8B%86%E5%BC%80"><span class="toc-number">1.</span> <span class="toc-text">8.1 逐项拆开</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-%E4%B8%80%E4%B8%AA%E7%9C%9F%E5%AE%9E%E7%9A%84%E7%94%9F%E4%BA%A7%E5%BD%A2%E6%80%81"><span class="toc-number">2.</span> <span class="toc-text">8.2 一个真实的生产形态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-3-%E6%9B%B4%E7%8B%A0%E7%9A%84%E4%B8%80%E5%B1%82%EF%BC%9A%E6%8A%8A-docker-API-%E4%B9%9F%E7%AE%A1%E8%B5%B7%E6%9D%A5"><span class="toc-number">3.</span> <span class="toc-text">8.3 更狠的一层：把 docker API 也管起来</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81Q3%EF%BC%9Adind-%E9%87%8C%E7%9A%84-gpus-all-%E4%B8%BA%E4%BB%80%E4%B9%88%E6%98%AF%E3%80%8C%E5%B1%80%E9%83%A8-all%E3%80%8D"><span class="toc-number"></span> <span class="toc-text">九、Q3：dind 里的 --gpus all 为什么是「局部 all」</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#9-1-%E9%97%AD%E9%9B%86%E6%98%AF%E4%B8%80%E5%B1%82%E5%B1%82%E4%BC%A0%E4%B8%8B%E6%9D%A5%E7%9A%84"><span class="toc-number">1.</span> <span class="toc-text">9.1 闭集是一层层传下来的</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-2-all-%E5%88%B0%E5%BA%95%E6%98%AF%E8%B0%81%E5%9C%A8%E6%95%B0%EF%BC%9A%E4%B8%80%E6%9D%A1%E4%B8%83%E6%AD%A5%E9%93%BE%E8%B7%AF"><span class="toc-number">2.</span> <span class="toc-text">9.2 all 到底是谁在数：一条七步链路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-3-%E4%BD%86%E9%9B%86%E5%90%88%E5%8F%AF%E4%BB%A5%E5%9C%A8%E5%86%85%E9%83%A8%E9%87%8D%E5%88%86%E9%85%8D"><span class="toc-number">3.</span> <span class="toc-text">9.3 但集合可以在内部重分配</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-4-%E4%B8%A4%E6%9D%A1%E8%B7%AF%E5%BE%84%E4%B8%8E%E4%B8%80%E6%9D%A1%E4%B8%8D%E6%8E%A8%E8%8D%90"><span class="toc-number">4.</span> <span class="toc-text">9.4 两条路径与一条不推荐</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E6%8A%8A%E9%95%9C%E5%A4%B4%E6%8B%89%E8%BF%9C%EF%BC%9A%E8%BF%99%E5%A5%97%E5%AE%9E%E7%8E%B0%E7%9A%84%E4%B8%89%E4%B8%AA%E8%AE%BE%E8%AE%A1%E5%8F%96%E8%88%8D"><span class="toc-number"></span> <span class="toc-text">十、把镜头拉远：这套实现的三个设计取舍</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#10-1-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%BC%9A%E6%9C%89%E8%BF%99%E5%A5%97%E4%B8%9C%E8%A5%BF%EF%BC%9A%E4%BB%8E-sidecar-%E5%88%B0-sibling"><span class="toc-number">1.</span> <span class="toc-text">10.1 为什么会有这套东西：从 sidecar 到 sibling</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-2-cgroup-%E5%B5%8C%E5%A5%97%EF%BC%9A%E8%AE%A9-dind-%E8%8A%B1%E4%B8%BB%E5%AE%B9%E5%99%A8%E7%9A%84%E9%A2%84%E7%AE%97"><span class="toc-number">2.</span> <span class="toc-text">10.2 cgroup 嵌套：让 dind 花主容器的预算</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-3-%E8%AE%BE%E8%AE%A1%E7%A8%BF%E9%87%8C%E7%9A%84-rootless%EF%BC%8C%E4%B8%BA%E4%BB%80%E4%B9%88%E6%B2%A1%E6%9C%89%E8%90%BD%E5%9C%B0"><span class="toc-number">3.</span> <span class="toc-text">10.3 设计稿里的 rootless，为什么没有落地</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E6%8A%8A%E4%B8%89%E9%97%AE%E6%94%BE%E8%BF%9B%E4%B8%80%E5%BC%A0%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%80%BB%E5%9B%BE"><span class="toc-number"></span> <span class="toc-text">十一、把三问放进一张责任链总图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%BA%8C%E3%80%81%E8%B8%A9%E5%9D%91%E6%B8%85%E5%8D%95"><span class="toc-number"></span> <span class="toc-text">十二、踩坑清单</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%89%E3%80%81%E5%9B%9E%E5%88%B0%E5%8E%9F%E7%AF%87"><span class="toc-number"></span> <span class="toc-text">十三、回到原篇</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E6%9D%A5%E6%BA%90"><span class="toc-number"></span> <span class="toc-text">参考来源</span></a></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/" title="推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM">推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/" title="runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链">runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链</a><time datetime="2026-11-07T16:00:00.000Z" title="发表于 2026-11-08 00:00:00">2026-11-08</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/" title="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</a><time datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/06/2026-11-06-%E5%AE%B9%E5%99%A8%E5%88%B0%E5%BA%95%E6%9C%89%E6%B2%A1%E6%9C%89%E5%86%85%E6%A0%B8%E6%8B%86%E8%A7%A3Docker-Kata-Firecracker%E7%9A%84%E5%86%85%E6%A0%B8%E8%BE%B9%E7%95%8C/" title="容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界">容器到底有没有内核？——拆解 Docker、Kata、Firecracker 的内核边界</a><time datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/06/2026-11-06-%E4%BB%8E%E5%BE%AE%E4%BF%A1%E8%AE%B0%E5%BD%95%E5%88%B0%E8%92%B8%E9%A6%8F%E8%87%AA%E5%B7%B1%EF%BC%9A%E8%92%B8%E9%A6%8F%E5%B7%A5%E4%BD%9C%E6%B5%81%E5%85%A8%E6%95%99%E7%A8%8B/" title="从微信记录到蒸馏自己：蒸馏工作流全教程">从微信记录到蒸馏自己：蒸馏工作流全教程</a><time datetime="2026-11-05T16:00:00.000Z" title="发表于 2026-11-06 00:00:00">2026-11-06</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
