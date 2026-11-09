@@ -1,0 +1,1620 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="一份流传较广的「2026 大厂 AI Infra 生产排错测试（卷二）」共 50 题，本文逐题给出经官方文档与源码核实的答案与解析。作答过程中发现 12 处题目本身的问题——包括把已弃用 MLA 的 DeepSeek-V4 按 V2&#x2F;V3 的 MLA 配置出题、昇腾并不存在题干所述的高精度累加环境变量、DualPipe-V2 这个不存在的命名、vLLM V1 已移除 swap、以及把 NVSent">
+<meta property="og:type" content="article">
+<meta property="og:title" content="2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="一份流传较广的「2026 大厂 AI Infra 生产排错测试（卷二）」共 50 题，本文逐题给出经官方文档与源码核实的答案与解析。作答过程中发现 12 处题目本身的问题——包括把已弃用 MLA 的 DeepSeek-V4 按 V2&#x2F;V3 的 MLA 配置出题、昇腾并不存在题干所述的高精度累加环境变量、DualPipe-V2 这个不存在的命名、vLLM V1 已移除 swap、以及把 NVSent">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-08T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-09T07:38:54.917Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="AI Infra">
+<meta property="article:tag" content="GPU">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="DeepSeek">
+<meta property="article:tag" content="Xid">
+<meta property="article:tag" content="RoCEv2">
+<meta property="article:tag" content="昇腾">
+<meta property="article:tag" content="KVCache">
+<meta property="article:tag" content="故障排查">
+<meta property="article:tag" content="SRE">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误",
+  "url": "https://roger-lv.github.io/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-08T16:00:00.000Z",
+  "dateModified": "2026-11-09T07:38:54.917Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">316</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">521</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-09T07:38:54.917Z" title="更新于 2026-11-09 15:38:54">2026-11-09</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/" data-flag-title="2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>这份试卷流传得挺广。它的定位很明确：不考概念背诵，而是把你直接扔进万卡集群的线上事故现场。题目质量整体在线——很多题干描述的现象（GPU 满载 100% 却无输出、单卡 OOM 引发连锁雪崩、Xid 静默故障）确实是生产里真实会遇到的东西。</p>
+<p>但做下来发现一个问题：<strong>有 12 处题干前提站不住</strong>。有些是命名错误（<code>DualPipe-V2</code> 不存在），有些是职责错配（把节点健康探测的活儿算到调度器头上），还有些是版本演进导致的自然过时——最典型的是<strong>题目按 DeepSeek-V2/V3 的 MLA 配置（潜变量 512 + 解耦 RoPE 64）给 DeepSeek-V4 出题，可 V4 已经不用 MLA 了</strong>。</p>
+<p>所以本文分两部分：先逐题给答案与解析，再把 12 处勘误集中列出。<strong>答案都尽量追到一手来源</strong>（NVIDIA 官方文档、PyTorch / vLLM 源码、Linux 内核定义、模型官方 config.json），而不是靠印象作答。</p>
+<hr>
+<h2 id="一、题目勘误汇总（先看这个）">一、题目勘误汇总（先看这个）</h2>
+<p>先集中列出题干本身的问题，避免读者照着错前提记结论。</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>位置</th>
+<th>问题</th>
+<th>正确表述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>判断 2</td>
+<td>称 <code>NCCL_DEBUG=INFO</code> 产生「标准错误输出开销」</td>
+<td>NCCL 调试日志<strong>默认写 stdout</strong>（<code>ncclDebugFile = stdout</code>），要改道需设 <code>NCCL_DEBUG_FILE</code>。且逐算子日志属 <strong>COLL 子系统</strong>，而 <code>NCCL_DEBUG_SUBSYS</code> 默认只有 <code>INIT,BOOTSTRAP,ENV</code>——<strong>只设 <code>NCCL_DEBUG=INFO</code> 看不到集合通信级日志</strong>，需补 <code>NCCL_DEBUG_SUBSYS=COLL</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td>判断 8</td>
+<td>「接受率过低」被当成绝对阈值；「反复校验失败重算」表述不准</td>
+<td>严格条件是 <strong>α ≤ c</strong>（阈值与草稿模型的相对开销绑定，草稿越便宜阈值越低）；每轮验证<strong>只有一次</strong>目标前向，不存在「反复重算」，真正代价是白付的草稿前向与几何衰减的接受 token 数</td>
+</tr>
+<tr>
+<td>3</td>
+<td>单选 3</td>
+<td>按 V2/V3 的 MLA 配置（512+64）给 DeepSeek-V4 出题</td>
+<td><strong>DeepSeek-V4 已弃用 MLA</strong>，改为混合注意力（滑动窗口 + CSA 压缩率 4 + HCA 压缩率 128），骨干是共享 K=V 的 MQA（<code>num_key_value_heads=1</code>），官方 config.json 中 <strong><code>kv_lora_rank</code> 字段已不存在</strong></td>
+</tr>
+<tr>
+<td>4</td>
+<td>单选 7</td>
+<td>选项 B 的同步时机写反</td>
+<td>应为「<strong>拷贝后</strong>同步」而非「拷贝前」——异步拷贝提交后，需在 CPU 读取前完成同步</td>
+</tr>
+<tr>
+<td>5</td>
+<td>单选 8</td>
+<td>称昇腾有「高精度累加模式」环境变量</td>
+<td>昇腾<strong>不存在</strong>该名称的开关。真实可核查的开关是 matmul/conv 的 <code>allow_hf32</code> 默认值、ATC <code>--allow_hf32</code>、<code>ENABLE_HF32_EXECUTION</code>、<code>cube_math_type</code>、<code>--precision_mode</code>、<code>HCCL_DETERMINISTIC</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td>多选 1</td>
+<td>A 项「全集群节点两两配对」</td>
+<td>O(N²) 不可行；标准做法是<strong>在作业通信域内</strong>跑 <code>all_reduce_perf</code>，比对各 rank 的离群值</td>
+</tr>
+<tr>
+<td>7</td>
+<td>多选 5</td>
+<td>D 项把探测/污点/驱逐算作调度器能力</td>
+<td>职责错配：<strong>NVSentinel</strong>（fault-quarantine 打污点、node-drainer 驱逐）与作业控制器负责，<strong>调度器只消费污点</strong></td>
+</tr>
+<tr>
+<td>8</td>
+<td>多选 10</td>
+<td><code>DualPipe-V2</code> 命名错误</td>
+<td>DualPipe 出自 <strong>DeepSeek-V3 技术报告</strong>（arXiv 2412.19437），<strong>无官方 DualPipe-V2</strong>；相近的 DualPipeV 是 Sea AI Lab 的 V 形调度。机制本身成立——DeepSeek-V4 技术报告明写仍用调整后的 DualPipe 1F1B</td>
+</tr>
+<tr>
+<td>9</td>
+<td>简答 6</td>
+<td><code>NCCL_NET_GDR_LEVEL=5</code> 不是文档化取值</td>
+<td>文档化取值<strong>只有 5 个字符串</strong>：<code>LOC / PIX / PXB / PHB / SYS</code>（<strong>没有 <code>DIS</code></strong>）。旧式整数 <code>0/1/2/3/4</code> 依次对应这 5 档，<strong><code>&gt;4</code> 一律按 <code>SYS</code> 解释</strong>（源码 <code>levelsOldToNew[]</code> 中 <code>5</code> 亦映射为 <code>SYS</code>）。<strong>整数形式仅为向后兼容，官方明确不推荐</strong>（“the literal values can change over time”）——生产直接写助记符</td>
+</tr>
+<tr>
+<td>10</td>
+<td>简答 7</td>
+<td>同 #3</td>
+<td>同 #3，应基于 V2/V3 的 MLA 作答并明确注明版本</td>
+</tr>
+<tr>
+<td>11</td>
+<td>简答 9</td>
+<td>称 vLLM 用「重算 + 换出」两种抢占策略</td>
+<td><strong>vLLM V1 引擎已移除 swap</strong>，只剩 recomputation 一条路径；V0 时代才是两者并存</td>
+</tr>
+<tr>
+<td>12</td>
+<td>简答 16</td>
+<td>变量状态未更新</td>
+<td><code>NCCL_ASYNC_ERROR_HANDLING</code> <strong>从来不是 libnccl 的变量</strong>，而是 PyTorch <code>ProcessGroupNCCL</code> 读的。PyTorch <strong>2.1 及更早</strong>用旧名、默认 <strong>1</strong>（TearDown）；<strong>2.2 起</strong>改名 <code>TORCH_NCCL_ASYNC_ERROR_HANDLING</code>、默认改 <strong>3</strong>（SkipCleanUp）。<strong>旧名在 2.2+ 源码中已不再被读取——写了也静默无效</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>#3 和 #10 是同一件事的两处体现，说明出题时参考的是 V3 时代的架构资料。这不是吹毛求疵——<strong>MLA 的 KV Cache 计算方式和混合注意力的完全不同</strong>，照错口径背公式，到了真实部署会算错显存。</p>
+</blockquote>
+<hr>
+<hr>
+<h2 id="二、判断题（10-题-·-10-分）">二、判断题（10 题 · 10 分）</h2>
+<h3 id="1-推理循环中每生成一个-Token-就手动调用一次-torch-cuda-empty-cache-，是官方推荐的最佳显存优化手段，能彻底规避-CUDA-OOM">1. 推理循环中每生成一个 Token 就手动调用一次 <code>torch.cuda.empty_cache()</code>，是官方推荐的最佳显存优化手段，能彻底规避 CUDA OOM</h3>
+<p><strong>答案：×</strong></p>
+<ul>
+<li><code>empty_cache()</code> 释放的是 caching allocator 中<strong>未被占用</strong>的缓存块（还给驱动，能在 <code>nvidia-smi</code> 里看到下降），不会释放仍被张量持有的显存；官方原话是 “empty_cache() doesn’t increase the amount of GPU memory available for PyTorch”，其用途只有两个：把显存让给别的进程、以及在特定情况下缓解碎片。</li>
+<li>推理 OOM 的根因是活跃张量（权重 + KV Cache + 激活峰值）超过显存，逐 token 清缓存完全不改变这个峰值，因此&quot;彻底规避 OOM&quot;从原理上就不成立。</li>
+<li>反向代价明确：清空缓存后下一次分配要重新走 <code>cudaMalloc</code>（昂贵且同步），而 caching allocator 的设计目标正是 “fast memory deallocation without device synchronizations”；逐 token 清缓存等于把 allocator 的收益全部丢掉，单步延迟与 GPU 空转都会恶化。</li>
+<li>更隐蔽的风险：在 CUDA Graph 捕获/回放、多流并发的路径上频繁回收显存，会破坏图捕获期间&quot;地址稳定&quot;的假设，触发重捕获或直接报错。</li>
+<li>正确做法：按 <code>max_num_seqs</code> / <code>max_model_len</code> / 并发预算显存，用 <code>expandable_segments:True</code> 缓解碎片，用 <code>memory_allocated()</code>（真实张量占用）与 <code>memory_reserved()</code>（allocator 持有的总量）区分两者，只在确实要让位给其他进程或做 profiling 前清一次。</li>
+<li>真正有用的场景：同一张卡上多个进程共享、需要在进程间让出显存；或输入长度高度可变导致&quot;缓存块尺寸碎片化&quot;形成高峰时，在<strong>请求间隙</strong>偶发清一次；这与&quot;每个 token 清一次&quot;是完全不同的用法。</li>
+</ul>
+<blockquote>
+<p>依据：PyTorch 官方 <code>torch.cuda.empty_cache</code> / <code>torch.cuda.memory.empty_cache</code> API 文档；PyTorch “CUDA semantics - Memory management”（caching allocator 设计目标、<code>memory_allocated/reserved</code> 语义）。</p>
+</blockquote>
+<h3 id="2-线上集群无故通信挂起时，临时开-NCCL-DEBUG-INFO-会引入额外日志输出开销，但它是快速定位卡在哪个-Rank-哪个通信算子的核心手段">2. 线上集群无故通信挂起时，临时开 <code>NCCL_DEBUG=INFO</code> 会引入额外日志输出开销，但它是快速定位卡在哪个 Rank / 哪个通信算子的核心手段</h3>
+<p><strong>答案：√</strong></p>
+<ul>
+<li>机制上 NCCL 日志按&quot;级别 × 子系统&quot;双维度过滤：INFO 级别会打开初始化、bootstrap、网络选路、拓扑探测等大量输出，多 Rank 同时打到终端或文件，格式化与 I/O 开销真实存在；官方也建议生产默认不开、需要时用 <code>NCCL_DEBUG_FILE</code> 落盘并用 <code>NCCL_DEBUG_SUBSYS</code> 收窄。</li>
+<li>Hang 定位原理：每个 Rank 在<strong>下发</strong>每个集合通信前会打印 <code>&quot;%s: opCount %lx sendbuff %p recvbuff %p count %zu datatype %d op %d root %d comm %p [nranks=%d] stream %p&quot;</code>；把所有 Rank 的日志按时间对齐，最后一个成功打印的算子即卡住点（例如 7 个 Rank 停在 AllReduce、1 个停在 AllGather，就是典型的算子/调用顺序不匹配）。</li>
+<li>初始化阶段的 hang 另有专门组合：<code>NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,NET</code>，官方文档给的就是这个用法，重点看 bootstrap 连接、网卡选择、Rank 同步三类问题。</li>
+<li>生产更优解是 PyTorch Flight Recorder：<code>TORCH_NCCL_TRACE_BUFFER_SIZE=2000</code> + <code>TORCH_NCCL_DUMP_ON_TIMEOUT=1</code>，用内存环形缓冲记录每 Rank 的 <code>last_enqueued / started / completed_collective</code> 与 C++ 栈，超时后自动 dump、再用 <code>fr_trace.py</code> 分析，避免海量日志本身成为二次故障。</li>
+</ul>
+<blockquote>
+<p>⚠️ 题目本身有问题：两处不严谨。(1) NCCL 调试日志默认写 <strong>stdout</strong>（源码 <code>ncclDebugFile = stdout</code>，只有设 <code>NCCL_DEBUG_FILE=/dev/stderr</code> 或文件才改道），说&quot;标准错误输出开销&quot;不准确；(2) 逐算子那一行属于 <strong>COLL 子系统</strong>，而 <code>NCCL_DEBUG_SUBSYS</code> 的默认值只有 <code>INIT,BOOTSTRAP,ENV</code>，因此只设 <code>NCCL_DEBUG=INFO</code> <strong>看不到</strong>集合通信级日志，需补 <code>NCCL_DEBUG_SUBSYS=COLL</code>（或 <code>ALL</code>）。更准确的表述是 <code>NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,COLL,NET</code>。</p>
+</blockquote>
+<blockquote>
+<p>依据：NCCL User Guide “Logging” 与 env 页；NCCL 源码 <code>src/enqueue/enqueue.cc</code>（<code>INFO(NCCL_COLL, &quot;%s: opCount ...&quot;)</code>）、<code>src/param/param.cc</code>（<code>NCCL_DEBUG_SUBSYS</code> 默认 <code>INIT|BOOTSTRAP|ENV</code>）、<code>src/debug.cc</code>（默认输出流为 stdout）；PyTorch Flight Recorder 官方教程。</p>
+</blockquote>
+<h3 id="3-PyTorch-原生-torch-compile-Inductor-后端可直接在昇腾-910B-C-上无缝编译执行，无需任何专用-CANN-编译器或-Torch-NPU-插件">3. PyTorch 原生 <code>torch.compile</code> + Inductor 后端可直接在昇腾 910B/C 上无缝编译执行，无需任何专用 CANN 编译器或 Torch-NPU 插件</h3>
+<p><strong>答案：×</strong></p>
+<ul>
+<li><code>torch.compile</code> 是&quot;前端 + 后端&quot;结构：Dynamo 抓取 FX 图后必须交给某个后端做代码生成。PyTorch 官方树内的 Inductor codegen 只有 Triton（GPU）、C++/OpenMP（CPU）以及 xpu / rocm / mps / mtia 等目标，<strong>没有昇腾的代码生成路径</strong>，所以&quot;原生无缝&quot;从第一性原理上不成立。</li>
+<li>昇腾上跑图模式必须装 CANN + torch_npu（Ascend Extension for PyTorch），再用 TorchAir 提供 NPU 后端：<code>torchair.get_npu_backend()</code> 把 FX 图转换为 GE 计算图，交由 CANN 的 GE 图引擎做算子融合、编译优化后下发到 910B/C 执行。</li>
+<li>官方示例即 <code>import torch_npu</code> 之后 <code>import torchair</code>，再 <code>model = torch.compile(model, backend=npu_backend)</code>；且 PyTorch / torch_npu / CANN 三者版本需严格匹配，属于典型 out-of-tree 扩展。</li>
+<li>昇腾侧其实有两条图模式路线：TorchAir 的 GE 图后端（图模式整图下发）与 torch_npu 体系内的 Inductor/AscendC 后端（算子级编译），两者都依赖 CANN 工具链，都不是&quot;原生 Inductor&quot;。</li>
+<li>落地检查项：确认 <code>torch_npu</code> 与 CANN 版本匹配（不匹配时典型表现是 <code>torch.compile</code> 直接报后端不支持或图模式下算子 fallback 到 eager），并在图模式出现精度/编译报错时先用 <code>TorchAir</code> 的调试开关做图与 eager 的精度比对。</li>
+<li>结论：昇腾支持恰恰<strong>依赖</strong>插件与 CANN 编译器，题干把必要条件说成了&quot;无需&quot;。</li>
+</ul>
+<blockquote>
+<p>依据：Ascend/torchair 官方 README（<code>torchair.get_npu_backend</code>、“将 PyTorch 的 FX 图转换为 GE 计算图”、版本匹配表）；昇腾社区《PyTorch 框架使能图模式》(CANN 8.1.RC1)；PyTorch 仓库 <code>torch/_inductor/codegen/</code> 目录清单（<a target="_blank" rel="noopener" href="http://triton.py">triton.py</a> / <a target="_blank" rel="noopener" href="http://cpp.py">cpp.py</a> / xpu / rocm / mps / mtia，无 Ascend）。</p>
+</blockquote>
+<h3 id="4-异步-Checkpoint-时，主训练线程只需把-GPU-显存中的权重拷到-Host-Pinned-Memory-即可立即恢复计算，无需等待磁盘-网络落盘">4. 异步 Checkpoint 时，主训练线程只需把 GPU 显存中的权重拷到 Host Pinned Memory 即可立即恢复计算，无需等待磁盘/网络落盘</h3>
+<p><strong>答案：√</strong></p>
+<ul>
+<li>核心机制是把&quot;GPU→Host 的拷贝&quot;与&quot;Host→存储的落盘&quot;解耦：主线程先把 state_dict 反暂存到 CPU 侧 staging 缓冲（PyTorch DCP 默认 <code>use_pinned_memory=True</code>、<code>use_async_staging=True</code>），落盘在独立线程或进程中完成，训练线程不再等磁盘/对象存储 I/O。</li>
+<li>DCP 的 <code>async_save</code> 返回 <code>AsyncSaveResponse</code>，含 <code>staging_completion</code>（本地拷贝完成）与 <code>upload_completion</code>（真正写完）两个 future；也可选 <code>async_checkpointer_type</code> 决定用线程还是独立进程落盘，避免 GIL 影响。</li>
+<li>收益量级：同步保存时训练要空转数秒到数十秒（取决于 state 大小与存储带宽），异步把 stall 压缩到 D2H 拷贝时间，典型大模型训练里能把 checkpoint 抖动从&quot;分钟级停顿&quot;降到&quot;亚秒级抖动&quot;。</li>
+<li>代价与边界：需要额外一份 pinned host 内存（量级约等于 state 大小，优化器状态另计），D2H 拷贝本身要走 PCIe/NVLink，与训练通信抢带宽；staging 完成前不能修改原始 state_dict（<code>synchronize_staging</code> 语义），实现上通常双缓冲。</li>
+<li>工程上最容易踩的坑：落盘线程/进程失败必须能被感知并让训练报错，否则会静默产出坏 checkpoint；另外 pinned memory 过多会挤压宿主内存，多机训练时要按 state 大小规划。</li>
+<li>大集群常用&quot;多级异步&quot;：先异步写到本地 NVMe，再由后台任务上传到远端对象存储，把跨机带宽争抢与训练错峰，本质上仍是&quot;主线程只等 D2H 拷贝&quot;这一条。</li>
+</ul>
+<blockquote>
+<p>依据：PyTorch 官方 <code>torch.distributed.checkpoint</code> 文档（<code>async_save</code> / <code>AsyncSaveResponse</code> / <code>StagingOptions</code> / <code>BlockingAsyncStager</code> / <code>synchronize_staging</code>）。</p>
+</blockquote>
+<h3 id="5-Kubernetes-原生调度器默认具备-GPU-拓扑感知能力，申请-4-卡时会自动挑同一颗-PCIe-Switch-下的卡，无需任何拓扑感知插件">5. Kubernetes 原生调度器默认具备 GPU 拓扑感知能力，申请 4 卡时会自动挑同一颗 PCIe Switch 下的卡，无需任何拓扑感知插件</h3>
+<p><strong>答案：×</strong></p>
+<ul>
+<li>默认路径上 kube-scheduler 只看到节点状态里的整数扩展资源 <code>nvidia.com/gpu</code>（官方文档：“Extended resources are only supported as integer resources and cannot be overcommitted”），既不认识 PCIe Switch 也不认识 NVLink 域，只做数量匹配与打分，物理上根本没有拓扑信息可用。</li>
+<li>决定&quot;分哪几张卡&quot;的是 kubelet 的 device manager + device plugin：默认按 <code>ListAndWatch</code> 上报顺序 first-fit 分配；device-plugin API 确实有可选的 <code>GetPreferredAllocation</code> 提示接口，但 kubelet 只在插件声明 <code>GetPreferredAllocationAvailable</code> 时才调用，且接口注释明确&quot;结果不保证被最终采用&quot;。</li>
+<li>即便装了 NVIDIA 插件，其当前实现是按副本分布策略（distributed / packed / spread）比较物理 GPU 的已分配次数来挑卡，并非按 PCIe Switch 拓扑挑卡——所以&quot;同一 PCIe Switch 自动选卡&quot;在默认栈里不存在。</li>
+<li>集群级/整机拓扑（NVLink 域、rail 优化、超节点）需要额外组件：NFD/Topograph 打标签 + Volcano / KAI Scheduler / Kueue TAS 等拓扑感知调度器，或走 DRA（含多节点 NVLink 的 ComputeDomain 方案），且通常还要配合 Gang 调度保证整组任务原子落地。</li>
+<li>NUMA 对齐属于另一条链路：插件上报 <code>TopologyInfo&#123;Nodes:[NUMANode]&#125;</code>，由 kubelet Topology Manager 在开启非 <code>none</code> 策略时使用，粒度是 NUMA 节点，与&quot;同一 PCIe Switch 选卡&quot;不是一回事。</li>
+<li>结构上还有一层限制：调度发生在节点级（kube-scheduler 先绑定节点），设备分配发生在节点内（kubelet + 插件），而插件看不到&quot;这个 Pod 是 4 卡 TP 还是 4 卡 DP、要和哪台机做 AllReduce&quot;，所以单机插件再怎么优化也做不出集群级拓扑最优解。</li>
+</ul>
+<blockquote>
+<p>依据：Kubernetes 官方 Device Plugins 文档（整数扩展资源、<code>GetPreferredAllocation</code> 为可选提示、<code>TopologyInfo</code> 与 Topology Manager 集成）；NVIDIA k8s-device-plugin 源码 <code>internal/plugin/server.go</code>、<code>internal/rm/&#123;rm,allocate&#125;.go</code>；NVIDIA Topograph 文档（“the default Kubernetes scheduler places one pod at a time”）。</p>
+</blockquote>
+<h3 id="6-RoCEv2-中交换机开启-PFC-Deadlock-Watchdog-后，若某队列持续收到-PFC-暂停帧超时，交换机会主动强制丢弃该队列报文以打破死锁环路">6. RoCEv2 中交换机开启 PFC Deadlock Watchdog 后，若某队列持续收到 PFC 暂停帧超时，交换机会主动强制丢弃该队列报文以打破死锁环路</h3>
+<p><strong>答案：√</strong></p>
+<ul>
+<li>PFC 死锁的本质是多跳缓冲依赖成环：环上每个端口都在等下游&quot;腾空间&quot;，暂停帧沿环传递后谁都不发数据，队列永久停在 XOFF；拥塞控制失效（DCQCN 参数不当、微突发）往往是形成环的前置条件，因此 PFC watchdog 与 ECN/DCQCN 调优是配套手段。</li>
+<li>Watchdog 的做法是在端口上按周期（如 100 ms）轮询 no-drop 队列状态：队列持续处于暂停状态超过 <code>shutdown-multiplier × interval</code> 即判定卡死，把它转入 shut 状态并丢弃该队列的所有出向报文（“all outgoing packets are dropped on interfaces that match the PFC queue that is not being drained”），从而打断暂停帧传播链。</li>
+<li>随后进入 auto-restore 观察期：若在该窗口内不再收到该队列的 PFC 帧，则恢复队列、流量继续；若仍有 PFC 帧到达则计时器重置、继续保持丢弃，必要时可手工执行 recover 命令。</li>
+<li>本质是&quot;用丢包换解锁&quot;：牺牲无损性，靠 RoCE 重传补数据，代价是瞬时丢包、重传风暴与吞吐下探；timer 必须按业务调优，过于激进会在正常拥塞时误杀流量。</li>
+<li>注意两点前提：watchdog 通常需要显式开启（不是所有平台默认打开），且动作可配置——有的平台默认丢队列，有的默认 err-disable 端口（整口下线），故障定位时要先确认动作类型。</li>
+<li>观测手段：交换机侧看 watchdog / shutdown / auto-restore 事件计数与被丢弃报文计数，主机侧看 RoCE 端口的 PFC pause 帧计数与重传计数；两侧同时跳变即可确认&quot;死锁被打断后重传恢复&quot;这一路径。</li>
+</ul>
+<blockquote>
+<p>依据：Cisco NX-OS 9000 QoS 配置指南 “Priority Flow Control Watchdog” 节（队列 shut + 丢包 + auto-restore 原话）；Cisco IOS XR PFC watchdog（interval / shutdown-multiplier / auto-restore-multiplier）。</p>
+</blockquote>
+<h3 id="7-vLLM-配-gpu-memory-utilization-0-9-意味着权重加-KV-Cache-永不超过-90-显存，因此绝不可能-OOM-崩溃">7. vLLM 配 <code>--gpu-memory-utilization 0.9</code> 意味着权重加 KV Cache 永不超过 90% 显存，因此绝不可能 OOM 崩溃</h3>
+<p><strong>答案：×</strong></p>
+<ul>
+<li>该参数的官方定义是 “The fraction of GPU memory to be used for the model executor”，且明确是 <strong>per-instance</strong> 限制（同一张卡两个实例各设 0.5 也合法），它是&quot;给本实例的预算比例&quot;，不是硬件级硬上限。</li>
+<li>实现方式是启动时跑一次 profiling，测出权重、激活峰值与 CUDA Graph 开销后，用剩余额度反推 KV Cache 的 block 数（<code>num_gpu_blocks</code>）；这是<strong>基于采样的估算</strong>，可被 <code>--num-gpu-blocks-override</code> 覆盖，也存在估算偏差。</li>
+<li>仍有大量 OOM 路径：权重本身放不下（要加 TP/PP 或换低精度）、KV Cache 需求超预算（要降 <code>max_model_len</code>）、碎片导致没有连续大块（要开 <code>expandable_segments</code>）、CUDA Graph 捕获/预热阶段吃掉预留之外的余量、同卡其他进程或实例占用、输入分布比 profiling 时更极端（长序列/多模态/大 batch）。</li>
+<li>预算的边界也值得注意：预留的那 10% 恰恰是留给 CUDA Graph、sampler warmup 与碎片的，所以&quot;利用率调到 0.9&quot;本身并不保证捕获阶段不 OOM，这也是小显存卡上最容易翻车的地方。</li>
+<li>排查方法：先看 OOM 发生在哪个阶段（加载权重 / 切 KV Cache / 图捕获 / 运行期），再对症下药；运行期还可观测 KV Cache 使用率指标，确认是容量不足还是碎片问题。</li>
+<li>默认值本身也在演进（历史版本 0.9，新版本引入可扩展 KV Cache 后语义与默认值有调整），所以&quot;0.9 就是一个硬保证&quot;这种理解在任何版本上都不成立。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM 官方 Engine Arguments 文档（<code>--gpu-memory-utilization</code> / <code>--device-memory-utilization</code>、per-instance 语义、profiling 与 <code>num_gpu_blocks</code>）；NVIDIA NIM “Troubleshooting GPU Memory Out-of-Memory Errors”（默认 0.9，剩余额度留给 CUDA Graph/warmup/碎片，按阶段给出不同修法）。</p>
+</blockquote>
+<h3 id="8-推测解码中若草稿模型接受率过低，端到端延迟不仅不降，反而会比直接跑大模型更慢">8. 推测解码中若草稿模型接受率过低，端到端延迟不仅不降，反而会比直接跑大模型更慢</h3>
+<p><strong>答案：√</strong></p>
+<ul>
+<li>论文给出的期望加速比为 <code>(1-α^(γ+1)) / ((1-α)(γc+1))</code>，其中 α 为接受率、c 为&quot;草稿一步耗时 / 目标一步耗时&quot;、γ 为草稿长度；推论是<strong>只有 α &gt; c 时才存在某个 γ 带来提升</strong>，即 α ≤ c 时任何草稿长度都无法加速。</li>
+<li>物理直觉：验证阶段目标模型只跑<strong>一次</strong> forward（处理 γ+1 个 token），换来的是&quot;被接受的那一小段前缀&quot;。若大部分草稿被拒，这一轮只产出 1 个 token——与普通解码相同——却额外付了 γ 次草稿前向的开销；α 越低收益按几何级数衰减、成本线性增长，于是端到端更慢。</li>
+<li>参数敏感度：γ 越大，期望接受 token 数 <code>(1-α^(γ+1))/(1-α)</code> 的边际收益越小而成本线性上升，所以低接受率时应<strong>先缩 γ</strong>，再考虑换草稿模型（EAGLE/Medusa 等更对齐的草稿器提高 α）。</li>
+<li>低接受率的常见来源：草稿与目标分布不匹配（tokenizer 不一致、领域差异）、采样温度偏高；此外高并发下目标模型已算力饱和，推测解码更容易变成负收益——它面向的是低/中 QPS、内存带宽受限的时延场景。</li>
+<li>生产判据：用接受 token 数 / 草稿 token 数（如 <code>spec_decode_num_accepted_tokens_total / draft_tokens_total</code>）实测 α，再按上面的公式判断当前 γ 是否划算。</li>
+<li>实测经验与理论一致：单流低并发下常见 1.5x~2.5x 加速，但接受率随任务类型剧烈波动（代码/结构化输出高、开放文本低），并发升高后常出现整体吞吐反而下降的负收益。</li>
+</ul>
+<blockquote>
+<p>⚠️ 题目本身有问题：&quot;接受率过低&quot;没有绝对阈值，严格条件是 <strong>α ≤ c</strong>（阈值与草稿模型的相对开销绑定，草稿越便宜阈值越低）；另外&quot;反复校验失败重算&quot;表述不准——每轮验证只有一次目标前向，并不存在反复重算，真正的代价是白付的草稿前向与几何衰减的接受 token 数。</p>
+</blockquote>
+<blockquote>
+<p>依据：Leviathan et al., arXiv:2211.17192 §3.3 与 Corollary 3.9（期望加速比公式、“If α&gt;c, there exists γ for which we’ll get an improvement”）；vLLM 官方推测解码文档（面向低/中 QPS、内存受限场景与可观测指标）。</p>
+</blockquote>
+<h3 id="9-显存出现-Double-Bit-Error（DBE）时，GPU-硬件会自动降频并跳过错误数据继续运算，不会导致运行中的-CUDA-Kernel-崩溃">9. 显存出现 Double-Bit Error（DBE）时，GPU 硬件会自动降频并跳过错误数据继续运算，不会导致运行中的 CUDA Kernel 崩溃</h3>
+<p><strong>答案：×</strong></p>
+<ul>
+<li>ECC 的 SECDED 编码只能纠正 1 bit、检出 2 bit：DBE 发生时硬件明确知道&quot;这份数据已损坏且无法纠正&quot;，不会静默跳过，而是立即中断上报（驱动侧即 Xid 48，语义为 GPU 上出现不可纠正错误）。</li>
+<li>后果是数据与上下文双失：受影响页内容不可信、CUDA 上下文被污染，正在执行的 kernel 会失败、进程必须重启；NVIDIA 的 Xid 目录对 Xid 48 明确要求 “A GPU reset or node reboot is needed to clear this error”，对包含型/非包含型错误（Xid 94 / 95）分别要求 restart app / reset GPU。</li>
+<li>硬件侧的&quot;自愈&quot;是<strong>事后</strong>动作：动态页退休（旧架构）或行重映射（Ampere 及以后，伴随 Xid 63/64）把坏行换掉，但内容已经丢失，救不回正在跑的任务；行重映射失败（Xid 64）只能复位或换卡。</li>
+<li>与可纠正错误（CE）的区别在于处置阈值：CE 通常按阈值累积后才触发页退休/行重映射，DBE 则是&quot;一次即不可用&quot;，且往往直接触发节点下线与 RMA 流程。</li>
+<li>降频属于温度/功耗保护动作，与 ECC 错误没有因果关系。工程做法是订阅 Xid 的健康检查（DCGM / 节点健康探针）命中后立即把节点拉出调度池并复位或换机，训练侧靠 checkpoint 重启恢复。</li>
+<li>定位路径：内核日志里的 Xid 行 + DCGM 的 ECC/页退休/行重映射字段（含 DBE 与 CE 计数）是判断&quot;该复位还是该换卡&quot;的直接依据；训练框架侧看到的往往只是 NCCL 超时或 CUDA 报错，别把根因误判成通信问题。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA Xid Errors 文档 Xid Catalog（Xid 48 <code>ROBUST_CHANNEL_GPU_ECC_DBE</code>、“A GPU reset or node reboot is needed to clear this error”；Xid 63/64 页退休与行重映射；Xid 94 RESTART_APP / Xid 95 RESET_GPU）。</p>
+</blockquote>
+<h3 id="10-超长分布式预训练中-FP16-比-BF16-更容易下溢或上溢（NaN），本质原因是-FP16-的指数位比-BF16-少-3-位">10. 超长分布式预训练中 FP16 比 BF16 更容易下溢或上溢（NaN），本质原因是 FP16 的指数位比 BF16 少 3 位</h3>
+<p><strong>答案：√</strong></p>
+<ul>
+<li>位宽布局是根因：FP16 为 1/5/10（5 位指数），bfloat16 为 1/8/7（8 位指数，与 FP32 同阶），指数位少 3 位意味着 FP16 的动态范围窄得多。</li>
+<li>数量级对比：FP16 正规数下限约 2^-14 ≈ 6.1e-5、上限 65504（次正规可到约 6e-8）；BF16 约为 1.18e-38 ~ 3.39e38。同一个 loss / 激活 / 梯度值域在 FP16 下更容易下溢成 0（梯度被吃掉）或上溢成 inf。</li>
+<li>严格说上溢首先产生 inf，NaN 多由 inf−inf、0×inf 之类的二次运算派生；这不改变结论。FP16 训练必须配 loss scaling（静态或动态）把梯度抬进可表示区间，BF16 通常不需要，这也是长序列训练普遍选 BF16 的直接原因。</li>
+<li>反向的取舍是精度：FP16 尾数多 3 位（10 vs 7），同量级下相对误差更小，BF16 的舍入更粗——所以&quot;BF16 更稳、FP16 更准&quot;是这一对格式的常见表述。</li>
+<li>具体路径举例：反向传播中小梯度常落在 1e-6~1e-8 量级，FP16 下直接归零（梯度被吃掉），而 BF16 仍可表示；相反，激活/attention logits 超过 65504 时 FP16 直接变 inf，随后 softmax 出 NaN。</li>
+<li>工程上还有配套约束：无论用哪种 16 位格式，优化器主权重通常仍保留 FP32 master copy 以保证更新精度；到 FP8 时代 BF16 依然是主流的主计算格式。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA Transformer Engine 低精度训练文档（FP32 1/8/23、BF16 1/8/7、FP16 1/5/10；BF16 共享 FP32 指数范围，FP16 动态范围受限需 loss scaling）；IEEE 754 binary16 定义。</p>
+</blockquote>
+<hr>
+<h2 id="三、单选题（10-题-·-20-分）">三、单选题（10 题 · 20 分）</h2>
+<blockquote>
+<p><strong>核实说明</strong>：本卷所有答案与解析均已联网核对官方文档 / 官方仓库源码 / 规范，来源在每题末尾标注。<br>
+标注 <code>⚠️ 题目本身有问题</code> 的题目存在事实错误或表述歧义；标注「注」的为答案不受影响的细节修正。</p>
+</blockquote>
+<hr>
+<h3 id="1-千卡训练卡死、GPU-利用率-100-，定位首个掉队的-Rank">1. 千卡训练卡死、GPU 利用率 100%，定位首个掉队的 Rank</h3>
+<blockquote>
+<p><strong>题干</strong>：千卡分布式训练进程突然卡死不动，所有 GPU 利用率均维持在 100%（实际处于 CPU/GPU 忙轮询等待状态），排查定位具体是哪个 Rank 率先掉队卡死的最有效手段是：</p>
+<ul>
+<li><strong>A.</strong> 立即重启整机服务器并清空日志</li>
+<li><strong>B.</strong> 使用 py-spy 或 GDB 打印各节点的调用栈，排查哪台机器未停留在当前的 NCCL 集合通信函数上</li>
+<li><strong>C.</strong> 调小模型的全局 Batch Size</li>
+<li><strong>D.</strong> 查看交换机 CPU 利用率</li>
+</ul>
+</blockquote>
+<p><strong>答案：B</strong></p>
+<p>卡死的本质是<strong>某个 rank 没有进入集合通信</strong>：NCCL 的集合操作要求同一通信域内所有 rank 按同一顺序进入同一次 collective，只要有一个 rank 没进来，其余 rank 就会在 <code>ncclKernel</code> 里忙轮询空等——表现正是「GPU 利用率 100% 但毫无进展」。因此最有效的动作是在所有节点上同时抓调用栈，<strong>看谁的栈不在集合通信函数里</strong>，谁就是元凶（即二分法的一次采样）。A 直接销毁现场，最差解；C 改 batch size 与根因无关；D 交换机 CPU 利用率与 GPU 侧通信阻塞没有因果对应关系。<br>
+现代补充手段：PyTorch Flight Recorder（<code>TORCH_NCCL_TRACE_BUFFER_SIZE</code> / <code>TORCH_NCCL_DUMP_ON_TIMEOUT</code> / <code>TORCH_NCCL_TRACE_CPP_STACK</code>）会把每个 rank 的 collective 元数据写盘，官方示例的结论正是「某 rank 未加入某次 all_reduce」。<br>
+命令（示意）：逐节点 <code>py-spy dump --pid &lt;rank_pid&gt; &gt; /tmp/rank_$&#123;RANK&#125;.stack</code>，再 diff 各栈；无 py-spy 时用 <code>gdb -p &lt;pid&gt; -batch -ex 'py-bt'</code>。抓完栈后再用 <code>NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=COLL</code> 的 SeqNum / OpType 对齐各 rank 的最后一次 collective，确认是「某个 rank 完全没到」还是「到了但顺序不一致」——后者是代码 bug（不同 rank 调用了不同数量或不同顺序的 collective）。</p>
+<blockquote>
+<p>依据：PyTorch《Flight Recorder》教程（“rank 1 did not join the ‘all_reduce’ collective”、<code>TORCH_NCCL_TRACE_BUFFER_SIZE</code> 默认 2000）；Ray Train《Detect NCCL hangs》（py-spy 提供原生栈，判据为各 rank 的 collective 计数不一致）；NVIDIA NCCL RAS 文档。</p>
+</blockquote>
+<hr>
+<h3 id="2-dmesg-中的-Xid-31-代表什么硬件问题">2. dmesg 中的 <code>Xid 31</code> 代表什么硬件问题</h3>
+<blockquote>
+<p><strong>题干</strong>：在 Linux 系统内核日志（dmesg）中频繁发现 <code>NVRM: Xid (PCI:0000:xx:00): 31, pid=xxxx, chid=xx</code> 报错，该 Xid 31 错误通常代表硬件发生了什么问题？</p>
+<ul>
+<li><strong>A.</strong> GPU 温度过高触发保护性降频</li>
+<li><strong>B.</strong> GPU 显存单比特 ECC 错误被自动纠正</li>
+<li><strong>C.</strong> GPU 显存页面错误（GPU Memory Page Fault，通常由非法的显存越界访问引起）</li>
+<li><strong>D.</strong> 交换机端口光模块掉电</li>
+</ul>
+</blockquote>
+<p><strong>答案：C</strong></p>
+<p>NVIDIA 官方 Xid Catalog 中 Xid 31 的助记符是 <code>ROBUST_CHANNEL_FIFO_ERROR_MMU_ERR_FLT</code>，描述为 <strong>“GPU memory page fault”</strong>：GPU 的 MMU 上报了一次地址翻译失败，即某个 chip unit 访问了非法（未映射）的虚拟地址。官方给出的即时动作是 <code>RESTART_APP</code>，并明确说明它 <strong>“Typically these are application-level bugs, but can also be driver bugs or hardware bugs”</strong>，建议用 Compute Sanitizer / cuda-gdb 或 <code>CUDA_DEVICE_WAITS_ON_EXCEPTION=1</code> 抓现场。<br>
+A 温度触发的降频走 clock throttle 事件，不产生 Xid；B 可纠正的单比特 ECC 由 ECC 计数器与独立 Xid 类别上报，不可纠正的双比特 ECC 是 Xid 48，都不是 31；D 光模块掉电属于网络侧，与 GPU Xid 无关。<br>
+生产口径：反复出现在<strong>同一张卡</strong>→ 转硬件诊断（DCGM diag / FieldDiags）并摘卡；<strong>跨卡随机</strong>→ 优先怀疑应用侧越界访问。<br>
+日志形态（示意）：<code>NVRM: Xid (PCI:0000:xx:00): 31, pid=xxxx, chid=xx</code>，其后常跟 <code>MMU Fault: ENGINE ... faulted</code> 与 <code>Fault is of type FAULT_PDE ACCESS_TYPE_VIRT_READ</code>——<code>FAULT_PDE</code> 表示页目录项级翻译失败，<code>ACCESS_TYPE_VIRT_READ</code> 表示触发的是读访问。看到这个格式就可以确定是地址翻译失败而非 ECC 或热问题。</p>
+<blockquote>
+<p>依据：NVIDIA《XID Errors》Xid Catalog（Xid 31 = “GPU memory page fault”，Immediate Action = RESTART_APP；Xid 48 = “Double Bit ECC Error”）。</p>
+</blockquote>
+<hr>
+<h3 id="3-DeepSeek-V4-Flash-Pro-的-MLA-单-Token-KV-Cache-大小">3. DeepSeek-V4 (Flash/Pro) 的 MLA 单 Token KV Cache 大小</h3>
+<blockquote>
+<p><strong>题干</strong>：在当前主流的 DeepSeek-V4 (Flash/Pro) 架构中，延续并升级了 MLA（Multi-Head Latent Attention），将每 Token 的 KV 向量压缩为一个潜变量（维度 ▢）与解耦 RoPE 向量（维度 ▢）。在 BF16 精度（每个参数 2 字节）下，单层 Transformer 的单个 Token 占用的 KV Cache 物理显存理论大小仅为多少？<br>
+（原卷此处两个维度数字在排版中丢失，以 ▢ 表示）</p>
+<ul>
+<li><strong>A.</strong> 576 字节</li>
+<li><strong>B.</strong> 1,152 字节</li>
+<li><strong>C.</strong> 2,304 字节</li>
+<li><strong>D.</strong> 4,608 字节</li>
+</ul>
+</blockquote>
+<p><strong>答案：B（1,152 字节）</strong></p>
+<p>按题干自述的 MLA 口径计算（<code>kv_lora_rank=512</code>、<code>qk_rope_head_dim=64</code>）：<br>
+每 token 每层需缓存的只有潜变量 <code>c_KV</code>（512 维）与解耦 RoPE key <code>k_R</code>（64 维），共 <strong>576 个元素</strong>；K/V 由 <code>c_KV</code> 上投影得到，不单独入缓存。<br>
+BF16 每元素 2 字节 → <strong>576 × 2 = 1,152 字节</strong>。<br>
+干扰项口径：A = 576 是元素个数不是字节数；C = 2,304 是按 FP32（4 字节）算；D = 4,608 无对应口径。</p>
+<blockquote>
+<p>⚠️ 题目本身有问题：<strong>DeepSeek-V4 真实存在</strong>（2026-04-24 预览并开源：V4-Pro 1.6T 总参 / 49B 激活，V4-Flash 284B / 13B 激活，1M 上下文为官方服务默认），<strong>但它并没有「延续并升级 MLA」</strong>。V4 把 V3 的 MLA 换成了<strong>混合注意力</strong>：滑动窗口注意力 + CSA（Compressed Sparse Attention，压缩率 4，带 Lightning Indexer 稀疏选择）+ HCA（Heavily Compressed Attention，压缩率 128），骨干是<strong>共享 K=V 的 MQA（<code>num_key_value_heads=1</code>）</strong>；官方 <code>config.json</code> 里 <strong><code>kv_lora_rank</code> 字段已不存在</strong>（<code>head_dim=512</code>、<code>q_lora_rank=1024</code>、<code>qk_rope_head_dim=64</code> 仍在，但 64 是 partial RoPE 的维度，不是 MLA 的解耦 RoPE key）。题干中的 512+64 实为 <strong>DeepSeek-V2/V3 的 MLA 配置</strong>（V3：<code>kv_lora_rank=512</code>、<code>qk_nope_head_dim=128</code>、<code>qk_rope_head_dim=64</code>、<code>v_head_dim=128</code>）。<br>
+V4 实际缓存的东西完全不同：滑动窗口分支的 K=V（单头，<code>sliding_window=128</code>）、CSA/HCA 压缩器按 4×/128× 合并后的聚合条目，以及 Lightning Indexer 的独立缓存（<code>index_n_heads=64</code>、<code>index_head_dim=128</code>、<code>index_topk=512</code>）——KV 占用由压缩率而非 <code>kv_lora_rank</code> 决定。<br>
+结论：按题干自述的 MLA 口径，答案仍取 B；但「V4 = 升级版 MLA」是事实错误，V4 的单 token KV 占用<strong>不能</strong>用 MLA 公式计算。</p>
+</blockquote>
+<blockquote>
+<p>依据：Hugging Face Transformers v5.8.0 <code>deepseek_v4</code> 模型文档（“replaces DeepSeek-V3’s Multi-head Latent Attention (MLA) with a hybrid local + long-range design”）；<code>deepseek-ai/DeepSeek-V4-Flash</code> 官方 <code>config.json</code>（无 <code>kv_lora_rank</code>）；DeepSeek 官方新闻页《V4 Preview》。</p>
+</blockquote>
+<hr>
+<h3 id="4-网卡计数器中最能指示物理链路隐性劣化的指标">4. 网卡计数器中最能指示物理链路隐性劣化的指标</h3>
+<blockquote>
+<p><strong>题干</strong>：在大规模数据并行训练中，训练步耗时（Step Time）偶尔突发飙升 5 倍，但没有机器报错崩溃。排查某台机器的网卡计数器时，最可能指示硬件物理链路存在隐性劣化的指标是：</p>
+<ul>
+<li><strong>A.</strong> rx_bytes（接收字节数）</li>
+<li><strong>B.</strong> rx_crc_errors / fcs_errors（物理帧循环冗余校验错误导致反复重传）</li>
+<li><strong>C.</strong> tx_packets（发送数据包数）</li>
+<li><strong>D.</strong> rx_unicast（接收单播包数）</li>
+</ul>
+</blockquote>
+<p><strong>答案：B</strong></p>
+<p><code>rx_crc_errors</code> 在内核 netdev 标准统计中的定义就是「收到的 CRC 校验失败的包数」，对应 IEEE 802.3 的 <code>aFrameCheckSequenceErrors</code>（部分驱动/<code>ethtool -S</code> 里叫 <code>rx_fcs_errors</code>）。这类错误是<strong>纯物理层（L1）<strong>问题：光模块收发功率劣化或老化、光纤弯折/脏污、铜缆受干扰、连接器氧化。它的行为特征恰好匹配题干「不崩溃、不报错，但 step time 偶发飙升」——帧被丢弃后触发重传/降速（RoCE 场景下还会引发 PFC 反压），于是只体现为性能抖动。<br>
+A/C/D 全是</strong>流量类计数器</strong>（字节数 / 包数 / 单播包数），只反映业务量，涨跌与链路质量无关。<br>
+实操：<code>ethtool -S &lt;iface&gt; | egrep 'crc|fcs|symbol|align|pause'</code>、<code>ethtool -m &lt;iface&gt;</code> 查光功率；RDMA 场景再看 <code>perfquery</code> / <code>ibdiagnet</code> 的 symbol errors。<br>
+判读要点：<strong>计数器必须看增量而非绝对值</strong>——开机以来累积的少量 CRC 错误无害，要盯的是「按分钟计的持续增长」。与之容易混淆的两类指标：<code>rx_missed_errors</code> / <code>rx_no_buffer_count</code> 是<strong>接收环无空闲描述符</strong>导致的丢包（软件侧，Ring 太浅或软中断打满），<code>rx_pause_ctrl_phy</code> 是 802.3x 反压计数（拥塞侧）；两者都不指向物理链路劣化。IB/RoCE 的等价信号是 symbol errors 与 link down/recovery 次数。</p>
+<blockquote>
+<p>依据：Linux 内核文档 <code>Documentation/networking/statistics.html</code>（<code>rx_crc_errors</code> = “Number of packets received with a CRC error”，映射 IEEE 802.3 <code>aFrameCheckSequenceErrors</code>）。</p>
+</blockquote>
+<hr>
+<h3 id="5-单个长文本请求引发-CUDA-OOM-的最常见生产根因">5. 单个长文本请求引发 CUDA OOM 的最常见生产根因</h3>
+<blockquote>
+<p><strong>题干</strong>：在高并发大模型推理服务中，显卡总显存 160GB（2×80GB），系统平稳运行中突然因某单个长文本请求引发 CUDA OOM 瞬间崩溃，最常见的生产触发根因是：</p>
+<ul>
+<li><strong>A.</strong> 客户端发送了 32k 超长 Prompt，系统未开启分块预填充（Chunked Prefill），导致中间激活值张量瞬时爆炸打满显存</li>
+<li><strong>B.</strong> 客户端关闭了浏览器</li>
+<li><strong>C.</strong> 宿主机磁盘被日志占满</li>
+<li><strong>D.</strong> 服务器时间与 NTP 服务器不一致</li>
+</ul>
+</blockquote>
+<p><strong>答案：A</strong></p>
+<p>根因是 <strong>prefill 阶段的峰值激活显存随序列长度放大</strong>：不开启分块预填充时，一个 32k 的 prompt 必须在单步内整体处理，中间激活张量按 32k 分配；开启 chunked prefill 后，单步只处理 <code>max_num_batched_tokens</code> 限定的那一段，峰值显存随之下降。vLLM 文档明确：<strong>关闭 chunked prefill 时 <code>max_num_batched_tokens</code> 必须大于 <code>max_model_len</code>，否则服务启动即可能崩溃</strong>——这正说明「单步可塞进整个上下文」是它的默认前提。<br>
+量化（示意，<code>hidden=4096</code>、<code>intermediate=14336</code>、BF16、词表 128k）：</p>
+<ul>
+<li>MLP gate+up 中间激活 ≈ 32768 × 14336 × 2 B × 2 ≈ <strong>1.9 GB</strong>（单层瞬时）</li>
+<li>若对所有位置都算 logits：32768 × 128256 × 2 B ≈ <strong>8.4 GB</strong></li>
+<li>开 chunked prefill 且 <code>max_num_batched_tokens=2048</code> 时，上述张量按 1/16 缩小<br>
+注：当前 vLLM 版本「chunked prefill is enabled by default whenever possible」，所以生产事故的形态通常是<strong>显式关闭它、或把 <code>max_num_batched_tokens</code> 设到 ≥ <code>max_model_len</code></strong>，等价于没有分块。<br>
+另一条常被忽略的路径：即使开了 chunked prefill，如果 <code>gpu_memory_utilization</code> 定得过高、KV Cache 把剩余显存吃满，那么单次 prefill 的激活峰值仍可能顶破余量——此时调小 <code>max_num_batched_tokens</code> 比调小 batch 更直接。<br>
+B/C/D 与显存无关。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM《Optimization and Tuning》（“chunked prefill is enabled by default whenever possible”、“process large prefills in smaller chunks”、“When chunked prefill is disabled, max_num_batched_tokens must be greater than max_model_len … vLLM may crash at server start-up”）。</p>
+</blockquote>
+<hr>
+<h3 id="6-K8s-中-Pod-看不到-GPU、容器内缺-NVIDIA-驱动库">6. K8s 中 Pod 看不到 GPU、容器内缺 NVIDIA 驱动库</h3>
+<blockquote>
+<p><strong>题干</strong>：在 Kubernetes 集群中部署大模型时，若 Pod 无法识别 GPU 硬件，排查发现容器内缺失 NVIDIA 驱动库映射，通常是 Pod 的环境变量中缺失了哪项关键配置？</p>
+<ul>
+<li><strong>A.</strong> <code>CUDA_VISIBLE_DEVICES=&quot;&quot;</code></li>
+<li><strong>B.</strong> <code>NVIDIA_VISIBLE_DEVICES=all</code> 和 <code>NVIDIA_DRIVER_CAPABILITIES=compute,utility</code></li>
+<li><strong>C.</strong> <code>PYTHONUNBUFFERED=1</code></li>
+<li><strong>D.</strong> <code>NCCL_DEBUG=INFO</code></li>
+</ul>
+</blockquote>
+<p><strong>答案：B</strong></p>
+<p>NVIDIA Container Toolkit 的 prestart hook 只认这两个环境变量：<code>NVIDIA_VISIBLE_DEVICES</code> 决定<strong>把哪些 GPU 交给容器</strong>（<code>all</code> / UUID 列表 / <code>none</code> / <code>void</code>），<code>NVIDIA_DRIVER_CAPABILITIES</code> 决定<strong>挂载哪些驱动库与二进制</strong>（<code>compute</code> / <code>utility</code> / <code>graphics</code> / <code>video</code> / <code>all</code>）。NVIDIA 官方 CUDA 基础镜像正是靠两行 ENV 保证容器内 CUDA 可用：<code>ENV NVIDIA_VISIBLE_DEVICES all</code> 与 <code>ENV NVIDIA_DRIVER_CAPABILITIES compute,utility</code>。<br>
+A 是反向操作：把可见设备清空，结果是彻底看不到卡（它是故障的<strong>成因</strong>，不是缺的配置）；C 只影响 Python 输出缓冲；D 只影响 NCCL 日志级别，与驱动库挂载无关。<br>
+注：在 K8s 里 <code>NVIDIA_VISIBLE_DEVICES</code> 由 device plugin 的 <code>Allocate()</code> 按分配的 UUID 自动写入；<code>NVIDIA_DRIVER_CAPABILITIES</code> 若完全不设置，toolkit 的默认值本身就是 <code>utility,compute</code>，因此更常见的翻车方式是<strong>显式把它设成不含 <code>compute</code>/<code>utility</code> 的值</strong>（例如空串或只留 <code>graphics</code>）。<br>
+分层排查顺序（先排掉与驱动库无关的原因，再落到这两个变量）：</p>
+<ol>
+<li>节点是否分到卡：<code>kubectl describe node &lt;node&gt; | grep nvidia.com/gpu</code>——<code>Capacity</code> 有值而 <code>Allocatable</code> 为 0 说明卡被标记 Unhealthy（ECC/Xid 掉卡）。</li>
+<li>插件是否注册：<code>ls /var/lib/kubelet/device-plugins/*.sock</code>（kubelet 重启会清空该目录，插件须能自动重注册）。</li>
+<li>容器内看设备与变量：<code>ls -l /dev/nvidia*</code>、<code>env | grep NVIDIA</code>——节点在、env 在而库缺失，就是 toolkit/CDI 的问题，可用 <code>nvidia-container-cli list</code> 确认实际挂了哪些库。</li>
+<li>注意 <code>/proc/driver/nvidia/gpus</code> 不按可见性分区，不能用来判断容器里能看到几张卡。</li>
+</ol>
+<blockquote>
+<p>依据：NVIDIA Container Toolkit《Specialized Configurations with Docker》（未设置时默认能力为 <code>utility, compute</code>；<code>NVIDIA_VISIBLE_DEVICES</code> 取值 <code>all</code>/<code>none</code>/UUID 列表/<code>void</code>）；NVIDIA 官方 CUDA 基础镜像中的上述两行 ENV。</p>
+</blockquote>
+<hr>
+<h3 id="7-异步-Checkpoint-导致恢复出的权重不可逆损坏">7. 异步 Checkpoint 导致恢复出的权重不可逆损坏</h3>
+<blockquote>
+<p><strong>题干</strong>：在实现千卡异步 Checkpoint 保存时，如果仅在 Python 层通过后台线程将张量拷贝到 Host CPU 内存，可能会导致恢复出的权重出现不可逆的数据损坏，核心原因是：</p>
+<ul>
+<li><strong>A.</strong> Python 的垃圾回收机制（GC）把变量释放了</li>
+<li><strong>B.</strong> GPU 到 CPU 的内存拷贝是基于 CUDA Stream 异步非阻塞的，若未在拷贝前显式同步，CPU 读到的是未计算完的脏数据</li>
+<li><strong>C.</strong> NVMe 写入速度过快导致电平跳变</li>
+<li><strong>D.</strong> 宿主机未安装 NVMe 驱动</li>
+</ul>
+</blockquote>
+<p><strong>答案：B（机制描述需更正）</strong></p>
+<p>真正的机制是：<code>tensor.to('cpu', non_blocking=True)</code> / <code>cudaMemcpyAsync</code> 只是把 D2H 拷贝<strong>入队到 CUDA Stream 后立即返回</strong>，此时拷贝尚未完成。若后台线程不同步就去写盘，或训练主循环在拷贝完成前进入下一步并覆盖了源张量，落盘的就是「半旧半新」的撕裂数据——权重混合了两个 step 的值，不可逆。正确做法是：让拷贝与生产 kernel 在同一 stream 上保序，并<strong>在拷贝之后</strong>用 stream/event 同步（或等 <code>future.result()</code>），再复用源张量、再读 host buffer。PyTorch DCP 的 <code>async_save</code> 之所以安全，正是因为它在异步写盘前先把状态 <strong>stage 到内部 CPU buffer</strong>，与训练循环解耦。<br>
+A 不成立（有引用就不会被 GC 回收）；C 的「电平跳变」与 D 的 NVMe 驱动与显存拷贝语义无关。</p>
+<blockquote>
+<p>⚠️ 题目本身有问题：选项 B 写的是「未在拷贝<strong>前</strong>显式同步」，方向说反了。异步拷贝的失败模式是<strong>拷贝之后没有同步</strong>（源张量被下一步覆盖、或 host buffer 未就绪就被读）；在同一 stream 上入队时，拷贝前的「同步」不但无必要，还会把异步拷贝退化成同步拷贝、吃掉全部收益。答案仍取 B（其余选项均不成立），但该选项应表述为「未在拷贝后同步 / 未做 stream 保序」。</p>
+</blockquote>
+<blockquote>
+<p>依据：PyTorch CUDA 语义文档（<code>to()</code>/<code>copy_()</code> 的 <code>non_blocking</code> 参数 “lets the caller bypass synchronization when it is unnecessary”，且需 pinned memory 才能真正异步）；PyTorch《Asynchronous Saving with DCP》教程（<code>async_save</code> 先拷贝到内部 CPU buffer，以保证写盘期间权重不被改动）。</p>
+</blockquote>
+<hr>
+<h3 id="8-昇腾-910B-上-Loss-变-NaN，A100-正常">8. 昇腾 910B 上 Loss 变 NaN，A100 正常</h3>
+<blockquote>
+<p><strong>题干</strong>：在华为昇腾 910B 上训练大模型时，训练 Loss 突然变为 NaN，但在 NVIDIA A100 上完全正常。最常见的硬件计算层根因是：</p>
+<ul>
+<li><strong>A.</strong> 昇腾机房温度过低</li>
+<li><strong>B.</strong> 昇腾部分 MatMul 算子底层默认启用了非严格 IEEE 754 累加模式，需配置环境变量显式开启高精度累加模式</li>
+<li><strong>C.</strong> 交换机 MTU 设置过大</li>
+<li><strong>D.</strong> NPU 固件版本过新</li>
+</ul>
+</blockquote>
+<p><strong>答案：B（但变量名需修正）</strong></p>
+<p>真实根因确实落在<strong>算子计算精度路径不同</strong>：CANN 对部分算子会把 FP32 下转成 HF32（尾数仅 11 位，接近 FP16），或把 FP32 算子降到 FP16 执行；长序列 / 大 K 维度下累加误差被放大，越界后溢出为 NaN——同一份脚本在 NVIDIA 侧走的是另一套算子实现与累加序，所以表现为「A100 正常、910B NaN」。可核查的开关有：<code>torch_npu.npu.matmul.allow_hf32</code>（默认 <strong>False</strong>）、<code>torch_npu.npu.conv.allow_hf32</code>（默认 <strong>True</strong>）、ATC 的 <code>--allow_hf32</code>（Conv 默认开、Matmul 默认关）、<code>ENABLE_HF32_EXECUTION</code>、算子级 <code>cube_math_type</code>（<code>KEEP_DTYPE</code> / <code>ALLOW_FP32_DOWN_PERCENTAGE</code> / <code>USE_FP16</code> / <code>USE_HF32</code>）、以及 <code>--precision_mode</code>（<code>allow_fp32_to_fp16</code> / <code>force_fp32</code> / <code>must_keep_origin_dtype</code> / <code>allow_mix_precision</code>）。另有两个影响<strong>累加序</strong>的开关会放大数值差异：<code>HCCL_DETERMINISTIC</code>（通信算子）与 ATB 的 <code>ATB_MATMUL_SHUFFLE_K_ENABLE</code>。A/C/D 与 NaN 无关。</p>
+<blockquote>
+<p>⚠️ 题目本身有问题：<strong>不存在题干所描述的那个环境变量</strong>。逐一核对昇腾官方文档（CANN 环境变量参考、torch_npu 环境变量列表、ATC 参数说明、算子接口说明、MindStudio 大模型训练精度定位指南）后，未发现任何「高精度累加模式 / 严格 IEEE 754 累加」的环境变量；真实存在的只有上列<strong>精度模式开关</strong>（其中大多数是<strong>下调</strong>精度的开关，如 HF32/FP16 下转）与<strong>累加序/确定性开关</strong>，且它们多以 Python 属性、ATC 参数或算子入参的形式出现，并非「环境变量」。因此本题应按「算子默认精度路径不同，需显式指定保原 dtype / 高精度模式」来理解（如 <code>precision_mode=must_keep_origin_dtype</code> 或 <code>force_fp32</code>、<code>matmul.allow_hf32=False</code>），而不是题干给出的那个不存在的变量名。<br>
+另有两类同样常见、且已被官方文档记录的根因：<strong>CANN / 算子版本缺陷</strong>（例如 <code>npu_fused_infer_attention_score</code> 输出 NaN 的已知案例），以及 <strong>FP16 未正确配置 Loss Scaling 导致梯度溢出</strong>。排查顺序建议：先比超参与环境变量 → 再比三方库与 CANN 版本 → 再用 msProbe/msAgent 做溢出检测定位到算子。</p>
+</blockquote>
+<blockquote>
+<p>依据：昇腾社区《–allow_hf32 算子调优选项》（Conv 默认开、Matmul 默认关）；《torch_npu.npu.matmul.allow_hf32》（默认 False）与《torch_npu.npu.conv.allow_hf32》（默认 True）；《配置精度模式》（<code>--precision_mode</code>）；《大模型训练精度定位指南》（GPU→NPU 迁移精度 Checklist）；CANN 环境变量参考（<code>HCCL_DETERMINISTIC</code>）。</p>
+</blockquote>
+<hr>
+<h3 id="9-TorchElastic（torchrun）的掉线自愈流程">9. TorchElastic（torchrun）的掉线自愈流程</h3>
+<blockquote>
+<p><strong>题干</strong>：在千卡分布式训练任务中，当某台机器掉线时，若底层依赖 TorchElastic（torchrun）框架，其标准的高可用自愈恢复流程是：</p>
+<ul>
+<li><strong>A.</strong> 其余所有机器忽略该掉线节点继续单向计算</li>
+<li><strong>B.</strong> 触发 Rendezvous 重新选举，终止所有旧 Worker 进程并拉起新副本从最近检查点重新组建通信环路</li>
+<li><strong>C.</strong> 将掉线节点上的张量直接拷贝到 CPU 内存</li>
+<li><strong>D.</strong> 自动降级为单机 CPU 训练</li>
+</ul>
+</blockquote>
+<p><strong>答案：B</strong></p>
+<p>TorchElastic 的容错语义是<strong>全停全启</strong>，而不是「剔除坏节点继续跑」：官方原文 <code>For a training job with n workers, if k&lt;=n workers fail all workers are stopped and restarted up to max_restarts</code>，且 <code>ALL surviving workers are killed immediately</code>。新成员通过 rendezvous（<code>--rdzv-backend</code> / <code>--rdzv-endpoint</code> / <code>--rdzv-id</code>）重新组成新的 WorkerGroup，<strong>rank 与 world size 都会重新分配</strong>——官方明确警告 <code>RANK is NOT stable</code>、<code>DO NOT hard code assumptions about WORLD_SIZE</code>。<br>
+A 在同步数据并行下不成立：缺一个 rank 的梯度，AllReduce 无法完成，且会破坏各副本一致性；C 是把显存状态搬到 CPU，与容错无关；D 不会自动降级为 CPU 训练。<br>
+注：<code>torchrun</code> <strong>不负责</strong>从 checkpoint 恢复——它只负责重启进程组，<code>load_checkpoint(...)</code> 是训练脚本自身的责任（官方原文 <code>Make sure to checkpoint your progress.</code>）。<br>
+工程含义：由于「全停全启」，ckpt 频率直接决定单次故障的算力损失；且重启要重建通信组并 warmup，规模越大固定开销越贵。<code>TORCHELASTIC_RESTART_COUNT</code> / <code>TORCHELASTIC_MAX_RESTARTS</code> 可观测重启次数，超出上限后任务以失败结束而非无限重试。</p>
+<blockquote>
+<p>依据：PyTorch《torchrun (Elastic Launch)》文档（fault tolerance 段落、rendezvous 三参数、<code>RANK is NOT stable</code>、<code>Make sure to checkpoint your progress</code>）。</p>
+</blockquote>
+<hr>
+<h3 id="10-FlashDecoding-相比-FlashAttention-2-的本质突破">10. FlashDecoding 相比 FlashAttention-2 的本质突破</h3>
+<blockquote>
+<p><strong>题干</strong>：相比传统 FlashAttention-2，FlashDecoding 技术在超长上下文推理的 Decode 阶段之所以能带来数倍提速，其最本质的算法突破是：</p>
+<ul>
+<li><strong>A.</strong> 将模型权重全部量化为 INT1</li>
+<li><strong>B.</strong> 沿着 Key/Value 的序列长度维度（KV Length）切分并在多 SM 上并发计算 Partial Softmax，最后再归约，打满 GPU 占用率</li>
+<li><strong>C.</strong> 直接丢弃超过 2k 的历史上下文</li>
+<li><strong>D.</strong> 借助 CPU 协处理器加速计算 Attention</li>
+</ul>
+</blockquote>
+<p><strong>答案：B</strong></p>
+<p>Decode 阶段 query 长度只有 1，而 FlashAttention-2 的并行维度是 batch × query 分块，batch=1 时只能占满极少数 SM——官方原话是 <code>With a batch size of 1, FlashAttention will use less than 1% of the GPU!</code>（A100 有 108 个 SM）。Flash-Decoding 的做法是<strong>新增一个并行维度：K/V 的序列长度</strong>——把 K/V 切成若干 chunk，各 chunk 在多个 SM 上并行计算「局部 attention + log-sum-exp」，最后按 LSE 加权归约出精确结果（本质是把 online softmax 的合并再做一次，因此<strong>不是</strong>对分块输出取平均）。这样并行度不再受 batch 限制，attention 耗时在 batch=1 下几乎不随上下文增长。官方数据：长序列下<strong>端到端解码最高 8× 加速，attention 本身最高 50×</strong>，且 FlashAttention 2.2 起、xFormers 0.0.22 起可用。<br>
+三步流程：① 把 K/V 切成 chunk（实际只是张量视图，不产生 GPU 算子）；② 每个 chunk 并行跑一次 FlashAttention，并额外输出每行一个标量——该 chunk 的 log-sum-exp；③ 用这些 LSE 对各个 split 的输出做加权归约。online softmax 的增量合并因此被用了两次：chunk 内部一次，chunk 之间再一次。这也是它<strong>不能用简单平均合并</strong>分块输出的原因。<br>
+A 是量化（与 attention 并行度无关）；C 是丢弃历史上下文（质量不可接受，且非该技术）；D 与 CPU 协处理器无关。</p>
+<blockquote>
+<p>依据：Stanford CRFM《Flash-Decoding for long-context inference》（“adds a new parallelization dimension: the keys/values sequence length”、三步切分与 LSE 归约、“up to 8x speedups in decoding speed”、“attention itself is up to 50x faster”）。</p>
+</blockquote>
+<hr>
+<h3 id="答案速览">答案速览</h3>
+<table>
+<thead>
+<tr>
+<th>题号</th>
+<th>1</th>
+<th>2</th>
+<th>3</th>
+<th>4</th>
+<th>5</th>
+<th>6</th>
+<th>7</th>
+<th>8</th>
+<th>9</th>
+<th>10</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>答案</td>
+<td>B</td>
+<td>C</td>
+<td>B</td>
+<td>B</td>
+<td>A</td>
+<td>B</td>
+<td>B</td>
+<td>B</td>
+<td>B</td>
+<td>B</td>
+</tr>
+</tbody>
+</table>
+<h2 id="题目本身有问题的题：第-3-题（V4-未使用-MLA，事实错误）、第-7-题（同步时机方向写反）、第-8-题（所述环境变量不存在）。第-6、9-题的选项表述略有简化，但答案唯一、不受影响。"><strong>题目本身有问题的题</strong>：第 3 题（V4 未使用 MLA，事实错误）、第 7 题（同步时机方向写反）、第 8 题（所述环境变量不存在）。第 6、9 题的选项表述略有简化，但答案唯一、不受影响。</h2>
+<h2 id="四、多选题（10-题-·-30-分）">四、多选题（10 题 · 30 分）</h2>
+<p><strong>答案速览</strong>：1. ABC　2. ABC　3. ABC　4. ACD　5. ABC　6. ABC　7. ABC　8. ABC　9. ABD　10. ABCD<br>
+<strong>需修正的题面</strong>：第 1 题 A 项措辞（“两两配对”）、第 5 题 D 项（职责错配）、第 10 题 C 项（来源与版本名）。</p>
+<hr>
+<h3 id="1-GPU-慢节点（Straggler）的标准排查手段">1. GPU 慢节点（Straggler）的标准排查手段</h3>
+<blockquote>
+<p><strong>题干</strong>：生产集群中诊断某台 GPU 机器沦为“慢节点（Straggler）”的标准排查手段包括：</p>
+<ul>
+<li><strong>A.</strong> 运行全集群节点两两配对的 NCCL AllReduce 带宽测试（all_reduce_perf），检查离群点</li>
+<li><strong>B.</strong> 使用 <code>nvidia-smi -q -d PERFORMANCE</code> 检查是否有 GPU 因供电异常或过热触发硬件保护性降频</li>
+<li><strong>C.</strong> 检查 <code>lspci -vvv</code> 确认 GPU 的 PCIe 协商链路是否从 Gen5 x16 意外降级为 Gen1/x1</li>
+<li><strong>D.</strong> 仅调大训练任务的超时等待时间，不做物理定位<br>
+<strong>答案：ABC</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对（措辞需修正）</strong>：跨节点跑 <code>all_reduce_perf</code> 并比对<strong>每个 rank 的 busbw</strong>，是定位慢节点的标准第一步。<br>
+nccl-tests 的 <code>-a/--average</code> 支持 <code>Rank0 / Avg / Min / Max</code> 聚合，<code>Min</code> 与 <code>Max</code> 的差距就是离群点的直接证据；<code>-c</code> 做结果校验（大集群上很慢，默认 1 次），<code>-n/-w</code> 控制迭代与预热，<code>-z 3</code> 加屏障。<br>
+典型命令（可直接执行）：<br>
+<code>mpirun -np 16 -x NCCL_DEBUG=WARN ./all_reduce_perf -b 8 -e 8G -f 2 -g 1 -n 50 -w 10 -a Max</code><br>
+⚠️ 但&quot;全集群节点<strong>两两配对</strong>&quot;不是标准做法：万卡规模下两两组合是 O(N²)，不可行；正确口径是<strong>在同一个作业的通信域/节点集合上跑</strong>（或按机架/TOR 分组抽样），再按 rank 看离群。A 的核心意图（带宽基线 + 离群点）成立，故计对。</li>
+<li><strong>B 对</strong>：<code>nvidia-smi -q -d PERFORMANCE</code> 输出 Performance State（P0–P12）与 <strong>Clocks Event Reasons</strong>，可判定是否被硬件保护性降频。<br>
+当前文档中的原因名为：<code>SW Power Cap</code>、<code>HW Slowdown</code>、<code>HW Thermal Slowdown</code>、<code>HW Power Brake</code>、<code>SW Thermal Slowdown</code>、<code>Board Limit</code>、<code>Reliability</code>。<br>
+注意 <code>HW Slowdown</code> 是伞形项——HW Thermal Slowdown 或 HW Power Brake 任一激活即置位，降频幅度可达 2 倍以上；<code>HW Power Brake</code> 常由外部供电/主板断言触发，而非 GPU 自身过热。<br>
+批量监控用 DCGM 的 <code>DCGM_FI_DEV_CLOCK_THROTTLE_REASONS</code>。</li>
+<li><strong>C 对</strong>：<code>lspci -vvv</code> 看 <code>LnkCap</code> / <code>LnkSta</code>：Gen5 = 32GT/s、Gen1 = 2.5GT/s；<code>Width x16</code> 掉到 <code>x1</code> 或速率回落到 Gen1，会让 NCCL 单机带宽断崖下跌。<br>
+常见诱因：转接卡/线缆/retimer、BIOS ACS 与电源状态、riser 接触不良。辅以 <code>nvidia-smi topo -m</code> 确认 NVLink/PCIe 拓扑是否与预期一致。</li>
+<li><strong>D 错</strong>：调大超时只是把症状藏起来——慢节点仍在拖慢全作业，白烧 GPU 机时，且会掩盖真正的 hang，使定位更难。<br>
+超时只应用于&quot;先二分确认是 hang 还是 slow&quot;的场景，不是处置手段。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA/nccl-tests README（all_reduce_perf 参数与 <code>-a</code> 聚合语义）；NVIDIA nvidia-smi 文档（<code>-q</code> 的 Performance State / Clocks Event Reasons 及原因名清单，现文档用 <code>HW Power Brake</code> 而非 <code>HW Power Brake Slowdown</code>）；NVML API 文档 <code>nvmlClocksEventReasons</code>；PCIe 各代链路速率定义。</p>
+</blockquote>
+<hr>
+<h3 id="2-RoCEv2-微突发丢包与训练性能剧烈抖动">2. RoCEv2 微突发丢包与训练性能剧烈抖动</h3>
+<blockquote>
+<p><strong>题干</strong>：大规模 RoCEv2 网络发生“微突发丢包”与训练性能剧烈抖动时，关键的网络排查与调优手段包括：</p>
+<ul>
+<li><strong>A.</strong> 检查交换机各端口是否存在 Pause 帧风暴（rx_pause 计数器持续激增）</li>
+<li><strong>B.</strong> 调优交换机 ECN 门限水线（Kmin / Kmax），使其在缓冲区堆积早期尽早触发网卡降速</li>
+<li><strong>C.</strong> 确保全链路（网卡、交换机端口）统一开启 MTU 9000（巨帧），避免大包跨跳分片</li>
+<li><strong>D.</strong> 关闭交换机 PFC 流量控制并退回不可靠 UDP 广播<br>
+<strong>答案：ABC</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对</strong>：<code>rx_pause</code> 持续激增说明上游端口在发 PFC Pause 帧，即缓冲区已顶到 PFC 门限。<br>
+PFC 会带来队头阻塞、受害流（victim flow）扩散，严重时形成 <strong>PFC 死锁</strong>。<br>
+排查口径：<code>ethtool -S &lt;dev&gt;</code> 看 <code>rx_pause</code> / <code>tx_pause</code>（RoCE 相关计数）、交换机侧看各端口与各优先级的 Pause 计数，同时看 NIC 侧 CNP 计数（<code>rx_cnp</code>）。<br>
+若 Pause 与 CNP 同时暴涨，说明 ECN 生效太晚、PFC 在兜底。</li>
+<li><strong>B 对（须配对调参）</strong>：DCQCN 的 ECN 标记是 Kmin/Kmax 之间的概率标记：交换机打标 → 接收端回 CNP → 发送端降速。<br>
+下调 Kmin/Kmax = 更早标记、更早降速，能在微突发堆积早期抑制注入速率，避免直接触发 PFC。<br>
+但<strong>不是越低越好</strong>：Kmin 过低会频繁误降速，链路利用率下降、吞吐抖动。<br>
+必须与 NIC 侧 DCQCN 参数、交换机 headroom/shareroom（按 MTU 与链路速率计算）、PFC watchdog 一起调。<br>
+NVIDIA Onyx 的 RoCE 模式中，TC3 的 ECN 绝对门限可配范围示例为 150–1500。</li>
+<li><strong>C 对（关键是一致性）</strong>：RoCE 场景下全链路统一巨帧（MTU 9000）是通行实践，MTU 不一致会导致跨跳丢弃/分片、PFC headroom 计算失配。<br>
+&quot;统一&quot;比&quot;9000&quot;更重要：NIC、所有交换机端口（含上行/下行）必须一致；headroom 必须按 MTU × 链路速率重算，否则改完 MTU 反而更容易触发 Pause。</li>
+<li><strong>D 错</strong>：PFC 是 RoCE 无损语义的基石，关掉它等于让 RDMA 流量在有损链路上跑，丢包触发 go-back-N 重传风暴，性能更差。<br>
+且 RoCEv2 是 <strong>UDP 单播</strong>封装（IP + UDP + IB BTH），根本没有&quot;广播&quot;一说，&quot;退回不可靠 UDP 广播&quot;是伪命题。<br>
+厂商确实提供 lossy / semi-lossless 模式（NVIDIA Onyx 有 lossless / semi-lossless / lossy 三档），但那是靠上层重传与 ECN 兜底的另一种设计，与&quot;关 PFC + 广播&quot;无关。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA Onyx User Manual「RDMA over Converged Ethernet (RoCE)」章节（lossless 依赖 PFC、ECN 依 RFC3168 语义与 CNP 回压、TC3 门限示例，并明确 “lossless does not mean that packets are absolutely never lost”）；DCQCN 的 Kmin/Kmax 概率标记机制（厂商公开材料与 RoCE 调优实践文献）。</p>
+</blockquote>
+<hr>
+<h3 id="3-长文本在线推理中-KV-Cache-被打爆的生产暗雷">3. 长文本在线推理中 KV Cache 被打爆的生产暗雷</h3>
+<blockquote>
+<p><strong>题干</strong>：在大模型长文本推理在线服务中，可能导致 KV Cache 迅速被耗尽并引发 OOM 崩溃的生产暗雷包括：</p>
+<ul>
+<li><strong>A.</strong> 外部流量突发大量超长 Prompt 请求，耗尽了预分配的 PagedAttention 显存池</li>
+<li><strong>B.</strong> 推理框架未显式配置安全的最大上下文限制（如 <code>--max-model-len</code>）</li>
+<li><strong>C.</strong> 客户端在 SSE 流式传输中单方面断开连接，而服务端未监听取消信号导致后台持续盲算生成</li>
+<li><strong>D.</strong> 开启了 FlashAttention-2 算子<br>
+<strong>答案：ABC</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对（需精确表述）</strong>：PagedAttention 的 KV 池是<strong>启动时按显存预算预分配</strong>的固定池（由 <code>--gpu-memory-utilization</code> 与显存 profiling 决定大小），突发超长 Prompt 会按块快速吞掉整池。<br>
+精确表述：在 vLLM V1 里池耗尽通常先表现为<strong>抢占/重算、排队变长、TTFT 飙升</strong>，而不是立刻 OOM；只有当激活、CUDA Graph、workspace 等非 KV 显存同时抬升时才演化为硬 OOM。<br>
+所以 A 描述的风险真实，但&quot;耗尽即 OOM&quot;是简化说法。</li>
+<li><strong>B 对</strong>：<code>--max-model-len</code> 不显式指定时会<strong>从模型 config 推导</strong>（官方原文：“If unspecified, will be automatically derived from the model config”）。<br>
+对 1M 上下文的新一代模型，这等于默认放行极端长请求；另有 <code>-1 / auto</code> 模式（按显存自动选最大长度）。<br>
+生产必须显式设安全上限，并在请求侧用 <code>max_tokens</code> 二次约束。<br>
+⚠️ 精度补充：该配置缺失在 vLLM 上更多表现为<strong>启动期报错</strong>（“The model’s max seq len (X) is larger than the maximum number of tokens that can be stored in KV cache”）或运行期抢占风暴，而非必然 OOM；但&quot;未显式限制最大上下文&quot;确实是标准暗雷。</li>
+<li><strong>C 对</strong>：SSE 场景下客户端断连而服务端不监听取消信号，会产生<strong>孤儿请求</strong>。<br>
+vLLM 官方文档原话：“Cancelling the asyncio task alone does NOT abort the underlying engine request”——请求会继续占槽位、继续生成到已死的连接上。<br>
+正确做法：在断开回调里显式调 <code>engine_client.abort(request_id)</code>，并做 stream 停止 + 任务取消 + await 收尾。</li>
+<li><strong>D 错</strong>：FlashAttention-2 通过分块 + online softmax <strong>避免物化 N×N 注意力矩阵</strong>，是显存<strong>下降</strong>手段，属于缓解措施而非风险项。<br>
+选错 attention 后端可能影响数值与吞吐，但不会导致 KV Cache 被耗尽。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM Engine Arguments 文档（<code>max_model_len</code> 默认从模型 config 推导、<code>-1/auto</code> 模式、<code>gpu_memory_utilization</code> 默认 1.0（可扩展 KV 缓存按实测空闲显存定容）或 0.92、<code>kv_cache_memory_bytes</code>）；vLLM 官方 API 文档中 realtime/streaming 连接的 <code>cleanup()</code> 说明（孤儿请求与显式 <code>abort()</code> 的必要性）；vLLM 社区对该 “max seq len larger than KV cache” 报错的官方处置建议（降 <code>max_model_len</code> / 增 TP / 降 <code>max_num_batched_tokens</code>）。</p>
+</blockquote>
+<hr>
+<h3 id="4-Checkpoint-性能与工程可靠性治理最佳实践">4. Checkpoint 性能与工程可靠性治理最佳实践</h3>
+<blockquote>
+<p><strong>题干</strong>：大模型训练断点续训（Checkpoint）性能与工程可靠性治理的最佳实践包括：</p>
+<ul>
+<li><strong>A.</strong> 采用分层多级保存：GPU ➔ Host RAM (Pinned) ➔ 本地 NVMe ➔ 远端对象存储（Ceph/S3）</li>
+<li><strong>B.</strong> 保存时仅持久化模型权重，丢弃随机数种子（RNG state）与优化器状态</li>
+<li><strong>C.</strong> 利用多进程/多线程异步 I/O 刷盘，主训练进程在显存拷贝到内存后立即继续 Forward</li>
+<li><strong>D.</strong> 限制集群并发写入远端存储的客户端连接数，避免千卡瞬时刷盘打瘫存储网关<br>
+<strong>答案：ACD</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对</strong>：分层多级保存（GPU → Pinned Host RAM → 本地 NVMe → 远端对象存储 / Ceph / S3）是通行结构：显存到 pinned 内存的 D2H 拷贝是&quot;快照点&quot;，本地 NVMe 做中转落地区，远端做持久层。<br>
+公开实践（ByteCheckpoint）把存储层次归纳为内存、本地磁盘、远端 HDFS/NAS；工程上&quot;先写本地快路径、再异步上传&quot;能显著降低训练停顿。<br>
+<strong>注意</strong>：本地 NVMe 只是加速层，不是持久层，节点损坏即丢；只有远端落盘完成才算真正 checkpoint。</li>
+<li><strong>B 错</strong>：只存权重会让续训<strong>不等价</strong>。<br>
+优化器状态（Adam 的 m/v）不恢复，等价于换了个优化器重启，loss 曲线抖动甚至劣化。<br>
+RNG 状态（Python/NumPy/CUDA，每 rank 独立）与 data iterator 位置不恢复则破坏确定性重放，可能重复或跳过数据。<br>
+Megatron-LM 的 checkpoint state 中 <code>rng_state</code>、<code>optimizer</code>、<code>train_data_iterator</code> 都是一等公民；PyTorch DCP 文档同样强调要捕获每 rank 独有状态（数据位置 + RNG）。</li>
+<li><strong>C 对（有前提条件）</strong>：异步 I/O + 主训练进程在 D2H 完成后立即继续，是&quot;零停顿 checkpoint&quot;的标准做法（DCP <code>async_save</code> 先把状态拷到 staging buffer 再后台上传；需以 <code>backend=&quot;cpu:gloo,cuda:nccl&quot;</code> 初始化进程组）。<br>
+前提必须说清：需要足够的 pinned host 内存（≈ 单次在飞分片大小），且<strong>在 D2H 拷贝完成前不能复用/释放 staging buffer</strong>，否则会拿到脏数据。</li>
+<li><strong>D 对（是缓解，不是根治）</strong>：千卡级瞬时齐刷会给存储的<strong>元数据/控制面</strong>造成巨大压力。<br>
+ByteCheckpoint 明确记录：海量 checkpoint 读写请求 “can overload the master node, causing delays in file metadata operations”（NameNode 串行 concat、SDK 冗余元数据调用都会放大）。<br>
+缓解手段：分片写 + 汇聚写（避免所有 rank 写同一文件）、层级化/树状上传、本地 staging 后批量上传、存储侧 QoS 与带宽预留、跨作业错峰。<br>
+⚠️ 单纯&quot;限并发连接数&quot;会把吞吐一起限死，应配合聚合写与存储侧限速使用。</li>
+</ul>
+<blockquote>
+<p>依据：ByteCheckpoint 论文（arXiv 2407.20143：重分片负担、重 I/O（175B / 4096 卡存 HDFS 约 200s）、元数据与 NameNode 过载、异步流水线 D2H→序列化→上传、RNG 与优化器状态打包）；PyTorch DCP 与 Azure Databricks AI Runtime 文档（DCP 分片并行写、<code>async_save</code>、本地 staging 后上传、<code>.metadata</code> 原子完成标志、RNG 与数据管线位置）；NVIDIA Megatron-LM checkpoint state 键（<code>rng_state</code> 等）。</p>
+</blockquote>
+<hr>
+<h3 id="5-K8s-万卡集群先进拓扑调度器的核心能力">5. K8s 万卡集群先进拓扑调度器的核心能力</h3>
+<blockquote>
+<p><strong>题干</strong>：在 Kubernetes 平台上调度万卡 AI 算力集群时，先进拓扑调度器（如 Volcano / Scheduler Plugins）的核心能力包括：</p>
+<ul>
+<li><strong>A.</strong> Gang Scheduling（成组调度，保证分布式训练 Pod“全赢或全输”，彻底杜绝死锁）</li>
+<li><strong>B.</strong> NUMA / NVLink 拓扑感知调度（尽量将单任务多卡绑定在同一 CPU NUMA 节点与 NVSwitch 域）</li>
+<li><strong>C.</strong> 跨机柜网络感知调度（尽量将同一训练任务收敛在同一 TOR 交换机下的同一机架内）</li>
+<li><strong>D.</strong> 节点故障探测联动（遇到坏卡自动打上 NoSchedule 污点并触发驱逐自愈）<br>
+<strong>答案：ABC</strong>（D 属职责错配）</li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对（结论成立，&quot;彻底&quot;是夸大）</strong>：Volcano 的 <code>gang</code> 插件实现成组调度：未就绪任务视为更高优先级、按 <code>minAvailable</code> 判断是否成组放行，避免&quot;半个作业占着资源等另一半&quot;导致的资源死锁。<br>
+⚠️ 但&quot;<strong>彻底</strong>杜绝死锁&quot;不成立：gang 只消除资源分配层面的部分分配死锁；NCCL/集合通信 hang、作业间依赖环、网络层 PFC 死锁都不在 gang 的射程内。</li>
+<li><strong>B 对（能力分布在两层）</strong>：Volcano 有 <code>numa-aware</code> 插件，按 <code>none / best-effort / restricted / single-numa-node</code> 策略过滤与打分，打分公式 <code>score = weight × (100 − 100 × numaNodeNum / maxNumaNodeNum)</code>，需 kubelet <code>cpu-manager-policy=static</code> 与 topology-manager 配合。<br>
+<strong>职责边界</strong>：调度器做的是<strong>节点级 NUMA 打分</strong>；真正的&quot;卡落在哪个 NUMA / NVSwitch 域&quot;由 kubelet topology manager + GPU/NPU device plugin（NVIDIA device plugin、昇腾 device plugin）在设备分配阶段完成。<br>
+所以 B 描述的意图正确，但能力横跨调度器与 kubelet 两层。</li>
+<li><strong>C 对</strong>：Volcano 的 <code>network-topology-aware</code> 插件 + <code>HyperNode</code> CRD：把 IB/RoCE/NVSwitch 等多级网络拓扑抽象成树（节点 → TOR → 上层交换机 → …）。<br>
+作业通过 <code>networkTopology</code> 声明 <code>mode: hard|soft</code> 与 <code>highestTierAllowed / highestTierName</code>，实现&quot;尽量收敛到同一 TOR / 同一性能域&quot;。<br>
+已知约束：需较新的调度器插件版本（厂商文档示例要求 ≥1.21.1）、<strong>不支持抢占</strong>、HyperJob 类负载的该配置会被忽略、拓扑运行期变更不保证正确性。</li>
+<li><strong>D 错（本题关键核实点）</strong>：<strong>&quot;探测坏卡 + 自动打污点 + 驱逐&quot;不属于调度器能力，调度器只是污点的消费者。</strong> 职责边界如下：
+<ul>
+<li><strong>探测层</strong>：DCGM/GPU 健康监控、node-problem-detector、device plugin 的健康上报、NVSentinel 的 <code>gpu-health-monitor</code> / <code>syslog-health-monitor</code> 等，产出健康事件（NVSentinel 的 <code>HealthEvent</code> 含 <code>event.agent</code>、<code>isFatal</code>、<code>errorCode</code> 等字段）。</li>
+<li><strong>隔离层</strong>：NVSentinel 的 <code>fault-quarantine</code> 依据规则做 <strong>cordon / taint / label</strong>（示例污点 <code>nvidia.com/gpu-error=fatal:NoSchedule</code>），恢复时只撤销自己加的那一份；若节点已被他人 cordon/taint，则记录为 pre-existing 且不动它。</li>
+<li><strong>驱逐层</strong>：<strong>drain/驱逐由独立的 <code>node-drainer</code> 组件负责</strong>，fault-quarantine 自身不做驱逐（默认示例用 <code>NoSchedule</code>，只挡新调度，不驱逐运行中 Pod）。</li>
+<li><strong>调度层</strong>：Volcano / kube-scheduler 在 predicates 阶段读取 cordon 与 taint，不发起探测。Volcano 官方插件清单（gang / conformance / DRF / nodeorder / predicates / priority 等）里<strong>没有</strong>节点健康或硬件故障探测类插件。</li>
+<li><strong>额外一层</strong>：驱逐&quot;正在运行的训练 Pod&quot;还需要<strong>作业控制器</strong>（Volcano Job 控制器、训练 Operator、Kueue 或外部重调度器）删除并重建 PodGroup，调度器不会因硬件故障自行驱逐运行中的 Pod。</li>
+<li>昇腾侧同理：NPU 故障触发重调度依赖 device plugin 与集群调度套件上报，调度器只是消费方。</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>依据：Volcano 官方 Plugins 文档（action 为 enqueue/allocate/preempt/reclaim/backfill；插件清单中无健康探测类）；华为云 CCE Volcano 文档（NUMA 亲和策略与打分公式；多级网络拓扑调度与 HyperNode、<code>network-topology-aware</code> 插件、hard/soft 模式与已知约束）；NVIDIA NVSentinel 文档（Fault Quarantine 的 cordon/taint/label 语义与恢复规则、Node Drainer 的独立职责、HealthEvent 触发条件）。</p>
+</blockquote>
+<hr>
+<h3 id="6-Triton-CUDA-算子开发中的性能反模式">6. Triton / CUDA 算子开发中的性能反模式</h3>
+<blockquote>
+<p><strong>题干</strong>：在使用 Triton / CUDA 进行算子深度开发时，会导致 GPU 性能断崖式下跌的典型反模式包括：</p>
+<ul>
+<li><strong>A.</strong> 显存访问未对齐（Misaligned Access），导致无法触发连续内存合并读取（Coalesced Access）</li>
+<li><strong>B.</strong> 同一个 Warp（32 个线程）内部执行了严重分化的 if-else 分支（Warp Divergence）</li>
+<li><strong>C.</strong> 频繁读写片外全局显存（Global Memory），未充分利用片上共享内存（Shared Memory）</li>
+<li><strong>D.</strong> 使用 BF16 精度进行矩阵乘法计算<br>
+<strong>答案：ABC</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对</strong>：对齐决定向量化宽度。<br>
+Triton 的 AxisInfo 分析为每个维度推导 <code>contiguity / divisibility / constancy</code>，Coalesce pass 据此选择 layout 与 <code>sizePerThread</code>，最高目标 128-bit（16 字节）向量化访存。<br>
+基址或 stride 未对齐会让 divisibility 退化为 1，向量化失效，退化成窄访存甚至逐元素访存，访存受限 kernel 直接断崖。<br>
+CUDA 侧同理：非合并/非对齐访存会降低每个 32 字节 sector 的利用率、事务数翻倍。</li>
+<li><strong>B 对</strong>：SIMT 下同一 warp 内分支分化会<strong>串行执行两条路径</strong>，发散区段的有效并行度可低至 1/32。<br>
+Volta 之后的 independent thread scheduling 改善了前进保证与调度，但<strong>不恢复</strong>发散分支的吞吐；短分支体的谓词化（predication）只省了跳转开销，分支体大时依然亏。</li>
+<li><strong>C 对</strong>：全局显存延迟是数百周期量级且带宽有限，数据复用必须靠片上存储（shared memory / 寄存器）与分块（tiling）。<br>
+矩阵乘的经典优化就是把块载入 shared/寄存器再 <code>tl.dot</code>；反复直接读写 global memory 会让 kernel 长期卡在访存受限区。</li>
+<li><strong>D 错</strong>：BF16 在 Ampere 及以后的 Tensor Core 上就是<strong>标准的高吞吐矩阵乘精度</strong>（8 位指数、与 FP32 同量级的动态范围），用 BF16 做 matmul 是<strong>性能使能项</strong>，不是反模式。<br>
+真正该警惕的精度反模式是：低精度累加、FP8 不做缩放/amax、以及为了精度把 matmul 退回 FP32 而放弃 Tensor Core。</li>
+</ul>
+<blockquote>
+<p>依据：Triton 编译器文档（Memory Coalescing 与 AxisInfo 的 contiguity-divisibility-constancy 三元组、Coalesce pass、TMA 路径的 16 字节向量化目标）；CUDA 编程模型文档（warp = 32 线程 SIMT 执行、分支分化串行化、合并访存与 sector 利用率、片上存储与延迟隐藏）。</p>
+</blockquote>
+<hr>
+<h3 id="7-昇腾（Ascend-NPU）生态部署前沿开源大模型的主要工程挑战">7. 昇腾（Ascend NPU）生态部署前沿开源大模型的主要工程挑战</h3>
+<blockquote>
+<p><strong>题干</strong>：国产昇腾（Ascend NPU）生态下部署开源前沿大模型（如 DeepSeek-V4-Flash / Qwen3）时的主要工程挑战包括：</p>
+<ul>
+<li><strong>A.</strong> CANN 算子库对最新前沿算子（如动态稀疏 Attention、特定量化 Kernel）的覆盖存在滞后</li>
+<li><strong>B.</strong> HCCL 通信原语与 NCCL 在部分高级重叠特性（如 P2P Buffer 注册、自定义拓扑）上存在语义差异</li>
+<li><strong>C.</strong> 开源推理引擎（vLLM、SGLang）官方主干优先适配 CUDA，NPU 分支需持续维护与同步</li>
+<li><strong>D.</strong> 昇腾芯片不支持运行标准 Linux 操作系统<br>
+<strong>答案：ABC</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对</strong>：CANN 算子/内核覆盖对最前沿结构存在滞后。<br>
+第三方实测研究（16 卡昇腾 910 + CANN + vLLM-Ascend）指出：MoE、DeepSeek Sparse Attention、异构多头路径、MTP 草稿头 “are exactly the components whose Ascend support proved least mature”。<br>
+关键结论是<strong>组合的交叉积未经测试</strong>（“each feature may work in isolation, but their cross-product is untested”），且为了让插件跑起来并产出正确结果需要 12 处源码级补丁，不少最难的问题表现为<strong>静默数值错误而非崩溃</strong>。<br>
+动态稀疏 Attention、特定量化 Kernel 的滞后与此一致。</li>
+<li><strong>B 对</strong>：HCCL 是 CANN 中 NCCL 的对位物，但语义与能力集<strong>不一一对应</strong>：
+<ul>
+<li>拓扑处理路径不同：NCCL 自动探测 NVLink 拓扑；HCCL 历史上依赖 rank file 手工描述 NPU 互联关系，较新版本才提供自动生成工具。</li>
+<li>调优旋钮集合不同（如 <code>HCCL_BUFFSIZE</code> 等，与 NCCL 的 <code>NCCL_ALGO/PROTO/BUFFSIZE</code> 体系不对等）。</li>
+<li>NCCL 侧的高级重叠/注册类能力——<code>ncclCommRegister</code> 用户缓冲区注册、Userbuffers 流水线重叠、更细的算法与协议选择——在 HCCL 侧没有 1:1 对应；NPU 上的通算重叠多由上层库（MindSpeed / MindSpeed-Core、torch_npu）另行实现。<br>
+因此&quot;语义差异 + 高级重叠特性缺位&quot;的判断成立。</li>
+</ul>
+</li>
+<li><strong>C 对</strong>：开源推理引擎主干优先适配 CUDA，NPU 支持以<strong>独立厂商插件/分支</strong>形态存在（如 vllm-ascend），需持续跟进上游。<br>
+同一实测研究把该插件描述为 “a young, fast-moving reimplementation whose tested configurations are a subset of what upstream vLLM supports”，并记录了并行策略脆弱（TP 被头分组因子卡在 TP=8、序列并行因分片张量尺寸不一致被关闭、PP&gt;1 时静默数值污染）、图编译与投机解码路径的兼容问题。</li>
+<li><strong>D 错</strong>：昇腾完全运行标准 Linux。<br>
+CANN 支持 openEuler、Ubuntu、EulerOS、CentOS、BCLinux、Kylin V10、UOS、Debian、SLES、Tlinux 等发行版（aarch64 / x86_64），安装方式与常规 Linux 软件栈一致，并提供官方容器镜像。<br>
+驱动需匹配内核头文件、部分发行版会触发驱动源码编译，但&quot;不支持运行标准 Linux&quot;是明显错误项。</li>
+</ul>
+<blockquote>
+<p>依据：arXiv 2607.08215《On the Limitations of Non-GPU AI Accelerators for Large-Model Inference》（CANN/HCCL 定位、算子与特性覆盖缺口、12 处 vLLM-Ascend 补丁、并行与数值故障、静默损坏）；华为 CANN 软件安装指南（支持 OS 清单与安装约束）；HCCL 与 NCCL 的对比实践材料（拓扑配置方式、调优差异）；NVIDIA NCCL 用户缓冲区注册文档。</p>
+</blockquote>
+<hr>
+<h3 id="8-生产推理网关（API-Gateway）必备的容灾与防护机制">8. 生产推理网关（API Gateway）必备的容灾与防护机制</h3>
+<blockquote>
+<p><strong>题干</strong>：大模型生产推理网关（API Gateway）必须具备的核心容灾与防护机制包括：</p>
+<ul>
+<li><strong>A.</strong> 动态限流与排队降级（基于 Token 消耗速率与 P99 队列延迟进行智能过载保护）</li>
+<li><strong>B.</strong> 客户端断开连接感知（Client Disconnect Detection，及时中止孤儿请求释放显存）</li>
+<li><strong>C.</strong> 实例健康探活与熔断（对持续报错或 TTFT 异常暴增的 Worker 自动剔除）</li>
+<li><strong>D.</strong> 将所有外部请求的超时时间均配置为无限大（Infinity）<br>
+<strong>答案：ABC</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对</strong>：过载保护要按<strong>成本</strong>而不是只按请求数。<br>
+基于 token 消耗速率（含输入 + 输出预算）做准入与排队，基于 P99 排队延迟/队列深度做降级与甩载，超限返回 429/503 并带 <code>Retry-After</code>，把&quot;过载&quot;转化为可控排队而非雪崩。<br>
+仅按 QPS 限流对长短混合负载无效——一个 1M-token 请求的成本约等于上千个短请求。</li>
+<li><strong>B 对</strong>：客户端断连感知必须做<strong>到引擎层</strong>的取消传播。<br>
+vLLM 官方文档明确：只取消 asyncio 任务<strong>不会</strong>中止引擎请求，请求会继续占槽位、生成到已死连接上（孤儿请求），必须显式 <code>abort(request_id)</code>。<br>
+网关侧要在 HTTP/2 RST_STREAM 或上下文取消时把取消沿调用链下传，否则显存与队列槽位被白占。</li>
+<li><strong>C 对</strong>：健康探活 + 熔断：liveness/readiness 探针做基础剔除；业务级熔断按错误率与 <strong>TTFT 异常抬升</strong>做被动离群剔除（passive outlier ejection），对持续报错的 Worker 摘流量，恢复后按比例回灌。<br>
+注意 TTFT 是比 QPS 更灵敏的劣化信号。</li>
+<li><strong>D 错</strong>：把超时设为无限大是典型反模式——挂住的请求会长期占住连接、KV Cache 与队列槽位，故障从单实例扩散成全站，且彻底失去背压。<br>
+正确做法是<strong>分层超时</strong>（连接 / TTFT / 总时长）+ 超时预算内的有限重试 + 取消传播（deadline propagation），并区分&quot;可重试&quot;与&quot;不可重试&quot;错误。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM 官方文档（客户端断连与显式 <code>abort()</code> 的必要性、孤儿请求占槽位）；vLLM Engine Arguments（<code>max_num_seqs</code> 等与过载相关的调度旋钮）；NVIDIA Dynamo 等推理栈的 Request Cancellation 文档（取消需传播到引擎）；K8s 探针语义与熔断/离群剔除的通用实践。</p>
+</blockquote>
+<hr>
+<h3 id="9-PyTorch-CUDA-OOM-的精准分析手段">9. PyTorch CUDA OOM 的精准分析手段</h3>
+<blockquote>
+<p><strong>题干</strong>：排查定位 PyTorch 训练中的 CUDA Out of Memory (OOM) 时，推荐使用的精准分析手段包括：</p>
+<ul>
+<li><strong>A.</strong> 使用 <code>torch.cuda.memory_summary()</code> 打印显存分配器的详细分布表（Allocated vs Cached）</li>
+<li><strong>B.</strong> 捕获并导出 PyTorch Memory Snapshot（显存快照），在浏览器中可视化显存分配时序火焰图</li>
+<li><strong>C.</strong> 查看操作系统层的 Swap 交换区大小</li>
+<li><strong>D.</strong> 借助 Nsight Systems (nsys) 捕获 CUDA 运行时显存峰值开销<br>
+<strong>答案：ABD</strong></li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对</strong>：<code>torch.cuda.memory_summary()</code> 打印分配器明细表，区分 <strong>Allocated / Active / Requested / Reserved（Cached）</strong>、non-releasable 内存与各 segment 占用，是判断&quot;真占用 vs 缓存碎片&quot;的第一手材料。<br>
+配套 <code>torch.cuda.memory_allocated()</code> 与 <code>memory_reserved()</code> 看差值，即可快速区分内存泄漏与碎片化。</li>
+<li><strong>B 对</strong>：官方推荐的深挖手段：<br>
+<code>torch.cuda.memory._record_memory_history(max_entries=...)</code> 记录 → <code>torch.cuda.memory._dump_snapshot(&quot;snap.pickle&quot;)</code> 导出 → 拖到 **<a target="_blank" rel="noopener" href="https://pytorch.org/memory_viz**%EF%BC%8C%E5%BE%97%E5%88%B0%22%E5%88%86%E9%85%8D%E9%9A%8F%E6%97%B6%E9%97%B4%22%E7%9A%84%E4%BA%A4%E4%BA%92%E5%BC%8F%E5%9B%BE%EF%BC%8C%E6%AF%8F%E4%B8%AA%E5%BC%A0%E9%87%8F%E5%8F%AF%E7%82%B9%E5%BC%80%E7%9C%8B%E5%88%86%E9%85%8D%E6%A0%88%E3%80%82">https://pytorch.org/memory_viz**，得到&quot;分配随时间&quot;的交互式图，每个张量可点开看分配栈。</a><br>
+离线可用仓库脚本：<code>python torch/cuda/_memory_viz.py trace_plot snap.pickle -o snap.html</code><br>
+它能把&quot;迭代间不释放的常驻张量&quot;（泄漏）、碎片、以及 OOM 那一刻的最大分配者一并暴露。</li>
+<li><strong>C 错</strong>：操作系统 Swap 与显存无关——CUDA 分配器不参与换页，GPU 显存不会被 swap 出去（NPU 同理）。<br>
+换页机制只在主机内存 OOM、或显式使用统一内存/可超售分配（<code>cudaMallocManaged</code> + HMM）时才有意义；PyTorch 默认分配器不走这条路。<br>
+用 Swap 排查 CUDA OOM 是方向性错误。</li>
+<li><strong>D 对</strong>：<code>nsys profile --cuda-memory-usage=true</code> 会跟踪 CUDA 显存分配/释放与设备内存占用随时间的变化，配合 <code>nsys stats</code> 的显存类报表可定位峰值来源。<br>
+实践注意：多进程 / 多 rank 场景要确保跟踪到<strong>正确的子进程</strong>，否则内存数据会为空。<br>
+PyTorch 侧还可叠加 <code>torch.profiler(profile_memory=True, with_stack=True)</code> 导出内存时间线。</li>
+</ul>
+<blockquote>
+<p>依据：PyTorch 官方博客《Understanding GPU Memory 1: Visualizing All Allocations over Time》与 <code>torch_cuda_memory</code> 文档（<code>_record_memory_history</code> / <code>_dump_snapshot</code> / <code>_memory_viz.py</code>、memory_viz 站点、<code>memory_summary</code> 的 Allocated vs Cached 口径）；NVIDIA Nsight Systems 用户手册与官方论坛（<code>--cuda-memory-usage</code> 选项与子进程跟踪注意事项）。</p>
+</blockquote>
+<hr>
+<h3 id="10-Megatron-LM-等分布式框架中通信与计算深度重叠的技术">10. Megatron-LM 等分布式框架中通信与计算深度重叠的技术</h3>
+<blockquote>
+<p><strong>题干</strong>：在 Megatron-LM 等分布式框架中，能够实现通信与计算深度重叠（Overlap）的技术包括：</p>
+<ul>
+<li><strong>A.</strong> TP 与 Sequence Parallelism 中 ReduceScatter / AllGather 与 GEMM 算子的异步流水线重叠</li>
+<li><strong>B.</strong> Pipeline Parallelism 中 1F1B（One Forward One Backward）调度机制</li>
+<li><strong>C.</strong> DeepSeek-V4 DualPipe / DualPipe-V2 中的双向流水线前向后向通信重叠</li>
+<li><strong>D.</strong> DDP（数据并行）中反向传播阶段的 Bucket 异步梯度同步与反向计算重叠<br>
+<strong>答案：ABCD</strong>（C 的名称有误，见 ⚠️）</li>
+</ul>
+</blockquote>
+<ul>
+<li><strong>A 对</strong>：Megatron 的 TP 重叠（<code>tp_comm_overlap=True</code>，要求 <code>sequence_parallel=True</code>、<code>tensor_model_parallel_size &gt;= 2</code>）分两层：
+<ul>
+<li><strong>bulk overlap</strong>（默认开启）：把与计算无直接依赖的 TP 通信与线性层计算重叠。</li>
+<li><strong>pipelined overlap</strong>：把有依赖的通信改造为流水——激活/梯度 <strong>all-gather 拆成多次 P2P ring 交换</strong>，<strong>reduce-scatter 改造为 GEMM 输出的 P2P ring 交换 + 接收端归约</strong>，与 GEMM 流水并行。<br>
+可用现成配置模板（如 <code>userbuffers_bf16_*_tp4_mbs1_seqlen*</code>），依赖 Userbuffers / NVLink。</li>
+</ul>
+</li>
+<li><strong>B 对</strong>：1F1B 是流水线调度机制，让不同 micro-batch 的前向与反向交错执行，从而把 PP 的 P2P 发送/接收（相邻 stage 的激活与梯度传输）压在<strong>其他 micro-batch 的计算</strong>之下，并把气泡从 GPipe 的 O(micro-batch 数) 降到 (PP−1)(F+B)。<br>
+精确表述：1F1B 提供的是&quot;交错机会&quot;，真正的重叠来自&quot;P2P 在飞时算别的 micro-batch&quot;。</li>
+<li><strong>C 对（机制真实，命名错误）</strong>：双向流水线 + 前向后向通算重叠真实存在且已在生产使用。<br>
+官方名称是 <strong>DualPipe</strong>（源自 DeepSeek-V3 技术报告），<strong>“DualPipe-V2” 不是官方名称</strong>；DeepSeek-V4 <strong>确实存在</strong>，其技术报告明确写了 “we adjust the DualPipe 1F1B overlapping scheme to accommodate the increased pipeline communication”，即 V4 训练仍在用（调整过的）DualPipe 方案。<br>
+故本选项描述的<strong>机制正确</strong>，但题面把来源与版本名写错了。</li>
+<li><strong>D 对</strong>：DDP 的 Reducer 把梯度按桶聚合（<code>bucket_cap_mb</code> 可调；参数按 <code>Model.parameters()</code> 大致逆序入桶，以匹配反向中梯度就绪顺序），每个参数注册一个 autograd hook，桶填满即<strong>异步发起 allreduce</strong>。<br>
+官方文档原话：“DDP’s performance advantage comes from overlapping allreduce collectives with computations during backwards”。<br>
+两个工程要点：所有进程必须按<strong>桶索引顺序</strong>发起 allreduce（顺序不一致会结果错误或反向 hang）；用 TorchDynamo 编译整图会破坏重叠，需要 <code>DDPOptimizer</code> 在桶边界切图，梯度累积时用 <code>no_sync</code>。</li>
+</ul>
+<blockquote>
+<p>⚠️ 题目本身有问题（第 10 题 C 项）：</p>
+<ol>
+<li><strong>DualPipe 出自 DeepSeek-V3 技术报告</strong>（arXiv 2412.19437），2025-02-27 作为开源周第四天项目在 <code>deepseek-ai/DualPipe</code> 仓库开源，要求 PyTorch 2.0+；气泡公式 (PP/2−1)(F&amp;B+B−3W)、参数 2×、激活 PP+1。它不是&quot;V4 的算法&quot;。</li>
+<li><strong>不存在官方 “DualPipe-V2”</strong>。仓库中唯一相近的是 <strong>DualPipeV</strong>——由 DualPipe “cut-in-half” 得到的 V 形调度（仓库注明来自 Sea AI Lab 的博客），特点是激活降到 PP/2、设备数减半；它是<strong>另一个调度</strong>，不是&quot;第二版&quot;。另有非官方博客把某版本称为 “DualPipe 2.0”，无可信来源支撑。</li>
+<li><strong>DeepSeek-V4 存在</strong>（2026-04-24 发布预览版并开源权重：V4-Pro 1.6T 总参 / 49B 激活，V4-Flash 284B / 13B 激活，1M 上下文，技术报告 arXiv 2606.19348）。所以&quot;V4 是否存在&quot;这一质疑可以排除；真正需要纠正的是把 DualPipe 归给 V4，并杜撰出 “V2”。</li>
+</ol>
+</blockquote>
+<blockquote>
+<p>依据：NVIDIA Megatron Bridge《Communication Overlap》文档（TP/SP 的 bulk 与 pipelined overlap、all-gather/reduce-scatter 的 P2P ring 改造、DDP 的 <code>overlap_grad_reduce</code> / <code>overlap_param_gather</code>）；PyTorch DDP 官方 notes（Reducer 分桶、autograd hook、按桶序 allreduce、与反向计算重叠、DDPOptimizer）；<code>deepseek-ai/DualPipe</code> 仓库 README（来源、DualPipeV 与 Sea AI Lab 归属、气泡与显存对比表、依赖）；DeepSeek-V3 技术报告；DeepSeek 官方 V4 发布公告与 V4 技术报告。</p>
+</blockquote>
+<hr>
+<h2 id="五、简答题（第-1–10-题）">五、简答题（第 1–10 题）</h2>
+<h3 id="1-大模型-GPU-显存中-静态显存-与-动态显存-的本质区别，及推理场景的构成">1. 大模型 GPU 显存中&quot;静态显存&quot;与&quot;动态显存&quot;的本质区别，及推理场景的构成</h3>
+<p><strong>要点：</strong></p>
+<p><strong>本质区别 = 生命周期与可预测性</strong></p>
+<ul>
+<li>静态显存：进程/服务启动阶段一次性申请、运行期基本不变（或只增不减），容量可由参数量与框架配置<strong>静态估算</strong>；超配的典型表现是&quot;服务起不来 / 加载即 OOM&quot;。</li>
+<li>动态显存：随请求数、批大小、序列长度实时申请与释放，峰值由调度策略（连续批处理、chunked prefill、并发上限）决定；典型表现是&quot;跑着跑着 OOM、请求被抢占、吞吐抖动&quot;。</li>
+<li>二者不是 CUDA/PyTorch 官方术语，而是运维口径；官方拆法是 weights / activations / KV cache / 框架与 context 开销。</li>
+</ul>
+<p><strong>推理场景构成（以 vLLM 类服务为例）</strong></p>
+<ul>
+<li>静态部分：模型权重（含 FP8/INT4 的 scale/zero-point）、CUDA context 与已加载 kernel 镜像（cuBLAS/cuDNN/FlashAttention）、cuBLAS/cuDNN workspace 上限、通信库 buffer（NCCL）、CUDA Graph 捕获池、进程级固定开销。</li>
+<li>动态部分：prefill 激活峰值（与 batch×seq 相关的中间张量）、KV Cache（∝ 并发序列数 × 序列长度 × 每 token 字节数）、attention split-K 等临时 workspace、以及 caching allocator 预留但未使用的碎片。</li>
+</ul>
+<p><strong>生产排查</strong></p>
+<ul>
+<li><code>torch.cuda.memory_allocated()</code>（真实张量）vs <code>memory_reserved()</code>（缓存池）区分&quot;用了&quot;和&quot;占着&quot;；<code>nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv</code> 看进程总占用（含 context 与非 PyTorch 分配）。</li>
+<li>vLLM 在 profiling 后按 <code>gpu_memory_utilization</code>（默认 0.9）扣掉静态部分，剩余按 block 分配给 KV Cache；静态部分估错（权重精度、context 开销）会直接压缩可用 KV 池 → 抢占与排队。</li>
+<li>调参顺序：先压动态峰值（<code>max_num_seqs</code>、<code>max_num_batched_tokens</code>、chunked prefill），再考虑提 <code>gpu_memory_utilization</code>，最后才是换卡/换精度。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM <code>CacheConfig</code> 文档（<code>gpu_memory_utilization</code> 默认 0.9）；vLLM 源码 <code>vllm/v1/worker/gpu_worker.py::determine_available_memory</code>；PyTorch <code>torch.cuda.memory_*</code> 文档。</p>
+</blockquote>
+<h3 id="2-torch-cuda-set-per-process-memory-fraction-的作用与多进程隔离的生产意义">2. <code>torch.cuda.set_per_process_memory_fraction()</code> 的作用与多进程隔离的生产意义</h3>
+<p><strong>要点：</strong></p>
+<p><strong>官方语义（已核对源码 docstring）</strong></p>
+<ul>
+<li>签名 <code>torch.cuda.set_per_process_memory_fraction(fraction, device=None) -&gt; None</code>；<code>fraction</code> 必须是 float，范围 0~1，否则分别抛 <code>TypeError</code> / <code>ValueError</code>；<code>device=None</code> 表示当前设备。</li>
+<li>作用是限制<strong>本进程 PyTorch caching allocator</strong> 在该 device 上的可分配上限 = 该 device 可见总显存 × fraction；越限时由 allocator 抛 CUDA OOM（不是驱动层硬限）。</li>
+<li>官方提示：“the total available free memory is less than the total capacity”——比例是按标称可见容量算的，别按 free 估。</li>
+<li>边界：只约束 PyTorch 分配器。CUDA context、其他框架（TensorRT/自研 CUDA）、以及 allocator 之外的分配都不受约束；必须在进程开始分配显存前调用。</li>
+</ul>
+<p><strong>多进程隔离的生产意义</strong></p>
+<ul>
+<li>单卡多进程（多实例、多租户、一个容器内多 rank）时，给每个进程设 fraction，防止单个进程吃满整卡导致邻居 OOM 或整机抖动；是 MIG/MPS 之外最轻量的软隔离手段。</li>
+<li>与 <code>CUDA_VISIBLE_DEVICES</code> / MIG 组合时注意基数：fraction 相对&quot;可见显存&quot;取比例，MIG 实例里可见容量已缩小。</li>
+<li>与 <code>PYTORCH_CUDA_ALLOC_CONF</code>（<code>expandable_segments</code>、<code>max_split_size_mb</code>）区别：后者调分配器行为与碎片，不设上限。</li>
+<li>同类替代：vLLM 用 <code>gpu_memory_utilization</code> 做&quot;每实例上限&quot;，并明确支持同卡两实例各设 0.5。</li>
+</ul>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 示意：单卡起 2 个进程，各限 45%（需在首次分配前调用）</span></span><br><span class="line">CUDA_VISIBLE_DEVICES=0 python -c <span class="string">&quot;import torch; torch.cuda.set_per_process_memory_fraction(0.45, 0); print(&#x27;ok&#x27;)&quot;</span></span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>依据：PyTorch 源码 <code>torch/cuda/memory.py</code>（<code>set_per_process_memory_fraction</code> / <code>get_per_process_memory_fraction</code>）；vLLM <code>CacheConfig</code> 文档。</p>
+</blockquote>
+<h3 id="3-分布式预训练为何必须统一-RNG-Seed；DP-与-TP-对初始化的种子处理差异">3. 分布式预训练为何必须统一 RNG Seed；DP 与 TP 对初始化的种子处理差异</h3>
+<p><strong>要点：</strong></p>
+<p><strong>为什么必须统一</strong></p>
+<ul>
+<li>权重初始化必须一致：所有 DP 副本必须从逐位相同的初始权重出发，否则梯度平均、优化器状态、checkpoint 语义全部失效。</li>
+<li>可复现与续训：数据顺序、dropout、随机增广、MoE 路由都必须能从相同 RNG 状态重放；激活重计算（activation recomputation）会重放前向，RNG 不可复现 → 梯度不一致。</li>
+<li>调试价值：只有&quot;同一 seed 必得同一 loss 曲线&quot;，才能把性能问题与随机性区分开。</li>
+</ul>
+<p><strong>DP 与 TP 的差异（Megatron-LM 实现，已核对源码）</strong></p>
+<ul>
+<li><code>_set_random_seed</code>：<code>seed = seed_ + 100 * pp_rank</code>（保证不同 PP stage 不同种子）；仅当 <code>data_parallel_random_init=True</code> 时再 <code>+ 10 * dp_rank</code>。默认<strong>不含 dp_rank</strong> → 所有 DP rank 初始化完全一致。随后 <code>random.seed / np.random.seed / torch.manual_seed</code> 全部设上，再调用 TP 的 RNG 初始化。</li>
+<li><code>model_parallel_cuda_manual_seed</code>：<code>offset = seed + 2718</code>，<code>tensor_model_parallel_seed = offset + tp_rank</code>，<code>data_parallel_seed = seed</code>，MoE 另设 <code>expert_parallel_seed = seed + 1024 + 100*ep_rank + etp_rank</code>；三条流分别注册为 <code>data-parallel-rng</code> / <code>model-parallel-rng</code> / <code>expert-parallel-rng</code>。</li>
+<li>含义：DP 副本共享同一 seed（初始化一致）；TP 组内参数分片来自<strong>同一份</strong>初始化（用同一 default 流生成完整 master weight 再切片，所以初始化不能按 tp_rank 偏移），但 TP 区域内的 dropout 等随机性按 tp_rank 偏移 → 各分片 mask 不同，而 DP 组内同一 TP rank 的 mask 一致。</li>
+<li>数据侧：默认按 DP rank 偏移采样种子（<code>--use-same-sampling-seed-across-dp-ranks</code> 关闭 <code>offset_sampling_seed_by_dp_rank</code>，默认开启偏移），保证各 rank 看到不同数据。</li>
+</ul>
+<p><strong>工程坑</strong></p>
+<ul>
+<li>种子必须在任何 CUDA/模型构造之前设置；之后不要再用 <code>torch.cuda.manual_seed_all</code> 覆盖；DataLoader worker、增广、MoE gating 都要走 tracker。</li>
+<li>要严格确定性需 <code>torch.use_deterministic_algorithms(True)</code> + <code>CUBLAS_WORKSPACE_CONFIG=:4096:8</code>，并接受部分算子变慢。</li>
+</ul>
+<blockquote>
+<p>依据：Megatron-LM 源码 <code>megatron/training/initialize.py::_set_random_seed</code>、<code>megatron/core/tensor_parallel/random.py::model_parallel_cuda_manual_seed</code>、<code>megatron/training/config/common_config.py::RNGConfig</code>、<code>megatron/training/arguments.py</code>。</p>
+</blockquote>
+<h3 id="4-Kubernetes-GPU-集群中的-僵尸-GPU-进程-及其排查与清理">4. Kubernetes GPU 集群中的&quot;僵尸 GPU 进程&quot;及其排查与清理</h3>
+<p><strong>要点：</strong></p>
+<p><strong>现象与定义（&quot;僵尸进程&quot;是运维说法，非官方术语）</strong></p>
+<ul>
+<li>容器/训练进程已退出或被 kill（Pod 已删除或 Terminated），但 GPU 上残留未回收的 CUDA context/device 占用：显存不释放、util 卡住或 SM 无响应；<code>nvidia-smi</code> 里仍能看到进程，但宿主机 <code>/proc/&lt;pid&gt;</code> 已不存在或属于已死容器。</li>
+<li>常见成因：SIGKILL 后驱动未回收、容器 runtime 异常、内核态 hang（如 uvm 卡死）、XID 事件（掉卡类）、PID namespace 不一致导致&quot;看不见也杀不掉&quot;。</li>
+</ul>
+<p><strong>排查</strong></p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">nvidia-smi                                                       <span class="comment"># 进程表 + 显存</span></span><br><span class="line">nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv</span><br><span class="line">lsof /dev/nvidia* 2&gt;/dev/null | <span class="built_in">head</span> -20                          <span class="comment"># 或 fuser -v /dev/nvidia*</span></span><br><span class="line">dmesg -T | grep -i xid | <span class="built_in">tail</span> -20                                 <span class="comment"># 驱动侧 XID</span></span><br></pre></td></tr></table></figure>
+<ul>
+<li>交叉验证：<code>kubectl describe node &lt;node&gt;</code> 的 <code>nvidia.com/gpu</code> 分配数 vs 实际 Pod；宿主机 <code>ps -ef</code> 找进程；nvidia-smi 报 “No running processes found” 但显存仍被占 → 多为 context 残留。</li>
+</ul>
+<p><strong>清理顺序（由轻到重）</strong></p>
+<ol>
+<li>宿主机 <code>kill -9 &lt;pid&gt;</code>；确认 <code>/dev/nvidia*</code> 已无持有者。</li>
+<li>确认<strong>无任何应用占用该 GPU</strong>（含 CUDA、图形、其他 <code>nvidia-smi</code> 实例）且以 root 执行 <code>nvidia-smi --gpu-reset -i &lt;idx&gt;</code>。官方限制：Ampere 起 NVLink 连接的 GPU 可单独 reset，Ampere NVSwitch 系统需 Fabric Manager（Hopper 及以后不再依赖），且&quot;GPU reset is not guaranteed to work in all cases&quot;、“not recommended for production environments”。</li>
+<li>仍无效 → 重启节点（冷启动）；XID 79/119/120/154 这类&quot;掉卡/需 reset&quot;事件基本只能重启。</li>
+</ol>
+<p><strong>K8s 侧</strong></p>
+<ul>
+<li>device plugin 通过 NVML 事件集监听 XID critical error / double-bit ECC 等并把设备标记 unhealthy（可用 <code>DP_DISABLE_HEALTHCHECKS</code> / <code>DP_ENABLE_HEALTHCHECKS</code> 调整忽略或启用的 XID 列表），表现为分配失败或节点可用 GPU 数变少。</li>
+<li>标准动作：cordon + drain 节点 → 清残留进程 → 重新健康检查 → uncordon；把&quot;GPU 健康&quot;接入节点自动隔离（taint/告警）以免反复派任务。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA <code>nvidia-smi</code> 官方文档（<code>--gpu-reset</code>、<code>--query-compute-apps</code>）；NVIDIA/k8s-device-plugin 源码 <code>internal/rm/health.go</code>。</p>
+</blockquote>
+<h3 id="5-什么是-CUDA-Context；为何单卡起过多-Python-进程会让可用显存大幅缩水">5. 什么是 CUDA Context；为何单卡起过多 Python 进程会让可用显存大幅缩水</h3>
+<p><strong>要点：</strong></p>
+<p><strong>机制</strong></p>
+<ul>
+<li>CUDA context 是进程（确切说是线程所属）与某张 GPU 之间的运行上下文：包含 GPU 虚拟地址空间与页表、已加载的 kernel 镜像（cubin/SASS、常量内存、全局数据）、流/事件/内存分配器等状态。Runtime API 首次调用时隐式创建 primary context，进程内共享。</li>
+<li>每个进程各有自己的 context；硬件以<strong>时间片轮转</strong>调度不同 context 的工作队列，不同 context 的 kernel <strong>不能并发执行</strong>——所以既吃显存又掉利用率，还有上下文切换开销。</li>
+</ul>
+<p><strong>为什么显存缩水</strong></p>
+<ul>
+<li>每个 context 都有一份独立的 kernel 镜像、常量/全局数据、页表与驱动预留；NVIDIA 论坛口径：每个用 CUDA 的进程都需要一个 context，“occupies a few hundred MB（具体随驱动版本与 GPU 型号变化）”，早期实测约 200 MB/进程量级。</li>
+<li>因此单卡起 N 个独立进程，会先被吃掉 N × 数百 MB 的&quot;隐形显存&quot;，再叠加各进程自己的权重/激活；再算上框架加载的 cuBLAS/cuDNN/flash-attn kernel 镜像，缩水更明显。</li>
+<li>排查方法：<code>nvidia-smi --query-compute-apps=pid,used_memory --format=csv</code> 的进程占用 减去 <code>torch.cuda.memory_allocated()</code>，差值即 context + 非 PyTorch 分配。</li>
+</ul>
+<p><strong>缓解</strong></p>
+<ul>
+<li>MPS（Multi-Process Service）：多进程共享一个 CUDA context，Volta 起 client 直接向 GPU 提交工作，减少时间片切换与重复 context 开销；MIG 则是硬件分区，每实例独立 context + 独立显存，隔离性最好。</li>
+<li>减少进程数（一个进程内多 device context）、及时销毁不用的 context（<code>torch.cuda.empty_cache()</code> 只能回收 allocator 缓存，回收不了 context）。</li>
+<li><code>CUDA_MODULE_LOADING=LAZY</code>：只加载实际用到的 kernel，显著降低 context 显存与启动时间（驱动级 11.7 / runtime 级 11.8，需 R515+ 驱动）；注意它把 kernel 加载推迟到首次执行，显存已吃满的程序要留余量。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA MPS 官方文档（Architecture）；NVIDIA Developer Forums（per-process CUDA context 占用）；CUDA C++ Programming Guide “Lazy Loading”。</p>
+</blockquote>
+<h3 id="6-NCCL-CROSS-NIC-1-与-NCCL-NET-GDR-LEVEL-5-的硬件前提与生产收益">6. <code>NCCL_CROSS_NIC=1</code> 与 <code>NCCL_NET_GDR_LEVEL=5</code> 的硬件前提与生产收益</h3>
+<p><strong>要点：</strong></p>
+<blockquote>
+<p>⚠️ 题目本身有问题：<code>NCCL_NET_GDR_LEVEL=5</code> 不是官方文档化的取值。官方文档只列 LOC/PIX/PXB/PHB/SYS（整数值 0/1/2/3/4），并写明&quot;Values greater than 4 will be interpreted as SYS&quot;；NCCL 源码里旧式数字通过 <code>levelsOldToNew[] = &#123;PATH_LOC, PATH_PIX, PATH_PXB, PATH_PHB, PATH_SYS, PATH_SYS&#125;</code> 映射，即 <strong>5 等价于 SYS（= 永远启用 GDR）</strong>，&gt;5 会被 clamp 到 5。生产上建议直接写 <code>NCCL_NET_GDR_LEVEL=SYS</code>，语义更清晰、不会被后续版本改掉。</p>
+</blockquote>
+<p><strong>NCCL_CROSS_NIC=1</strong></p>
+<ul>
+<li>官方语义：0 = 同一 ring/tree 始终用同一张 NIC（避免跨 rail）；1 = 允许同一 ring/tree 使用不同 NIC；<strong>2 是默认值</strong>（尽量同 NIC，但性能更好时允许不同）。源码 <code>NCCL_PARAM(CrossNic, &quot;CROSS_NIC&quot;, 2)</code>。</li>
+<li>硬件前提：节点内 ≥2 张 HCA（官方原文&quot;This has no effect on systems with only one NIC&quot;）；且拓扑允许交叉——官方描述 1 适合&quot;all of a node’s NICs attach to one switch&quot;的平面式组网。</li>
+<li>生产收益：让同一 communicator 的不同 channel/ring 分散到多张 NIC，避免单口热点，提升跨节点聚合带宽（all-to-all 类收益最明显）。</li>
+<li>反例：严格 rail-optimized 组网（每 NIC 独立 rail、跨 rail 走慢速上行）应设 0，否则把流量推到跨 rail 路径反而变慢；默认 2 是折中。</li>
+</ul>
+<p><strong>NCCL_NET_GDR_LEVEL=5（= SYS）</strong></p>
+<ul>
+<li>前提：GPU 与 NIC 双方都支持 GDR（源码 <code>ncclTopoCheckGdr</code> 检查两侧 <code>gdrSupport</code>）、RDMA HCA（ConnectX-4 及以上）、内核 peer-memory 支持（源码 <code>ncclIbPeerMemSupport()</code>，走 nv_peermem 或 DMA-BUF）、且拓扑能被 NCCL 识别。</li>
+<li>默认行为：未设置时源码取 <code>netGdrLevel = PATH_PXB</code>，即路径距离 &gt; PXB（跨 NUMA）时 NCCL 会<strong>静默关闭</strong> GDR；设 5/SYS 则强制启用。</li>
+<li>收益：RDMA 直接读写显存，省掉 host bounce buffer 的两次 PCIe 拷贝 → 降延迟、提有效带宽、省 CPU 与 host 内存带宽；在容器内拓扑不可见、路径被误判为 PHB/SYS 的场景，显式设置可避免降级。</li>
+<li>风险：若 NIC 与 GPU 确实跨 NUMA 且只有 PCIe，强制 GDR 可能不如走 host 内存（官方在 <code>NCCL_NET_GDR_READ</code> 条目下明确&quot;reading directly from GPU memory … is known to be slightly slower … on some platforms, such as PCI-E&quot;）；send 方向的 GDR 读还受 <code>NCCL_NET_GDR_READ</code> 控制。</li>
+<li>验证：<code>NCCL_DEBUG=INFO</code> 看初始化日志中通道行是否带 <code>/GDRDMA</code>（源码打印 <code>... via NET/IB/&lt;dev&gt;/GDRDMA</code>）；<code>nvidia-smi topo -m</code> 看 GPU-NIC 亲和；用 <code>NCCL_NET_GDR_LEVEL=0</code> 做 A/B 对照（NCCL 自身也给了这条 HINT）。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA NCCL 官方环境变量文档（NCCL_CROSS_NIC、NCCL_NET_GDR_LEVEL、NCCL_NET_GDR_READ）；NCCL 源码 <code>src/graph/paths.cc</code>、<code>src/graph/search.cc</code>、<code>src/transport/net.cc</code>、<code>src/transport/net_ib/</code>。</p>
+</blockquote>
+<h3 id="7-DeepSeek-V4-的-MLA-相比-GQA-为何能降低长文本-KV-Cache-与跨节点搬迁压力">7. DeepSeek-V4 的 MLA 相比 GQA 为何能降低长文本 KV Cache 与跨节点搬迁压力</h3>
+<p><strong>要点：</strong></p>
+<blockquote>
+<p>⚠️ 题目本身有问题：DeepSeek-V4 确实存在（2026-04-24 官方发布预览版：V4-Pro 1.6T 总参/49B 激活、V4-Flash 284B/13B 激活、标配 1M 上下文、开源权重），但<strong>它不采用 MLA</strong>。官方公告写的注意力是&quot;Token-wise compression + DSA (DeepSeek Sparse Attention)“；V4-Pro 官方 config.json 中已无 MLA 的核心参数 <code>kv_lora_rank</code>，改为 <code>num_key_value_heads: 1</code> + <code>compress_ratios</code>（SWA/CSA/HCA 交替的序列维压缩）+ <code>index_topk: 1024</code>。MLA 是 V2/V3 的机制（V3.2-Exp 在 MLA 上加了 DSA 稀疏选择），V4 用&quot;序列维压缩&quot;替代了 MLA 的&quot;维度维低秩压缩”，仅 Q 侧仍保留低秩（<code>q_lora_rank: 1536</code>、<code>o_lora_rank: 1024</code>）。下面按 V2/V3 的 MLA 作答——这才是&quot;MLA vs GQA&quot;的正确事实。</p>
+</blockquote>
+<p><strong>MLA 的机制（V2/V3）</strong></p>
+<ul>
+<li>每个 token 的 K/V 不按 head 展开缓存，而是压成一个共享低秩 latent <code>c_KV</code>（<code>kv_lora_rank=512</code>）+ 一个解耦 RoPE 分量（<code>qk_rope_head_dim=64</code>），每 token 每层只缓存 <strong>576 个元素</strong>。</li>
+<li>推理时把上投影矩阵 W_UK/W_UV 吸收进 W_Q/W_O，attention 直接在 latent 上算，完整 K/V 永不物化。</li>
+</ul>
+<p><strong>与 GQA 的对比</strong></p>
+<ul>
+<li>GQA 靠&quot;减少 KV head 数&quot;省显存（如 8 组），但每 token 仍需缓存 K 和 V 两份：<code>2 × n_kv_heads × head_dim × 层数 × 字节数</code>。</li>
+<li>官方论文（arXiv:2505.09343）表格：DeepSeek-V3 <strong>70 KB/token</strong>（61 层），LLaMA-3.1-405B <strong>516 KB/token</strong>，Qwen-2.5-72B 327 KB/token → 约 <strong>7.3 倍</strong>差距，且 MLA 不减少 attention head 数（128），质量损失远小于&quot;砍 KV head&quot;。</li>
+</ul>
+<p><strong>为什么长文本与跨节点网络压力骤降</strong></p>
+<ul>
+<li>KV 显存与搬运量 ∝ 每 token KV 字节数 × 序列长度 × 并发数。1M token 单序列：MLA 量级约 70 GB（8 卡节点仍可容纳），传统 GQA 量级约 516 GB → 必须跨节点分片，KV 长期在网络上来回搬。</li>
+<li>PD 分离场景：prefill 节点算完要把 KV 传给 decode 节点；大 TP/EP 下 KV 分片还要跨节点交换——每 token 字节数降 7 倍，网络搬迁量同比下降，使&quot;KV 跨节点搬&quot;从不可行变为可行，也是百万上下文能被&quot;普惠&quot;的底层原因。</li>
+<li>与 DSA 的分工：DSA（top-k 稀疏选择）降的是<strong>计算量</strong>，MLA 降的是<strong>缓存与搬运量</strong>，两者正交。</li>
+</ul>
+<blockquote>
+<p>依据：DeepSeek-V2 论文（arXiv:2405.04434）、DeepSeek-V3 官方技术报告与 Insights 论文（arXiv:2412.19437、arXiv:2505.09343）；DeepSeek 官方 V4 发布公告；HuggingFace <code>deepseek-ai/DeepSeek-V4-Pro</code> 官方 <code>config.json</code>。</p>
+</blockquote>
+<h3 id="8-什么是-合并访存（Coalesced-Memory-Access）-，未合并对显存带宽利用率的影响">8. 什么是&quot;合并访存（Coalesced Memory Access）&quot;，未合并对显存带宽利用率的影响</h3>
+<p><strong>要点：</strong></p>
+<p><strong>机制</strong></p>
+<ul>
+<li>一个 warp 的 32 个线程的访存会被硬件按 <strong>32 字节 sector</strong> 为最小事务单位合并；L1 cache line 为 128 字节 = 4 个 sector。</li>
+<li>连续线程访问连续地址（线程 i 访问 base + 4i 的 float）：整个 warp 覆盖 128 字节，落在 4 个 sector，<strong>1 次请求 : 4 个 sector</strong>，每个字节都被用到，效率 100%。</li>
+<li>跨步/随机访问（如 stride = 32 个元素）：每个线程落在不同 sector，<strong>1 次请求 : 32 个 sector</strong>，每次只用到其中 4 字节。</li>
+</ul>
+<p><strong>致命后果</strong></p>
+<ul>
+<li>有效带宽直接除以 8（最坏 1/32）：NVIDIA 官方博客实测 NCU 显示&quot;only 4.0 of the 32 bytes transmitted per sector are utilized&quot;，DRAM 的 sectors_read/sectors_write 相差 8 倍。</li>
+<li>HBM 物理带宽是硬上限（H100 HBM3 约 3.35 TB/s 量级），访存密集 kernel（GEMM epilogue、attention、embedding gather、MoE scatter）会提前撞上带宽墙，算力闲置、GPU 利用率塌陷。</li>
+<li>附带伤害：L1/L2 被无效数据污染（cache thrashing），命中率进一步下降；功耗与延迟上升，且问题在 profiler 之外往往不可见。</li>
+</ul>
+<p><strong>常见来源与修复</strong></p>
+<ul>
+<li>来源：transpose 后未 materialize 的 stride 访问、paged KV Cache 的非连续 block、gather/scatter 索引、未对齐起始地址（跨 sector 边界）、AoS 结构体布局。</li>
+<li>修复：保证最内层维度连续（NCHW→NHWC、AoS→SoA）、向量化访问（float4/128-bit）、让 block/切片对齐 32B/128B、padding 对齐。</li>
+<li>排查：Nsight Compute 关注 “sectors per request”、“Global Load/Store Efficiency”、“DRAM throughput %” 三个指标。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA 官方技术博客 “Unlock GPU Performance: Global Memory Access in CUDA”；NVIDIA Developer Forums 关于 128B cache line / 32B sector 结构的说明。</p>
+</blockquote>
+<h3 id="9-vLLM-等推理框架中的-抢占（Preemption）-机制与两种策略">9. vLLM 等推理框架中的&quot;抢占（Preemption）&quot;机制与两种策略</h3>
+<p><strong>要点：</strong></p>
+<p><strong>机制</strong></p>
+<ul>
+<li>连续批处理下，调度器每个 step 都要为 running 请求分配 KV Cache block。当 block 池耗尽（<code>allocate_slots</code> 返回 None），必须&quot;抢占&quot;某个正在运行的请求（按优先级/最晚到达选择），释放其 block 给当前请求，被抢占者回到 waiting 队列。</li>
+<li>抢占不丢请求，只带来延迟毛刺：TTFT/ITL 抖动、可能的重复计算、吞吐下降。它是过载保护机制，不是 bug。</li>
+</ul>
+<p><strong>V0 的两种策略（已核实配置项）</strong></p>
+<ul>
+<li><code>SchedulerConfig.preemption_mode: Literal['swap', 'recompute']</code>（<code>vllm/core/scheduler.py</code> 的调度逻辑；CLI 为 <code>--preemption-mode</code>），默认 <code>recompute</code>：
+<ul>
+<li><strong>RECOMPUTE（重计算，默认）</strong>：<code>block_manager.free()</code> 直接释放该请求的 GPU blocks，<code>reset_state_for_recompute()</code> 清零已算 token，请求回到 waiting；恢复时重新 prefill（prefix caching 可复用部分）。省显存、省 PCIe 带宽，代价是重复算力（长序列代价高）。</li>
+<li><strong>SWAP（交换）</strong>：<code>block_manager.swap_out()</code> 把该请求的 KV blocks 拷到 CPU 侧 swap 空间（<code>swap_space</code>，默认 4 GiB/GPU），请求进 swapped 队列，恢复时 swap_in 拷回。省算力，代价是 PCIe/NVLink 传输。</li>
+<li>官方 docstring 明确：“We use recomputation by default since it incurs lower overhead than swapping”；例外是 beam search 等&quot;一个 sequence group 含多个 sequence&quot;的场景，recompute 不支持 → 改用 swapping。</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>⚠️ 题目本身有问题（口径过时）：上述&quot;两种策略&quot;是 <strong>V0</strong> 的事实。vLLM V1（当前默认引擎）已移除 GPU↔CPU 的 KV Cache 交换——官方 V1 指南原文&quot;vLLM V1 no longer requires KV cache swapping to handle request preemptions&quot;，特性表把 “GPU &lt;&gt; CPU KV Cache Swapping” 标为 <strong>Removed</strong>；V1 scheduler 只有重计算一条路径（<code>_preempt_request</code>：置 <code>RequestStatus.PREEMPTED</code>、<code>num_computed_tokens = 0</code>、放回 waiting 队首）。</p>
+</blockquote>
+<p><strong>生产观测与调参</strong></p>
+<ul>
+<li>指标：<code>vllm:num_preemptions</code>（累计计数）、<code>vllm:request_num_preemptions</code>（直方图），日志行 “Preemptions: N”。</li>
+<li>调参：降 <code>max_num_seqs</code> / <code>max_num_batched_tokens</code>、适度提高 <code>gpu_memory_utilization</code>（注意同卡其他进程）、开启 prefix caching（降低 recompute 成本）、chunked prefill 平滑显存曲线。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM 官方 V1 用户指南（Swapping 已移除）；vLLM <code>vllm/config/scheduler.py</code> API 文档（<code>PreemptionMode = Literal['swap','recompute']</code>、默认 recompute 的 docstring）；vLLM 源码 <code>vllm/v1/core/sched/scheduler.py::_preempt_request</code>、<code>vllm/v1/metrics/loggers.py</code>。</p>
+</blockquote>
+<h3 id="10-构建-RDMA-无损网络时为何必须严格配置-DSCP-到-CoS-的优先级映射">10. 构建 RDMA 无损网络时为何必须严格配置 DSCP 到 CoS 的优先级映射</h3>
+<p><strong>要点：</strong></p>
+<p><strong>为什么必须映射</strong></p>
+<ul>
+<li>PFC（IEEE 802.1Qbb）是 <strong>L2 的按优先级</strong>流控机制：CoS/PCP 只有 3 bit（8 个优先级），暂停帧只作用于某个优先级。</li>
+<li>RoCEv2 是 <strong>L3</strong>（UDP 4791）承载，跨 L3 后 L2 的 PCP 不再传递，必须靠 IP 头的 DSCP（6 bit）在<strong>每一跳</strong>重新映射到设备内部的 priority/CoS。因此映射必须在整条路径（NIC→Leaf→Spine→Leaf→NIC）上一致，NIC 侧与交换机侧也要一致。</li>
+<li>NVIDIA 参考配置（Cumulus/Spectrum 默认）：RoCE 数据 <strong>DSCP 26 → priority 3</strong>（该优先级开 PFC 并分配无损 buffer），<strong>CNP（拥塞通知）DSCP 48 → priority 6</strong>（严格优先级），其余流量 → priority 0。NIC 侧 <code>mlnx_qos</code> 的 <code>dscp2prio</code>、trust 模式（trust dscp）与 <code>pfctx/pfcrx</code> 必须两端一致（官方原文：“The values of pfctx and pfcrx must be identical”），也可用 <code>dscp_force</code> 强制打标。</li>
+</ul>
+<p><strong>不配置 / 配不一致的严重后果</strong></p>
+<ul>
+<li>报文落到默认优先级（0）→ 该队列没有 PFC、没有无损 buffer，无损语义彻底失效；拥塞（典型 incast）时直接丢包 → RoCEv2 go-back-N 重传、QP 重试/超时 → 集合通信从&quot;变慢&quot;恶化到&quot;hang&quot;（NCCL watchdog 超时）。</li>
+<li>半配置（部分交换机或部分 NIC 映射不同）→ PFC 在错误的优先级上发暂停帧，把同优先级的其他业务一起停住（head-of-line blocking）；极端情况下形成 <strong>PFC 风暴/死锁</strong>：链路长时间被 pause、缓冲区循环依赖无法解除，整片网络停摆。</li>
+<li>CNP 未走严格优先级或 ECN 阈值/标记不一致 → DCQCN 闭环断裂：发送端要么不降速继续丢包，要么过度降速浪费带宽。</li>
+<li>可观测性被破坏：PFC 计数器只在启用了 PFC 的优先级上可见（官方原文），映射错了连计数都看不到，故障只能靠猜。</li>
+</ul>
+<p><strong>排查与落地</strong></p>
+<ul>
+<li>NIC 侧：<code>mlnx_qos -i &lt;dev&gt;</code> 看 trust 模式、<code>dscp2prio</code>、PFC 使能位；<code>ethtool -S &lt;dev&gt;</code> 看 per-priority 的 pause 计数与丢包；NIC 侧还可看 PFC 风暴计数器 <code>tx_pause_storm_warning_events</code> / <code>tx_pause_storm_error_events</code>，并用 <code>pfc_stall_prevention</code>（默认 8 s，auto 模式 100 ms）做兜底。</li>
+<li>交换机侧：核对 DSCP→TC/priority 映射表、PFC 使能优先级、ECN 阈值与队列水位，确保全网一套配置。</li>
+<li>主机与通信库对齐：NCCL 的 RoCE traffic class 字段（<code>NCCL_IB_TC</code>，默认 AUTO 即未配置时为 0）需与交换机映射的 DSCP 对齐，否则改了半天交换机而主机仍用默认标记。</li>
+</ul>
+<blockquote>
+<p>依据：NVIDIA Cumulus Linux “RDMA over Converged Ethernet - RoCE” 文档（DSCP 26→priority 3、DSCP 48→priority 6、PFC/ECN 默认）；NVIDIA “HowTo Configure RoCEv2 Lossless Fabric”（trust DSCP、pfctx/pfcrx 一致）；NVIDIA DOCA “Flow Control”（PFC 风暴/停滞防护计数器）；NCCL 官方环境变量文档（NCCL_IB_TC）。</p>
+</blockquote>
+<hr>
+<h2 id="六、简答题（第-11–20-题）">六、简答题（第 11–20 题）</h2>
+<h3 id="11-Checkpoint-保存引起的慢存储-I-O-阻塞与分层存储设计">11. Checkpoint 保存引起的慢存储 I/O 阻塞与分层存储设计</h3>
+<p><strong>要点：</strong></p>
+<p><strong>物理机制（为什么它会阻塞）</strong></p>
+<ul>
+<li>同步 Checkpoint 的语义是：所有 rank 到达保存点后<strong>停止前向/反向</strong>，把参数、梯度、优化器状态、LR 调度器、RNG、数据加载器位置全部落盘，写完才恢复计算。体积口径：混合精度 + Adam ≈ <strong>16 bytes/参数</strong>（fp16 参数 2 + fp16 梯度 2 + fp32 master 4 + m 4 + v 4），175B ≈ <strong>2.8 TB</strong>。</li>
+<li>千卡集群里数千个进程<strong>在同一秒开始写</strong>，DeepSpeed/Megatron 默认 per-rank 一个分片文件 → 单次 Checkpoint 产生数百到数千个文件，瞬间打满元数据服务器（create/open/close/rename）+ 存储聚合带宽。若存储无法在分钟级吸收完这次写入，训练被迫暂停。</li>
+<li>写放大有五个来源：元数据放大（文件数）、跨 OST 未对齐写（false sharing）、POSIX page cache 冗余拷贝、EC 重建读放大（≈k 倍）、<code>torch.save</code> 单线程 pickle 序列化。</li>
+<li>损耗可量化：设每步 <code>T_step</code>、每 K 步存一次、同步写耗时 <code>T_ckpt</code>，额外吞吐损耗 = <code>T_ckpt / (K·T_step + T_ckpt)</code>。典型数字：<code>T_step</code> 1–2 s、<code>T_ckpt</code> 5–10 min、K=500 → 约 <strong>42%</strong> 的算力被空转吃掉，且会顺带打满存储、影响同集群其他租户（噪声邻居）。</li>
+</ul>
+<p><strong>分层存储的三级流水（唯一可行解）</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">GPU HBM --DMA--&gt; CPU pinned --独立进程--&gt; 本地 NVMe --限速后台--&gt; 并行FS/对象存储</span><br><span class="line"> (同步段 &lt;100ms)   (异步 1-2s)              (完全后台 30-60min)</span><br></pre></td></tr></table></figure>
+<ol>
+<li><strong>L0 GPU HBM → CPU pinned memory（唯一同步段）</strong>：预分配 pinned 池，用 <code>cudaMemcpyAsync</code> + 独立 CUDA stream；利用 fwd/bwd 期间张量不可变，把 D2H 拷贝打散到整个迭代中与计算 kernel 交错（DataStates-LLM，HPDC’24 的做法）。</li>
+<li><strong>L1 CPU → 本地 NVMe（异步段）</strong>：序列化与落盘必须放<strong>独立进程</strong>而非线程（GIL 隔离）；大块写用 <code>O_DIRECT</code>/<code>io_uring</code> 绕过页缓存；若节点有 NVMe 且启用 GPUDirect Storage，L0+L1 可合并为一次 HBM→NVMe 的 DMA。</li>
+<li><strong>L2 本地 NVMe → 共享存储/对象存储（完全后台）</strong>：<strong>错峰 + 限速</strong>，把瞬时风暴摊平成长尾流。限速值不能设 0（否则永远写不完），且<strong>必须在存储端做全局聚合限速</strong>，单节点限速挡不住多节点并发。</li>
+</ol>
+<ul>
+<li>一致性三件套：全局 barrier → 写临时目录 → <strong>原子 rename</strong> → 最后写 done 标记（顺序不能反，否则恢复时读到&quot;有标记但内容为空&quot;的损坏 Checkpoint）；NFS 的 rename 不保证原子性。</li>
+<li>分级频率：高频本地 Checkpoint（每 1000–2000 步，供节点级故障恢复，本地保留 2–3 份）+ 低频全局归档（每 2–4 小时，供灾难恢复）。</li>
+<li>关键参数：NeMo/Megatron 的 <code>dist_ckpt_parallel_save: True</code>（每 DP rank 独立写自己的 shard）与 <code>dist_ckpt_torch_dist_multiproc</code>（每 rank 额外保存进程数，<strong>默认 2</strong>）；PyTorch 侧对应 <code>torch.distributed.checkpoint</code> 分片保存。</li>
+</ul>
+<p><strong>为什么全局存储不需要匹配 GPU 峰值带宽</strong>：某厂商对 40 个 1024+ GPU 生产训练 run（18 个集群、&gt;85,000 次 Checkpoint）的统计显示，异步 Checkpoint 落到全局存储的速率是 <strong>50–200 GB/s</strong>，与模型规模无明显相关性，万亿参数模型也远低于 1 TB/s。前提是<strong>绝大多数故障是单卡/链路级</strong>（Meta Llama 团队的研究：整机故障只占故障总数的约 5%），可从节点本地 Checkpoint 恢复。</p>
+<blockquote>
+<p>依据：NVIDIA/IBM DataStates-LLM（arXiv:2406.10707, HPDC’24）；ZeRO 论文的 16Ψ 显存口径；NeMo/Megatron 分布式 Checkpoint 文档；PyTorch <code>torch.distributed.checkpoint</code> 与 <code>async_save</code>（2.4 引入）文档；VAST Data 生产集群 Checkpoint 量化分析。</p>
+</blockquote>
+<h3 id="12-未开启客户端断开检测为何引发-显存滚雪球式崩溃">12. 未开启客户端断开检测为何引发&quot;显存滚雪球式崩溃&quot;</h3>
+<p><strong>要点：</strong></p>
+<p><strong>物理机制（一条僵尸请求如何吃光 KV Cache）</strong></p>
+<ul>
+<li>流式推理（SSE/HTTP chunked）中，客户端断开（关页面、客户端超时、网络抖动、网关主动断连）后 TCP 层会到达 FIN/RST，但<strong>服务端如果不在生成循环里主动检测断开状态，就会继续为这条请求逐 token 解码</strong>。</li>
+<li>在<strong>连续批处理</strong>下，这条请求始终留在 running batch：每步仍为它算一次 attention，它占用的 <strong>KV Cache 块一直不释放</strong>。KV Cache 是按块管理的固定大小池（PagedAttention 的 block pool），池子大小在启动时由 <code>gpu_memory_utilization</code> 决定，不会自己长大。</li>
+<li>雪崩链条：僵尸请求占块 → 可分配块减少 → 调度器无法接纳新请求或被迫<strong>抢占 + 重算（preemption + recompute）</strong>，吞吐塌陷 → 排队变长 → 客户端超时重试 → 请求数放大 → 更多 KV 被占 → 直至 <code>gpu_cache_usage_perc</code> 打满、CUDA OOM / EngineCore 崩溃。长上下文与投机解码会放大单请求的 KV 占用，使雪崩来得更快。</li>
+<li>二次放大（PD 分离场景）：decode 端释放 KV 槽位必须与 prefill 端协商。SGLang 官方安全更新（2026-10）披露的跨请求数据暴露事件，根因正是<strong>客户端断开触发 abort，而 RDMA 写入仍在飞行中，槽位被提前释放并分配给了新请求</strong>——即&quot;释放得太早&quot;会造成 KV 污染，所以正确做法是 <strong>hold-then-free</strong>：等各 prefill rank 确认（ABORT_ACK）后再释放，并用超时兜底。</li>
+</ul>
+<p><strong>正确做法</strong></p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># vLLM 官方文档给出的标准写法（示意）</span></span><br><span class="line"><span class="keyword">async</span> <span class="keyword">for</span> request_output <span class="keyword">in</span> results_generator:</span><br><span class="line">    <span class="keyword">if</span> <span class="keyword">await</span> request.is_disconnected():</span><br><span class="line">        <span class="keyword">await</span> engine.abort(request_id)   <span class="comment"># 关键：显式中止，触发 KV 块回收</span></span><br><span class="line">    final_output = request_output</span><br></pre></td></tr></table></figure>
+<ul>
+<li>网关/负载均衡层要做<strong>连接级取消透传</strong>，不要让断连在代理处被吞掉；给每条请求设 <code>max_tokens</code> 与整体超时，作为兜底。</li>
+<li>必须监控：<code>num_running_reqs</code> / <code>num_queue_reqs</code> 是否只增不减、KV Cache 使用率、单请求驻留时长；对&quot;running 数不降但输出 token 数不涨&quot;设告警——这正是僵尸请求的指纹。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM 官方文档 <code>AsyncLLMEngine.abort()</code> 与 <code>request.is_disconnected()</code> 示例（<code>entrypoints/api_server.py</code>）；SGLang 官方安全更新（2026-10，KV 槽位提前释放导致的跨请求暴露）与其 deferred KV release 修复。</p>
+</blockquote>
+<h3 id="13-Single-Bit-与-Double-Bit-ECC-的运维处理策略本质区别">13. Single-Bit 与 Double-Bit ECC 的运维处理策略本质区别</h3>
+<p><strong>要点：</strong></p>
+<p><strong>先确认命令与口径</strong>：<code>nvidia-smi -q -d ECC</code> 是合法用法，输出分 <strong>Volatile</strong>（本次驱动加载/复位后的累计，复位即清零）与 <strong>Aggregate</strong>（设备全生命周期累计）两套计数，各自再按 Single Bit / Double Bit 拆分，并按硬件单元细分（Device Memory、Register File、L1/L2 Cache、Texture Memory…）。<strong>做历史趋势必须用 Aggregate，判断&quot;这张卡当前状态&quot;才用 Volatile</strong>，两者混用会得出完全相反的结论。规模化采集建议走 DCGM，<code>nvidia-smi --query-remapped-rows</code> 单独看行重映射。</p>
+<p><strong>SBE（可纠正，Single Bit）：数据无损，是&quot;预警信号&quot;，处理策略是观察而非下线</strong></p>
+<ul>
+<li>ECC 硬件自动纠正，应用无感、数据正确。因此<strong>不能设绝对值告警</strong>——一旦设了，一个集群会刷出告警风暴。正确做法是<strong>速率/增量告警</strong>（如 15 分钟滑动窗口内新增超过阈值），看增长斜率。</li>
+<li>关键判据是它有没有触发<strong>行重映射</strong>：HBM 有备用行，重映射是正常的自愈机制。<strong>Xid 63 表示&quot;重映射条目已成功写入 InfoROM&quot;，属于信息类事件</strong>（与之相对，<strong>Xid 64 表示重映射记录失败</strong>，这个要关注）。只有重映射行数耗尽/失败，才进入 RMA 流程。</li>
+<li>处置：标记观察、纳入节点健康分；不隔离、不换卡；配合 <code>nvidia-smi --query-remapped-rows</code> 跟踪 <code>Remapped Rows</code> 与 <code>Row Remapping Failure</code>。注意 <strong>retire 页数是持久化的，重启不会归零</strong>。</li>
+</ul>
+<p><strong>DBE（不可纠正，Double Bit）：数据已损坏，是&quot;停服信号&quot;，处理策略是零容忍</strong></p>
+<ul>
+<li>错误无法被纠正，<strong>读出的数据已经是错的</strong>。训练对显存一致性要求极高，静默数据错误会污染模型参数/梯度且难以察觉（表现为 loss 异常、结果静默出错）。应用层会收到 <code>uncorrectable ECC error</code>，驱动侧对应 <strong>Xid 48</strong>（NVIDIA 另有 <strong>Xid 171 = DRAM</strong>、<strong>Xid 172 = SRAM</strong> 区分错误来源）。</li>
+<li>处置：<strong>立即终止任务 → 隔离该 GPU（不可复位后继续复用）→ 走 RMA</strong>。不能&quot;复位一下再跑&quot;，因为 DBE 的语义是数据完整性已被破坏，而训练不会自检。</li>
+<li>自动化边界：DBE 可以接入自动化（告警 → 调用调度系统 API 下线节点 → 人工复核），但<strong>换卡决策建议保留人工确认</strong>；同时要有熔断——短时间内批量 DBE 说明是共性环境问题（供电/散热/批次），自动批量隔离会打穿备用池。</li>
+</ul>
+<p><strong>一句话区别</strong>：SBE 影响的是<strong>这张卡的未来寿命</strong>（观察趋势、允许继续服务）；DBE 影响的是<strong>已经产出的数据是否正确</strong>（立即止损、不允许继续服务）。二者的判据、告警方式、自动化权限三者完全不同。</p>
+<blockquote>
+<p>依据：NVIDIA XID Errors 官方文档（Xid 48 / 63 / 64 条目，Xid 171 DRAM、Xid 172 SRAM）；NVIDIA GPU Memory Error Management（Row Remapping、RAS Repair）；NVML/<code>nvidia-smi -q -d ECC</code> 的 Volatile/Aggregate 语义。</p>
+</blockquote>
+<h3 id="14-FlashDecoding-的切分逻辑，及它与-FlashAttention-2-解决并行度瓶颈的差异">14. FlashDecoding 的切分逻辑，及它与 FlashAttention-2 解决并行度瓶颈的差异</h3>
+<p><strong>要点：</strong></p>
+<p><strong>FlashAttention-2 的并行度来源与它的天花板</strong></p>
+<ul>
+<li>FA2 的并行维度是 <strong>batch × head × query 分块</strong>，加上块内 warp 级的任务重新划分（减少非 matmul FLOPs、减少 shared memory 通信）。这在训练/prefill 阶段够用，因为 query 长度本身就很大。</li>
+<li>但 <strong>decode 阶段 query 长度 = 1</strong>：每个 (batch, head) 只有一行 query，沿 query 方向根本切不动，并行度被压缩到 <code>batch × heads</code>。batch 小、上下文长时（长上下文场景的常态），GPU 占用率可以低到 <strong>“A100 108 个 SM 里用不到 1%”</strong>（官方博客原话：<code>as little as &lt;1% of an A100's 108 SMs</code>）。此时算力不是瓶颈，<strong>并行度</strong>才是。</li>
+</ul>
+<p><strong>FlashDecoding 新增的维度：KV 序列长度（split-KV）</strong></p>
+<ol>
+<li><strong>切</strong>：把 KV Cache 沿序列维度切成若干 chunk；</li>
+<li><strong>并行算</strong>：query 与每个 chunk 并行做 FlashAttention，除局部输出外<strong>额外写出每行的 log-sum-exp</strong>；</li>
+<li><strong>归约</strong>：第二个 kernel 用 log-sum-exp 对各 split 的结果做 rescale 后合并（split-K 式归约）。</li>
+</ol>
+<p>softmax 因此变成两级可迭代计算：split 内部（同 FlashAttention）+ split 之间（最终归约）。这样<strong>batch=1 也能把 GPU 打满</strong>（只要上下文足够长），且耗时在上下文长度上近似恒定（官方数据：CodeLlama-34B 长序列端到端解码最高 <strong>8×</strong> 加速，attention 本身相对 FlashAttention v2 最高 <strong>50×</strong>；seqlen 131k 时 ~106 µs vs FA2 的 ~4592 µs）。</p>
+<p><strong>两者关系与工程取舍</strong></p>
+<ul>
+<li><strong>互补而非替代</strong>：FlashDecoding 的每个 split 内部用的就是 FlashAttention-2 的 kernel；FA2 优化的是&quot;单次 kernel 效率与块内并行&quot;，FlashDecoding 增加的是&quot;原本不存在的并行维度&quot;。</li>
+<li><strong>split 数要自适应</strong>：上下文短时 split 带来的额外归约开销大于收益，所以需要运行时 dispatcher 自动在 FlashAttention / FlashDecoding 之间选择（FlashAttention 包 ≥ v2.2、xFormers ≥ v0.0.22 已内置自动分发与 Triton 回退）。生产上真正要盯的是<strong>长上下文 + 小 batch 的组合</strong>——这才是 FlashDecoding 生效的窗口。</li>
+</ul>
+<blockquote>
+<p>依据：PyTorch 官方博客《Flash-Decoding for long-context inference》（Tri Dao、Daniel Haziza、Francisco Massa、Grigory Sizov，2023-10）；FlashAttention-2 论文/README 关于并行维度与 work partitioning 的表述。</p>
+</blockquote>
+<h3 id="15-仅靠-CPU-Memory-Request-与-Limit-为何挡不住-GPU-算力噪声邻居">15. 仅靠 CPU/Memory Request 与 Limit 为何挡不住 GPU 算力噪声邻居</h3>
+<p><strong>要点：</strong></p>
+<p><strong>根本原因：GPU 算力不在 cgroup 的管辖范围内</strong></p>
+<ul>
+<li>CPU/Memory 的 request/limit 能生效，是因为 kubelet 把它们翻译成 cgroup 的控制器（<code>cpu.max</code>/<code>cpu.weight</code>、<code>memory.max</code>），由内核调度器强制执行。</li>
+<li>GPU 走的是另一条路：<strong>Device Plugin 把 <code>nvidia.com/gpu</code> 表达成&quot;整数个同质设备&quot;</strong>，容器拿到的只是挂载进来的 <code>/dev/nvidia*</code> 与驱动库。<strong>&quot;1 张卡&quot;没有对应的带宽/算力配额语义</strong>——调度器只知道&quot;这个 Pod 有 1 张卡&quot;，不知道&quot;这 1 张卡只许用 1/8 的 SM 和 1/4 的 HBM 带宽&quot;。</li>
+<li>cgroup 的 <code>devices</code> 控制器只管&quot;<strong>能不能访问</strong>&quot;，没有 CUDA 时间片控制器，也没有显存带宽控制器。NVIDIA 没有把 SM 时间片暴露给 cgroup v2。</li>
+</ul>
+<p><strong>因此同卡邻居可以造成的四类伤害</strong></p>
+<ol>
+<li><strong>算力抢占</strong>：SM 时间片轮转由驱动做，<strong>没有公平性保证</strong>，邻居的持续大 kernel 会让你的 kernel 排队；</li>
+<li><strong>访存争抢</strong>：HBM 带宽与 L2 被邻居打满，你的算子直接掉速（访存密集算子受影响最大）；</li>
+<li><strong>显存无隔离</strong>：显存是<strong>先到先得</strong>，一个进程把显存吃满，同卡其他租户直接 OOM；</li>
+<li><strong>共享故障域</strong>：邻居的 CUDA 错误/上下文异常、copy engine 占用、NVLink/PCIe 带宽占用都会外溢。</li>
+</ol>
+<p><strong>时间片复用（time-slicing）不是隔离</strong>：NVIDIA device plugin 的 <code>replicas</code> 是&quot;<strong>靠虚增设备数实现超卖</strong>&quot;——官方原文说明单卡 <code>replicas: 4</code> 会让节点通告 4 个 GPU、双卡节点通告 8 个。插件通告的是<strong>数量不是属性</strong>，它无法表达&quot;这 4 个是同一张物理卡的时间片、共享显存与故障域&quot;。<strong>没有显存隔离、没有故障隔离、没有 QoS。</strong></p>
+<p><strong>隔离强度谱系（从硬到软，选型要匹配多租户的安全要求）</strong></p>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>隔离强度</th>
+<th>代价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MIG</strong>（A100/H100/H200 硬件切分，独立 SM/显存/L2 slice，实例数上限 7）</td>
+<td>硬件强制 + QoS</td>
+<td>profile 需预配置、实例数有限、调度器要感知</td>
+</tr>
+<tr>
+<td><strong>MPS</strong></td>
+<td>进程级共享，可用 <code>CUDA_MPS_ACTIVE_THREAD_PERCENTAGE</code> 限制 SM 占比</td>
+<td><strong>无显存隔离</strong>、故障域共享</td>
+</tr>
+<tr>
+<td><strong>Time-slicing</strong></td>
+<td>无</td>
+<td>仅超卖，靠自觉</td>
+</tr>
+<tr>
+<td><strong>HAMi 类 API 拦截</strong></td>
+<td>可做显存/算力限额</td>
+<td>依赖 CUDA API 拦截，绕过路径有风险，无硬件隔离语义</td>
+</tr>
+</tbody>
+</table>
+<p><strong>生产处置</strong>：要真隔离就上 MIG 或<strong>节点池隔离</strong>（唯一干净解）；要超卖就明确接受降级，并用 DCGM 按 GPU 粒度采集 SM Active / Tensor Active / 显存带宽，把&quot;谁在干扰谁&quot;变成可归因的证据；调度侧用亲和/反亲和避免把两个高密度任务放到同一张物理卡上。<strong>注意：<code>kubectl top</code> 与 CPU/Memory 告警对此完全失明，必须另建 GPU 维度的观测。</strong></p>
+<blockquote>
+<p>依据：NVIDIA device plugin 官方 time-slicing 文档（<code>replicas</code> 原文）；NVIDIA MIG 用户指南与各卡型实例上限；Kubernetes Device Plugin / DRA 机制；NVIDIA Device Plugin for Kubernetes 源码（<code>getAllocateResponse</code> 的 MPS 共享分支）。</p>
+</blockquote>
+<h3 id="16-NCCL-ASYNC-ERROR-HANDLING-TORCH-NCCL-ASYNC-ERROR-HANDLING-的作用、语义与当前状态">16. <code>NCCL_ASYNC_ERROR_HANDLING</code> / <code>TORCH_NCCL_ASYNC_ERROR_HANDLING</code> 的作用、语义与当前状态</h3>
+<p><strong>要点：</strong></p>
+<blockquote>
+<p>⚠️ 题目本身有问题：<code>NCCL_ASYNC_ERROR_HANDLING</code> <strong>从来就不是 NVIDIA libnccl 的环境变量</strong>。查 NVIDIA 官方 NCCL 环境变量清单，其中没有该条目（NCCL 库侧与之相关的是 API <code>ncclCommGetAsyncError</code> 和 2.23 引入的 <code>NCCL_IB_RETURN_ASYNC_EVENTS</code>）。它是 <strong>PyTorch <code>ProcessGroupNCCL</code> 自己读取的变量</strong>，只在用 PyTorch 训练时生效。因此&quot;新版为 <code>TORCH_NCCL_ASYNC_ERROR_HANDLING</code>&quot;的表述要修正为：<strong>PyTorch 给自己的 NCCL 相关变量统一加了 <code>TORCH_</code> 前缀，以区别于 libnccl 的原生变量</strong>。</p>
+</blockquote>
+<p><strong>核实结论（逐版本源码核对）</strong></p>
+<table>
+<thead>
+<tr>
+<th>版本</th>
+<th>读取的变量名</th>
+<th>默认值</th>
+<th>源码证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PyTorch ≤ 2.1</td>
+<td><code>NCCL_ASYNC_ERROR_HANDLING</code></td>
+<td><strong>1（TearDown）</strong></td>
+<td><code>parseEnvVarIntDefault(NCCL_ASYNC_ERROR_HANDLING, 1 /*TearDown*/)</code></td>
+</tr>
+<tr>
+<td>PyTorch ≥ 2.2</td>
+<td><strong><code>TORCH_NCCL_ASYNC_ERROR_HANDLING</code></strong></td>
+<td><strong>3（SkipCleanUp）</strong></td>
+<td><code>getCvarInt(TORCH_NCCL_ASYNC_ERROR_HANDLING, 3 /*SkipCleanUp*/)</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>引入/改名版本：PyTorch 2.2</strong>（同一版本把默认值从 1 改成 3）。PyTorch 2.2 release note 原文：<code>Change default NCCL_ASYNC_ERROR_HANDLING to 3:SkipCleanUp to avoid calling ncclCommAbort which in some cases hangs</code>。</li>
+<li><strong>旧名是否已废弃：是。</strong> 在 PyTorch 2.2 与当前 main 的 <code>torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp</code> 中检索不到无 <code>TORCH_</code> 前缀的变量名，<strong>旧名写了也不会被读取（静默无效）</strong>——这是生产环境里最典型的一个&quot;配置了但没生效&quot;陷阱。</li>
+<li><strong>取值语义（官方文档原文口径）</strong>：<code>0</code> = 不做任何异步错误处理；<code>1</code> = 中止 NCCL communicator <strong>并</strong>拆掉进程；<code>2</code> = 只中止 communicator；<code>3</code> = 拆掉进程但<strong>不</strong>中止 communicator（默认）。</li>
+</ul>
+<p><strong>核心作用与生产价值</strong></p>
+<ul>
+<li>watchdog 检测到集合通信超时/异步错误后，把&quot;<strong>静默 hang</strong>&quot;转成&quot;<strong>显式异常 + 进程退出</strong>&quot;。默认行为（3）已经会让进程退出，所以设 <code>0</code> 等于主动放弃快速失败：任务会一直挂着占住 GPU，直到外层超时或人工介入。</li>
+<li>与配套变量一起才构成完整的&quot;故障现场&quot;能力：<code>TORCH_NCCL_TRACE_BUFFER_SIZE</code>（Flight Recorder，PyTorch 2.4 起可用）、<code>TORCH_NCCL_DUMP_ON_TIMEOUT</code>、<code>TORCH_NCCL_DESYNC_DEBUG</code>、<code>TORCH_NCCL_ENABLE_MONITORING</code> / <code>TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC</code>。超时 dump 里会带每个 rank 的 <code>OpType</code> / <code>SeqNum</code> / <code>NumelIn</code> / <code>NumelOut</code> / <code>Timeout(ms)</code>——<strong>把全部 worker 的 OpType 与 SeqNum 对齐，就能看出在哪一步分叉</strong>（集合通信操作不匹配是最高频的 NCCL hang 根因）。</li>
+<li><strong>不要盲目设 <code>=1</code></strong>：默认改成 3 正是为了避开 <code>ncclCommAbort</code> 在某些场景下自身挂死的问题。要&quot;更快失败&quot;应该调 watchdog 超时（NCCL 后端自 PyTorch v2.2 起默认 10 分钟；以所用版本源码为准），而不是把 3 改回 1。</li>
+<li>它<strong>不修复任何故障</strong>，只是把 hang 变成 crash + 现场，让容错/调度系统能感知并重启——这是&quot;有效训练时间占比&quot;能守住的前提。</li>
+</ul>
+<blockquote>
+<p>依据：PyTorch 官方文档《PYTORCH ProcessGroupNCCL Environment Variables》（<code>TORCH_NCCL_ASYNC_ERROR_HANDLING</code> 条目，默认 3）；PyTorch v2.1.0 与 v2.2.0 的 <code>torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp</code> 源码对比；PyTorch v2.2.0 release notes；NVIDIA 官方 NCCL 环境变量文档（确认无 <code>NCCL_ASYNC_ERROR_HANDLING</code>）。</p>
+</blockquote>
+<h3 id="17-生产镜像构建规范为何禁止把数百-GB-权重打进-Docker-镜像">17. 生产镜像构建规范为何禁止把数百 GB 权重打进 Docker 镜像</h3>
+<p><strong>要点：</strong></p>
+<p><strong>1）镜像分层与内容寻址机制决定了&quot;没有增量&quot;</strong></p>
+<ul>
+<li>每一层是内容寻址（<code>sha256(内容)</code>）且<strong>不可变</strong>。改一个权重文件 → 生成一个<strong>全新的数百 GB 层</strong>，旧层仍被 manifest 引用、仍占仓库与节点磁盘。模型每出一版，仓库就要多吃一份全量体积（存储成本 = 权重体积 × 版本数）。</li>
+<li>层是 gzip 压缩的 tar，拉取时要<strong>先下载再解压再写 overlay2</strong>，落盘量 ≈ 镜像大小；节点的 <code>upperdir</code>/layer 目录会被迅速撑满。</li>
+</ul>
+<p><strong>2）分发放大：万卡同时拉 = 打爆 registry + 打爆节点盘</strong></p>
+<ul>
+<li>数百 GB × N 个节点同时拉取，registry 出口带宽瞬间打满，所有节点都变慢（拉取时间 ∝ 镜像大小 ÷ 分到的带宽）。</li>
+<li>会与 kubelet 的镜像 GC 直接冲突：<code>imageGCHighThresholdPercent</code> <strong>默认 85</strong>（磁盘使用率超过 85% 开始回收镜像）、<code>imageGCLowThresholdPercent</code> <strong>默认 80</strong>（降到 80% 停止）。大镜像会把节点推入 ImageFsPressure / KubeletDiskPressure，出现<strong>反复 GC → 拉取 → 再 GC</strong> 的循环，甚至驱逐 Pod。</li>
+<li>失败模式直接可见：<code>ImagePullBackOff</code>、拉取超时、Pod 长时间 <code>ContainerCreating</code>。</li>
+</ul>
+<p><strong>3）缓存击穿：同一个 tag 覆盖推送是灾难放大器</strong></p>
+<ul>
+<li>生产上真实发生过的形态：镜像 tag 没变但内容被重新 push → 所有节点都要重拉那个增量层 → 几十个 Pod 同时拉 → 每个节点只分到很少带宽。一次实测：<strong>只有约 130 MB 的增量层，拉了 56.9 秒</strong>（同节点上已缓存该层的 Pod 只用 181 ms）。换成数百 GB 的权重层，这个放大就是小时级。</li>
+<li>注意：P2P 分发（Dragonfly/spegel 类）<strong>只对出现在 containerd <code>certs.d</code> 路径下的域名生效</strong>，用别的域名访问同一个 registry 就不走加速。</li>
+</ul>
+<p><strong>4）工程正确做法</strong></p>
+<ul>
+<li><strong>镜像只装&quot;环境&quot;</strong>：基础镜像放 OS + 驱动兼容层 + 框架 + 依赖；权重、数据集、Checkpoint 全部走<strong>数据面</strong>（对象存储 / 并行文件系统），启动时拉取或挂载。</li>
+<li>加载侧加速：<code>safetensors</code> + <code>mmap</code>（避免一次性全量读 + 避免反序列化）、<code>fastsafetensors</code>（成组张量直接传到 device 内存再实例化，官方报告 4.8×–7.5×）、GPUDirect Storage（<code>kvikio</code> / <code>torch.cuda.gds</code>）。</li>
+<li>分发侧加速：节点级缓存（本地 NVMe / JuiceFS 缓存组）、P2P 分发、懒加载（eStargz / Nydus / SOCI + 对应 snapshotter）——<strong>这些方案的共同前提恰恰是&quot;数据不在镜像层里&quot;或&quot;镜像层可寻址&quot;</strong>。</li>
+<li>版本管理：镜像 tag 与模型版本解耦，权重用对象存储的版本/校验和（checksum）管理，避免&quot;同名 tag 覆盖&quot;造成的缓存击穿。</li>
+</ul>
+<blockquote>
+<p>依据：OCI 镜像规范与 containerd/overlay2 的层机制（内容寻址、不可变层、copy-up）；Kubernetes kubelet 镜像 GC 参数默认值（<code>imageGCHighThresholdPercent</code> 85 / <code>imageGCLowThresholdPercent</code> 80）；IBM《Speeding up Model Loading with fastsafetensors》（arXiv:2505.23072, IEEE CLOUD 2025）；NVIDIA GPUDirect Storage 文档。</p>
+</blockquote>
+<h3 id="18-HCCL-与-NCCL-在通信挂死（Hang）排查手段上的核心异同">18. HCCL 与 NCCL 在通信挂死（Hang）排查手段上的核心异同</h3>
+<p><strong>要点：</strong></p>
+<p><strong>相同点（方法论层面是一致的）</strong></p>
+<ul>
+<li><strong>分层定界</strong>：都按&quot;通信域初始化 → 参数面建链 → 任务下发执行&quot;三阶段切分，先判断卡在哪一段，再往下钻。</li>
+<li><strong>全 rank 日志对齐</strong>：都要把每个 rank 的日志按时间戳排开，回答&quot;谁先报错、谁在等谁&quot;——NCCL 侧看 watchdog 的 <code>OpType</code> / <code>SeqNum</code> 是否分叉，HCCL 侧看各 device 在同一通信域（<code>identifier[...]</code>）内的等待链路。</li>
+<li><strong>二分消融</strong>：换小规模复现、禁用 RDMA（NCCL 是 <code>NCCL_IB_DISABLE=1</code>）、换算法/关闭流水优化做对照，都是两边通用的收敛手段。</li>
+<li><strong>抓卡死时刻的栈</strong>：<code>pstack</code> / <code>gdb</code> / <code>py-spy</code> 在两边都是&quot;卡在哪一行代码&quot;的最后手段。</li>
+<li><strong>都有超时环境变量</strong>：把&quot;无限等待&quot;变成&quot;有限等待 + 显式报错&quot;。</li>
+</ul>
+<p><strong>核心差异（工程手段层面差异很大）</strong></p>
+<ol>
+<li><strong>日志体系与可见性</strong>。NCCL 的日志由 <code>NCCL_DEBUG=INFO</code> + <code>NCCL_DEBUG_SUBSYS=ALL</code> <strong>直接打在训练进程的 stdout</strong>，随容器日志一起被采集。HCCL 的日志分 <strong>host 侧 plog 与 device 侧日志</strong>，device 侧需要专门工具（如 <code>msnpureport</code>）导出；而<strong>算子级的下发日志还要单独开关</strong> <code>HCCL_ENTRY_LOG_ENABLE</code>（取值 0/1）。也就是说 HCCL 的&quot;第一现场&quot;默认是不完整的，<strong>必须提前在镜像/启动脚本里把日志开关和采集链路配好</strong>，出事后再去开往往已经错过现场。</li>
+<li><strong>超时参数的分层语义不同</strong>。NCCL 侧的超时主要落在 <strong>PyTorch 的 ProcessGroupNCCL watchdog</strong>（库侧只有链路级的 <code>NCCL_IB_TIMEOUT</code>，默认 20、取值 0–31，与 <code>NCCL_IB_RETRY_CNT</code>，默认 7）。HCCL 侧是<strong>执行级 <code>HCCL_EXEC_TIMEOUT</code>（取值 1s–17340s）+ 建链级 <code>HCCL_CONNECT_TIMEOUT</code>（取值 120s–7200s）<strong>两把旋钮，且</strong>建链超时是 HCCL 特有的一类高频故障</strong>（对应故障码 EI0006&quot;建链接超时&quot;，NCCL 侧没有同等级的独立类别）。</li>
+<li><strong>拓扑来源不同，因此多了一整类故障</strong>。NCCL 自己探测 NVLink/PCIe/RDMA 拓扑并据此选算法与路径；HCCL 依赖<strong>显式的集群信息 / rank table</strong> 描述通信域拓扑，于是&quot;集群信息校验失败&quot;&quot;集群信息协商失败&quot;是 HCCL 独有的故障大类——排查时先核对 rank table 与实际节点、IP、端口是否一致，再怀疑通信本身。</li>
+<li><strong>工具链生态不同</strong>。NCCL 生态：nccl-tests（点对点 + 集合通信二分定位）、PyTorch Flight Recorder（<code>TORCH_NCCL_TRACE_BUFFER_SIZE</code> / <code>TORCH_NCCL_DUMP_ON_TIMEOUT</code>）、<code>NCCL_ALGO</code> 强制算法做对照。HCCL 生态：官方故障诊断按阶段配套<strong>故障码体系</strong>（EI0001 环境变量配置错误、EI0002 执行通信操作超时、EI0006 建链接超时等）、通信域 identifier 追踪等待关系、<code>HCCL_OP_RETRY_ENABLE</code> 控制通信算子重试、以及关闭流水优化（如 <code>TASK_QUEUE_ENABLE</code>）做对照实验。</li>
+<li><strong>典型根因分布不同</strong>。NCCL 侧最常见的是<strong>集合通信操作不匹配</strong>（一部分 rank 走 AllReduce、另一部分走 AllGather，谁也等不到谁）与 PFC/ECN 拥塞导致的超时。HCCL 侧有一类特色死锁：<strong>多通信域并发下发导致的闭环死锁</strong>——同一进程同一 HCCL Context 内，不同模块（C++ 侧与 Python 侧接口混用）未统一管理算子下发顺序，导致算子下发乱序 + 设备间同步等待交织成环。官方结论是：<strong>所有通信域算子必须在每个 device 上串行下发，由统一调度器管理</strong>。这类问题的定位靠 <code>HCCL_ENTRY_LOG_ENABLE=1</code> 看下发日志 + <code>pstack</code>/<code>gdb</code> 抓栈 + 逐级追踪 rank 间等待关系。</li>
+</ol>
+<p><strong>一句话总结</strong>：方法论同源（分层 + 全 rank 对齐 + 二分 + 抓栈），<strong>差异集中在&quot;现场可见性&quot;与&quot;超时/拓扑的显式性&quot;</strong>——HCCL 把更多东西交给了显式配置（rank table、日志开关、两级超时），因此<strong>排查能力高度依赖事前把日志与配置准备好</strong>；NCCL 的自动探测与 stdout 日志让&quot;事后取证&quot;更容易，但也因此更容易出现静默降级（如 fallback 到 Socket）这类隐蔽问题。</p>
+<blockquote>
+<p>依据：昇腾社区 CANN《HCCL 集合通信库故障诊断》文档（定位思路、通信域初始化/参数面建链/任务下发执行三阶段）与《多通信域并发下发导致 HCCL 通信死锁问题分析与解决方案》官方技术文章；HCCL 常见问题总结（EI0001/EI0002/EI0006）与 <code>HCCL_ENTRY_LOG_ENABLE</code> 环境变量文档；NVIDIA 官方 NCCL 环境变量文档。</p>
+</blockquote>
+<h3 id="19-推测解码的工程落地风险与-接受率-动态熔断-的必要性">19. 推测解码的工程落地风险与&quot;接受率 + 动态熔断&quot;的必要性</h3>
+<p><strong>要点：</strong></p>
+<p><strong>原理与收益的边界</strong>：draft 模型猜 k 个 token，target 模型一次前向并行验证，接受率 α 决定实际加速比。α 高且并发低时接近&quot;免费加速&quot;；<strong>α 一旦塌陷，verify 的成本照付、被拒的 draft token 全白算，有效吞吐会低于不投机</strong>——生产上出现过&quot;接受率下降导致整体变慢&quot;的实测案例。</p>
+<p><strong>四类落地风险</strong></p>
+<ol>
+<li><strong>α 漂移（最主要）</strong>：draft 与 target 的分布不匹配会直接压低 α。触发因素包括：换领域数据（代码/多语言/长文档）、采样参数变化（temperature / top-p 调高）、draft 模型量化、<strong>开启动态 EPLB 后专家分布变化</strong>（昇腾社区已收录&quot;动态 EPLB 开启后投机推理接受率下降&quot;这一典型案例）。</li>
+<li><strong>并发下收益反转</strong>：低并发、单请求时收益最大；高并发时 GPU 已被 batch 填满，verify 的额外算力不再&quot;免费&quot;，反而挤占吞吐——同一套投机配置在 1 用户和 32 用户下的结论可能完全相反。</li>
+<li><strong>显存与 KV 放大</strong>：draft 模型自身的 KV Cache + 每步多算 k 个 token 的 KV，长上下文下会挤占并发度，把&quot;吞吐优化&quot;变成&quot;并发下降&quot;。</li>
+<li><strong>结构化输出冲突</strong>：语法/JSON 约束会让被判定非法的 draft token 失效，<strong>有效 α 低于统计值</strong>；逐请求统计里的 <code>num_draft_tokens</code> 通常已经是扣除后的口径，读指标时要注意。</li>
+</ol>
+<p><strong>为什么必须实时监控 α 并设熔断</strong></p>
+<ul>
+<li>α 是<strong>唯一能直接回答&quot;投机现在到底在赚钱还是在亏钱&quot;的观测量</strong>，且它是随流量、模型、采样参数、专家负载持续漂移的——<strong>上线前离线测出来的 α 不能作为生产依据</strong>。</li>
+<li>可采集口径：vLLM 在逐请求响应里提供投机解码统计（需显式开启相应开关，如 <code>--per-request-spec-decode-stats</code> 类参数，以所用版本文档为准），第三方工具（NVIDIA AIPerf 等）把它归一化为 <code>draft_acceptance_rate</code>、<code>mean_acceptance_length</code>、<code>num_accepted_draft_tokens</code> / <code>num_draft_tokens</code>、<code>num_spec_tokens</code> 等字段。<strong>核心派生指标就是接受率与平均接受长度</strong>（<code>mean_acceptance_length == 1.0</code> 表示&quot;完全没接受&quot;，即纯亏损状态）。</li>
+<li><strong>熔断兜底的设计</strong>：以滑动窗口的 α 与实测 TPOT/吞吐为输入——α 低于阈值、或 TPOT 相比纯 target 解码反而劣化时，自动降 k → 关投机 → 回落到纯 target 解码，并告警；恢复条件要带滞回（连续多个窗口达标才开回），避免在阈值附近反复抖动切换（切换本身要重建 CUDA graph / 重编译，抖动代价很高）。</li>
+<li>配套：把 α 与 TPOT 一起进监控看板，按<strong>模型版本 × 流量类型 × 采样参数</strong>分组看——全局平均 α 会把&quot;某一类流量崩了&quot;平均掉。</li>
+</ul>
+<blockquote>
+<p>依据：vLLM 投机解码与逐请求指标文档；NVIDIA AIPerf《Per-Request Speculative-Decoding Acceptance》（<code>draft_acceptance_rate</code> / <code>mean_acceptance_length</code> / <code>num_accepted_draft_tokens</code> 字段定义与 vLLM 适配说明）；昇腾社区&quot;动态 EPLB 开启后投机推理接受率下降&quot;典型案例。</p>
+</blockquote>
+<h3 id="20-SRE-视角的高可用算力监控体系：必须采集的四大维度">20. SRE 视角的高可用算力监控体系：必须采集的四大维度</h3>
+<p><strong>要点：</strong></p>
+<p><strong>方法论前提</strong>：四个维度必须<strong>按&quot;信号来源&quot;正交切分</strong>，再按&quot;责任层&quot;归因。切错的代价是&quot;查了两周网络，结果根因是慢节点&quot;——因为平面内自洽，但层与层之间没有对照。归因的唯一判据是：<strong>这个现象换一台机器 / 换一个集群 / 换一份代码，还跟不跟着走</strong>（跟节点走 → 硬件；跟镜像/驱动走 → 系统软件；跟调度位置走 → 调度；跟代码走 → 应用）。</p>
+<p><strong>维度一：任务 / 应用面（业务 SLO 与训练进度）</strong></p>
+<ul>
+<li>训练：MFU、samples/sec、<strong>单 step 耗时（看方差胜过看均值——方差大即有 Straggler）</strong>、loss 曲线、<strong>日志最后更新时间</strong>（最便宜的 Hang 检测，日志超过 5 分钟无输出就告警，比任何探针都更早发现 NCCL Hang）。</li>
+<li>推理：TTFT、TPOT（两者由不同阶段决定，必须分开看且看 P99 不看均值）、请求队列长度、错误率、单请求驻留时长。</li>
+<li>作用：这是唯一能把&quot;用户感知&quot;翻译成可量化判据的维度；<code>OutOfMemoryError</code>、<code>CUDNN_STATUS_NOT_INITIALIZED</code> 这类瞬时事件<strong>长采样间隔根本采不到，只能靠用户日志</strong>。</li>
+</ul>
+<p><strong>维度二：GPU / 算力硬件面</strong></p>
+<ul>
+<li>利用率要<strong>组合读</strong>，单看一个会误导：<code>GR_ENGINE_ACTIVE</code>（Util）vs <code>SM_ACTIVE</code> vs <code>SM_OCCUPANCY</code> vs <code>PIPE_TENSOR_ACTIVE</code>。<strong>“Util 打到 100% 而 SM Active 接近 0” 是 NCCL 阻塞的特征指纹</strong>（GPU 在轮询式地占着引擎但没在算）——这是不看业务代码就能识别集体卡顿的唯一判据。</li>
+<li><strong>SM Clock</strong>：最容易被漏掉、却是慢节点的主要信号（曾出现 2048 卡任务 MFU 长期波动，最后定位到 256 台里有一台的 8 张卡 SM 时钟长期跑 1.1 GHz、其他机器 1.9 GHz；<strong>这类问题在交换机上永远查不到</strong>）。</li>
+<li>显存要分&quot;容量占用&quot;与&quot;显存带宽利用率&quot;两个量；Xid（31/48/63/64/79/119/120 分级处置）、ECC（SBE/DBE，Volatile vs Aggregate 口径不能混）、降频标志位、PCIe 链路速率与降速（<code>16x → 2x</code> 不报错只变慢）、NVLink 带宽与错误计数、温度与功耗。</li>
+</ul>
+<p><strong>维度三：网络 / 通信面</strong></p>
+<ul>
+<li>无损机制是否生效：<strong>PFC 暂停帧计数</strong>、<strong>ECN 标记率</strong>、队列深度、headroom 余量、<strong>CNP Slow Restart</strong>（隐性丢包与降速的强信号）、RDMA 重传计数（长期应为 0）。</li>
+<li>链路质量：CRC 错包（健康链路应长期为 0）、收发光功率与温度（光模块 DDM）、端口翻转次数、协商速率（<strong>静默降速必须主动比对基线</strong>）、IB 侧 <code>SymbolErrors</code> / <code>LinkErrorRecovery</code> / <code>LinkDowned</code>。</li>
+<li>所有计数器类指标<strong>必须按增量看</strong>（<code>rate()</code>/<code>increase()</code>），瞬时值会把一次突发抹平；<strong>必须采集链路两端的计数器</strong>（两端可能不对称）。</li>
+</ul>
+<p><strong>维度四：存储 / I-O 面</strong></p>
+<ul>
+<li>读写带宽与 IOPS、<code>await</code> 与 <code>%util</code>、元数据操作延迟（小文件场景 MDS 才是真瓶颈，光看带宽会误判）。</li>
+<li>Checkpoint 专项：单次写入耗时、对训练的阻塞时长、异步上传队列深度。</li>
+<li>水位要<strong>容量与 inode 两个维度都看</strong>（<code>df -h</code> 与 <code>df -i</code>），加上缓存命中率与 NVMe SMART/寿命。</li>
+<li>判据：顺序读达标而随机读极慢是&quot;符合预期&quot;的，不能据此说存储坏了——<strong>先分清顺序/随机、单线程/多线程、首次（冷缓存）/第二次（热缓存）</strong>，这四个维度决定结论完全相反。</li>
+</ul>
+<p><strong>配套的采集纪律与看板</strong></p>
+<ul>
+<li>采样间隔必须匹配事件尺度：一个训练 step 几百毫秒到几秒，一次 AllReduce 只有百微秒到毫秒级，<strong>长间隔采样对毫秒级事件是瞎的</strong>；计数器类指标按增量看，事件型信息靠日志补。</li>
+<li>告警三层设计：收敛（<code>for</code> 持续时间，过滤毛刺）→ 聚合（<code>group_by</code> cluster+node）→ 抑制（<code>inhibit_rules</code> 建模因果关系，不要用长期 Silence 代替 inhibit）；<strong>必须用 <code>absent()</code> 类告警捕获&quot;指标断采&quot;</strong>（普通阈值告警在指标消失时根本不会触发）。</li>
+<li>容量水位看板：GPU 分配率（&gt;85% 关注）、<strong>有效算力比 = MFU 均值 / 目标 MFU（&lt;80% 告警，比分配率更能反映真实利用）</strong>、节点可用率（&lt;95% 关注）、网络重传率、存储网水位（&gt;70% 关注，Checkpoint 突发需要余量）。</li>
+<li>基线是前提：交付验收阶段就要存档点对点带宽、集合通信带宽、单节点 MFU、<code>nvidia-smi topo -m</code> 卡间拓扑、网卡-交换机端口对应关系；<strong>任何网络侧/硬件侧变更前后都要重跑基线</strong>——&quot;运行三个月突然变慢&quot;追到最后几乎都是三个月里某次没人记录的变更。</li>
+</ul>
+<blockquote>
+<p>依据：AI Infra 运维排障知识库（四平面/四层责任面、DCGM <code>DCGM_FI_PROF_*</code> 指标口径与组合读法、告警收敛/聚合/抑制三层设计）；DCGM 与 dcgm-exporter 文档；《集群监控告警》面试题集（容量水位阈值、告警分级）。</p>
+</blockquote>
+<hr>
+<hr>
+<h2 id="七、这套卷子该怎么用">七、这套卷子该怎么用</h2>
+<p>试卷本身的设计意图是对的：<strong>用生产现象倒逼机制理解</strong>。像「所有卡满载 100% 却无输出」这种描述，比任何教科书定义都更能让人记住「忙轮询等待」和「真在算」的区别——前者的 GPU 利用率是假的，瓶颈在等一个永远不来的集合通信对端。</p>
+<p>但勘误那 11 条也说明一个问题：<strong>AI Infra 的知识半衰期很短</strong>。这份卷子里过时的部分，几乎都集中在「模型架构」和「框架版本行为」两类：</p>
+<ul>
+<li>模型架构：DeepSeek-V4 弃用 MLA，是从 V3 到 V4 的一次真实架构换代。任何按 V3 口径记住的 KV Cache 公式，到 V4 上都不成立。</li>
+<li>框架版本行为：vLLM V1 移除 swap、PyTorch 2.2 改超时变量名与默认值——这类变更不会大张旗鼓地公告，但会让旧笔记静默失效（<code>NCCL_ASYNC_ERROR_HANDLING</code> 写了不报错、也不生效，是最典型的坑）。</li>
+</ul>
+<p>所以用这套卷子自测时，建议这样处理：</p>
+<ol>
+<li><strong>现象类题目</strong>（为什么卡死、为什么 OOM、为什么掉速）——放心当考点，这些物理机制不会变。</li>
+<li><strong>涉及具体模型架构的题目</strong>——先查当前版本的 <code>config.json</code> 和官方技术报告再作答。</li>
+<li><strong>涉及具体环境变量、API、默认值的题目</strong>——一律回官方文档核对当前版本，不要用记忆里的值。</li>
+<li><strong>涉及组件职责边界的题目</strong>——多问一句「这个动作到底是谁做的」，调度器、设备插件、健康检查控制器、作业控制器之间的职责经常被混着说。</li>
+</ol>
+<p>最后一条尤其值得强调。多选第 5 题的 D 项把「探测坏卡 → 打 NoSchedule 污点 → 驱逐」当成调度器的能力，这是很常见的误解。真实的分工是：<strong>探测与隔离由 NVSentinel 这类健康检查组件（fault-quarantine 打污点、node-drainer 驱逐）和作业控制器负责，调度器只是消费污点做决策</strong>。搞混这个边界，排查时就会去翻调度器日志找一个根本不存在的逻辑。</p>
+<p>这类职责边界问题，我在 <a href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/">推理服务调度的五层责任边界</a> 里也专门拆过——每一层「看得见什么、看不见什么」，比「它有什么功能」更能决定你该去哪里查。</p>
+<hr>
+<blockquote>
+<p>本文的答案与解析已同步沉淀进本地 AI Infra 知识库（<code>ai-infra</code> skill）的 <code>references/troubleshooting.md</code> 与 <code>references/inference.md</code>，可直接检索复用。</p>
+<p>所有答案均尽量追至一手来源（NVIDIA 官方文档、PyTorch / vLLM 源码、Linux 内核定义、模型官方 config.json）。<strong>题目勘误仅针对题干表述，不代表原卷作者的技术判断有误</strong>——其中多数是版本演进导致的自然过时。</p>
+</blockquote>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/">https://roger-lv.github.io/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/AI-Infra/">AI Infra</a><a class="post-meta__tags" href="/tags/GPU/">GPU</a><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/DeepSeek/">DeepSeek</a><a class="post-meta__tags" href="/tags/Xid/">Xid</a><a class="post-meta__tags" href="/tags/RoCEv2/">RoCEv2</a><a class="post-meta__tags" href="/tags/%E6%98%87%E8%85%BE/">昇腾</a><a class="post-meta__tags" href="/tags/KVCache/">KVCache</a><a class="post-meta__tags" href="/tags/%E6%95%85%E9%9A%9C%E6%8E%92%E6%9F%A5/">故障排查</a><a class="post-meta__tags" href="/tags/SRE/">SRE</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/09/2026-11-09-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%80%E6%9D%A132k%E8%AF%B7%E6%B1%82%E8%83%BD%E7%9E%AC%E9%97%B4%E6%89%93%E7%88%86%E6%98%BE%E5%AD%98/" title="为什么一条 32k 请求能瞬间打爆显存：中间激活张量、常驻水位与 Chunked Prefill"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">为什么一条 32k 请求能瞬间打爆显存：中间激活张量、常驻水位与 Chunked Prefill</div></div><div class="info-2"><div class="info-item-1">推理服务最常见的崩溃形态是这样的：系统平稳运行了很久，突然因为一条长文本请求 CUDA OOM，整个实例挂掉。 直觉上会去怪权重太大或 KV Cache 爆了。但权重是启动时就固定的，KV Cache 有 PagedAttention 分页管理、增长是缓坡——它们都不解释「瞬间」这两个字。 真正的元凶是第三类显存：中间激活张量。 一、显存的三类「性格」 把推理时的 GPU 显存按行为特征分成三类，很多 OOM 问题会立刻变得清楚：    类型 内容 增长方式 管理手段     常驻水位 模型权重 启动即固定，不随负载变 量化、张量并行   线性累积 KV Cache 随 token 数 O(S)O(S)O(S) 缓坡上涨 PagedAttention 分页、前缀缓存、KV 量化   瞬时峰值 中间激活张量 单步内 O(S)O(S)O(S) 甚至 O(S2)O(S^2)O(S2) 尖峰 Chunked Prefill、FlashAttention    中间激活张量指的是前向计算过程中、每层算子之间临时产生并立即消费的那部分张量。它们既不是常驻显存的权重，也不是需要长期保留的 KV...</div></div></div></a><a class="pagination-related" href="/2026/11/09/2026-11-09-%E5%9B%BD%E4%BA%A7GPU%E9%80%82%E9%85%8D%E5%88%B0%E5%BA%95%E5%9C%A8%E9%80%82%E9%85%8D%E4%BB%80%E4%B9%88/" title="国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解</div></div><div class="info-2"><div class="info-item-1">在一套兼容的 NVIDIA 环境里，部署一个大模型可能只需要一条命令： 123vllm serve /models/Qwen \    --tensor-parallel-size 1 \    --max-model-len 32768 换到国产 GPU 上，同样的模型、同样的 Python 代码，却可能遇到一长串看似互不相关的问题：PyTorch 认不出设备；权重能加载但执行 Attention 时异常退出；BF16 正常而 FP8 不被支持；单卡能跑但 Tensor Parallel 起不来；能出字但速度远低于预期；短上下文正常而长上下文 OOM；CUDA Graph、投机解码、MoE 这些优化全部不可用。 这些问题指向同一个根源：大模型推理并不直接跑在 GPU 硬件上，而是跑在一整套软硬件协同的执行体系上。 换一张卡，换掉的是整条链路。 一、模型不认识 GPU 以 Transformer 为例，无论 Qwen、DeepSeek 还是 GLM，模型首先描述的是一组数学计算——线性变换 Y=XWY = XWY=XW、注意力 softmax(QKT/d)V\mathrm{sof...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%B8%87%E5%8D%A1GPU%E9%9B%86%E7%BE%A4%E8%BF%90%E7%BB%B4%E7%9B%91%E6%8E%A7%E5%9B%9B%E5%B9%B3%E9%9D%A2%E6%95%85%E9%9A%9C%E4%BA%94%E5%88%86%E7%B1%BB%E4%B8%8E%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7/" title="万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：把 RoCEv2 网络配成无损只是让集群「能跑起来」，真正吃掉算力的在后面——几万张卡在几个月里不停地出故障、掉速、Hang 住，而你要在没有用户配合、看不到业务代码的情况下，判断这一次的锅是硬件、是网络还是调度。 这篇给一套可执行的方法：四个监控平面分工排查、五类故障定性定位、RoCE 三种典型病的判据、三板斧的调优顺序，最后落一份巡检清单。  开场先看一个真实场景。 某集群上一个 2048 卡预训练任务，MFU 长期在 38% 上下波动。团队查了两周网络：PFC 计数正常、ECN 标记率正常、交换机上零丢包、ib_write_bw 端到端带宽也达标。 最后在 DCGM 的 SM Clock 指标上发现问题——256 台机器里有一台的 8 张卡，SM 时钟长期跑在 1.1GHz，其他机器都是 1.9GHz。这台机器是慢节点，它在每一个 AllReduce 里拖后腿，整条 ring 都要等它。换掉之后 MFU 回到 45%，而且不再波动。 这类问题在交换机上永远查不到，因为网络侧所有计数都是干净的。  边界说明：文中命令以 NVIDIA DCGM 与 nvidia-...</div></div></div></a><a class="pagination-related" href="/2025/11/10/2025-11-10-NCCL%E9%80%9A%E4%BF%A1%E5%8E%9F%E8%AF%AD/" title="NCCL通信原语"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-11-10</div><div class="info-item-2">NCCL通信原语</div></div><div class="info-2"><div class="info-item-1">NCCL通信原语 参考： https://blog.csdn.net/2401_84208172/article/details/142610913?fromshare=blogdetail&amp;sharetype=blogdetail&amp;sharerId=142610913&amp;sharerefer=PC&amp;sharesource=a1150568956&amp;sharefrom=from_link 1. Broadcast 其实就是把自己卡上面的东西让所有卡都知道 2. Scatter 其实就是把自己的东西分成多块，按照顺序向其他GPU发送data block 3. Reduce 就是把所有卡的部分在自己卡上面作一个sum。注意这里只有自己的卡作sum 4. Gather 其实对应于Scatter，是把分布在其他卡上的data block在自己卡上面拼起来。注意，这里也是只有自己这一张卡 5. AllReduce 每张卡都对所有卡作一个sum=reduce scatter+all gather, 通信成本也等于这俩加起来 官方说法：将每个节点的数据规约并...</div></div></div></a><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</div></div><div class="info-2"><div class="info-item-1">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点 RDMA 这套东西之所以让人望而生畏,不是因为哪个概念特别难,而是因为它把三个本来独立的知识域压进了同一条调用链:Linux 内核系统调用机制、内存管理、网络硬件。单独看每个术语都不复杂,叠在一起才显得信息量爆炸。 这篇文章分三大块:  调用链——从 ibv_reg_mr 一路走到 HCA 硬件,每一层在做什么; 术语地图——把所有黑话按类别拆开,每个只给一句人话; 实战落点——AI 训练云平台上,这条链路到底体现在哪些日常工作里。   先正一个名。 中文社区里偶尔能看到 “ubverbs” 这个写法,它不是标准名称。内核里承接用户态 verbs 请求的模块叫 ib_uverbs(Userspace Verbs),源码在 drivers/infiniband/core/uverbs*.c。本文统一用 ib_uverbs。   关联阅读: 这条链路上的故障怎么观测,我在 《RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区》 里写过。那篇讲的是&quot;怎么看见...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-Anchor%E8%AE%BA%E6%96%87%E7%B2%BE%E8%AF%BB%E8%A7%A3%E8%80%A6GPU%E5%86%85%E5%AD%98%E6%89%80%E6%9C%89%E6%9D%83%E8%AE%A9%E6%B5%85%E5%B1%82%E4%B8%AD%E6%96%AD%E4%B8%8D%E5%86%8D%E4%BB%98%E5%87%BA%E5%85%A8%E9%87%8F%E6%81%A2%E5%A4%8D%E7%9A%84%E4%BB%A3%E4%BB%B7/" title="Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价</div></div><div class="info-2"><div class="info-item-1">Anchor 论文精读:解耦 GPU 内存所有权,让&quot;浅层中断&quot;不再付出全量恢复的代价  论文:Anchor: Mitigating GPU Shallow Disruptions with Decoupled Memory 作者:Haoyi Ma、Shiwei Gao、Youmin Chen、Junrong Huang、Youyou Lu、Jiwu Shu(清华大学 &amp; 上海交通大学) 发表:SOSP '26(ACM SIGOPS 第 32 届操作系统原理研讨会)  TL;DR 大规模 LLM 集群中的绝大多数故障其实是&quot;浅层中断&quot;——进程崩了,但 GPU 硬件和 OS 内核毫发无损。现有恢复机制对此一视同仁:checkpoint → 重启 → 全量重载,哪怕数据本来就还完好在显存里。 Anchor 的核心主张是:内存所有权不应与进程生命周期绑定。它用一个 daemon 进程持有 GPU 内存,worker 通过 GPU IPC 机制零开销地映射访问;worker 崩溃后,新 worker 直接把同一块物理显存重新映射回来,数据从...</div></div></div></a><a class="pagination-related" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-15</div><div class="info-item-2">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</div></div><div class="info-2"><div class="info-item-1">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析 本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill/preempt/reclaim 的跨队列语义,一次讲透。 核心观点先抛出来:Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。 一、GPU 性能与分布式训练:Nsight 与并行策略 1.1 Nsight 是什么、怎么用 Nsight 是 NVIDIA 提供的 GPU 性能分析工具套件,其中最核心的是两把&quot;不同倍率的放大镜&quot;:    工具 定位 分析粒度 典型命令     Nsight Systems (nsys) 全系统时间...</div></div></div></a><a class="pagination-related" href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/" title="推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-09</div><div class="info-item-2">推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：所谓「推理调度」，不是一个调度器，而是五层彼此看不见的决策。每一层能做什么，完全由它能看见什么信息决定——把决策放错层，不是效果差一点，而是根本做不成。  K8s 调度器只看得见整数设备：它知道「还剩几张卡」，不知道每张卡的 KV Cache 水位、队列深度、模型是否加载完； Gang 层保证多卡模型「一起上车」，但它读不到 PodGroup 的调度结果； 拓扑层约束落点，而 GPU 互联的约束（TP 整除、MIG 不可跨实例通信）是硬约束，不是偏好； 路由器是唯一能看见「请求」的一层——公共前缀、活动请求数、队列深度只有它知道； 引擎内部再决定请求进哪个 batch，这一层 K8s 完全看不见。   这篇是一次「责任边界」的梳理。主线是一次推理请求穿过五层调度器时，每一层的可见性与决策权；对照组是 Kthena（Volcano 子项目，v1.0）的源码——它的每一层都做了明确取舍，恰好把边界照了出来。 同时，近期有一篇流传较广的公众号文章《从部署 vLLM 到 AI 基础设施：Kubernetes 推理平台生产级落地、容量设计与性能优化》，整体框架（容量、调度、弹...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">316</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">521</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E9%A2%98%E7%9B%AE%E5%8B%98%E8%AF%AF%E6%B1%87%E6%80%BB%EF%BC%88%E5%85%88%E7%9C%8B%E8%BF%99%E4%B8%AA%EF%BC%89"><span class="toc-number">1.</span> <span class="toc-text">一、题目勘误汇总（先看这个）</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%88%A4%E6%96%AD%E9%A2%98%EF%BC%8810-%E9%A2%98-%C2%B7-10-%E5%88%86%EF%BC%89"><span class="toc-number">2.</span> <span class="toc-text">二、判断题（10 题 · 10 分）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E6%8E%A8%E7%90%86%E5%BE%AA%E7%8E%AF%E4%B8%AD%E6%AF%8F%E7%94%9F%E6%88%90%E4%B8%80%E4%B8%AA-Token-%E5%B0%B1%E6%89%8B%E5%8A%A8%E8%B0%83%E7%94%A8%E4%B8%80%E6%AC%A1-torch-cuda-empty-cache-%EF%BC%8C%E6%98%AF%E5%AE%98%E6%96%B9%E6%8E%A8%E8%8D%90%E7%9A%84%E6%9C%80%E4%BD%B3%E6%98%BE%E5%AD%98%E4%BC%98%E5%8C%96%E6%89%8B%E6%AE%B5%EF%BC%8C%E8%83%BD%E5%BD%BB%E5%BA%95%E8%A7%84%E9%81%BF-CUDA-OOM"><span class="toc-number">2.1.</span> <span class="toc-text">1. 推理循环中每生成一个 Token 就手动调用一次 torch.cuda.empty_cache()，是官方推荐的最佳显存优化手段，能彻底规避 CUDA OOM</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E7%BA%BF%E4%B8%8A%E9%9B%86%E7%BE%A4%E6%97%A0%E6%95%85%E9%80%9A%E4%BF%A1%E6%8C%82%E8%B5%B7%E6%97%B6%EF%BC%8C%E4%B8%B4%E6%97%B6%E5%BC%80-NCCL-DEBUG-INFO-%E4%BC%9A%E5%BC%95%E5%85%A5%E9%A2%9D%E5%A4%96%E6%97%A5%E5%BF%97%E8%BE%93%E5%87%BA%E5%BC%80%E9%94%80%EF%BC%8C%E4%BD%86%E5%AE%83%E6%98%AF%E5%BF%AB%E9%80%9F%E5%AE%9A%E4%BD%8D%E5%8D%A1%E5%9C%A8%E5%93%AA%E4%B8%AA-Rank-%E5%93%AA%E4%B8%AA%E9%80%9A%E4%BF%A1%E7%AE%97%E5%AD%90%E7%9A%84%E6%A0%B8%E5%BF%83%E6%89%8B%E6%AE%B5"><span class="toc-number">2.2.</span> <span class="toc-text">2. 线上集群无故通信挂起时，临时开 NCCL_DEBUG&#x3D;INFO 会引入额外日志输出开销，但它是快速定位卡在哪个 Rank &#x2F; 哪个通信算子的核心手段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-PyTorch-%E5%8E%9F%E7%94%9F-torch-compile-Inductor-%E5%90%8E%E7%AB%AF%E5%8F%AF%E7%9B%B4%E6%8E%A5%E5%9C%A8%E6%98%87%E8%85%BE-910B-C-%E4%B8%8A%E6%97%A0%E7%BC%9D%E7%BC%96%E8%AF%91%E6%89%A7%E8%A1%8C%EF%BC%8C%E6%97%A0%E9%9C%80%E4%BB%BB%E4%BD%95%E4%B8%93%E7%94%A8-CANN-%E7%BC%96%E8%AF%91%E5%99%A8%E6%88%96-Torch-NPU-%E6%8F%92%E4%BB%B6"><span class="toc-number">2.3.</span> <span class="toc-text">3. PyTorch 原生 torch.compile + Inductor 后端可直接在昇腾 910B&#x2F;C 上无缝编译执行，无需任何专用 CANN 编译器或 Torch-NPU 插件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E5%BC%82%E6%AD%A5-Checkpoint-%E6%97%B6%EF%BC%8C%E4%B8%BB%E8%AE%AD%E7%BB%83%E7%BA%BF%E7%A8%8B%E5%8F%AA%E9%9C%80%E6%8A%8A-GPU-%E6%98%BE%E5%AD%98%E4%B8%AD%E7%9A%84%E6%9D%83%E9%87%8D%E6%8B%B7%E5%88%B0-Host-Pinned-Memory-%E5%8D%B3%E5%8F%AF%E7%AB%8B%E5%8D%B3%E6%81%A2%E5%A4%8D%E8%AE%A1%E7%AE%97%EF%BC%8C%E6%97%A0%E9%9C%80%E7%AD%89%E5%BE%85%E7%A3%81%E7%9B%98-%E7%BD%91%E7%BB%9C%E8%90%BD%E7%9B%98"><span class="toc-number">2.4.</span> <span class="toc-text">4. 异步 Checkpoint 时，主训练线程只需把 GPU 显存中的权重拷到 Host Pinned Memory 即可立即恢复计算，无需等待磁盘&#x2F;网络落盘</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-Kubernetes-%E5%8E%9F%E7%94%9F%E8%B0%83%E5%BA%A6%E5%99%A8%E9%BB%98%E8%AE%A4%E5%85%B7%E5%A4%87-GPU-%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E8%83%BD%E5%8A%9B%EF%BC%8C%E7%94%B3%E8%AF%B7-4-%E5%8D%A1%E6%97%B6%E4%BC%9A%E8%87%AA%E5%8A%A8%E6%8C%91%E5%90%8C%E4%B8%80%E9%A2%97-PCIe-Switch-%E4%B8%8B%E7%9A%84%E5%8D%A1%EF%BC%8C%E6%97%A0%E9%9C%80%E4%BB%BB%E4%BD%95%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E6%8F%92%E4%BB%B6"><span class="toc-number">2.5.</span> <span class="toc-text">5. Kubernetes 原生调度器默认具备 GPU 拓扑感知能力，申请 4 卡时会自动挑同一颗 PCIe Switch 下的卡，无需任何拓扑感知插件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-RoCEv2-%E4%B8%AD%E4%BA%A4%E6%8D%A2%E6%9C%BA%E5%BC%80%E5%90%AF-PFC-Deadlock-Watchdog-%E5%90%8E%EF%BC%8C%E8%8B%A5%E6%9F%90%E9%98%9F%E5%88%97%E6%8C%81%E7%BB%AD%E6%94%B6%E5%88%B0-PFC-%E6%9A%82%E5%81%9C%E5%B8%A7%E8%B6%85%E6%97%B6%EF%BC%8C%E4%BA%A4%E6%8D%A2%E6%9C%BA%E4%BC%9A%E4%B8%BB%E5%8A%A8%E5%BC%BA%E5%88%B6%E4%B8%A2%E5%BC%83%E8%AF%A5%E9%98%9F%E5%88%97%E6%8A%A5%E6%96%87%E4%BB%A5%E6%89%93%E7%A0%B4%E6%AD%BB%E9%94%81%E7%8E%AF%E8%B7%AF"><span class="toc-number">2.6.</span> <span class="toc-text">6. RoCEv2 中交换机开启 PFC Deadlock Watchdog 后，若某队列持续收到 PFC 暂停帧超时，交换机会主动强制丢弃该队列报文以打破死锁环路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-vLLM-%E9%85%8D-gpu-memory-utilization-0-9-%E6%84%8F%E5%91%B3%E7%9D%80%E6%9D%83%E9%87%8D%E5%8A%A0-KV-Cache-%E6%B0%B8%E4%B8%8D%E8%B6%85%E8%BF%87-90-%E6%98%BE%E5%AD%98%EF%BC%8C%E5%9B%A0%E6%AD%A4%E7%BB%9D%E4%B8%8D%E5%8F%AF%E8%83%BD-OOM-%E5%B4%A9%E6%BA%83"><span class="toc-number">2.7.</span> <span class="toc-text">7. vLLM 配 --gpu-memory-utilization 0.9 意味着权重加 KV Cache 永不超过 90% 显存，因此绝不可能 OOM 崩溃</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-%E6%8E%A8%E6%B5%8B%E8%A7%A3%E7%A0%81%E4%B8%AD%E8%8B%A5%E8%8D%89%E7%A8%BF%E6%A8%A1%E5%9E%8B%E6%8E%A5%E5%8F%97%E7%8E%87%E8%BF%87%E4%BD%8E%EF%BC%8C%E7%AB%AF%E5%88%B0%E7%AB%AF%E5%BB%B6%E8%BF%9F%E4%B8%8D%E4%BB%85%E4%B8%8D%E9%99%8D%EF%BC%8C%E5%8F%8D%E8%80%8C%E4%BC%9A%E6%AF%94%E7%9B%B4%E6%8E%A5%E8%B7%91%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%9B%B4%E6%85%A2"><span class="toc-number">2.8.</span> <span class="toc-text">8. 推测解码中若草稿模型接受率过低，端到端延迟不仅不降，反而会比直接跑大模型更慢</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-%E6%98%BE%E5%AD%98%E5%87%BA%E7%8E%B0-Double-Bit-Error%EF%BC%88DBE%EF%BC%89%E6%97%B6%EF%BC%8CGPU-%E7%A1%AC%E4%BB%B6%E4%BC%9A%E8%87%AA%E5%8A%A8%E9%99%8D%E9%A2%91%E5%B9%B6%E8%B7%B3%E8%BF%87%E9%94%99%E8%AF%AF%E6%95%B0%E6%8D%AE%E7%BB%A7%E7%BB%AD%E8%BF%90%E7%AE%97%EF%BC%8C%E4%B8%8D%E4%BC%9A%E5%AF%BC%E8%87%B4%E8%BF%90%E8%A1%8C%E4%B8%AD%E7%9A%84-CUDA-Kernel-%E5%B4%A9%E6%BA%83"><span class="toc-number">2.9.</span> <span class="toc-text">9. 显存出现 Double-Bit Error（DBE）时，GPU 硬件会自动降频并跳过错误数据继续运算，不会导致运行中的 CUDA Kernel 崩溃</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-%E8%B6%85%E9%95%BF%E5%88%86%E5%B8%83%E5%BC%8F%E9%A2%84%E8%AE%AD%E7%BB%83%E4%B8%AD-FP16-%E6%AF%94-BF16-%E6%9B%B4%E5%AE%B9%E6%98%93%E4%B8%8B%E6%BA%A2%E6%88%96%E4%B8%8A%E6%BA%A2%EF%BC%88NaN%EF%BC%89%EF%BC%8C%E6%9C%AC%E8%B4%A8%E5%8E%9F%E5%9B%A0%E6%98%AF-FP16-%E7%9A%84%E6%8C%87%E6%95%B0%E4%BD%8D%E6%AF%94-BF16-%E5%B0%91-3-%E4%BD%8D"><span class="toc-number">2.10.</span> <span class="toc-text">10. 超长分布式预训练中 FP16 比 BF16 更容易下溢或上溢（NaN），本质原因是 FP16 的指数位比 BF16 少 3 位</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E5%8D%95%E9%80%89%E9%A2%98%EF%BC%8810-%E9%A2%98-%C2%B7-20-%E5%88%86%EF%BC%89"><span class="toc-number">3.</span> <span class="toc-text">三、单选题（10 题 · 20 分）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%8D%83%E5%8D%A1%E8%AE%AD%E7%BB%83%E5%8D%A1%E6%AD%BB%E3%80%81GPU-%E5%88%A9%E7%94%A8%E7%8E%87-100-%EF%BC%8C%E5%AE%9A%E4%BD%8D%E9%A6%96%E4%B8%AA%E6%8E%89%E9%98%9F%E7%9A%84-Rank"><span class="toc-number">3.1.</span> <span class="toc-text">1. 千卡训练卡死、GPU 利用率 100%，定位首个掉队的 Rank</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-dmesg-%E4%B8%AD%E7%9A%84-Xid-31-%E4%BB%A3%E8%A1%A8%E4%BB%80%E4%B9%88%E7%A1%AC%E4%BB%B6%E9%97%AE%E9%A2%98"><span class="toc-number">3.2.</span> <span class="toc-text">2. dmesg 中的 Xid 31 代表什么硬件问题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-DeepSeek-V4-Flash-Pro-%E7%9A%84-MLA-%E5%8D%95-Token-KV-Cache-%E5%A4%A7%E5%B0%8F"><span class="toc-number">3.3.</span> <span class="toc-text">3. DeepSeek-V4 (Flash&#x2F;Pro) 的 MLA 单 Token KV Cache 大小</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-%E7%BD%91%E5%8D%A1%E8%AE%A1%E6%95%B0%E5%99%A8%E4%B8%AD%E6%9C%80%E8%83%BD%E6%8C%87%E7%A4%BA%E7%89%A9%E7%90%86%E9%93%BE%E8%B7%AF%E9%9A%90%E6%80%A7%E5%8A%A3%E5%8C%96%E7%9A%84%E6%8C%87%E6%A0%87"><span class="toc-number">3.4.</span> <span class="toc-text">4. 网卡计数器中最能指示物理链路隐性劣化的指标</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E5%8D%95%E4%B8%AA%E9%95%BF%E6%96%87%E6%9C%AC%E8%AF%B7%E6%B1%82%E5%BC%95%E5%8F%91-CUDA-OOM-%E7%9A%84%E6%9C%80%E5%B8%B8%E8%A7%81%E7%94%9F%E4%BA%A7%E6%A0%B9%E5%9B%A0"><span class="toc-number">3.5.</span> <span class="toc-text">5. 单个长文本请求引发 CUDA OOM 的最常见生产根因</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-K8s-%E4%B8%AD-Pod-%E7%9C%8B%E4%B8%8D%E5%88%B0-GPU%E3%80%81%E5%AE%B9%E5%99%A8%E5%86%85%E7%BC%BA-NVIDIA-%E9%A9%B1%E5%8A%A8%E5%BA%93"><span class="toc-number">3.6.</span> <span class="toc-text">6. K8s 中 Pod 看不到 GPU、容器内缺 NVIDIA 驱动库</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-%E5%BC%82%E6%AD%A5-Checkpoint-%E5%AF%BC%E8%87%B4%E6%81%A2%E5%A4%8D%E5%87%BA%E7%9A%84%E6%9D%83%E9%87%8D%E4%B8%8D%E5%8F%AF%E9%80%86%E6%8D%9F%E5%9D%8F"><span class="toc-number">3.7.</span> <span class="toc-text">7. 异步 Checkpoint 导致恢复出的权重不可逆损坏</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-%E6%98%87%E8%85%BE-910B-%E4%B8%8A-Loss-%E5%8F%98-NaN%EF%BC%8CA100-%E6%AD%A3%E5%B8%B8"><span class="toc-number">3.8.</span> <span class="toc-text">8. 昇腾 910B 上 Loss 变 NaN，A100 正常</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-TorchElastic%EF%BC%88torchrun%EF%BC%89%E7%9A%84%E6%8E%89%E7%BA%BF%E8%87%AA%E6%84%88%E6%B5%81%E7%A8%8B"><span class="toc-number">3.9.</span> <span class="toc-text">9. TorchElastic（torchrun）的掉线自愈流程</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-FlashDecoding-%E7%9B%B8%E6%AF%94-FlashAttention-2-%E7%9A%84%E6%9C%AC%E8%B4%A8%E7%AA%81%E7%A0%B4"><span class="toc-number">3.10.</span> <span class="toc-text">10. FlashDecoding 相比 FlashAttention-2 的本质突破</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AD%94%E6%A1%88%E9%80%9F%E8%A7%88"><span class="toc-number">3.11.</span> <span class="toc-text">答案速览</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%A2%98%E7%9B%AE%E6%9C%AC%E8%BA%AB%E6%9C%89%E9%97%AE%E9%A2%98%E7%9A%84%E9%A2%98%EF%BC%9A%E7%AC%AC-3-%E9%A2%98%EF%BC%88V4-%E6%9C%AA%E4%BD%BF%E7%94%A8-MLA%EF%BC%8C%E4%BA%8B%E5%AE%9E%E9%94%99%E8%AF%AF%EF%BC%89%E3%80%81%E7%AC%AC-7-%E9%A2%98%EF%BC%88%E5%90%8C%E6%AD%A5%E6%97%B6%E6%9C%BA%E6%96%B9%E5%90%91%E5%86%99%E5%8F%8D%EF%BC%89%E3%80%81%E7%AC%AC-8-%E9%A2%98%EF%BC%88%E6%89%80%E8%BF%B0%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E4%B8%8D%E5%AD%98%E5%9C%A8%EF%BC%89%E3%80%82%E7%AC%AC-6%E3%80%819-%E9%A2%98%E7%9A%84%E9%80%89%E9%A1%B9%E8%A1%A8%E8%BF%B0%E7%95%A5%E6%9C%89%E7%AE%80%E5%8C%96%EF%BC%8C%E4%BD%86%E7%AD%94%E6%A1%88%E5%94%AF%E4%B8%80%E3%80%81%E4%B8%8D%E5%8F%97%E5%BD%B1%E5%93%8D%E3%80%82"><span class="toc-number">4.</span> <span class="toc-text">题目本身有问题的题：第 3 题（V4 未使用 MLA，事实错误）、第 7 题（同步时机方向写反）、第 8 题（所述环境变量不存在）。第 6、9 题的选项表述略有简化，但答案唯一、不受影响。</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%A4%9A%E9%80%89%E9%A2%98%EF%BC%8810-%E9%A2%98-%C2%B7-30-%E5%88%86%EF%BC%89"><span class="toc-number">5.</span> <span class="toc-text">四、多选题（10 题 · 30 分）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-GPU-%E6%85%A2%E8%8A%82%E7%82%B9%EF%BC%88Straggler%EF%BC%89%E7%9A%84%E6%A0%87%E5%87%86%E6%8E%92%E6%9F%A5%E6%89%8B%E6%AE%B5"><span class="toc-number">5.1.</span> <span class="toc-text">1. GPU 慢节点（Straggler）的标准排查手段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-RoCEv2-%E5%BE%AE%E7%AA%81%E5%8F%91%E4%B8%A2%E5%8C%85%E4%B8%8E%E8%AE%AD%E7%BB%83%E6%80%A7%E8%83%BD%E5%89%A7%E7%83%88%E6%8A%96%E5%8A%A8"><span class="toc-number">5.2.</span> <span class="toc-text">2. RoCEv2 微突发丢包与训练性能剧烈抖动</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E9%95%BF%E6%96%87%E6%9C%AC%E5%9C%A8%E7%BA%BF%E6%8E%A8%E7%90%86%E4%B8%AD-KV-Cache-%E8%A2%AB%E6%89%93%E7%88%86%E7%9A%84%E7%94%9F%E4%BA%A7%E6%9A%97%E9%9B%B7"><span class="toc-number">5.3.</span> <span class="toc-text">3. 长文本在线推理中 KV Cache 被打爆的生产暗雷</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-Checkpoint-%E6%80%A7%E8%83%BD%E4%B8%8E%E5%B7%A5%E7%A8%8B%E5%8F%AF%E9%9D%A0%E6%80%A7%E6%B2%BB%E7%90%86%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5"><span class="toc-number">5.4.</span> <span class="toc-text">4. Checkpoint 性能与工程可靠性治理最佳实践</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-K8s-%E4%B8%87%E5%8D%A1%E9%9B%86%E7%BE%A4%E5%85%88%E8%BF%9B%E6%8B%93%E6%89%91%E8%B0%83%E5%BA%A6%E5%99%A8%E7%9A%84%E6%A0%B8%E5%BF%83%E8%83%BD%E5%8A%9B"><span class="toc-number">5.5.</span> <span class="toc-text">5. K8s 万卡集群先进拓扑调度器的核心能力</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-Triton-CUDA-%E7%AE%97%E5%AD%90%E5%BC%80%E5%8F%91%E4%B8%AD%E7%9A%84%E6%80%A7%E8%83%BD%E5%8F%8D%E6%A8%A1%E5%BC%8F"><span class="toc-number">5.6.</span> <span class="toc-text">6. Triton &#x2F; CUDA 算子开发中的性能反模式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-%E6%98%87%E8%85%BE%EF%BC%88Ascend-NPU%EF%BC%89%E7%94%9F%E6%80%81%E9%83%A8%E7%BD%B2%E5%89%8D%E6%B2%BF%E5%BC%80%E6%BA%90%E5%A4%A7%E6%A8%A1%E5%9E%8B%E7%9A%84%E4%B8%BB%E8%A6%81%E5%B7%A5%E7%A8%8B%E6%8C%91%E6%88%98"><span class="toc-number">5.7.</span> <span class="toc-text">7. 昇腾（Ascend NPU）生态部署前沿开源大模型的主要工程挑战</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-%E7%94%9F%E4%BA%A7%E6%8E%A8%E7%90%86%E7%BD%91%E5%85%B3%EF%BC%88API-Gateway%EF%BC%89%E5%BF%85%E5%A4%87%E7%9A%84%E5%AE%B9%E7%81%BE%E4%B8%8E%E9%98%B2%E6%8A%A4%E6%9C%BA%E5%88%B6"><span class="toc-number">5.8.</span> <span class="toc-text">8. 生产推理网关（API Gateway）必备的容灾与防护机制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-PyTorch-CUDA-OOM-%E7%9A%84%E7%B2%BE%E5%87%86%E5%88%86%E6%9E%90%E6%89%8B%E6%AE%B5"><span class="toc-number">5.9.</span> <span class="toc-text">9. PyTorch CUDA OOM 的精准分析手段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-Megatron-LM-%E7%AD%89%E5%88%86%E5%B8%83%E5%BC%8F%E6%A1%86%E6%9E%B6%E4%B8%AD%E9%80%9A%E4%BF%A1%E4%B8%8E%E8%AE%A1%E7%AE%97%E6%B7%B1%E5%BA%A6%E9%87%8D%E5%8F%A0%E7%9A%84%E6%8A%80%E6%9C%AF"><span class="toc-number">5.10.</span> <span class="toc-text">10. Megatron-LM 等分布式框架中通信与计算深度重叠的技术</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E7%AE%80%E7%AD%94%E9%A2%98%EF%BC%88%E7%AC%AC-1%E2%80%9310-%E9%A2%98%EF%BC%89"><span class="toc-number">6.</span> <span class="toc-text">五、简答题（第 1–10 题）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%A4%A7%E6%A8%A1%E5%9E%8B-GPU-%E6%98%BE%E5%AD%98%E4%B8%AD-%E9%9D%99%E6%80%81%E6%98%BE%E5%AD%98-%E4%B8%8E-%E5%8A%A8%E6%80%81%E6%98%BE%E5%AD%98-%E7%9A%84%E6%9C%AC%E8%B4%A8%E5%8C%BA%E5%88%AB%EF%BC%8C%E5%8F%8A%E6%8E%A8%E7%90%86%E5%9C%BA%E6%99%AF%E7%9A%84%E6%9E%84%E6%88%90"><span class="toc-number">6.1.</span> <span class="toc-text">1. 大模型 GPU 显存中&quot;静态显存&quot;与&quot;动态显存&quot;的本质区别，及推理场景的构成</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-torch-cuda-set-per-process-memory-fraction-%E7%9A%84%E4%BD%9C%E7%94%A8%E4%B8%8E%E5%A4%9A%E8%BF%9B%E7%A8%8B%E9%9A%94%E7%A6%BB%E7%9A%84%E7%94%9F%E4%BA%A7%E6%84%8F%E4%B9%89"><span class="toc-number">6.2.</span> <span class="toc-text">2. torch.cuda.set_per_process_memory_fraction() 的作用与多进程隔离的生产意义</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E5%88%86%E5%B8%83%E5%BC%8F%E9%A2%84%E8%AE%AD%E7%BB%83%E4%B8%BA%E4%BD%95%E5%BF%85%E9%A1%BB%E7%BB%9F%E4%B8%80-RNG-Seed%EF%BC%9BDP-%E4%B8%8E-TP-%E5%AF%B9%E5%88%9D%E5%A7%8B%E5%8C%96%E7%9A%84%E7%A7%8D%E5%AD%90%E5%A4%84%E7%90%86%E5%B7%AE%E5%BC%82"><span class="toc-number">6.3.</span> <span class="toc-text">3. 分布式预训练为何必须统一 RNG Seed；DP 与 TP 对初始化的种子处理差异</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-Kubernetes-GPU-%E9%9B%86%E7%BE%A4%E4%B8%AD%E7%9A%84-%E5%83%B5%E5%B0%B8-GPU-%E8%BF%9B%E7%A8%8B-%E5%8F%8A%E5%85%B6%E6%8E%92%E6%9F%A5%E4%B8%8E%E6%B8%85%E7%90%86"><span class="toc-number">6.4.</span> <span class="toc-text">4. Kubernetes GPU 集群中的&quot;僵尸 GPU 进程&quot;及其排查与清理</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-%E4%BB%80%E4%B9%88%E6%98%AF-CUDA-Context%EF%BC%9B%E4%B8%BA%E4%BD%95%E5%8D%95%E5%8D%A1%E8%B5%B7%E8%BF%87%E5%A4%9A-Python-%E8%BF%9B%E7%A8%8B%E4%BC%9A%E8%AE%A9%E5%8F%AF%E7%94%A8%E6%98%BE%E5%AD%98%E5%A4%A7%E5%B9%85%E7%BC%A9%E6%B0%B4"><span class="toc-number">6.5.</span> <span class="toc-text">5. 什么是 CUDA Context；为何单卡起过多 Python 进程会让可用显存大幅缩水</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-NCCL-CROSS-NIC-1-%E4%B8%8E-NCCL-NET-GDR-LEVEL-5-%E7%9A%84%E7%A1%AC%E4%BB%B6%E5%89%8D%E6%8F%90%E4%B8%8E%E7%94%9F%E4%BA%A7%E6%94%B6%E7%9B%8A"><span class="toc-number">6.6.</span> <span class="toc-text">6. NCCL_CROSS_NIC&#x3D;1 与 NCCL_NET_GDR_LEVEL&#x3D;5 的硬件前提与生产收益</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-DeepSeek-V4-%E7%9A%84-MLA-%E7%9B%B8%E6%AF%94-GQA-%E4%B8%BA%E4%BD%95%E8%83%BD%E9%99%8D%E4%BD%8E%E9%95%BF%E6%96%87%E6%9C%AC-KV-Cache-%E4%B8%8E%E8%B7%A8%E8%8A%82%E7%82%B9%E6%90%AC%E8%BF%81%E5%8E%8B%E5%8A%9B"><span class="toc-number">6.7.</span> <span class="toc-text">7. DeepSeek-V4 的 MLA 相比 GQA 为何能降低长文本 KV Cache 与跨节点搬迁压力</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-%E4%BB%80%E4%B9%88%E6%98%AF-%E5%90%88%E5%B9%B6%E8%AE%BF%E5%AD%98%EF%BC%88Coalesced-Memory-Access%EF%BC%89-%EF%BC%8C%E6%9C%AA%E5%90%88%E5%B9%B6%E5%AF%B9%E6%98%BE%E5%AD%98%E5%B8%A6%E5%AE%BD%E5%88%A9%E7%94%A8%E7%8E%87%E7%9A%84%E5%BD%B1%E5%93%8D"><span class="toc-number">6.8.</span> <span class="toc-text">8. 什么是&quot;合并访存（Coalesced Memory Access）&quot;，未合并对显存带宽利用率的影响</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-vLLM-%E7%AD%89%E6%8E%A8%E7%90%86%E6%A1%86%E6%9E%B6%E4%B8%AD%E7%9A%84-%E6%8A%A2%E5%8D%A0%EF%BC%88Preemption%EF%BC%89-%E6%9C%BA%E5%88%B6%E4%B8%8E%E4%B8%A4%E7%A7%8D%E7%AD%96%E7%95%A5"><span class="toc-number">6.9.</span> <span class="toc-text">9. vLLM 等推理框架中的&quot;抢占（Preemption）&quot;机制与两种策略</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-%E6%9E%84%E5%BB%BA-RDMA-%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9C%E6%97%B6%E4%B8%BA%E4%BD%95%E5%BF%85%E9%A1%BB%E4%B8%A5%E6%A0%BC%E9%85%8D%E7%BD%AE-DSCP-%E5%88%B0-CoS-%E7%9A%84%E4%BC%98%E5%85%88%E7%BA%A7%E6%98%A0%E5%B0%84"><span class="toc-number">6.10.</span> <span class="toc-text">10. 构建 RDMA 无损网络时为何必须严格配置 DSCP 到 CoS 的优先级映射</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E7%AE%80%E7%AD%94%E9%A2%98%EF%BC%88%E7%AC%AC-11%E2%80%9320-%E9%A2%98%EF%BC%89"><span class="toc-number">7.</span> <span class="toc-text">六、简答题（第 11–20 题）</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#11-Checkpoint-%E4%BF%9D%E5%AD%98%E5%BC%95%E8%B5%B7%E7%9A%84%E6%85%A2%E5%AD%98%E5%82%A8-I-O-%E9%98%BB%E5%A1%9E%E4%B8%8E%E5%88%86%E5%B1%82%E5%AD%98%E5%82%A8%E8%AE%BE%E8%AE%A1"><span class="toc-number">7.1.</span> <span class="toc-text">11. Checkpoint 保存引起的慢存储 I&#x2F;O 阻塞与分层存储设计</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#12-%E6%9C%AA%E5%BC%80%E5%90%AF%E5%AE%A2%E6%88%B7%E7%AB%AF%E6%96%AD%E5%BC%80%E6%A3%80%E6%B5%8B%E4%B8%BA%E4%BD%95%E5%BC%95%E5%8F%91-%E6%98%BE%E5%AD%98%E6%BB%9A%E9%9B%AA%E7%90%83%E5%BC%8F%E5%B4%A9%E6%BA%83"><span class="toc-number">7.2.</span> <span class="toc-text">12. 未开启客户端断开检测为何引发&quot;显存滚雪球式崩溃&quot;</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#13-Single-Bit-%E4%B8%8E-Double-Bit-ECC-%E7%9A%84%E8%BF%90%E7%BB%B4%E5%A4%84%E7%90%86%E7%AD%96%E7%95%A5%E6%9C%AC%E8%B4%A8%E5%8C%BA%E5%88%AB"><span class="toc-number">7.3.</span> <span class="toc-text">13. Single-Bit 与 Double-Bit ECC 的运维处理策略本质区别</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#14-FlashDecoding-%E7%9A%84%E5%88%87%E5%88%86%E9%80%BB%E8%BE%91%EF%BC%8C%E5%8F%8A%E5%AE%83%E4%B8%8E-FlashAttention-2-%E8%A7%A3%E5%86%B3%E5%B9%B6%E8%A1%8C%E5%BA%A6%E7%93%B6%E9%A2%88%E7%9A%84%E5%B7%AE%E5%BC%82"><span class="toc-number">7.4.</span> <span class="toc-text">14. FlashDecoding 的切分逻辑，及它与 FlashAttention-2 解决并行度瓶颈的差异</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#15-%E4%BB%85%E9%9D%A0-CPU-Memory-Request-%E4%B8%8E-Limit-%E4%B8%BA%E4%BD%95%E6%8C%A1%E4%B8%8D%E4%BD%8F-GPU-%E7%AE%97%E5%8A%9B%E5%99%AA%E5%A3%B0%E9%82%BB%E5%B1%85"><span class="toc-number">7.5.</span> <span class="toc-text">15. 仅靠 CPU&#x2F;Memory Request 与 Limit 为何挡不住 GPU 算力噪声邻居</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#16-NCCL-ASYNC-ERROR-HANDLING-TORCH-NCCL-ASYNC-ERROR-HANDLING-%E7%9A%84%E4%BD%9C%E7%94%A8%E3%80%81%E8%AF%AD%E4%B9%89%E4%B8%8E%E5%BD%93%E5%89%8D%E7%8A%B6%E6%80%81"><span class="toc-number">7.6.</span> <span class="toc-text">16. NCCL_ASYNC_ERROR_HANDLING &#x2F; TORCH_NCCL_ASYNC_ERROR_HANDLING 的作用、语义与当前状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#17-%E7%94%9F%E4%BA%A7%E9%95%9C%E5%83%8F%E6%9E%84%E5%BB%BA%E8%A7%84%E8%8C%83%E4%B8%BA%E4%BD%95%E7%A6%81%E6%AD%A2%E6%8A%8A%E6%95%B0%E7%99%BE-GB-%E6%9D%83%E9%87%8D%E6%89%93%E8%BF%9B-Docker-%E9%95%9C%E5%83%8F"><span class="toc-number">7.7.</span> <span class="toc-text">17. 生产镜像构建规范为何禁止把数百 GB 权重打进 Docker 镜像</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#18-HCCL-%E4%B8%8E-NCCL-%E5%9C%A8%E9%80%9A%E4%BF%A1%E6%8C%82%E6%AD%BB%EF%BC%88Hang%EF%BC%89%E6%8E%92%E6%9F%A5%E6%89%8B%E6%AE%B5%E4%B8%8A%E7%9A%84%E6%A0%B8%E5%BF%83%E5%BC%82%E5%90%8C"><span class="toc-number">7.8.</span> <span class="toc-text">18. HCCL 与 NCCL 在通信挂死（Hang）排查手段上的核心异同</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#19-%E6%8E%A8%E6%B5%8B%E8%A7%A3%E7%A0%81%E7%9A%84%E5%B7%A5%E7%A8%8B%E8%90%BD%E5%9C%B0%E9%A3%8E%E9%99%A9%E4%B8%8E-%E6%8E%A5%E5%8F%97%E7%8E%87-%E5%8A%A8%E6%80%81%E7%86%94%E6%96%AD-%E7%9A%84%E5%BF%85%E8%A6%81%E6%80%A7"><span class="toc-number">7.9.</span> <span class="toc-text">19. 推测解码的工程落地风险与&quot;接受率 + 动态熔断&quot;的必要性</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#20-SRE-%E8%A7%86%E8%A7%92%E7%9A%84%E9%AB%98%E5%8F%AF%E7%94%A8%E7%AE%97%E5%8A%9B%E7%9B%91%E6%8E%A7%E4%BD%93%E7%B3%BB%EF%BC%9A%E5%BF%85%E9%A1%BB%E9%87%87%E9%9B%86%E7%9A%84%E5%9B%9B%E5%A4%A7%E7%BB%B4%E5%BA%A6"><span class="toc-number">7.10.</span> <span class="toc-text">20. SRE 视角的高可用算力监控体系：必须采集的四大维度</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E8%BF%99%E5%A5%97%E5%8D%B7%E5%AD%90%E8%AF%A5%E6%80%8E%E4%B9%88%E7%94%A8"><span class="toc-number">8.</span> <span class="toc-text">七、这套卷子该怎么用</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/" title="推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM">推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E5%9B%BD%E4%BA%A7GPU%E9%80%82%E9%85%8D%E5%88%B0%E5%BA%95%E5%9C%A8%E9%80%82%E9%85%8D%E4%BB%80%E4%B9%88/" title="国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解">国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/" title="2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误">2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%80%E6%9D%A132k%E8%AF%B7%E6%B1%82%E8%83%BD%E7%9E%AC%E9%97%B4%E6%89%93%E7%88%86%E6%98%BE%E5%AD%98/" title="为什么一条 32k 请求能瞬间打爆显存：中间激活张量、常驻水位与 Chunked Prefill">为什么一条 32k 请求能瞬间打爆显存：中间激活张量、常驻水位与 Chunked Prefill</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/08/2026-11-08-rootless%E5%AE%B9%E5%99%A8privileged-without-device%E4%B8%8Edind%E7%9A%84GPU%E8%B4%A3%E4%BB%BB%E9%93%BE%E6%8B%86%E8%A7%A3/" title="runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链">runc 补篇之后：rootless 容器、privileged-without-device 与 dind 的 GPU 责任链</a><time datetime="2026-11-07T16:00:00.000Z" title="发表于 2026-11-08 00:00:00">2026-11-08</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
