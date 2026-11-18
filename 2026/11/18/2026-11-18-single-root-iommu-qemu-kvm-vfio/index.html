@@ -1,0 +1,837 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从 PCIe 单根拓扑出发，梳理 IOMMU 的 DMA 地址转换与隔离，以及 QEMU、KVM、VFIO 如何协作把真实设备交给虚拟机。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从 PCIe 单根拓扑出发，梳理 IOMMU 的 DMA 地址转换与隔离，以及 QEMU、KVM、VFIO 如何协作把真实设备交给虚拟机。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-18T07:24:09.000Z">
+<meta property="article:modified_time" content="2026-11-18T07:24:09.172Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="KVM">
+<meta property="article:tag" content="SR-IOV">
+<meta property="article:tag" content="IOMMU">
+<meta property="article:tag" content="VFIO">
+<meta property="article:tag" content="PCIe">
+<meta property="article:tag" content="QEMU">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO",
+  "url": "https://roger-lv.github.io/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-18T07:24:09.000Z",
+  "dateModified": "2026-11-18T07:24:09.172Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">319</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">523</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-18T07:24:09.000Z" title="发表于 2026-11-18 15:24:09">2026-11-18</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-18T07:24:09.172Z" title="更新于 2026-11-18 15:24:09">2026-11-18</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/" data-flag-title="从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>在<a href="https://roger-lv.github.io/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/">上一篇文章</a>中，我们讨论了 SR-IOV、VFIO，以及虚拟机与容器使用设备驱动的区别。沿着设备直通继续往下看，还会遇到三个问题：SR-IOV 中的 Single Root 究竟指什么；设备为何需要 IOMMU；QEMU、KVM、VFIO 是三个独立方案，还是一套方案里的不同部分？</p>
+<p>这三个问题分别涉及 <strong>PCIe 拓扑、设备访问内存的边界，以及虚拟机的软件分工</strong>。把它们放回各自的位置，就能理解一块物理设备如何交给虚拟机使用，以及这件事为什么不能只靠某一个组件完成。</p>
+<p>本文以 Linux 宿主机、常规非机密的 x86 QEMU/KVM 虚拟机和 PCIe 设备直通为主要场景。其他体系结构及机密虚拟机可能采用不同的具体机制。</p>
+<span id="more"></span>
+<h2 id="一、Single-Root-描述的是怎样的-PCIe-拓扑">一、Single Root 描述的是怎样的 PCIe 拓扑</h2>
+<h3 id="先区分-Root-Complex-和-Root-Port">先区分 Root Complex 和 Root Port</h3>
+<p>SR-IOV 的全称是 <strong>Single Root I/O Virtualization</strong>。理解 Single Root，首先要看设备如何接入处理器和系统内存一侧。</p>
+<table>
+<thead>
+<tr>
+<th>名词</th>
+<th>在拓扑中的作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Root Complex，RC</td>
+<td>PCIe 根端的硬件逻辑，连接处理器、系统内存与 PCIe 子系统</td>
+</tr>
+<tr>
+<td>Host Bridge</td>
+<td>在系统与 PCI 层级之间建立连接，承担相应的地址和资源窗口组织</td>
+</tr>
+<tr>
+<td>Root Port，RP</td>
+<td>Root Complex 面向下游链路的根端口，软件上通常表现为 PCI-to-PCI Bridge</td>
+</tr>
+<tr>
+<td>PCIe Switch</td>
+<td>在下游扩展多个 PCIe 端口，让多个设备通过上游链路接入</td>
+</tr>
+<tr>
+<td>Endpoint</td>
+<td>网卡、GPU、NVMe 等终端设备所实现的 PCIe 功能</td>
+</tr>
+</tbody>
+</table>
+<p>Root Complex 可以包含多个 Root Port，也可以包含 Root Complex Integrated Endpoint，即集成在根复合体内部的端点。因此，Root Complex 与 Root Port 不能混用，Root Port 也不是 PCIe Switch 的另一种叫法。<a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/controller/pci-controller-drivers.html">1</a></p>
+<h3 id="Single-Root-关注设备所在的单根拓扑">Single Root 关注设备所在的单根拓扑</h3>
+<p>准确的理解是：<strong>SR-IOV 在单根 PCIe 拓扑内，允许设备通过多个 PCIe Function 向不同系统镜像提供资源。</strong> 常见外接设备位于某个 Root Complex 内的一个 Root Port 所引出的分支下。PCI-SIG 对 SR-IOV 的定位也是面向 single-root topologies 的设备虚拟化与共享。<a target="_blank" rel="noopener" href="https://pcisig.com/specification-overview/pci-express-iov">2</a></p>
+<p>下面以一张支持 SR-IOV 的网卡为例。实线表示物理拓扑，虚线表示 VF 分配关系。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TB
+  subgraph HOST[&quot;宿主机物理 PCIe 拓扑&quot;]
+    CPU[&quot;CPU 与系统内存&quot;]
+    subgraph RC[&quot;Root Complex&quot;]
+      HB[&quot;Host Bridge&quot;]
+      RP0[&quot;Root Port 0&quot;]
+      RP1[&quot;Root Port 1&quot;]
+      HB --&gt; RP0
+      HB --&gt; RP1
+    end
+    CPU --&gt; HB
+    RP0 --&gt; SW[&quot;PCIe Switch&quot;]
+    RP1 --&gt; NVME[&quot;NVMe&quot;]
+    subgraph NIC[&quot;支持 SR-IOV 的网卡&quot;]
+      PF[&quot;PF&quot;]
+      VF0[&quot;VF 0&quot;]
+      VF1[&quot;VF 1&quot;]
+    end
+    SW --&gt; NIC
+  end
+  VF0 -. 分配 .-&gt; VM0[&quot;VM 0&quot;]
+  VF1 -. 分配 .-&gt; VM1[&quot;VM 1&quot;]
+  </pre></div>
+<p>PF 是具备完整配置能力的 Physical Function；它可以管理相关的 VF。VF 是 Virtual Function，具有自己的 PCIe 功能身份和可访问的配置、寄存器资源，可以由对应驱动使用。VF 的“虚拟”不代表由 QEMU 纯软件模拟；它来自设备实际提供的硬件虚拟化能力。一张物理卡也可能包含多个 PF，不能将 PF 永远等同于整张卡。<a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/pci-iov-howto.html">3</a></p>
+<p>这里的 Single <strong>不要求整台服务器只有一个 Root Complex、一个 Root Port、一颗 CPU、一个 NUMA 节点或一台虚拟机</strong>。它限定的是设备共享所处的拓扑语境。CPU Socket 与 NUMA 描述处理器封装和访问局部性，也不能直接拿它们来给 PCIe 根计数。</p>
+<p>有些资料用“一个 Root Complex 下共享设备”概括典型部署，这有助于理解主机视角；但不宜进一步说“Single Root 只能解释成 Root Complex，与 Root Port 无关”。对常见外接设备，具体的 PCIe 分支正是从 Root Port 向下展开的。<a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/controller/pci-controller-drivers.html">1</a><a target="_blank" rel="noopener" href="https://pcisig.com/specification-overview/pci-express-iov">2</a></p>
+<h3 id="多个虚拟机的虚拟根不等于-Multi-Root">多个虚拟机的虚拟根不等于 Multi Root</h3>
+<p>QEMU 可以向每个 Guest 呈现独立的虚拟 PCIe 拓扑，包括虚拟根总线和 Root Port。把两个 VF 分别分给两个 VM 后，两个 VM 可以各自看到一套 PCIe 设备树，但 VF 的物理连接并没有因此变成两个物理根。<a target="_blank" rel="noopener" href="https://github.com/qemu/qemu/blob/master/docs/pcie.txt">4</a></p>
+<table>
+<thead>
+<tr>
+<th>技术</th>
+<th>关注的共享范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SR-IOV</td>
+<td>在单根 PCIe 拓扑内，将设备资源以 PF/VF 等形式供不同系统镜像使用</td>
+</tr>
+<tr>
+<td>MR-IOV</td>
+<td>在多个物理根对应的拓扑之间共享设备资源，需要相应的多根设备、交换结构与管理支持</td>
+</tr>
+</tbody>
+</table>
+<p>PCI-SIG 为 MR-IOV 举的例子，是通过 PCIe 交换结构连接不同服务器刀片，让独立处理单元上的系统镜像共享设备。这说明 MR-IOV 讨论的是物理多根共享；多个 VM、多个 CPU Socket，或者给普通交换机画上两条主机连接，都不能单独证明已经实现 MR-IOV。<a target="_blank" rel="noopener" href="https://pcisig.com/PCIExpress/Specs/IOV/Multi-RootIOVirtualizationandSharing_1.0">5</a></p>
+<h2 id="二、IOMMU-解决的是设备如何访问内存">二、IOMMU 解决的是设备如何访问内存</h2>
+<h3 id="DMA-为什么需要地址转换和保护">DMA 为什么需要地址转换和保护</h3>
+<p>设备传输大量数据时，通常通过 DMA，也就是 Direct Memory Access，直接读写系统内存。以网卡接收数据为例，驱动准备接收缓冲区和描述符，网卡把数据写入相应缓冲区，再通知软件处理。</p>
+<p>这里的“直接”表示不需要 CPU 对每个字节执行搬运。CPU 和驱动仍然负责准备队列、配置设备、建立映射以及处理完成通知。<a target="_blank" rel="noopener" href="https://docs.kernel.org/core-api/dma-api-howto.html">6</a></p>
+<p>问题在于：设备接收到一个地址后，究竟应该访问哪块真实内存？如果这个地址越界，又由谁阻止它写入其他虚拟机或宿主机的数据？</p>
+<p><strong>IOMMU 是设备侧的地址转换与访问保护硬件。</strong> 在启用翻译的典型 DMA 路径中，它根据请求对应的设备上下文，将设备使用的 I/O 地址转换为主机物理地址，并检查映射及权限。没有合法映射或权限不匹配的访问会产生故障，而不是被允许随意访问内存。<a target="_blank" rel="noopener" href="https://docs.kernel.org/core-api/dma-api-howto.html">6</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a></p>
+<h3 id="CPU-MMU-与-IOMMU-处理不同的访问发起者">CPU MMU 与 IOMMU 处理不同的访问发起者</h3>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>CPU 的地址转换机制</th>
+<th>IOMMU</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>访问由谁发起</td>
+<td>CPU 执行指令</td>
+<td>网卡、GPU、NVMe 等设备执行 DMA</td>
+</tr>
+<tr>
+<td>典型输入</td>
+<td>CPU 使用的虚拟地址</td>
+<td>设备使用的 I/O 地址，即 IOVA</td>
+</tr>
+<tr>
+<td>主要职责</td>
+<td>为 CPU 建立地址空间与访问权限；虚拟化时还需处理 Guest 到 Host 的转换</td>
+<td>为设备建立 DMA 地址空间与访问权限</td>
+</tr>
+<tr>
+<td>与设备直通的关系</td>
+<td>让 Guest CPU 访问其获分配的内存</td>
+<td>约束直通设备能访问的 Host 内存</td>
+</tr>
+</tbody>
+</table>
+<p>IOMMU 并不是让设备请求转交给 CPU MMU，再由 CPU 帮它逐笔拷贝。两者服务于不同的访问路径。CPU 能够使用硬件虚拟化，也不自动证明设备侧的 DMA 地址转换与保护已经配置好。<a target="_blank" rel="noopener" href="https://docs.kernel.org/core-api/dma-api-howto.html">6</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a></p>
+<h2 id="三、看懂-GVA-GPA-HVA-HPA-和-IOVA">三、看懂 GVA GPA HVA HPA 和 IOVA</h2>
+<h3 id="五种地址分别属于谁">五种地址分别属于谁</h3>
+<table>
+<thead>
+<tr>
+<th>缩写</th>
+<th>全称</th>
+<th>本文中的含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GVA</td>
+<td>Guest Virtual Address</td>
+<td>Guest 进程或内核使用的虚拟地址</td>
+</tr>
+<tr>
+<td>GPA</td>
+<td>Guest Physical Address</td>
+<td>Guest 操作系统认为的物理地址</td>
+</tr>
+<tr>
+<td>HVA</td>
+<td>Host Virtual Address</td>
+<td>QEMU 等 Host 进程使用的虚拟地址</td>
+</tr>
+<tr>
+<td>HPA</td>
+<td>Host Physical Address</td>
+<td>主机实际的物理内存地址</td>
+</tr>
+<tr>
+<td>IOVA</td>
+<td>I/O Virtual Address</td>
+<td>设备所在 I/O 地址空间中的地址</td>
+</tr>
+</tbody>
+</table>
+<p>GPA 名称里虽然带 Physical，但它是 <strong>Guest 视角的物理地址</strong>，不意味着它与 HPA 一致。IOVA 也不是 QEMU 的普通进程指针。<a target="_blank" rel="noopener" href="https://docs.kernel.org/core-api/dma-api-howto.html">6</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/x86/mmu.html">8</a></p>
+<h3 id="CPU-和设备可以经不同路径访问同一块内存">CPU 和设备可以经不同路径访问同一块内存</h3>
+<p>对使用 EPT/NPT 的常见 x86 虚拟机，Guest CPU 的逻辑转换关系是 <strong>GVA → GPA → HPA</strong>：Guest 页表描述第一段，KVM 管理的二阶段转换描述第二段。硬件结合这些信息完成访问，并不是每次读写都让 QEMU 执行一段软件查表流程。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/x86/mmu.html">8</a></p>
+<p>设备对主机内存执行 DMA 时，典型关系则是 <strong>IOVA → 物理 IOMMU → HPA</strong>。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TB
+  CPU[&quot;Guest CPU 发起访问&quot;] --&gt; GVA[&quot;GVA&quot;]
+  GVA --&gt;|Guest 页表| GPA[&quot;GPA&quot;]
+  GPA --&gt;|EPT 或 NPT| RAM[&quot;Host RAM 对应的 HPA&quot;]
+  DEV[&quot;直通设备发起 DMA&quot;] --&gt; IOVA[&quot;IOVA&quot;]
+  IOVA --&gt; IOMMU[&quot;物理 IOMMU 转换与权限检查&quot;]
+  IOMMU --&gt; RAM
+  </pre></div>
+<p>这张图描述的是 CPU 和设备访问 Host RAM 的路径。它没有试图描述所有设备之间的传输：例如部分 PCIe Peer-to-Peer 请求可以在交换机内部完成路由，不必抵达 Root Port，不能把所有 GPU 与网卡之间的数据流都套进这张图。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/pci/p2pdma.html">9</a></p>
+<h3 id="Guest-RAM-与-QEMU-地址空间究竟是什么关系">Guest RAM 与 QEMU 地址空间究竟是什么关系</h3>
+<p>对常规非机密 QEMU/KVM 虚拟机，<strong>Guest RAM 通常确实由映射在 QEMU 进程地址空间里的 Host 内存提供后备</strong>。QEMU 把某段 GPA 与对应的 HVA 范围登记给 KVM；<code>KVM_SET_USER_MEMORY_REGION</code> 接口中的 <code>guest_phys_addr</code>、<code>memory_size</code>、<code>userspace_addr</code> 正是在表达这种关系。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/api.html">10</a></p>
+<p>例如，QEMU 可以登记这样一段逻辑对应关系：</p>
+<ul>
+<li>
+<p>Guest 看到的一段 RAM，从某个 GPA 开始。</p>
+</li>
+<li>
+<p>这段 RAM 的后备，来自 QEMU 地址空间中从某个 HVA 开始的映射。</p>
+</li>
+<li>
+<p>Host 操作系统为该映射管理实际的物理页。</p>
+</li>
+</ul>
+<p>但 <strong>内存由 QEMU 的映射提供后备，与 Guest 指令如何执行，是两个问题</strong>。启用 KVM 后，Guest 指令在硬件提供的虚拟化执行环境中运行，Guest 内核不会因此变成 QEMU 里的一个普通 Host 用户态函数。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/x86/mmu.html">8</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/api.html">10</a></p>
+<p>同样，HVA 用于软件登记和组织内存后备，并不意味着设备 DMA 的数据路径是“IOVA → HVA → HPA”。在这里，IOMMU 最终使用的是通向物理页的映射，而不是先去访问一个 QEMU 进程指针。<a target="_blank" rel="noopener" href="https://docs.kernel.org/userspace-api/iommufd.html">11</a></p>
+<h3 id="Guest-没有虚拟-IOMMU-也可以进行受保护的直通">Guest 没有虚拟 IOMMU 也可以进行受保护的直通</h3>
+<p>需要分别看两件事：<strong>Guest 是否看见虚拟 IOMMU，以及 Host 是否用物理 IOMMU 约束设备。</strong></p>
+<p>在常见 x86 虚拟机没有暴露 vIOMMU、Guest 使用 direct DMA mapping 的情况下，Guest 驱动提交给设备的 DMA 地址，通常在数值上对应 GPA。Host 可以把这些地址作为 IOVA，映射到该 VM 获分配的物理页。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/x86/mmu.html">8</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/userspace-api/iommufd.html">11</a><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/devel/vfio-iommufd.html">12</a></p>
+<table>
+<thead>
+<tr>
+<th>设备所属上下文</th>
+<th style="text-align:right">设备提交的 IOVA</th>
+<th>在示例 Guest 中的含义</th>
+<th style="text-align:right">最终映射的 HPA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VM A 的 VF，Domain A</td>
+<td style="text-align:right"><code>0x4000</code></td>
+<td>Guest A 的 GPA <code>0x4000</code></td>
+<td style="text-align:right"><code>0x81004000</code></td>
+</tr>
+<tr>
+<td>VM B 的 VF，Domain B</td>
+<td style="text-align:right"><code>0x4000</code></td>
+<td>Guest B 的 GPA <code>0x4000</code></td>
+<td style="text-align:right"><code>0x92004000</code></td>
+</tr>
+</tbody>
+</table>
+<p>表中地址是人为构造的示例。两个设备提交相同的数值并不冲突，因为请求所关联的转换上下文不同；IOVA 不是全主机唯一的地址。<a target="_blank" rel="noopener" href="https://docs.kernel.org/userspace-api/iommufd.html">11</a></p>
+<p>如果向 Guest 暴露 vIOMMU，Guest 可以管理自己的 I/O 地址空间，逻辑关系可能变为 <strong>Guest IOVA → GPA → HPA</strong>。实际实现可能采用影子映射或硬件嵌套转换，不能据此断言每次 DMA 必然依次经过两个物理 IOMMU。也不能将前一个示例中的 IOVA 与 GPA 数值相同，当成 IOVA 的通用定义。<a target="_blank" rel="noopener" href="https://docs.kernel.org/userspace-api/iommufd.html">11</a></p>
+<h2 id="四、IOMMU-Group-和-Domain-为什么不能混为一谈">四、IOMMU Group 和 Domain 为什么不能混为一谈</h2>
+<h3 id="Group-表达设备隔离与所有权边界">Group 表达设备隔离与所有权边界</h3>
+<p><strong>IOMMU Group 表示当前平台能提供的设备 DMA 隔离粒度。</strong> 如果硬件拓扑或设备能力使几个 Function 无法被可靠地相互隔离，Linux 会将它们归入同一 Group。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a></p>
+<p>假设一张卡的两个 Function 落在同一 Group 中，就不能仅凭它们拥有不同 BDF，认定可以安全地分别交给两个互不信任的 VM。需要先满足整个 Group 的 DMA 所有权要求。同组设备不一定都要在 Guest 中显示，但不能被当作几个彼此无关的隔离单元任意拆分。</p>
+<p>Group 的划分与平台、桥和交换机的隔离能力有关，不能简单按“同一张卡”或“同一个 PCIe 插槽”猜测。使用新的 VFIO 设备 cdev 接口，也不会消除 Group 的约束；同组设备仍然受到统一 DMA owner 的限制。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a></p>
+<h3 id="Domain-表达设备使用哪个地址空间">Domain 表达设备使用哪个地址空间</h3>
+<p><strong>IOMMU Domain 是 DMA 地址转换和访问权限的上下文。</strong> 它关注设备访问某个 IOVA 时，应该按照哪套映射进行解释。</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>主要回答的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IOMMU Group</td>
+<td>哪些设备必须作为一个隔离和所有权单元处理</td>
+</tr>
+<tr>
+<td>IOMMU Domain</td>
+<td>设备采用哪个 DMA 转换与权限上下文</td>
+</tr>
+<tr>
+<td>IOVA</td>
+<td>设备在该 I/O 地址空间中访问哪个地址</td>
+</tr>
+<tr>
+<td>IOMMUFD IOAS</td>
+<td>用户态维护哪个逻辑 I/O 地址空间及其映射</td>
+</tr>
+</tbody>
+</table>
+<p>因此，不存在“一个 Group 必然等于一台 VM、一个 Domain、一张硬件页表”的普遍关系。同一台 VM 可以使用来自多个 Group 的设备；一个逻辑 IOAS 也可能同步到多个底层硬件 Domain 或页表。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/userspace-api/iommufd.html">11</a></p>
+<h2 id="五、QEMU-KVM-VFIO-既分工又协作">五、QEMU KVM VFIO 既分工又协作</h2>
+<h3 id="三者分别负责什么">三者分别负责什么</h3>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>主要位置</th>
+<th>主要职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QEMU</td>
+<td>Host 用户空间</td>
+<td>构建虚拟机器，组织内存、vCPU、固件、总线、设备模型与后端，并调用其他接口</td>
+</tr>
+<tr>
+<td>KVM</td>
+<td>Linux 内核</td>
+<td>提供 VM、vCPU、内存虚拟化与中断等接口，利用硬件虚拟化运行 Guest</td>
+</tr>
+<tr>
+<td>VFIO</td>
+<td>Linux 内核框架及相关设备驱动，配合用户态使用者</td>
+<td>提供真实设备区域、中断及 DMA 访问管理机制，用于设备分配和用户态 I/O</td>
+</tr>
+</tbody>
+</table>
+<p>QEMU 是系统模拟器和用户态 VMM，不只是一个虚拟机管理界面。libvirt、virsh 等通常处于更上一层，负责配置与生命周期管理。KVM 也不只是“执行 CPU 指令”，其接口还涉及 Guest 内存布局与中断等功能。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/api.html">10</a><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/system/introduction.html">13</a></p>
+<p>VFIO 则是设备访问框架。它与厂商的 GPU、网卡功能驱动职责不同，也不限于虚拟机：用户态程序可以通过 VFIO 使用硬件设备。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a></p>
+<h3 id="怎样理解它们是否正交">怎样理解它们是否正交</h3>
+<p>最准确的概括是：<strong>职责分离、可以组合、运行时协作。</strong></p>
+<table>
+<thead>
+<tr>
+<th>组合</th>
+<th>可以完成的事情</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QEMU + KVM，不使用 VFIO</td>
+<td>运行硬件加速 VM，使用模拟设备、virtio 等 I/O 方式</td>
+</tr>
+<tr>
+<td>QEMU + TCG，不使用 KVM</td>
+<td>通过动态翻译运行 Guest CPU，可用于支持的跨架构模拟</td>
+</tr>
+<tr>
+<td>KVM + 其他 VMM</td>
+<td>由其他用户态程序构建虚拟机，例如 Cloud Hypervisor</td>
+</tr>
+<tr>
+<td>VFIO + 用户态应用，不创建 VM</td>
+<td>让用户态程序访问设备，进行用户态 I/O</td>
+</tr>
+<tr>
+<td>QEMU + KVM + VFIO</td>
+<td>运行硬件加速 VM，同时把真实设备分配给 Guest</td>
+</tr>
+</tbody>
+</table>
+<p>这些组合说明三者并非必须捆绑。QEMU 官方文档分别描述了 TCG、KVM 等执行方式；Cloud Hypervisor 也是一个直接使用 KVM 等接口的 VMM。<a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/system/introduction.html">13</a><a target="_blank" rel="noopener" href="https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/README.md">14</a></p>
+<p>但组合之后，它们必须协调 Guest 内存映射、设备寄存器区域、中断路由和生命周期。因此，把它们说成“完全正交、彼此没有关系”会遗漏真正让直通工作起来的部分。模块可以分开选择，不表示任意架构、执行后端和设备都能无条件组合。</p>
+<h2 id="六、一台带直通设备的虚拟机如何运行起来">六、一台带直通设备的虚拟机如何运行起来</h2>
+<h3 id="QEMU-建立虚拟机器并通过-KVM-运行-vCPU">QEMU 建立虚拟机器并通过 KVM 运行 vCPU</h3>
+<p>从概念上看，过程可以分为六步：</p>
+<ol>
+<li>
+<p>QEMU 打开 <code>/dev/kvm</code>，通过 <code>KVM_CREATE_VM</code> 创建内核中的 VM 对象。</p>
+</li>
+<li>
+<p>QEMU 准备 Guest RAM 后备，并通过内存槽接口登记 GPA 与 Host 内存的对应关系。</p>
+</li>
+<li>
+<p>创建和配置 vCPU、中断控制器以及虚拟平台所需的状态。</p>
+</li>
+<li>
+<p>QEMU 的 vCPU 线程调用 <code>KVM_RUN</code>，由 KVM 进入 Guest 执行环境。</p>
+</li>
+<li>
+<p>对需要用户态处理的退出原因，KVM 将控制权交回 QEMU。</p>
+</li>
+<li>
+<p>QEMU 完成相应处理后，继续调用 <code>KVM_RUN</code>。</p>
+</li>
+</ol>
+<p>这是一组概念步骤，不是 QEMU 初始化代码的完整调用顺序。常规 Guest 指令不需要逐条交给 QEMU 解释，发生 VM Exit 也不意味着一定返回用户态；一部分情况可以由 KVM 直接处理后继续执行。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/api.html">10</a></p>
+<h3 id="VFIO-为真实设备建立访问通路">VFIO 为真实设备建立访问通路</h3>
+<p>对于典型 PCIe 直通，Host 中的 <code>vfio-pci</code> 等驱动向 QEMU 暴露设备访问接口。QEMU 据此安排 Guest 可见的设备区域、DMA 映射和中断关联，再让 Guest 内的设备驱动使用它。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/devel/vfio-iommufd.html">12</a></p>
+<p>下面的图表示各层协作关系。虚线是建立和管理关系，实线表示相应硬件参与 Guest 执行或 DMA。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TB
+  Q[&quot;QEMU 用户态 VMM&quot;]
+  subgraph KERNEL[&quot;Host Linux 内核&quot;]
+    K[&quot;KVM&quot;]
+    V[&quot;VFIO 设备接口&quot;]
+    M[&quot;IOMMUFD 或传统 DMA 映射接口&quot;]
+  end
+  subgraph HW[&quot;物理硬件&quot;]
+    CPU[&quot;CPU 虚拟化执行环境&quot;]
+    DEV[&quot;直通 PCIe Function&quot;]
+    I[&quot;物理 IOMMU&quot;]
+    RAM[&quot;Host RAM&quot;]
+  end
+  Q -. 创建与运行 vCPU .-&gt; K
+  Q -. 设备区域与中断 .-&gt; V
+  Q -. 登记内存映射 .-&gt; M
+  V -. 绑定与管理 .-&gt; DEV
+  M -. 配置 DMA 映射 .-&gt; I
+  V -. 中断事件与路由 .-&gt; K
+  K -. 配置执行与内存虚拟化 .-&gt; CPU
+  CPU --&gt; RAM
+  DEV --&gt;|DMA| I
+  I --&gt; RAM
+  </pre></div>
+<p>图中的 QEMU、VFIO 和 IOMMU 映射接口主要负责建立和维护访问条件。<strong>数据流不能简单画成每个数据包都依次经过 QEMU、VFIO、IOMMU，最后才到设备。</strong></p>
+<h3 id="管理-MMIO-和-DMA-是三类不同的路径">管理 MMIO 和 DMA 是三类不同的路径</h3>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>谁发起</th>
+<th>发生的事情</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>建立与管理</td>
+<td>QEMU、Host 内核</td>
+<td>登记内存、配置设备区域、DMA 映射和中断路由</td>
+</tr>
+<tr>
+<td>CPU 访问设备</td>
+<td>Guest CPU 上运行的驱动</td>
+<td>访问 Guest 可见的 BAR/MMIO，例如读状态或写 doorbell</td>
+</tr>
+<tr>
+<td>设备访问内存</td>
+<td>真实设备</td>
+<td>发起 DMA，经物理 IOMMU 的相应转换与检查访问 Host RAM</td>
+</tr>
+</tbody>
+</table>
+<p>BAR 描述 PCIe Function 的地址窗口；其中的 MMIO 区域用于寄存器或设备内存访问。对可直接映射的设备区域，CPU 访问可以避免逐次用户态模拟；配置或特殊区域等访问仍可能需要拦截处理。设备 DMA 则是设备主动发起的另一条路径，不能与 CPU 写设备寄存器混为一谈。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a><a target="_blank" rel="noopener" href="https://github.com/qemu/qemu/blob/master/hw/vfio/region.c">15</a></p>
+<p>中断也不必都由 QEMU 用户态线程逐次转发。VFIO 的中断事件机制可以与 KVM 的 irqfd 等机制配合，使中断按已建立的路由注入 Guest。QEMU 的 VFIO 实现中就包含与 KVM 中断接口的协作。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/api.html">10</a><a target="_blank" rel="noopener" href="https://github.com/qemu/qemu/blob/master/hw/vfio/pci.c">16</a></p>
+<h3 id="IOMMUFD-在哪里">IOMMUFD 在哪里</h3>
+<p>IOMMUFD 是 Linux 的用户态 I/O 地址空间管理接口，通过 <code>/dev/iommu</code> 管理 IOAS、映射和相关硬件页表。它可以与 VFIO 的设备访问接口协作。<a target="_blank" rel="noopener" href="https://docs.kernel.org/userspace-api/iommufd.html">11</a><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/devel/vfio-iommufd.html">12</a></p>
+<p>传统路径使用 VFIO container/group 等接口；较新的路径可以使用 VFIO 设备 cdev 与 IOMMUFD。两者属于软件接口组织方式的演进，不能据此说“VFIO 已被 IOMMUFD 完全替代”，也不能把 IOMMUFD 当成另一块物理 IOMMU。</p>
+<h2 id="七、从一条-QEMU-命令对应到各层职责">七、从一条 QEMU 命令对应到各层职责</h2>
+<p>下面是一条展示参数关系的示例，假设镜像存在、设备已经按平台要求准备好：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">qemu-system-x86_64 \</span><br><span class="line">  -machine q35 \</span><br><span class="line">  -accel kvm \</span><br><span class="line">  -cpu host \</span><br><span class="line">  -smp 8 \</span><br><span class="line">  -m 32G \</span><br><span class="line">  -drive file=guest.qcow2,<span class="keyword">if</span>=virtio,format=qcow2 \</span><br><span class="line">  -device vfio-pci,host=0000:81:00.0</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>对应的含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>qemu-system-x86_64</code></td>
+<td>由 QEMU 构建 x86 系统虚拟机</td>
+</tr>
+<tr>
+<td><code>-machine q35</code></td>
+<td>选择 Guest 的虚拟机器平台，不是选择 Host 的某个物理 Root Complex</td>
+</tr>
+<tr>
+<td><code>-accel kvm</code></td>
+<td>使用 KVM 提供硬件辅助执行</td>
+</tr>
+<tr>
+<td><code>-cpu host</code></td>
+<td>使用 Host CPU 模型向 Guest 暴露相应能力</td>
+</tr>
+<tr>
+<td><code>-smp 8</code></td>
+<td>提供 8 个 vCPU；不自动意味着独占 8 个物理核</td>
+</tr>
+<tr>
+<td><code>-m 32G</code></td>
+<td>配置 Guest 的 RAM 大小</td>
+</tr>
+<tr>
+<td><code>-drive ... if=virtio</code></td>
+<td>为虚拟磁盘选择 virtio 接口，与直通设备可以同时存在</td>
+</tr>
+<tr>
+<td><code>-device vfio-pci,host=...</code></td>
+<td>通过 QEMU 的 VFIO PCI 设备模型呈现指定的 Host PCI Function</td>
+</tr>
+</tbody>
+</table>
+<p>这些参数说明 CPU 执行方式、内存配置和设备后端是可以组合的不同维度。示例用于理解关系；具体设备仍可能要求相应的固件、BAR 空间、中断和复位支持，不能将它当作所有 GPU 或网卡的完整部署配方。<a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/devel/vfio-iommufd.html">12</a><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/system/invocation.html">17</a></p>
+<p>还有一个容易混淆的同名项：命令行里的 <code>-device vfio-pci</code> 是 <strong>QEMU 的设备模型</strong>；<code>lspci -k</code> 显示的 <code>vfio-pci</code> 是 <strong>Host Linux 的设备驱动</strong>。它们相互配合，但不是同一个组件。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/devel/vfio-iommufd.html">12</a></p>
+<h2 id="八、理解隔离能力时还要保留哪些边界">八、理解隔离能力时还要保留哪些边界</h2>
+<p><strong>IOMMU 不负责划分 GPU 算力和显存容量。</strong> 它约束 DMA 地址与权限；GPU 是否整卡独占、是否划分计算资源、如何调度，属于设备虚拟化与资源管理的其他部分。给设备建立某个 VM 的内存映射，也不自动实现该 VM 内每个进程之间的设备 DMA 隔离。</p>
+<p><strong>开启 IOMMU 不等于某个设备已经获得预期的隔离。</strong> 还需要看设备绑定、Group、实际 Domain 和映射。尤其不能把 <code>iommu=pt</code>、<code>iommu.passthrough=1</code> 这类默认采用 identity／passthrough DMA Domain 的配置，直接解读成“全系统 IOMMU 已关闭”。这里的 passthrough 描述默认 DMA 地址转换行为；通过 VFIO 分配的设备仍可使用专门的转换上下文。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/admin-guide/kernel-parameters.html">18</a></p>
+<p><strong>IOMMU 地址转换并非完全没有成本。</strong> 常见实现通过 IOTLB 缓存转换结果，性能还受映射粒度、缓存命中、映射更新和失效操作影响。不能把每次 DMA 都描述为重新读取完整页表，也不能脱离具体设备和工作负载给出固定百分比的开销。<a target="_blank" rel="noopener" href="https://www.intel.com/content/www/us/en/docs/vtune-profiler/user-guide/2025-4/analyze-platform-performance.html">19</a></p>
+<p>如需在宿主机上核对一个具体设备，可以先做以下只读检查。示例 BDF 需要替换为实际 Host 地址；Guest 中看到的 BDF 不必与 Host 相同。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">lspci -Dnnk -s 0000:81:00.0</span><br><span class="line"><span class="built_in">readlink</span> -f /sys/bus/pci/devices/0000:81:00.0/iommu_group</span><br><span class="line"><span class="built_in">ls</span> -l /sys/bus/pci/devices/0000:81:00.0/iommu_group/devices</span><br></pre></td></tr></table></figure>
+<p>第一条查看设备及其当前内核驱动，后两条定位 Group 并列出成员。它们能帮助判断设备归属和隔离边界，却不能单独证明全部 DMA 映射、设备复位以及 Guest 驱动都已配置正确。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">7</a><a target="_blank" rel="noopener" href="https://github.com/pciutils/pciutils/blob/master/lspci.man">20</a></p>
+<h2 id="九、用一组问题定位不同层次">九、用一组问题定位不同层次</h2>
+<p>遇到直通问题时，可以按下面的顺序明确自己在问什么：</p>
+<table>
+<thead>
+<tr>
+<th>需要回答的问题</th>
+<th>首先对应的概念</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>设备位于哪个物理 PCIe 分支，如何向多个使用者提供 Function</td>
+<td>Root Complex、Root Port、SR-IOV</td>
+</tr>
+<tr>
+<td>哪些设备可以作为独立的 DMA 所有权单元</td>
+<td>IOMMU Group</td>
+</tr>
+<tr>
+<td>设备提交的地址允许映射到哪些 Host 物理页</td>
+<td>IOMMU、Domain、IOVA</td>
+</tr>
+<tr>
+<td>Guest 的 RAM 后备、总线、固件和设备如何组织</td>
+<td>QEMU</td>
+</tr>
+<tr>
+<td>Guest CPU 如何执行，Guest 内存和中断如何虚拟化</td>
+<td>KVM</td>
+</tr>
+<tr>
+<td>用户态 VMM 如何访问和分配真实设备</td>
+<td>VFIO</td>
+</tr>
+<tr>
+<td>DMA 地址空间通过什么用户态接口进行管理</td>
+<td>传统 VFIO 接口或 IOMMUFD</td>
+</tr>
+</tbody>
+</table>
+<p>单根拓扑、DMA 隔离和虚拟机执行解决的是不同问题。一台 VM 能正确使用直通设备，依赖这些层次在地址空间、设备所有权和运行时状态上保持一致。沿着这个边界理解各个组件，才不会把“有多个 VM”理解成多个物理根，也不会把“Guest RAM 映射在 QEMU 中”理解成“Guest 指令全部在用户态解释执行”。</p>
+<h2 id="参考资料">参考资料</h2>
+<ol>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/controller/pci-controller-drivers.html">Linux Writing PCI Host Controller Drivers</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://pcisig.com/specification-overview/pci-express-iov">PCI-SIG PCI Express IOV overview</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/pci-iov-howto.html">Linux PCI Express I/O Virtualization Howto</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/qemu/qemu/blob/master/docs/pcie.txt">QEMU PCI Express guidelines</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://pcisig.com/PCIExpress/Specs/IOV/Multi-RootIOVirtualizationandSharing_1.0">PCI-SIG Multi-Root I/O Virtualization and Sharing Specification Revision 1.0</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/core-api/dma-api-howto.html">Linux Dynamic DMA mapping Guide</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">Linux VFIO documentation</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/x86/mmu.html">KVM x86 MMU</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/pci/p2pdma.html">Linux PCI Peer-to-Peer DMA Support</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/api.html">Linux KVM API</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/userspace-api/iommufd.html">Linux IOMMUFD</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/devel/vfio-iommufd.html">QEMU VFIO IOMMUFD backend</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/system/introduction.html">QEMU Introduction</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/README.md">Cloud Hypervisor official README</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/qemu/qemu/blob/master/hw/vfio/region.c">QEMU VFIO region implementation</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/qemu/qemu/blob/master/hw/vfio/pci.c">QEMU VFIO PCI implementation</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://www.qemu.org/docs/master/system/invocation.html">QEMU Invocation</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/admin-guide/kernel-parameters.html">Linux kernel parameters</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://www.intel.com/content/www/us/en/docs/vtune-profiler/user-guide/2025-4/analyze-platform-performance.html">Intel VTune Analyze Platform Performance</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/pciutils/pciutils/blob/master/lspci.man">pciutils lspci manual</a></p>
+</li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/">https://roger-lv.github.io/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/KVM/">KVM</a><a class="post-meta__tags" href="/tags/SR-IOV/">SR-IOV</a><a class="post-meta__tags" href="/tags/IOMMU/">IOMMU</a><a class="post-meta__tags" href="/tags/VFIO/">VFIO</a><a class="post-meta__tags" href="/tags/PCIe/">PCIe</a><a class="post-meta__tags" href="/tags/QEMU/">QEMU</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/" title="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</div></div><div class="info-2"><div class="info-item-1">在云计算和 Kubernetes 环境中，同一块 GPU 或网卡可能以整卡、PCIe 虚拟功能、硬件分区或软件虚拟接口的形式提供给应用。SR-IOV、VFIO、macvlan、Network Namespace 和 vGPU 经常一起出现，却分别解决不同层次的问题。 理解这些技术，需要沿着三条线分析：硬件向操作系统暴露什么设备，哪个内核和驱动负责控制设备，应用最终被允许使用哪些资源。 这也能解释几个常见现象：为什么直通虚拟机需要自己的驱动，为什么普通容器能够使用节点驱动，以及为什么独占一个 VF 并不意味着独占整张网卡。 本文以 Linux、KVM/QEMU 和普通 Linux 进程型容器为背景。这里的“容器宿主机”指承载容器的 Kubernetes Node；Node 本身也可以是 VM。基于独立虚拟机的沙箱运行时需要按实际内核边界分析。  一、先区分设备虚拟化与设备分配    概念 所在层次 主要解决的问题     SR-IOV PCIe 设备能力 一个物理设备如何暴露多个可独立分配的 PCIe Function   VFIO Linux 内核框架 如何向用户态提供受控的设备...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/" title="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-06</div><div class="info-item-2">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：从 IOMMU（硬件地址翻译与 DMA 隔离）→ VFIO（设备直通框架）→ SR-IOV（PCIe 级切分）→ MIG（硅片级硬切分）→ vGPU（软件时间片调度）这条链路，构成了 GPU 虚拟化的完整技术栈。「IOMMU 划边界、VFIO 做移交」这条直通链路，是所有 GPU 沙盒和具身仿真基础设施绕不开的地基。  本文按「技术原理 → 两大落地场景 → 一个真实落地案例 → 决策树」四层展开，并把各技术支持的功能以表格汇总。 所有技术描述核对自 Linux 内核文档、NVIDIA 官方文档、Intel/AMD 官方文档与各项目仓库。核对中发现原稿有二十余处需要更正，其中三处是实质性错误，已在文中以 ⚠️ 标注。  一、技术原理层：从 IOMMU 到 vGPU 1.1 IOMMU：硬件级安全边界 IOMMU 是提供地址翻译与设备隔离的硬件单元：对设备发出的 DMA 做 IOVA → HPA 翻译与访问保护，并提供中断重映射；隔离以 IOMMU group 为粒度。Intel 侧叫 VT-d，AMD 侧叫 AMD-Vi。  Linux VFIO 内核文档原文：  ...</div></div></div></a><a class="pagination-related" href="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/" title="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-18</div><div class="info-item-2">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</div></div><div class="info-2"><div class="info-item-1">在云计算和 Kubernetes 环境中，同一块 GPU 或网卡可能以整卡、PCIe 虚拟功能、硬件分区或软件虚拟接口的形式提供给应用。SR-IOV、VFIO、macvlan、Network Namespace 和 vGPU 经常一起出现，却分别解决不同层次的问题。 理解这些技术，需要沿着三条线分析：硬件向操作系统暴露什么设备，哪个内核和驱动负责控制设备，应用最终被允许使用哪些资源。 这也能解释几个常见现象：为什么直通虚拟机需要自己的驱动，为什么普通容器能够使用节点驱动，以及为什么独占一个 VF 并不意味着独占整张网卡。 本文以 Linux、KVM/QEMU 和普通 Linux 进程型容器为背景。这里的“容器宿主机”指承载容器的 Kubernetes Node；Node 本身也可以是 VM。基于独立虚拟机的沙箱运行时需要按实际内核边界分析。  一、先区分设备虚拟化与设备分配    概念 所在层次 主要解决的问题     SR-IOV PCIe 设备能力 一个物理设备如何暴露多个可独立分配的 PCIe Function   VFIO Linux 内核框架 如何向用户态提供受控的设备...</div></div></div></a><a class="pagination-related" href="/2026/07/18/2026-07-18-CPU%E8%99%9A%E6%8B%9F%E5%8C%96/" title="CPU 虚拟化——从 trap-and-emulate 到 VT-x"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-18</div><div class="info-item-2">CPU 虚拟化——从 trap-and-emulate 到 VT-x</div></div><div class="info-2"><div class="info-item-1">CPU 虚拟化——从 trap-and-emulate 到 VT-x  本文目标：把 CPU 虚拟化的完整脉络讲透——从 Popek-Goldberg 理论、软件 trap-and-emulate、到硬件辅助 VT-x，再到 KVM 的工程实现。读完你能回答&quot;为什么 x86 早期不能做高效虚拟化&quot;“VT-x 的 root/non-root 是什么”“VMCS 存什么”“一次 VM-Exit 的开销和优化”“嵌套虚拟化怎么实现”。   一、要解决的问题：一个物理 CPU 怎么变成多个虚拟 CPU CPU 虚拟化的本质是：让多个 Guest OS 以为自己在独占一个物理 CPU，实际由 hypervisor（VMM）时分复用一个或多个物理核。 核心难点在于&quot;特权指令&quot;。Guest OS 内核要执行 hlt（停 CPU）、cli（关中断）、改 CR3（切页表）、lgdt（加载 GDT）这些指令——这些指令一旦真在物理 CPU 上执行，会真的关掉中断、真的换掉页表、真的停下 CPU，整机就乱了。所以必须让 Guest 不能直接执行这些指令，或执行后...</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-Firecracker-MicroVM%E5%AE%B9%E5%99%A8%E6%8A%80%E6%9C%AF%E5%AE%9E%E8%B7%B5/" title="基于 containerd 与 Firecracker 的 MicroVM 容器技术实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践</div></div><div class="info-2"><div class="info-item-1">基于 containerd 与 Firecracker 的 MicroVM 容器技术实践 目录  引言与背景 技术架构全景 前置条件与环境搭建 核心组件深度剖析 工作流程与数据流详解 通信机制:vsock 技术内幕 总结与展望   1. 引言与背景 1.1 容器安全隔离的演进 传统的 Linux 容器(如 runc)依赖 Namespace 和 Cgroups 实现进程级隔离,共享宿主机内核。这种模型在追求轻量和高密度的同时,也带来了潜在的安全风险——恶意容器可能通过内核漏洞影响宿主机或其他容器。 MicroVM 技术的出现为容器安全提供了硬件级别的隔离方案。Firecracker 作为 AWS 开源的高性能 VMM(Virtual Machine Monitor),专为轻量级 MicroVM 设计,可在毫秒级启动时间下提供完整的硬件虚拟化隔离。 1.2 项目背景 firecracker-containerd 项目由 AWS 主导,旨在将 Firecracker 的强大隔离能力与 containerd 的成熟容器管理生态相结合,实现&quot;像管理容器一样管理 MicroVM&...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-%E4%BB%8E%E5%86%AF%E8%AF%BA%E4%BE%9D%E6%9B%BC%E5%88%B0Agent%E6%B2%99%E7%AE%B1%E8%99%9A%E6%8B%9F%E5%8C%96%E9%9A%94%E7%A6%BB%E6%8A%80%E6%9C%AF%E6%A0%88%E6%8B%86%E8%A7%A3/" title="从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解</div></div><div class="info-2"><div class="info-item-1">从冯·诺依曼到 Agent 沙箱:虚拟化隔离技术栈的一次完整拆解 LLM Agent 正在把一个老问题重新推到台前:当代码由模型生成、且不可信时,你把它放在哪里执行? 容器的隔离撑不住对抗性负载;传统虚拟机又太重,扛不住每秒几十次的沙箱创建。于是一批沉寂多年的技术突然变得炙手可热——Firecracker、gVisor、Kata Containers、microVM。这些名词经常混在一起出现,但它们分处不同层次、解决不同问题。要真正理解它们的取舍,需要从最底层讲起:从冯·诺依曼架构的&quot;核心与外围&quot;,一路讲到 Agent infra 的选型决策。 本文分四部分:先梳理虚拟化技术栈的分层关系,再深入 QEMU 的设备模型理解&quot;外围设备&quot;的本质,然后分析性能差异的根源,最后落到 Agent 沙箱的实战选型。  一、技术栈全景:谁在谁的上面 先用一句话给所有主角定位:  KVM 是 Linux 内核提供的硬件虚拟化基础设施;QEMU 是基于 KVM 的传统全功能虚拟机监视器;Firecracker 是基于 KVM、专为 Serverless 设计的...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-IPoIB%E4%B8%8Epkey%E5%AD%90%E6%8E%A5%E5%8F%A3InfiniBand%E4%B8%96%E7%95%8C%E9%87%8C%E7%9A%84IP%E7%BD%91%E5%8D%A1%E4%B8%8EVLAN/" title="IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;</div></div><div class="info-2"><div class="info-item-1">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot; IPoIB(IP over InfiniBand)接口是运行在 InfiniBand 物理网络之上的&quot;IP 网卡&quot;,pkey 子接口则是在这张 IP 网卡上按&quot;分区键&quot;虚拟出的子接口——两者的组合,就是 InfiniBand 世界里对&quot;IP 网卡 + VLAN 子接口&quot;的对应物。 之所以需要它们,根源在于 InfiniBand 与以太网是两套截然不同的 L2 体系。  一、前提:InfiniBand 不是以太网 理解 IPoIB + pkey,必须先放下以太网的思维惯性。InfiniBand 是一套独立的链路层协议,从硬件寻址开始就和以太网不同:    维度 以太网 InfiniBand     硬件地址 48 位 MAC 地址,烧录在网卡里 无 MAC;由 GUID(端口全局唯一 ID)+ LID(子网内本地 ID,由子网管理器动态分配)标识   单播地址概念 MAC GID(128 位,基于 GUID 生...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">319</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">523</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81Single-Root-%E6%8F%8F%E8%BF%B0%E7%9A%84%E6%98%AF%E6%80%8E%E6%A0%B7%E7%9A%84-PCIe-%E6%8B%93%E6%89%91"><span class="toc-text">一、Single Root 描述的是怎样的 PCIe 拓扑</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%88%E5%8C%BA%E5%88%86-Root-Complex-%E5%92%8C-Root-Port"><span class="toc-text">先区分 Root Complex 和 Root Port</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Single-Root-%E5%85%B3%E6%B3%A8%E8%AE%BE%E5%A4%87%E6%89%80%E5%9C%A8%E7%9A%84%E5%8D%95%E6%A0%B9%E6%8B%93%E6%89%91"><span class="toc-text">Single Root 关注设备所在的单根拓扑</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E4%B8%AA%E8%99%9A%E6%8B%9F%E6%9C%BA%E7%9A%84%E8%99%9A%E6%8B%9F%E6%A0%B9%E4%B8%8D%E7%AD%89%E4%BA%8E-Multi-Root"><span class="toc-text">多个虚拟机的虚拟根不等于 Multi Root</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81IOMMU-%E8%A7%A3%E5%86%B3%E7%9A%84%E6%98%AF%E8%AE%BE%E5%A4%87%E5%A6%82%E4%BD%95%E8%AE%BF%E9%97%AE%E5%86%85%E5%AD%98"><span class="toc-text">二、IOMMU 解决的是设备如何访问内存</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#DMA-%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81%E5%9C%B0%E5%9D%80%E8%BD%AC%E6%8D%A2%E5%92%8C%E4%BF%9D%E6%8A%A4"><span class="toc-text">DMA 为什么需要地址转换和保护</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#CPU-MMU-%E4%B8%8E-IOMMU-%E5%A4%84%E7%90%86%E4%B8%8D%E5%90%8C%E7%9A%84%E8%AE%BF%E9%97%AE%E5%8F%91%E8%B5%B7%E8%80%85"><span class="toc-text">CPU MMU 与 IOMMU 处理不同的访问发起者</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E7%9C%8B%E6%87%82-GVA-GPA-HVA-HPA-%E5%92%8C-IOVA"><span class="toc-text">三、看懂 GVA GPA HVA HPA 和 IOVA</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BA%94%E7%A7%8D%E5%9C%B0%E5%9D%80%E5%88%86%E5%88%AB%E5%B1%9E%E4%BA%8E%E8%B0%81"><span class="toc-text">五种地址分别属于谁</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#CPU-%E5%92%8C%E8%AE%BE%E5%A4%87%E5%8F%AF%E4%BB%A5%E7%BB%8F%E4%B8%8D%E5%90%8C%E8%B7%AF%E5%BE%84%E8%AE%BF%E9%97%AE%E5%90%8C%E4%B8%80%E5%9D%97%E5%86%85%E5%AD%98"><span class="toc-text">CPU 和设备可以经不同路径访问同一块内存</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Guest-RAM-%E4%B8%8E-QEMU-%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E7%A9%B6%E7%AB%9F%E6%98%AF%E4%BB%80%E4%B9%88%E5%85%B3%E7%B3%BB"><span class="toc-text">Guest RAM 与 QEMU 地址空间究竟是什么关系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Guest-%E6%B2%A1%E6%9C%89%E8%99%9A%E6%8B%9F-IOMMU-%E4%B9%9F%E5%8F%AF%E4%BB%A5%E8%BF%9B%E8%A1%8C%E5%8F%97%E4%BF%9D%E6%8A%A4%E7%9A%84%E7%9B%B4%E9%80%9A"><span class="toc-text">Guest 没有虚拟 IOMMU 也可以进行受保护的直通</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81IOMMU-Group-%E5%92%8C-Domain-%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E8%83%BD%E6%B7%B7%E4%B8%BA%E4%B8%80%E8%B0%88"><span class="toc-text">四、IOMMU Group 和 Domain 为什么不能混为一谈</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Group-%E8%A1%A8%E8%BE%BE%E8%AE%BE%E5%A4%87%E9%9A%94%E7%A6%BB%E4%B8%8E%E6%89%80%E6%9C%89%E6%9D%83%E8%BE%B9%E7%95%8C"><span class="toc-text">Group 表达设备隔离与所有权边界</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Domain-%E8%A1%A8%E8%BE%BE%E8%AE%BE%E5%A4%87%E4%BD%BF%E7%94%A8%E5%93%AA%E4%B8%AA%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4"><span class="toc-text">Domain 表达设备使用哪个地址空间</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81QEMU-KVM-VFIO-%E6%97%A2%E5%88%86%E5%B7%A5%E5%8F%88%E5%8D%8F%E4%BD%9C"><span class="toc-text">五、QEMU KVM VFIO 既分工又协作</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E8%80%85%E5%88%86%E5%88%AB%E8%B4%9F%E8%B4%A3%E4%BB%80%E4%B9%88"><span class="toc-text">三者分别负责什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%80%8E%E6%A0%B7%E7%90%86%E8%A7%A3%E5%AE%83%E4%BB%AC%E6%98%AF%E5%90%A6%E6%AD%A3%E4%BA%A4"><span class="toc-text">怎样理解它们是否正交</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E4%B8%80%E5%8F%B0%E5%B8%A6%E7%9B%B4%E9%80%9A%E8%AE%BE%E5%A4%87%E7%9A%84%E8%99%9A%E6%8B%9F%E6%9C%BA%E5%A6%82%E4%BD%95%E8%BF%90%E8%A1%8C%E8%B5%B7%E6%9D%A5"><span class="toc-text">六、一台带直通设备的虚拟机如何运行起来</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#QEMU-%E5%BB%BA%E7%AB%8B%E8%99%9A%E6%8B%9F%E6%9C%BA%E5%99%A8%E5%B9%B6%E9%80%9A%E8%BF%87-KVM-%E8%BF%90%E8%A1%8C-vCPU"><span class="toc-text">QEMU 建立虚拟机器并通过 KVM 运行 vCPU</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#VFIO-%E4%B8%BA%E7%9C%9F%E5%AE%9E%E8%AE%BE%E5%A4%87%E5%BB%BA%E7%AB%8B%E8%AE%BF%E9%97%AE%E9%80%9A%E8%B7%AF"><span class="toc-text">VFIO 为真实设备建立访问通路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AE%A1%E7%90%86-MMIO-%E5%92%8C-DMA-%E6%98%AF%E4%B8%89%E7%B1%BB%E4%B8%8D%E5%90%8C%E7%9A%84%E8%B7%AF%E5%BE%84"><span class="toc-text">管理 MMIO 和 DMA 是三类不同的路径</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#IOMMUFD-%E5%9C%A8%E5%93%AA%E9%87%8C"><span class="toc-text">IOMMUFD 在哪里</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E4%BB%8E%E4%B8%80%E6%9D%A1-QEMU-%E5%91%BD%E4%BB%A4%E5%AF%B9%E5%BA%94%E5%88%B0%E5%90%84%E5%B1%82%E8%81%8C%E8%B4%A3"><span class="toc-text">七、从一条 QEMU 命令对应到各层职责</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E7%90%86%E8%A7%A3%E9%9A%94%E7%A6%BB%E8%83%BD%E5%8A%9B%E6%97%B6%E8%BF%98%E8%A6%81%E4%BF%9D%E7%95%99%E5%93%AA%E4%BA%9B%E8%BE%B9%E7%95%8C"><span class="toc-text">八、理解隔离能力时还要保留哪些边界</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E7%94%A8%E4%B8%80%E7%BB%84%E9%97%AE%E9%A2%98%E5%AE%9A%E4%BD%8D%E4%B8%8D%E5%90%8C%E5%B1%82%E6%AC%A1"><span class="toc-text">九、用一组问题定位不同层次</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/" title="从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO">从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO</a><time datetime="2026-11-18T07:24:09.000Z" title="发表于 2026-11-18 15:24:09">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/" title="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</a><time datetime="2026-11-18T06:39:10.000Z" title="发表于 2026-11-18 14:39:10">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sky-scheduler-rdma-topology/" title="Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点">Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点</a><time datetime="2026-11-17T16:00:00.000Z" title="发表于 2026-11-18 00:00:00">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/" title="推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM">推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E5%9B%BD%E4%BA%A7GPU%E9%80%82%E9%85%8D%E5%88%B0%E5%BA%95%E5%9C%A8%E9%80%82%E9%85%8D%E4%BB%80%E4%B9%88/" title="国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解">国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
