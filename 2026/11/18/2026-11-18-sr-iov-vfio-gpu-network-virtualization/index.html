@@ -1,0 +1,940 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从 PCIe PF 和 VF 到 Kubernetes Pod，梳理设备呈现、驱动绑定和资源分配，串起 SR-IOV、VFIO、macvlan、RDMA、MIG 与 vGPU，并给出排查命令。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从 PCIe PF 和 VF 到 Kubernetes Pod，梳理设备呈现、驱动绑定和资源分配，串起 SR-IOV、VFIO、macvlan、RDMA、MIG 与 vGPU，并给出排查命令。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-18T06:39:10.000Z">
+<meta property="article:modified_time" content="2026-11-18T06:39:10.952Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="SR-IOV">
+<meta property="article:tag" content="GPU虚拟化">
+<meta property="article:tag" content="IOMMU">
+<meta property="article:tag" content="VFIO">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化",
+  "url": "https://roger-lv.github.io/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-18T06:39:10.000Z",
+  "dateModified": "2026-11-18T06:39:10.952Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">318</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">521</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-18T06:39:10.000Z" title="发表于 2026-11-18 14:39:10">2026-11-18</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-18T06:39:10.952Z" title="更新于 2026-11-18 14:39:10">2026-11-18</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/" data-flag-title="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>在云计算和 Kubernetes 环境中，同一块 GPU 或网卡可能以整卡、PCIe 虚拟功能、硬件分区或软件虚拟接口的形式提供给应用。SR-IOV、VFIO、macvlan、Network Namespace 和 vGPU 经常一起出现，却分别解决不同层次的问题。</p>
+<p>理解这些技术，需要沿着三条线分析：<strong>硬件向操作系统暴露什么设备，哪个内核和驱动负责控制设备，应用最终被允许使用哪些资源。</strong> 这也能解释几个常见现象：为什么直通虚拟机需要自己的驱动，为什么普通容器能够使用节点驱动，以及为什么独占一个 VF 并不意味着独占整张网卡。</p>
+<p>本文以 Linux、KVM/QEMU 和普通 Linux 进程型容器为背景。这里的“容器宿主机”指承载容器的 Kubernetes Node；Node 本身也可以是 VM。基于独立虚拟机的沙箱运行时需要按实际内核边界分析。</p>
+<span id="more"></span>
+<h2 id="一、先区分设备虚拟化与设备分配">一、先区分设备虚拟化与设备分配</h2>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>所在层次</th>
+<th>主要解决的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SR-IOV</td>
+<td>PCIe 设备能力</td>
+<td>一个物理设备如何暴露多个可独立分配的 PCIe Function</td>
+</tr>
+<tr>
+<td>VFIO</td>
+<td>Linux 内核框架</td>
+<td>如何向用户态提供受控的设备访问，用于 VM 直通或用户态 I/O</td>
+</tr>
+<tr>
+<td>macvlan</td>
+<td>Linux 网络设备层</td>
+<td>如何在父网络接口上创建拥有独立 MAC 的虚拟接口</td>
+</tr>
+<tr>
+<td>Network Namespace</td>
+<td>Linux 资源隔离</td>
+<td>哪些网络接口、路由、socket 等资源属于哪个网络环境</td>
+</tr>
+<tr>
+<td>Device Plugin</td>
+<td>Kubernetes 设备管理</td>
+<td>如何发现、报告设备资源，并配合 kubelet 将设备提供给容器</td>
+</tr>
+<tr>
+<td>MIG 与 vGPU</td>
+<td>GPU 资源划分与虚拟化</td>
+<td>GPU 的计算、显存等资源如何提供给不同工作负载</td>
+</tr>
+</tbody>
+</table>
+<p><strong>SR-IOV 和 VFIO 可以配合使用，也可以分别使用。</strong> 一块没有启用 SR-IOV 的物理 GPU 可以通过 VFIO 整体直通；支持 SR-IOV 的网卡 VF 可以由普通内核驱动管理，直接提供给容器，也可以通过 VFIO 分配给 VM。VFIO 名称中的 Virtual Function 不意味着它只能处理 SR-IOV VF。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">1</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/pci-iov-howto.html">2</a></p>
+<h3 id="PCIe-Function-与网络接口的区别">PCIe Function 与网络接口的区别</h3>
+<p>PCIe Function 是 PCI 总线枚举和驱动绑定的对象，通常由包含 PCI domain 的地址标识，例如 <code>0000:65:00.2</code>。Linux 网络接口则是内核网络子系统中的 <code>net_device</code>，例如 <code>ens5f0</code>、<code>eth0</code> 或 <code>net1</code>。</p>
+<p>一个由内核网络驱动管理的 VF，可以同时有两种身份：</p>
+<table>
+<thead>
+<tr>
+<th>观察层次</th>
+<th>示例身份</th>
+<th>用什么查看</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PCI 子系统</td>
+<td><code>0000:65:00.2</code></td>
+<td><code>lspci</code>、PCI sysfs</td>
+</tr>
+<tr>
+<td>网络子系统</td>
+<td><code>enp65s0f0v0</code>，或移入 Pod 后的 <code>net1</code></td>
+<td>对应 NetNS 内的 <code>ip link</code></td>
+</tr>
+</tbody>
+</table>
+<p>这两种身份不能混为一谈。网络接口改名或改变命名空间归属，并不等于 PCIe Function 被重新创建，也不等于其 PCI 驱动绑定发生变化。对于更复杂的多端口设备和 representor，也不能假定所有 PCI Function 与 netdev 永远一一对应。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/driver-model/binding.html">3</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/networking/netdevices.html">4</a></p>
+<h2 id="二、SR-IOV-在硬件层面提供-PF-和-VF">二、SR-IOV 在硬件层面提供 PF 和 VF</h2>
+<p>SR-IOV 全称 Single Root I/O Virtualization。支持该能力的 PCIe 设备可以通过 PF 管理多个 VF：</p>
+<ul>
+<li>
+<p><strong>PF，Physical Function</strong>：具有较完整配置和管理能力的物理 Function，负责启用、配置和管理关联的 VF。</p>
+</li>
+<li>
+<p><strong>VF，Virtual Function</strong>：可独立枚举的虚拟 Function，具有自己的 PCIe 配置和寄存器访问空间，可以绑定相应驱动。</p>
+</li>
+</ul>
+<p>PF 是一个 Function，不应简单等同于整块板卡。一块多端口或多功能网卡可能具有多个 PF。以下以只有一个 PF 的简化设备为例。<a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/pci-iov-howto.html">2</a><a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-cni">8</a></p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TB
+    subgraph NIC[&quot;一块支持 SR-IOV 的物理网卡&quot;]
+        PF[&quot;PF 管理功能&quot;]
+        VF0[&quot;VF0&quot;]
+        VF1[&quot;VF1&quot;]
+        PF -.-&gt;|管理| VF0
+        PF -.-&gt;|管理| VF1
+    end
+    PF --- PD[&quot;节点 PF 驱动&quot;]
+    VF0 --- KD[&quot;节点 VF 功能驱动&quot;]
+    KD --- NET[&quot;Pod 的 VF 网络接口&quot;]
+    VF1 --- VD[&quot;节点 VFIO 驱动&quot;]
+    VD -.-&gt;|设备分配| VM[&quot;VM 及 Guest 功能驱动&quot;]
+  </pre></div>
+<p>图中两个 VF 分别采用不同使用方式。虚线表示管理或设备分配关系，不表示应用数据必须经过 PF 驱动逐包转发。</p>
+<p>VF 通常拥有可独立管理的队列和设备上下文，但仍共享底层物理端口、PCIe 链路及部分芯片资源。假设一个 100 Gb/s 端口创建了四个 VF，不能推导出每个 VF 都额外拥有 100 Gb/s 带宽，也不能推导出硬件一定自动为每个 VF 保留 25 Gb/s。带宽限制和保障要看设备能力与实际配置。</p>
+<p>同样，<strong>GPU 暴露四个 VF，不代表其计算单元和显存天然平均分成四份。</strong> SR-IOV 定义了设备呈现与访问的基础能力；GPU 资源如何切分，还要看具体 GPU、固件和虚拟化软件。</p>
+<h2 id="三、VFIO-直通为什么需要-VM-内的功能驱动">三、VFIO 直通为什么需要 VM 内的功能驱动</h2>
+<h3 id="VFIO-负责建立设备访问环境">VFIO 负责建立设备访问环境</h3>
+<p>VFIO 是 Linux 向用户态提供直接设备访问的框架。在使用 IOMMU 的直通模式中，它与虚拟化平台协作，提供设备寄存器区域访问、中断处理接口以及 DMA 地址空间管理。IOMMU 负责设备侧地址转换和访问限制，避免被分配设备任意读写不属于它的系统内存。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">1</a></p>
+<p>VFIO 并不实现 CUDA，也不负责理解某张网卡完整的收发逻辑。控制设备功能仍然需要对应的功能驱动。QEMU/KVM 使用 VFIO 把设备呈现给 Guest 后，Guest 内的 GPU 或网卡驱动才能初始化设备、管理队列并提交工作。</p>
+<table>
+<thead>
+<tr>
+<th>位置</th>
+<th>整 GPU 直通时的典型组件</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>物理宿主机内核</td>
+<td><code>vfio-pci</code> 或适用的专用 VFIO 驱动</td>
+<td>暴露设备访问，配合设备分配和 DMA 隔离</td>
+</tr>
+<tr>
+<td>宿主机用户空间及虚拟化层</td>
+<td>QEMU/KVM</td>
+<td>向 Guest 呈现设备并建立访问环境</td>
+</tr>
+<tr>
+<td>VM 内核</td>
+<td>NVIDIA GPU 功能驱动</td>
+<td>初始化 GPU，管理设备资源和计算任务</td>
+</tr>
+<tr>
+<td>VM 用户空间</td>
+<td>CUDA、框架和应用</td>
+<td>调用 GPU 功能</td>
+</tr>
+</tbody>
+</table>
+<p>表中描述的是职责关系。建立映射后，部分寄存器访问和 DMA 可以直接进行，不能把直通理解成“每次 GPU 操作或每个数据包，都必须由 QEMU 和 VFIO 逐层复制转发”。</p>
+<h3 id="安装驱动与绑定驱动是两件事">安装驱动与绑定驱动是两件事</h3>
+<p>判断设备由谁使用，需要区分三个状态：</p>
+<ol>
+<li>
+<p><strong>已安装</strong>：驱动软件包存在于系统中。</p>
+</li>
+<li>
+<p><strong>已加载</strong>：相关内核模块已经进入当前内核。</p>
+</li>
+<li>
+<p><strong>已绑定</strong>：某个具体设备 Function 由该驱动接管。</p>
+</li>
+</ol>
+<p>普通 Linux PCI 驱动模型中，同一个 PCI Function 在同一内核里不会同时绑定两个互相独立的 PCI 功能驱动。整 GPU 从宿主机计算模式切换到 VFIO 直通时，典型做法是从 <code>nvidia</code> 解绑，再绑定 <code>vfio-pci</code>。NVIDIA 的直通文档明确描述了这一转换。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/driver-model/binding.html">3</a><a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/using-gpu-pass-through.html">5</a></p>
+<p>例如，同一服务器可以同时存在以下绑定：</p>
+<table>
+<thead>
+<tr>
+<th>GPU</th>
+<th>物理宿主机上的绑定</th>
+<th>使用方</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU0</td>
+<td><code>vfio-pci</code></td>
+<td>VM A 的 Guest NVIDIA 驱动</td>
+</tr>
+<tr>
+<td>GPU1</td>
+<td><code>vfio-pci</code></td>
+<td>VM B 的 Guest NVIDIA 驱动</td>
+</tr>
+<tr>
+<td>GPU2</td>
+<td><code>nvidia</code></td>
+<td>宿主机应用或普通容器</td>
+</tr>
+</tbody>
+</table>
+<p>所以，“VFIO 直通后宿主机不装驱动”不够准确。<strong>宿主机仍有 VFIO 侧驱动；被直通 GPU 的功能控制由 VM 内的驱动承担。</strong> 宿主机也可以保留 NVIDIA 软件包和模块，用于其他 GPU。Guest 中是独立加载的一份驱动实例，并不是把宿主机的模块文件移动进 VM。</p>
+<p>同一硬件在 Host 看起来绑定 VFIO、在 Guest 看起来绑定功能驱动，并不违反上述规则：这两个绑定属于不同内核，承担不同职责。</p>
+<h3 id="PCIe-Function-也不一定是最小安全直通单元">PCIe Function 也不一定是最小安全直通单元</h3>
+<p>IOMMU Group 表示平台能够与其他设备隔离的一组设备。某些硬件拓扑下，多个 Function 无法彼此可靠隔离，因此不能仅凭 PCI 地址不同，就认定它们可以安全地分配给不同租户。</p>
+<p>直通需要检查 IOMMU Group、设备复位能力以及平台支持。传统 VFIO 使用 group 接口；使用 device cdev 和 IOMMUFD 的新接口也仍受 DMA 所有权约束。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">1</a></p>
+<h2 id="四、共享内核为何意味着可以使用节点内核驱动">四、共享内核为何意味着可以使用节点内核驱动</h2>
+<h3 id="普通容器没有自己的内核驱动空间">普通容器没有自己的内核驱动空间</h3>
+<p>普通 Linux 容器是一组被 namespace、cgroup 等机制约束的进程。它可以有自己的文件系统和用户态软件，但系统调用进入的是承载它的 Node 内核。VM 则运行独立的 Guest Kernel。<a target="_blank" rel="noopener" href="https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/">6</a></p>
+<p><code>mlx5_core</code>、<code>mlx5_ib</code>、<code>nvidia</code> 等内核驱动是这份内核中的代码和状态。容器进程获得相应设备访问权限后，就能通过共享内核提供的接口使用它们，不需要在容器里再运行一套内核驱动。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TB
+    H[&quot;宿主机用户态进程&quot;]
+    P[&quot;Pod 用户态进程&quot;]
+    subgraph K[&quot;同一个 Node Linux 内核&quot;]
+        HN[&quot;Host NetNS 的网络资源&quot;]
+        PN[&quot;Pod NetNS 的网络资源&quot;]
+        D[&quot;共享的网卡驱动实现&quot;]
+        HN --&gt; D
+        PN --&gt; D
+    end
+    H --&gt;|socket 系统调用| HN
+    P --&gt;|socket 系统调用| PN
+    D --&gt; F0[&quot;PF 或 VF0&quot;]
+    D --&gt; F1[&quot;VF1&quot;]
+  </pre></div>
+<p>这里“共享驱动”指同一内核中的驱动实现可服务多个设备或使用者。驱动仍为不同 Function、队列和进程维护各自的状态，并不代表所有容器混用同一个网络接口或设备上下文。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/driver-model/binding.html">3</a><a target="_blank" rel="noopener" href="https://docs.kernel.org/networking/netdevices.html">4</a></p>
+<h3 id="Namespace-隔离资源和状态-不复制内核">Namespace 隔离资源和状态 不复制内核</h3>
+<p>Network Namespace 隔离网络接口、IP 路由、协议栈状态、socket 端口空间及相关规则。它不仅改变可见名称，还改变这些资源的归属和运行环境；不同 NetNS 依然使用同一套内核实现。<a target="_blank" rel="noopener" href="https://man7.org/linux/man-pages/man7/network_namespaces.7.html">7</a></p>
+<p>以 Pod 使用普通 TCP socket 为例，发送逻辑可以概括为：</p>
+<ol>
+<li>
+<p>应用对 socket 调用 <code>send()</code> 等接口。</p>
+</li>
+<li>
+<p>系统调用进入 Node 内核。</p>
+</li>
+<li>
+<p>内核根据 socket 所属的 NetNS、路由与相关配置选择出口。</p>
+</li>
+<li>
+<p>网络子系统将待发送数据交给出口 netdev 的驱动。</p>
+</li>
+<li>
+<p>驱动组织发送队列，由网卡执行 DMA 和网络发送。</p>
+</li>
+</ol>
+<p>因此 Pod 使用节点驱动并不需要经过一个“宿主机驱动服务”，也不需要先进入宿主机默认 NetNS。进程本来就在共享的内核之上运行。</p>
+<p><strong>共享内核只是使用内核驱动的基础，不是设备访问授权。</strong> 容器还需要正确的网络接口归属，或设备节点、访问策略和用户态依赖。仅在镜像里安装 CUDA 或 <code>libibverbs</code>，不会自动获得 GPU 或 RDMA 设备。</p>
+<p>还要避免把“驱动”一概视为内核模块。GPU 驱动包包含用户态和内核态组件，RDMA 也需要用户态 provider；DPDK PMD 则可以在用户态实现设备数据路径。<a target="_blank" rel="noopener" href="https://docs.kernel.org/infiniband/user_verbs.html">11</a><a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/cuda-compatibility/latest/why-cuda-compatibility.html">15</a></p>
+<h2 id="五、把-VF-网络接口放进-Pod-到底移动了什么">五、把 VF 网络接口放进 Pod 到底移动了什么</h2>
+<h3 id="保持驱动绑定并改变-netdev-的命名空间归属">保持驱动绑定并改变 netdev 的命名空间归属</h3>
+<p>假设一个网卡 VF 的 PCI 地址是 <code>0000:65:00.2</code>，在节点上绑定 <code>mlx5_core</code>，并创建网络接口 <code>enp65s0f0v0</code>。SR-IOV CNI 将这个 netdev 放入 Pod 的 NetNS 后，可能把它改名为 <code>net1</code>。</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>分配前</th>
+<th>分配后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PCIe VF</td>
+<td>Node PCI 子系统中的 <code>0000:65:00.2</code></td>
+<td>仍由同一 Node 内核管理</td>
+</tr>
+<tr>
+<td>PCI 驱动绑定</td>
+<td><code>mlx5_core</code></td>
+<td>通常保持不变</td>
+</tr>
+<tr>
+<td>VF 网络接口</td>
+<td>默认 NetNS 中的 <code>enp65s0f0v0</code></td>
+<td>Pod NetNS 中的 <code>net1</code></td>
+</tr>
+<tr>
+<td>内核</td>
+<td>Node Linux Kernel</td>
+<td>仍是同一份内核</td>
+</tr>
+</tbody>
+</table>
+<p>Pod 中看到的是网络接口。它没有获得独立的 PCI 子系统，也没有接管一套新的内核。宿主机默认 NetNS 下的 <code>ip link</code> 不再列出这个接口，并不代表宿主机的 <code>lspci</code> 看不到 VF。<a target="_blank" rel="noopener" href="https://man7.org/linux/man-pages/man7/network_namespaces.7.html">7</a><a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-cni">8</a></p>
+<p>因此，这个模式不需要为了跨越内核边界而引入 VFIO：<strong>VF 已由共享内核的功能驱动管理，CNI 只需把网络资源交给正确的容器网络环境。</strong></p>
+<h3 id="Kubernetes-各组件的分工">Kubernetes 各组件的分工</h3>
+<p>在典型 Device Plugin、Multus 和 SR-IOV CNI 部署中，分工如下：</p>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>主要职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PF 驱动及节点配置工具或 Operator</td>
+<td>创建 VF，选择驱动绑定，配置物理设备</td>
+</tr>
+<tr>
+<td>SR-IOV Network Device Plugin</td>
+<td>发现、报告设备及健康状态，响应 kubelet 的分配请求</td>
+</tr>
+<tr>
+<td>kubelet Device Manager</td>
+<td>在节点上为容器分配具体设备并协调启动</td>
+</tr>
+<tr>
+<td>Multus</td>
+<td>根据附加网络配置取得 VF 的 <code>deviceID</code>，调用对应 CNI</td>
+</tr>
+<tr>
+<td>SR-IOV CNI</td>
+<td>配置已分配的 VF；在内核网络模式下移动 netdev 并设置网络参数</td>
+</tr>
+<tr>
+<td>IPAM</td>
+<td>分配 IP 地址，供 CNI 配置接口</td>
+</tr>
+</tbody>
+</table>
+<p>SR-IOV Device Plugin 和 SR-IOV CNI 都不负责凭空创建 VF；前者也不负责随意 bind/unbind 驱动。设备应事先由节点管理流程准备好。<a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-cni">8</a><a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-network-device-plugin">9</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/">10</a></p>
+<p>设备分配与网络配置属于两项不同工作。申请一个扩展资源，不会天然得到正确的 IP 和路由；只有附加网络配置，没有相应设备资源，也不构成完整的 VF 分配流程。</p>
+<h3 id="VM-直通与容器中的-VFIO-使用">VM 直通与容器中的 VFIO 使用</h3>
+<p>VM 内核和 Host 内核独立，不能用 NetNS 操作把 Host 的 netdev 直接移入 Guest Kernel。对于 VF 直通，需要通过设备分配机制向 Guest 呈现 PCIe VF，由 Guest 驱动使用。</p>
+<p>但 VM 网络并不总是直通：使用 virtio-net 时，Guest 运行 virtio 网卡驱动，Host 的网络后端与物理网卡驱动完成另一侧工作。</p>
+<p>反过来，容器也可以使用 VFIO。例如某些 DPDK PMD 通过 VFIO 访问设备；这种容器主要使用 VFIO 设备接口，不一定拥有可用于普通 socket 收发的 <code>net1</code>。所以，判断是否需要 VFIO，应看设备访问模型，而不能只看工作负载叫 Pod 还是 VM。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">1</a><a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-cni">8</a></p>
+<h2 id="六、macvlan-与-SR-IOV-的关系">六、macvlan 与 SR-IOV 的关系</h2>
+<p>macvlan 在一个父 netdev 上创建多个虚拟网络接口，通常为各接口提供独立 MAC。它使用 Linux 网络机制，不生成新的 PCIe Function。<a target="_blank" rel="noopener" href="https://www.cni.dev/plugins/current/main/macvlan/">12</a></p>
+<p>例如，父接口是 <code>ens5f0</code>，Pod A 和 Pod B 各有一个 macvlan 子接口。普通 TCP/UDP 发送时，可以按以下逻辑理解：</p>
+<p><strong>Pod 应用 → socket → Pod NetNS 的网络处理 → macvlan 接口 → 父接口 → 底层网卡驱动 → 物理网卡。</strong></p>
+<p>CNI 配置中的 <code>master</code> 指父网络接口，未必直接是物理 PF 接口，也可能是 bond、VLAN 接口，或保留 netdev 的 VF，取决于实际部署。<code>mode: bridge</code> 是 macvlan 自身的工作模式，不表示必须另建一个 Linux bridge。</p>
+<table>
+<thead>
+<tr>
+<th>对比项</th>
+<th>macvlan</th>
+<th>SR-IOV VF 的内核网络模式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>对 Pod 提供什么</td>
+<td>软件虚拟 netdev</td>
+<td>VF 对应的 netdev</td>
+</tr>
+<tr>
+<td>是否新增 PCIe Function</td>
+<td>否</td>
+<td>是，由 SR-IOV 提供</td>
+</tr>
+<tr>
+<td>设备驱动在哪里</td>
+<td>Node 内核</td>
+<td>Node 内核</td>
+</tr>
+<tr>
+<td>是否必须使用 VFIO</td>
+<td>否</td>
+<td>否</td>
+</tr>
+<tr>
+<td>资源独占粒度</td>
+<td>接口身份，不代表独占物理硬件</td>
+<td>可以独占 VF，仍共享物理网卡部分资源</td>
+</tr>
+<tr>
+<td>是否自动具有 RDMA</td>
+<td>否</td>
+<td>取决于 VF 的硬件、驱动和配置</td>
+</tr>
+</tbody>
+</table>
+<p>两种方式通常是不同的网络配置选择，但并非永远互斥。例如，VF 仍由内核驱动管理且具备 netdev 时，可以在条件允许时再创建 macvlan；若 VF 已在物理宿主机绑定 VFIO 并直通 VM，物理宿主机就不能再把该 VF 当作普通 netdev 的 <code>master</code> 使用。</p>
+<p>另外，macvlan 子接口默认不能直接与父接口所在宿主机通过该父接口通信，需要额外网络设计；在云环境中，还要确认底层网络是否允许同一连接使用多个 MAC。独立 MAC 不等于独占硬件通路。<a target="_blank" rel="noopener" href="https://docs.docker.com/engine/network/drivers/macvlan/">13</a></p>
+<h2 id="七、RDMA-网络要分开看接口配置与设备访问">七、RDMA 网络要分开看接口配置与设备访问</h2>
+<h3 id="macvlan-加共享-RDMA-设备">macvlan 加共享 RDMA 设备</h3>
+<p>macvlan 为 Pod 提供网络接口和 MAC/IP；RDMA Shared Device Plugin 则提供对 RDMA 设备的共享访问。它们承担不同职责，NVIDIA Network Operator 的官方部署文档将两者组合为 MacVLAN RDMA Shared 模式。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking/display/kubernetes2671/quick-start/macvlan-rdma-shared.html">14</a></p>
+<p>Pod 还需要兼容的 RDMA 用户态库、设备相关 provider、设备访问权限和网络配置。共享插件报告的资源单位也不等于相同数量的物理网卡、VF 或硬带宽分区。<a target="_blank" rel="noopener" href="https://github.com/Mellanox/k8s-rdma-shared-dev-plugin">19</a></p>
+<h3 id="SR-IOV-加支持-RDMA-的-VF">SR-IOV 加支持 RDMA 的 VF</h3>
+<p>另一种方式是给每个 Pod 分配一个支持 RDMA 的 VF，同时提供 VF 对应的网络与 RDMA 访问能力。</p>
+<p>这里需要再区分 <strong>Ethernet netdev</strong> 与 <strong>RDMA 设备对象</strong>。仅把以太网接口移入 Pod，不代表 RDMA 命名空间隔离已经完成。在需要 RDMA exclusive namespace 的配置中，可以串联 RDMA CNI，处理关联 RDMA 设备的命名空间归属。<a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/rdma-cni">16</a></p>
+<h3 id="Kernel-bypass-的准确含义">Kernel bypass 的准确含义</h3>
+<p>普通 TCP/IP 路径与硬件 RDMA verbs 快路径不同。RDMA 的设备打开、资源创建、内存注册等控制操作仍需要操作系统及内核驱动参与；资源准备完成后，用户态通常可以通过映射的队列和 doorbell 提交工作，RNIC 执行 DMA 与传输，无须每次都进入普通内核网络协议栈。<a target="_blank" rel="noopener" href="https://docs.kernel.org/infiniband/user_verbs.html">11</a></p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TB
+    APP[&quot;Pod 中的 RDMA 应用&quot;]
+    LIB[&quot;libibverbs 与设备 provider&quot;]
+    K[&quot;uverbs 与 RDMA 内核驱动&quot;]
+    Q[&quot;映射的队列与 doorbell&quot;]
+    NIC[&quot;RDMA 网卡&quot;]
+    MEM[&quot;已注册内存&quot;]
+    APP --&gt; LIB
+    LIB -.-&gt;|资源创建与内存注册| K
+    K -.-&gt;|建立和管理访问资源| NIC
+    LIB --&gt;|提交工作| Q
+    Q --&gt; NIC
+    NIC &lt;--&gt;|DMA| MEM
+  </pre></div>
+<p>图中虚线是控制关系，实线是简化的数据操作关系。使用 macvlan 配置网络，并不意味着每次 RDMA payload 都要经过 macvlan 软件转发层。</p>
+<p>这解释了一个看似矛盾的组合：<strong>RDMA 可以在数据面绕过常规内核网络协议栈，同时继续依赖节点内核驱动进行控制、资源管理与清理。</strong></p>
+<p>DPDK 也不能一概等同于 VFIO。NVIDIA mlx5 PMD 采用 bifurcated driver 模型，保留内核驱动并与用户态 PMD 协作，利用硬件规则将不同流量交给内核或用户态。使用 DPDK 不构成把 ConnectX 从 <code>mlx5_core</code> 解绑的充分理由。<a target="_blank" rel="noopener" href="https://doc.dpdk.org/guides/nics/mlx5.html">17</a><a target="_blank" rel="noopener" href="https://doc.dpdk.org/guides/platform/mlx5.html">18</a></p>
+<h2 id="八、云上-GPU-独占的判断方法">八、云上 GPU 独占的判断方法</h2>
+<h3 id="先确定独占的对象">先确定独占的对象</h3>
+<p>“独占 GPU”可能指整颗物理 GPU，也可能只是一个 MIG 分区或 vGPU 实例。不同含义对应的资源保障不同。</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>分配对象</th>
+<th>共享与独占的边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>整 GPU PCIe passthrough</td>
+<td>完整物理 GPU</td>
+<td>GPU 在 VM 之间独占；同一 VM 内仍可运行多个进程或 Pod</td>
+</tr>
+<tr>
+<td>SR-IOV GPU VF</td>
+<td>一个 PCIe VF</td>
+<td>VF 可独立分配，算力和显存如何分配由具体实现决定</td>
+</tr>
+<tr>
+<td>Time-sliced vGPU</td>
+<td>vGPU 实例</td>
+<td>多个 VM 分时使用 GPU 计算资源，显存等按 profile 管理</td>
+</tr>
+<tr>
+<td>MIG 硬件分区</td>
+<td>GPU Instance 等资源实例</td>
+<td>不同 GI 有硬件资源划分；一个 GI 内还可能进一步划分 CI</td>
+</tr>
+<tr>
+<td>MIG-backed vGPU</td>
+<td>建立在 MIG 上的 vGPU</td>
+<td>需检查 profile 及分区内是否继续共享</td>
+</tr>
+<tr>
+<td>普通 GPU Pod</td>
+<td>插件分配的 GPU 或共享资源</td>
+<td>取决于 Device Plugin、MIG、time-slicing 等配置</td>
+</tr>
+</tbody>
+</table>
+<p>整 GPU passthrough 的设备不在多个 VM 之间共享；MIG 则划分物理 GPU 内部资源。MIG 的 GI 与 CI 也不是同一粒度：同一 GI 内的 CI 可以分割计算资源，但共享父 GI 的显存及部分引擎。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/grid-vgpu-introduction.html">20</a><a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/concepts.html">21</a></p>
+<p>受支持的平台还存在 MIG-backed time-sliced vGPU，因此不能只看到“MIG-backed”就断定 VM 独占一个完整 GI。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/grid-vgpu-introduction.html">20</a></p>
+<p>对于 Kubernetes，<code>nvidia.com/gpu: 1</code> 的实际含义也要结合插件配置判断。启用 time-slicing 后，它可能表示共享 GPU 的一个可分配单位；这些单位没有 MIG 那样的独立硬件显存和故障隔离，也不保证请求两个单位就获得两倍计算能力。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-sharing.html">22</a></p>
+<h3 id="驱动版本影响沿着实际控制链传播">驱动版本影响沿着实际控制链传播</h3>
+<table>
+<thead>
+<tr>
+<th>部署方式</th>
+<th>GPU 功能驱动的位置</th>
+<th>主要兼容关系</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>裸金属上的普通 GPU 容器</td>
+<td>Kubernetes Node 内核</td>
+<td>容器用户态 CUDA 软件与节点驱动兼容</td>
+</tr>
+<tr>
+<td>整 GPU 直通 VM</td>
+<td>Guest Kernel</td>
+<td>Guest 驱动支持 GPU、Guest OS 及应用栈</td>
+</tr>
+<tr>
+<td>NVIDIA vGPU VM</td>
+<td>Host vGPU Manager 与 Guest 驱动协作</td>
+<td>两侧版本必须处于官方支持的兼容组合</td>
+</tr>
+</tbody>
+</table>
+<p>整卡直通时，不存在“物理 Host 安装的 NVIDIA 计算驱动必须与 Guest 驱动同版”的普遍要求，因为它不负责控制这张被直通 GPU 的计算功能。不过平台固件、虚拟化组件和设备支持仍会影响可用性。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/using-gpu-pass-through.html">5</a></p>
+<p>vGPU 不同：Host 管理组件持续参与共享 GPU 的运行，因此 Host vGPU Manager 与 Guest 驱动需要兼容。兼容不等于永远完全同版本，应查看对应版本和虚拟化平台的发布说明。不同 GPU 与平台还可能采用 mdev 或厂商专用 VFIO 接口，不能照搬普通网卡 VF 的配置流程。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/installing-configuring-grid-vgpu.html">23</a><a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-release-notes-ubuntu/release-notes.html">24</a></p>
+<h3 id="CUDA-Toolkit-与-GPU-驱动不是同一层">CUDA Toolkit 与 GPU 驱动不是同一层</h3>
+<p>CUDA Toolkit 提供编译器、CUDA Runtime 和相关库；NVIDIA 驱动包则包含 <code>libcuda.so</code> 等用户态驱动组件以及内核态组件。容器可以携带不同版本的 CUDA 应用依赖，但实际使用的节点驱动仍需满足兼容条件。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/cuda-compatibility/latest/why-cuda-compatibility.html">15</a><a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/cuda-compatibility/latest/index.html">25</a></p>
+<p>NVIDIA Container Toolkit 负责将所需设备和驱动支持接入容器。它不为每个 Pod 启动一份独立内核。因此，修改镜像中的 CUDA Toolkit，不会同时替换 Node 内核中的 NVIDIA 驱动。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/arch-overview.html">26</a></p>
+<p>对 GPU 故障进行定位时，应分别检查“应用依赖”“用户态驱动组件”“当前内核驱动”“设备绑定与分配”，不要把所有版本问题都归结为容器镜像。</p>
+<h2 id="九、把这些技术放进同一个云上部署">九、把这些技术放进同一个云上部署</h2>
+<p>考虑一种云 GPU 节点的架构：物理服务器将整张 GPU 和网卡上的一个 SR-IOV VF 直通给 VM，VM 作为 Kubernetes Node，再运行训练 Pod。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TB
+    subgraph PH[&quot;物理服务器&quot;]
+        GPU[&quot;整张 GPU&quot;]
+        VF[&quot;RDMA 网卡 VF&quot;]
+        ASSIGN[&quot;物理 Host 的 VFIO 与虚拟化平台&quot;]
+        GPU --- ASSIGN
+        VF --- ASSIGN
+        subgraph VM[&quot;VM 同时是 Kubernetes Node&quot;]
+            subgraph GK[&quot;Guest Linux 内核&quot;]
+                GD[&quot;NVIDIA 功能驱动&quot;]
+                ND[&quot;网卡与 RDMA 功能驱动&quot;]
+            end
+            POD[&quot;训练 Pod 用户态&quot;]
+            POD --&gt;|CUDA 与设备接口| GD
+            POD -.-&gt;|网络与 RDMA 驱动接口| ND
+        end
+        ASSIGN -.-&gt;|向 Guest 分配 GPU| GD
+        ASSIGN -.-&gt;|向 Guest 分配 VF| ND
+    end
+  </pre></div>
+<p>这是设备归属示意，虚线不是逐包转发路径。RDMA 数据快路径仍可直接操作已映射的队列与 doorbell，不必逐次进入 Guest 内核。</p>
+<p>在这一部署里：</p>
+<ul>
+<li>
+<p>相对物理服务器，VM 使用的是通过 VFIO 分配的设备。</p>
+</li>
+<li>
+<p>相对训练 Pod，VM 就是宿主机，Pod 共享的是 VM 的 Guest Kernel。</p>
+</li>
+<li>
+<p>Pod 使用的 NVIDIA 和 RDMA 内核驱动位于 VM 中，而不是物理 Hypervisor Kernel。</p>
+</li>
+<li>
+<p>VM 内仍需配置 Pod 的网络与设备访问，设备直通到 VM 不会自动完成这一层配置。</p>
+</li>
+</ul>
+<p>因此，“VM 内安装驱动”和“Pod 使用宿主机驱动”可以同时成立。它们描述的是同一部署的两个层次。排障时先明确“宿主机”究竟指物理 Hypervisor 还是 Kubernetes Node，才能找对需要检查和升级的驱动。<a target="_blank" rel="noopener" href="https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/">6</a></p>
+<h2 id="十、从运行中的机器验证设备归属">十、从运行中的机器验证设备归属</h2>
+<p>下面的命令用于观察配置。PCI 地址、接口名、命名空间和 Pod 名均为示例，需要替换为实际值。</p>
+<h3 id="查看具体-Function-绑定的驱动">查看具体 Function 绑定的驱动</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">lspci -nnk -s 0000:65:00.2</span><br><span class="line"><span class="built_in">readlink</span> -f /sys/bus/pci/devices/0000:65:00.2/driver</span><br></pre></td></tr></table></figure>
+<p>优先看 <code>Kernel driver in use</code>，不要把 <code>Kernel modules</code> 的候选模块列表或 <code>lsmod</code> 中存在某模块，当成该设备已绑定它的证明。</p>
+<table>
+<thead>
+<tr>
+<th>观察结果</th>
+<th>可以得出的结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vfio-pci</code></td>
+<td>当前内核把该 Function 交给 VFIO 访问；单凭这一项不能确认使用者一定是 VM</td>
+</tr>
+<tr>
+<td><code>mlx5_core</code></td>
+<td>该 Function 由当前内核的 mlx5 功能驱动管理</td>
+</tr>
+<tr>
+<td><code>nvidia</code></td>
+<td>该 GPU Function 由当前内核的 NVIDIA 驱动管理；需进一步区分本机计算与 vGPU 管理</td>
+</tr>
+</tbody>
+</table>
+<h3 id="查看-PF-与-VF-的关系">查看 PF 与 VF 的关系</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 在 PF 上查看支持数量与当前启用数量</span></span><br><span class="line"><span class="built_in">cat</span> /sys/bus/pci/devices/0000:65:00.0/sriov_totalvfs</span><br><span class="line"><span class="built_in">cat</span> /sys/bus/pci/devices/0000:65:00.0/sriov_numvfs</span><br><span class="line"><span class="built_in">ls</span> -l /sys/bus/pci/devices/0000:65:00.0/virtfn*</span><br><span class="line"></span><br><span class="line"><span class="comment"># 在 VF 上寻找对应 PF</span></span><br><span class="line"><span class="built_in">readlink</span> -f /sys/bus/pci/devices/0000:65:00.2/physfn</span><br></pre></td></tr></table></figure>
+<p>相关 sysfs 项是否存在，取决于当前 Function 和暴露的能力。GPU 的 VF 创建还可能需要厂商管理流程，不能仅凭网卡配置经验修改它。<a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/pci-iov-howto.html">2</a><a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/installing-configuring-grid-vgpu.html">23</a></p>
+<h3 id="查看网络接口所在的命名空间">查看网络接口所在的命名空间</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 当前节点默认网络命名空间</span></span><br><span class="line">ip -d <span class="built_in">link</span> show</span><br><span class="line"></span><br><span class="line"><span class="comment"># 进入目标 Pod 的网络环境查看接口</span></span><br><span class="line">kubectl <span class="built_in">exec</span> -n demo pod-a -- ip -d <span class="built_in">link</span> show</span><br><span class="line">kubectl <span class="built_in">exec</span> -n demo pod-a -- ip addr show net1</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看某个可见接口的驱动和总线信息</span></span><br><span class="line">ethtool -i net1</span><br></pre></td></tr></table></figure>
+<p><code>ethtool -i net1</code> 应在能看到 <code>net1</code> 的网络命名空间执行。容器镜像也需要包含相应工具。若节点 <code>lspci</code> 仍看到 VF，而节点默认 <code>ip link</code> 不再看到对应接口，应继续检查 Pod NetNS，而不是直接判断设备丢失。</p>
+<h3 id="分别检查-RDMA-与-IOMMU">分别检查 RDMA 与 IOMMU</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># RDMA 设备与网络接口映射</span></span><br><span class="line">rdma <span class="built_in">link</span> show</span><br><span class="line">ibv_devices</span><br><span class="line"></span><br><span class="line"><span class="comment"># VF 所属的 IOMMU Group</span></span><br><span class="line"><span class="built_in">readlink</span> -f /sys/bus/pci/devices/0000:65:00.2/iommu_group</span><br><span class="line"><span class="built_in">ls</span> -l /sys/bus/pci/devices/0000:65:00.2/iommu_group/devices</span><br></pre></td></tr></table></figure>
+<p><code>ip link</code>、<code>rdma link</code> 和 <code>lspci</code> 观察的是不同对象层次。接口存在、RDMA 设备可见、PCI 驱动已绑定，也都不单独证明应用已经具备完整、正确的设备使用条件。</p>
+<h2 id="十一、关键概念对照">十一、关键概念对照</h2>
+<table>
+<thead>
+<tr>
+<th>容易混淆的说法</th>
+<th>准确的理解</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VFIO 会把设备切成多份</td>
+<td>VFIO 提供设备访问；切分由 SR-IOV、MIG 或具体虚拟化方案实现</td>
+</tr>
+<tr>
+<td>VFIO 只能处理 VF</td>
+<td>也可以处理普通物理 PCI Function，且不限于 VM 场景</td>
+</tr>
+<tr>
+<td>直通后 Host 不需要驱动</td>
+<td>Host 使用 VFIO 侧驱动，Guest 使用功能驱动</td>
+</tr>
+<tr>
+<td>SR-IOV 就是每个租户独占整卡</td>
+<td>通常是独占 VF，仍共享底层物理资源</td>
+</tr>
+<tr>
+<td>VF 放进 Pod 就是 PCI 设备直通</td>
+<td>内核网络模式通常移动的是 VF 对应的 netdev</td>
+</tr>
+<tr>
+<td>同一个内核就能使用所有设备</td>
+<td>还需要设备授权、命名空间配置和用户态依赖</td>
+</tr>
+<tr>
+<td>Kernel bypass 等于不需要内核驱动</td>
+<td>快路径可以绕过常规协议栈，控制和资源管理仍可依赖内核</td>
+</tr>
+<tr>
+<td>DPDK 都要绑定 vfio-pci</td>
+<td>取决于 PMD；mlx5 bifurcated 模型保留内核驱动</td>
+</tr>
+<tr>
+<td>看到独立 MAC 就有独立硬件</td>
+<td>macvlan 也能提供独立 MAC，并不创建 PCIe VF</td>
+</tr>
+<tr>
+<td>GPU 资源名就能证明独占整卡</td>
+<td>必须继续检查插件共享配置、profile 和底层分配方式</td>
+</tr>
+</tbody>
+</table>
+<p>面对一个具体云上工作负载，可以依次确认：<strong>分配对象是整设备、VF 还是软件接口；控制设备的是哪一层内核；驱动如何绑定；工作负载通过什么接口访问；最终独占和共享的资源分别是什么。</strong> 这五个问题能把 SR-IOV、VFIO、容器网络与 GPU 虚拟化放回各自正确的层次。</p>
+<h2 id="参考资料">参考资料</h2>
+<ol>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/vfio.html">Linux Kernel — VFIO</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/PCI/pci-iov-howto.html">Linux Kernel — PCI Express I/O Virtualization Howto</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/driver-model/binding.html">Linux Kernel — Driver Binding</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/networking/netdevices.html">Linux Kernel — Network Devices, the Kernel, and You</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/using-gpu-pass-through.html">NVIDIA — Using GPU Pass-Through</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/">Docker — What is a container</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://man7.org/linux/man-pages/man7/network_namespaces.7.html">Linux man-pages — network_namespaces</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-cni">Kubernetes Network Plumbing — SR-IOV CNI</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-network-device-plugin">Kubernetes Network Plumbing — SR-IOV Network Device Plugin</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/">Kubernetes — Device Plugins</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.kernel.org/infiniband/user_verbs.html">Linux Kernel — Userspace verbs access</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://www.cni.dev/plugins/current/main/macvlan/">CNI Plugins — macvlan</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.docker.com/engine/network/drivers/macvlan/">Docker — Macvlan network driver</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking/display/kubernetes2671/quick-start/macvlan-rdma-shared.html">NVIDIA Network Operator — MacVLAN with RDMA Shared Device</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/cuda-compatibility/latest/why-cuda-compatibility.html">NVIDIA — Why CUDA Compatibility</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/rdma-cni">Kubernetes Network Plumbing — RDMA CNI</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://doc.dpdk.org/guides/nics/mlx5.html">DPDK — NVIDIA MLX5 Ethernet Driver</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://doc.dpdk.org/guides/platform/mlx5.html">DPDK — NVIDIA MLX5 Common Driver</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://github.com/Mellanox/k8s-rdma-shared-dev-plugin">NVIDIA Mellanox — RDMA Shared Device Plugin</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/grid-vgpu-introduction.html">NVIDIA — Introduction to vGPU Software</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/concepts.html">NVIDIA — MIG Concepts</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-sharing.html">NVIDIA GPU Operator — Time-Slicing GPUs in Kubernetes</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-user-guide/installing-configuring-grid-vgpu.html">NVIDIA — Installing and Configuring vGPU Manager</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/vgpu/latest/grid-vgpu-release-notes-ubuntu/release-notes.html">NVIDIA — vGPU for Ubuntu Release Notes</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/cuda-compatibility/latest/index.html">NVIDIA — CUDA Compatibility</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/arch-overview.html">NVIDIA Container Toolkit — Architecture Overview</a></p>
+</li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/">https://roger-lv.github.io/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/SR-IOV/">SR-IOV</a><a class="post-meta__tags" href="/tags/GPU%E8%99%9A%E6%8B%9F%E5%8C%96/">GPU虚拟化</a><a class="post-meta__tags" href="/tags/IOMMU/">IOMMU</a><a class="post-meta__tags" href="/tags/VFIO/">VFIO</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/18/2026-11-18-sky-scheduler-rdma-topology/" title="Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点</div></div><div class="info-2"><div class="info-item-1">假设一个训练作业需要三个 worker，每个 worker 都占用一台带 RDMA 的 GPU 节点。机房里有一个域还剩两台，另外两个域各剩一台。逐个给 Pod 选节点，三个 worker 可能正好分散到三个域。先看整个作业，只要从两个域各取一部分资源就能放下。 Sky-Scheduler 用的是第二种思路。它把网卡到交换机的信息压成节点的 RDMA 域键，先为 Job 找一个能覆盖总需求的最小域组合，再用 Quota 和节点的谓词、评分及序号完成落位。这里的“最小”指域的数量最少。域键相等是网络局部性的代理指标，调度过程中没有按交换机跳数、链路带宽或实时拥塞计算通信代价。  文中用 Sky-Scheduler 指代所分析的调度器。下文的节点、域名和资源数字都用于算法推演。 从训练通信看调度的三个阶段 当 NCCL 执行 AllReduce 时，各 rank 都参与归约，并各自拿到归约结果。假设六台 GPU 服务器分接到两台 Leaf 交换机，每台 Leaf 下有三台服务器。一个需要三台服务器的 Job 如果选了 A 下的一台和 B 下的两台，跨这两组 Worker 的通信就要经...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/06/2026-11-06-GPU%E8%99%9A%E6%8B%9F%E5%8C%96%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E6%99%AF%E4%BB%8EIOMMU%E5%88%B0vGPU%E5%86%8D%E5%88%B0Agent%E6%B2%99%E7%9B%92%E4%B8%8E%E5%85%B7%E8%BA%AB%E4%BB%BF%E7%9C%9F/" title="GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-06</div><div class="info-item-2">GPU 虚拟化技术栈全景：从 IOMMU 到 vGPU，再到 Agent 沙盒与具身仿真</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：从 IOMMU（硬件地址翻译与 DMA 隔离）→ VFIO（设备直通框架）→ SR-IOV（PCIe 级切分）→ MIG（硅片级硬切分）→ vGPU（软件时间片调度）这条链路，构成了 GPU 虚拟化的完整技术栈。「IOMMU 划边界、VFIO 做移交」这条直通链路，是所有 GPU 沙盒和具身仿真基础设施绕不开的地基。  本文按「技术原理 → 两大落地场景 → 一个真实落地案例 → 决策树」四层展开，并把各技术支持的功能以表格汇总。 所有技术描述核对自 Linux 内核文档、NVIDIA 官方文档、Intel/AMD 官方文档与各项目仓库。核对中发现原稿有二十余处需要更正，其中三处是实质性错误，已在文中以 ⚠️ 标注。  一、技术原理层：从 IOMMU 到 vGPU 1.1 IOMMU：硬件级安全边界 IOMMU 是提供地址翻译与设备隔离的硬件单元：对设备发出的 DMA 做 IOVA → HPA 翻译与访问保护，并提供中断重映射；隔离以 IOMMU group 为粒度。Intel 侧叫 VT-d，AMD 侧叫 AMD-Vi。  Linux VFIO 内核文档原文：  ...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-IPoIB%E4%B8%8Epkey%E5%AD%90%E6%8E%A5%E5%8F%A3InfiniBand%E4%B8%96%E7%95%8C%E9%87%8C%E7%9A%84IP%E7%BD%91%E5%8D%A1%E4%B8%8EVLAN/" title="IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;</div></div><div class="info-2"><div class="info-item-1">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot; IPoIB(IP over InfiniBand)接口是运行在 InfiniBand 物理网络之上的&quot;IP 网卡&quot;,pkey 子接口则是在这张 IP 网卡上按&quot;分区键&quot;虚拟出的子接口——两者的组合,就是 InfiniBand 世界里对&quot;IP 网卡 + VLAN 子接口&quot;的对应物。 之所以需要它们,根源在于 InfiniBand 与以太网是两套截然不同的 L2 体系。  一、前提:InfiniBand 不是以太网 理解 IPoIB + pkey,必须先放下以太网的思维惯性。InfiniBand 是一套独立的链路层协议,从硬件寻址开始就和以太网不同:    维度 以太网 InfiniBand     硬件地址 48 位 MAC 地址,烧录在网卡里 无 MAC;由 GUID(端口全局唯一 ID)+ LID(子网内本地 ID,由子网管理器动态分配)标识   单播地址概念 MAC GID(128 位,基于 GUID 生...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/" title="Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</div></div><div class="info-2"><div class="info-item-1">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道 在大模型分布式训练的 Kubernetes 集群里,macvlan 会被用到,但角色非常特定:它作为辅助网络为 Pod 提供访问高性能 RDMA 网络的&quot;共享&quot;通道,而不是承担集群默认网络的职责。 默认网络(控制面通信、Service 访问)通常由 Calico/Cilium/OVN 等标准 CNI 负责,macvlan 网卡通过 Multus 附加,专门承载 GPU 之间的训练数据流。  一、为什么大模型训练需要独立的 RDMA 网络 理解 macvlan 的定位,先要理解训练流量对网络的压力。在 PyTorch FSDP 或 DeepSpeed ZeRO 的分片训练中,每一层前向/反向传播前都要在全量 GPU 间 gather 分片权重,mini-batch 结束后要 all-reduce 梯度——这些集合通信在集群规模上可达数十 Gbit/s 的峰值流量。 如果这些流量走默认的 Overlay 网络(如 OVN-Kubernetes),内核协议栈的封解包、netfilter 处理...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Spiderpool%E5%A4%9A%E7%BD%91%E5%8D%A1IPAM%E6%96%B9%E6%A1%88%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图</div></div><div class="info-2"><div class="info-item-1">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图 Macvlan、ipvlan、SR-IOV 这几个 CNI 有个共同特点:数据面很漂亮,管理面近乎空白。它们能把 Pod 直接挂到物理网络上,省掉隧道封装的开销,但你问它&quot;这个 IP 能不能跟着 Pod 漂移到别的节点&quot;、“Pod 崩了 IP 怎么收回来”、“两张网卡的回包怎么别走错路由”,它们基本答不上来。 Spiderpool 要补的就是这块。它不是又一个新 CNI——它不碰数据面,而是给这些原生 Underlay CNI 配一套企业级的 IPAM、路由协调和连通性增强,让它们从&quot;能跑&quot;变成&quot;能生产&quot;。 这篇文章分四块:  为什么 Underlay 需要专门的 IPAM——Overlay 和 Underlay 对 IPAM 的需求差在哪; 架构与 CRD 体系——controller-agent 怎么分工,六个 CRD 各管什么; 多网卡 IPAM 全流程——从网卡划分、池选择到策略路由协调、垃圾回收; 实战与坑——部署示例,以及几...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-%E6%B5%85%E8%B0%88%E5%A4%A7%E8%A7%84%E6%A8%A1%E9%9B%86%E7%BE%A4%E7%9A%84%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%AE%B9%E5%99%A8%E5%8C%96%E5%BB%BA%E8%AE%BE/" title="浅谈大规模集群的高性能网络容器化建设:从机器内通信到容器化 RDMA"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">浅谈大规模集群的高性能网络容器化建设:从机器内通信到容器化 RDMA</div></div><div class="info-2"><div class="info-item-1">浅谈大规模集群的高性能网络容器化建设:从机器内通信到容器化 RDMA 计算机硬件的通信方式大体分为两种类型:机器内通信和机器间通信。大模型训练把这两条路径都压到了极限——GPU 之间在机器内要全速交换分片权重,跨机器要跑 all-reduce 梯度洪流。这篇文章沿着这两条路径往下走:先看机器内 NVLink/GPUDirect 那套硬件互联,再看机器间 RDMA 的三种网络与无损组网,最后落到平台侧真正要回答的问题——如何把这些高性能网络以容器的方式交付给用户。  一、机器内通信技术 1.1 共享内存 狭义上的共享内存通信,指的是在 CPU 的内存上开辟一段空间,让不同进程都能访问到。具体形式可以是某种&quot;句柄&quot;,让数据的存在可以借助此句柄跨进程引用这片内存。在容器里我们通常说的是 /dev/shm 这个目录,不同进程直接访问,做到 zero copy。 广义上的节点内 GPU 通信走共享内存,是指支持 GPU 与第三方 PCIe 设备(网卡、存储等)通过共享 pin 住的 host memory 实现共享内存访问,从而加速通信——这就是 GPUDirect S...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/" title="K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：控制面决定「能不能跑」，数据面决定「跑多快」。K8s 的功夫全在控制面——把 Pod 调度起来、把副本数维持住；而大模型训练真正的痛点，是 GPU 之间、机器之间的数据流动快不快、堵不堵。kubectl get pods 全绿但 MFU 上不去，是典型的控制面看不见的数据面问题。  本文基于 B 站视频《K8s 很熟，为什么月薪卡在三万？大模型 AI Infra 第一讲：从控制面走到数据面》的内容框架整理，其中的技术细节我对照 NVIDIA 官方文档（nvidia-smi 拓扑定义、NCCL 环境变量文档）与相关论文做了核实与补全。核对过程中发现原稿有四处需要更正的地方，已在文中标注。  一、为什么 K8s 玩得溜，月薪却卡在三万 很多云原生工程师 K8s 炉火纯青：写 YAML、调 Deployment、写 Operator、排 Pod 故障、扩缩集群，整套控制面技术一气呵成，但薪资天花板死死卡在三万上下。而那些看起来「只是会跑 nccl-tests」的 AI Infra 同事，年薪轻松翻倍。 差距不在于会不会写 YAML，而在于是否看懂了 K8s 之下的数据面。...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">318</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">521</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E5%8C%BA%E5%88%86%E8%AE%BE%E5%A4%87%E8%99%9A%E6%8B%9F%E5%8C%96%E4%B8%8E%E8%AE%BE%E5%A4%87%E5%88%86%E9%85%8D"><span class="toc-text">一、先区分设备虚拟化与设备分配</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#PCIe-Function-%E4%B8%8E%E7%BD%91%E7%BB%9C%E6%8E%A5%E5%8F%A3%E7%9A%84%E5%8C%BA%E5%88%AB"><span class="toc-text">PCIe Function 与网络接口的区别</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81SR-IOV-%E5%9C%A8%E7%A1%AC%E4%BB%B6%E5%B1%82%E9%9D%A2%E6%8F%90%E4%BE%9B-PF-%E5%92%8C-VF"><span class="toc-text">二、SR-IOV 在硬件层面提供 PF 和 VF</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81VFIO-%E7%9B%B4%E9%80%9A%E4%B8%BA%E4%BB%80%E4%B9%88%E9%9C%80%E8%A6%81-VM-%E5%86%85%E7%9A%84%E5%8A%9F%E8%83%BD%E9%A9%B1%E5%8A%A8"><span class="toc-text">三、VFIO 直通为什么需要 VM 内的功能驱动</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#VFIO-%E8%B4%9F%E8%B4%A3%E5%BB%BA%E7%AB%8B%E8%AE%BE%E5%A4%87%E8%AE%BF%E9%97%AE%E7%8E%AF%E5%A2%83"><span class="toc-text">VFIO 负责建立设备访问环境</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%89%E8%A3%85%E9%A9%B1%E5%8A%A8%E4%B8%8E%E7%BB%91%E5%AE%9A%E9%A9%B1%E5%8A%A8%E6%98%AF%E4%B8%A4%E4%BB%B6%E4%BA%8B"><span class="toc-text">安装驱动与绑定驱动是两件事</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#PCIe-Function-%E4%B9%9F%E4%B8%8D%E4%B8%80%E5%AE%9A%E6%98%AF%E6%9C%80%E5%B0%8F%E5%AE%89%E5%85%A8%E7%9B%B4%E9%80%9A%E5%8D%95%E5%85%83"><span class="toc-text">PCIe Function 也不一定是最小安全直通单元</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E5%85%B1%E4%BA%AB%E5%86%85%E6%A0%B8%E4%B8%BA%E4%BD%95%E6%84%8F%E5%91%B3%E7%9D%80%E5%8F%AF%E4%BB%A5%E4%BD%BF%E7%94%A8%E8%8A%82%E7%82%B9%E5%86%85%E6%A0%B8%E9%A9%B1%E5%8A%A8"><span class="toc-text">四、共享内核为何意味着可以使用节点内核驱动</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%99%AE%E9%80%9A%E5%AE%B9%E5%99%A8%E6%B2%A1%E6%9C%89%E8%87%AA%E5%B7%B1%E7%9A%84%E5%86%85%E6%A0%B8%E9%A9%B1%E5%8A%A8%E7%A9%BA%E9%97%B4"><span class="toc-text">普通容器没有自己的内核驱动空间</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Namespace-%E9%9A%94%E7%A6%BB%E8%B5%84%E6%BA%90%E5%92%8C%E7%8A%B6%E6%80%81-%E4%B8%8D%E5%A4%8D%E5%88%B6%E5%86%85%E6%A0%B8"><span class="toc-text">Namespace 隔离资源和状态 不复制内核</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E6%8A%8A-VF-%E7%BD%91%E7%BB%9C%E6%8E%A5%E5%8F%A3%E6%94%BE%E8%BF%9B-Pod-%E5%88%B0%E5%BA%95%E7%A7%BB%E5%8A%A8%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-text">五、把 VF 网络接口放进 Pod 到底移动了什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BF%9D%E6%8C%81%E9%A9%B1%E5%8A%A8%E7%BB%91%E5%AE%9A%E5%B9%B6%E6%94%B9%E5%8F%98-netdev-%E7%9A%84%E5%91%BD%E5%90%8D%E7%A9%BA%E9%97%B4%E5%BD%92%E5%B1%9E"><span class="toc-text">保持驱动绑定并改变 netdev 的命名空间归属</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Kubernetes-%E5%90%84%E7%BB%84%E4%BB%B6%E7%9A%84%E5%88%86%E5%B7%A5"><span class="toc-text">Kubernetes 各组件的分工</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#VM-%E7%9B%B4%E9%80%9A%E4%B8%8E%E5%AE%B9%E5%99%A8%E4%B8%AD%E7%9A%84-VFIO-%E4%BD%BF%E7%94%A8"><span class="toc-text">VM 直通与容器中的 VFIO 使用</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81macvlan-%E4%B8%8E-SR-IOV-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-text">六、macvlan 与 SR-IOV 的关系</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81RDMA-%E7%BD%91%E7%BB%9C%E8%A6%81%E5%88%86%E5%BC%80%E7%9C%8B%E6%8E%A5%E5%8F%A3%E9%85%8D%E7%BD%AE%E4%B8%8E%E8%AE%BE%E5%A4%87%E8%AE%BF%E9%97%AE"><span class="toc-text">七、RDMA 网络要分开看接口配置与设备访问</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#macvlan-%E5%8A%A0%E5%85%B1%E4%BA%AB-RDMA-%E8%AE%BE%E5%A4%87"><span class="toc-text">macvlan 加共享 RDMA 设备</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#SR-IOV-%E5%8A%A0%E6%94%AF%E6%8C%81-RDMA-%E7%9A%84-VF"><span class="toc-text">SR-IOV 加支持 RDMA 的 VF</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Kernel-bypass-%E7%9A%84%E5%87%86%E7%A1%AE%E5%90%AB%E4%B9%89"><span class="toc-text">Kernel bypass 的准确含义</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E4%BA%91%E4%B8%8A-GPU-%E7%8B%AC%E5%8D%A0%E7%9A%84%E5%88%A4%E6%96%AD%E6%96%B9%E6%B3%95"><span class="toc-text">八、云上 GPU 独占的判断方法</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%88%E7%A1%AE%E5%AE%9A%E7%8B%AC%E5%8D%A0%E7%9A%84%E5%AF%B9%E8%B1%A1"><span class="toc-text">先确定独占的对象</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%A9%B1%E5%8A%A8%E7%89%88%E6%9C%AC%E5%BD%B1%E5%93%8D%E6%B2%BF%E7%9D%80%E5%AE%9E%E9%99%85%E6%8E%A7%E5%88%B6%E9%93%BE%E4%BC%A0%E6%92%AD"><span class="toc-text">驱动版本影响沿着实际控制链传播</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#CUDA-Toolkit-%E4%B8%8E-GPU-%E9%A9%B1%E5%8A%A8%E4%B8%8D%E6%98%AF%E5%90%8C%E4%B8%80%E5%B1%82"><span class="toc-text">CUDA Toolkit 与 GPU 驱动不是同一层</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E6%8A%8A%E8%BF%99%E4%BA%9B%E6%8A%80%E6%9C%AF%E6%94%BE%E8%BF%9B%E5%90%8C%E4%B8%80%E4%B8%AA%E4%BA%91%E4%B8%8A%E9%83%A8%E7%BD%B2"><span class="toc-text">九、把这些技术放进同一个云上部署</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E4%BB%8E%E8%BF%90%E8%A1%8C%E4%B8%AD%E7%9A%84%E6%9C%BA%E5%99%A8%E9%AA%8C%E8%AF%81%E8%AE%BE%E5%A4%87%E5%BD%92%E5%B1%9E"><span class="toc-text">十、从运行中的机器验证设备归属</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9F%A5%E7%9C%8B%E5%85%B7%E4%BD%93-Function-%E7%BB%91%E5%AE%9A%E7%9A%84%E9%A9%B1%E5%8A%A8"><span class="toc-text">查看具体 Function 绑定的驱动</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9F%A5%E7%9C%8B-PF-%E4%B8%8E-VF-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-text">查看 PF 与 VF 的关系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9F%A5%E7%9C%8B%E7%BD%91%E7%BB%9C%E6%8E%A5%E5%8F%A3%E6%89%80%E5%9C%A8%E7%9A%84%E5%91%BD%E5%90%8D%E7%A9%BA%E9%97%B4"><span class="toc-text">查看网络接口所在的命名空间</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%88%86%E5%88%AB%E6%A3%80%E6%9F%A5-RDMA-%E4%B8%8E-IOMMU"><span class="toc-text">分别检查 RDMA 与 IOMMU</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E5%85%B3%E9%94%AE%E6%A6%82%E5%BF%B5%E5%AF%B9%E7%85%A7"><span class="toc-text">十一、关键概念对照</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/" title="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</a><time datetime="2026-11-18T06:39:10.000Z" title="发表于 2026-11-18 14:39:10">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sky-scheduler-rdma-topology/" title="Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点">Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点</a><time datetime="2026-11-17T16:00:00.000Z" title="发表于 2026-11-18 00:00:00">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/" title="推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM">推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E5%9B%BD%E4%BA%A7GPU%E9%80%82%E9%85%8D%E5%88%B0%E5%BA%95%E5%9C%A8%E9%80%82%E9%85%8D%E4%BB%80%E4%B9%88/" title="国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解">国产 GPU 适配到底在适配什么：从 CUDA 生态到 vLLM 插件机制的执行链拆解</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/09/2026-11-09-%E5%A4%A7%E5%8E%82AIInfra%E7%94%9F%E4%BA%A7%E6%8E%92%E9%94%99%E6%B5%8B%E8%AF%95%E5%8D%B7%E4%BA%8C50%E9%A2%98%E5%85%A8%E8%A7%A3/" title="2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误">2026 大厂 AI Infra 生产排错测试（卷二）50 题全解：附 12 处题目勘误</a><time datetime="2026-11-08T16:00:00.000Z" title="发表于 2026-11-09 00:00:00">2026-11-09</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
