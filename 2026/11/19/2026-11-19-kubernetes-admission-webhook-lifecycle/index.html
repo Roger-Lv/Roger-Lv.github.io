@@ -1,0 +1,650 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>Kubernetes Admission Webhook 的注册机制与请求生命周期 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="以 VolcanoJob 为例，梳理 Admission Webhook 的注册、匹配、AdmissionReview、对象修改与拒绝，以及 TLS 和调用故障的排查路径。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Kubernetes Admission Webhook 的注册机制与请求生命周期">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="以 VolcanoJob 为例，梳理 Admission Webhook 的注册、匹配、AdmissionReview、对象修改与拒绝，以及 TLS 和调用故障的排查路径。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-19T03:28:08.000Z">
+<meta property="article:modified_time" content="2026-11-19T03:28:09.127Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Volcano">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="Admission Webhook">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Kubernetes Admission Webhook 的注册机制与请求生命周期",
+  "url": "https://roger-lv.github.io/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-19T03:28:08.000Z",
+  "dateModified": "2026-11-19T03:28:09.127Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'Kubernetes Admission Webhook 的注册机制与请求生命周期',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">321</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">524</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">Kubernetes Admission Webhook 的注册机制与请求生命周期</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">Kubernetes Admission Webhook 的注册机制与请求生命周期</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-19T03:28:08.000Z" title="发表于 2026-11-19 11:28:08">2026-11-19</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-19T03:28:09.127Z" title="更新于 2026-11-19 11:28:09">2026-11-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/" data-flag-title="Kubernetes Admission Webhook 的注册机制与请求生命周期"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>在 Kubernetes 训练平台中，提交一个作业后，常见的两种结果是：API 直接返回“禁止使用这个队列”；或者作业创建成功，但一直等待 GPU。</p>
+<p>这两种结果发生在不同阶段。前者可以由 Admission Webhook 在 API 请求处理过程中作出决定；后者通常由作业控制器和调度器在对象创建之后处理。</p>
+<p><strong>Admission Webhook 的核心机制是：我们运行一个 HTTPS 服务，再通过 Kubernetes API 对象声明调用规则；API Server 在处理匹配的请求时，同步调用这个服务，根据响应继续修改、接纳或拒绝请求。</strong></p>
+<p>本文以 VolcanoJob 为例，介绍 Webhook 如何注册、API Server 如何回调、AdmissionReview 如何表达校验结果，以及它与 Controller、资源调度之间的职责边界。文中的 <code>training-policy-webhook</code> 是假设的训练平台组件，队列限制和默认值均为示例策略，并非声称 Volcano 默认采用这些规则。</p>
+<span id="more"></span>
+<h2 id="一、Admission-Webhook-在-API-请求中的位置">一、Admission Webhook 在 API 请求中的位置</h2>
+<p>客户端向 Kubernetes 提交对象时，API Server 需要处理身份认证、权限检查、对象校验和持久化等工作。Admission，也就是准入控制，位于认证与授权之后、对象持久化之前。它能够检查请求，并在允许的阶段修改请求中的对象。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/">1</a></p>
+<p>这里需要区分两个“Webhook”概念：</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>所在位置</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MutatingAdmissionWebhook</code>、<code>ValidatingAdmissionWebhook</code></td>
+<td>API Server 内置的准入插件</td>
+<td>读取注册配置，匹配请求，调用外部服务</td>
+</tr>
+<tr>
+<td>我们编写的 Webhook Server</td>
+<td>独立运行的 HTTPS 服务</td>
+<td>执行平台自己的修改或校验逻辑</td>
+</tr>
+</tbody>
+</table>
+<p>业务代码运行在外部服务中。API Server 内置的是调用机制。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/">1</a></p>
+<p>两类动态 Webhook 的主要分工如下：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>能否修改对象</th>
+<th>能否拒绝请求</th>
+<th>常见用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mutating Webhook</td>
+<td>能，通过返回补丁</td>
+<td>能</td>
+<td>注入字段、补充平台默认值</td>
+</tr>
+<tr>
+<td>Validating Webhook</td>
+<td>不能</td>
+<td>能</td>
+<td>检查字段关系、限制允许的配置</td>
+</tr>
+</tbody>
+</table>
+<p>从理解调用链的角度，可以把相关阶段概括为：<strong>修改对象、检查修改后的对象、通过后持久化</strong>。Mutating 阶段在 Validating 阶段之前；对象自身的 API 校验也必须通过。实际请求还可能包含类型转换、默认值处理等步骤，不能把这个概括当作全部内部处理步骤的严格排序。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">2</a></p>
+<p>Admission 并不拦截所有请求。<code>GET</code>、<code>LIST</code>、<code>WATCH</code> 这样的读取操作不经过准入控制；创建、更新、删除等操作是否触发某个 Webhook，还取决于它的匹配规则。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/">1</a></p>
+<h2 id="二、所谓注册，是向-API-Server-声明调用规则">二、所谓注册，是向 API Server 声明调用规则</h2>
+<p>实现一个可用的 Webhook，需要准备三个部分：</p>
+<ol>
+<li>
+<p><strong>服务实现</strong>：接收 AdmissionReview 请求，运行检查或修改逻辑，返回 AdmissionReview 响应。</p>
+</li>
+<li>
+<p><strong>访问入口</strong>：让 API Server 能通过 HTTPS 访问服务，配置服务端证书和信任关系。</p>
+</li>
+<li>
+<p><strong>注册对象</strong>：创建 <code>ValidatingWebhookConfiguration</code> 或 <code>MutatingWebhookConfiguration</code>，描述什么请求要调用哪个端点。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">2</a></p>
+</li>
+</ol>
+<p>“组件向 API Server 注册”是一种方便的说法。准确地说，注册是创建 Kubernetes 配置对象。这个对象可以由 Helm、安装清单、Operator，或者程序启动逻辑创建。Webhook 服务进程本身不一定负责注册。</p>
+<p>还要区分两层配置：程序中的 <code>/validate-vcjob</code> 路由决定服务收到请求后调用哪个处理函数；WebhookConfiguration 决定 API Server 何时向这个路由发请求。只写好了 HTTP Handler，API Server 并不会自动发现它。</p>
+<h3 id="一个训练作业校验器的注册示例">一个训练作业校验器的注册示例</h3>
+<p>假设平台约定：<strong>命名空间 <code>team-a</code> 中的训练作业，只允许使用 <code>team-a</code> 队列。</strong></p>
+<p>平台运行 <code>training-policy-webhook</code> 服务，并将校验端点注册为：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">admissionregistration.k8s.io/v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ValidatingWebhookConfiguration</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">training-job-validator</span></span><br><span class="line"><span class="attr">webhooks:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">jobs.training.example.com</span></span><br><span class="line">    <span class="attr">admissionReviewVersions:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">v1</span></span><br><span class="line">    <span class="attr">sideEffects:</span> <span class="string">None</span></span><br><span class="line">    <span class="attr">failurePolicy:</span> <span class="string">Fail</span></span><br><span class="line">    <span class="attr">timeoutSeconds:</span> <span class="number">3</span></span><br><span class="line">    <span class="attr">clientConfig:</span></span><br><span class="line">      <span class="attr">service:</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">platform-system</span></span><br><span class="line">        <span class="attr">name:</span> <span class="string">training-policy-webhook</span></span><br><span class="line">        <span class="attr">path:</span> <span class="string">/validate-vcjob</span></span><br><span class="line">        <span class="attr">port:</span> <span class="number">443</span></span><br><span class="line">      <span class="attr">caBundle:</span> <span class="string">&lt;BASE64_ENCODED_CA_CERT&gt;</span></span><br><span class="line">    <span class="attr">rules:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">operations:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">CREATE</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">UPDATE</span></span><br><span class="line">        <span class="attr">apiGroups:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">batch.volcano.sh</span></span><br><span class="line">        <span class="attr">apiVersions:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">v1alpha1</span></span><br><span class="line">        <span class="attr">resources:</span></span><br><span class="line">          <span class="bullet">-</span> <span class="string">jobs</span></span><br><span class="line">        <span class="attr">scope:</span> <span class="string">Namespaced</span></span><br></pre></td></tr></table></figure>
+<p>这是教学配置，需要替换 CA 占位符，并事先部署服务、配置证书。创建这份配置不会自动部署 Webhook Server。</p>
+<p>其中，<code>rules</code> 匹配的是 <code>batch.volcano.sh</code> API 组中的 <code>jobs</code>，并非 Kubernetes 原生 <code>batch/v1</code> Job。<code>clientConfig</code> 指定调用端点；<code>admissionReviewVersions</code> 声明支持的回调协议版本；<code>timeoutSeconds</code> 限制等待时间。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">3</a></p>
+<p>还可以用 <code>namespaceSelector</code>、<code>objectSelector</code> 或 <code>matchConditions</code> 进一步缩小匹配范围。本例没有配置命名空间选择器，因此它会接收所有命名空间中匹配的 VolcanoJob 请求，再由业务逻辑决定是否应用 <code>team-a</code> 的限制。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">3</a></p>
+<p>与之对应，修改型 Webhook 需要创建 <code>MutatingWebhookConfiguration</code>。同一个 HTTPS 服务可以提供两个路径，例如 <code>/mutate-vcjob</code> 与 <code>/validate-vcjob</code>，分别承载修改和校验逻辑。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">2</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/mutating-webhook-configuration-v1/">4</a></p>
+<h2 id="三、API-Server-通过-AdmissionReview-传递上下文">三、API Server 通过 AdmissionReview 传递上下文</h2>
+<p>当请求命中规则后，API Server 向 Webhook 发出 HTTPS POST，请求和响应都使用 <code>AdmissionReview</code>。Webhook 接收的是 API Server 整理后的结构化对象及请求上下文，不是客户端原始 YAML 文本。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">2</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">5</a></p>
+<p>下面展示一次创建请求中的部分信息，省略了实际请求中的 <code>object</code> 等字段：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;apiVersion&quot;</span><span class="punctuation">:</span> <span class="string">&quot;admission.k8s.io/v1&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;kind&quot;</span><span class="punctuation">:</span> <span class="string">&quot;AdmissionReview&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;request&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">    <span class="attr">&quot;uid&quot;</span><span class="punctuation">:</span> <span class="string">&quot;f43e5313-2a37-4e65-96cd-e24fac76f199&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;kind&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">      <span class="attr">&quot;group&quot;</span><span class="punctuation">:</span> <span class="string">&quot;batch.volcano.sh&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;version&quot;</span><span class="punctuation">:</span> <span class="string">&quot;v1alpha1&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;kind&quot;</span><span class="punctuation">:</span> <span class="string">&quot;Job&quot;</span></span><br><span class="line">    <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;resource&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">      <span class="attr">&quot;group&quot;</span><span class="punctuation">:</span> <span class="string">&quot;batch.volcano.sh&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;version&quot;</span><span class="punctuation">:</span> <span class="string">&quot;v1alpha1&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;resource&quot;</span><span class="punctuation">:</span> <span class="string">&quot;jobs&quot;</span></span><br><span class="line">    <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;operation&quot;</span><span class="punctuation">:</span> <span class="string">&quot;CREATE&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;namespace&quot;</span><span class="punctuation">:</span> <span class="string">&quot;team-a&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;name&quot;</span><span class="punctuation">:</span> <span class="string">&quot;train-demo&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;dryRun&quot;</span><span class="punctuation">:</span> <span class="literal"><span class="keyword">false</span></span></span><br><span class="line">  <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>处理业务逻辑时，通常需要关注以下字段：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>request.uid</code></td>
+<td>本次 Admission 请求与响应的关联标识</td>
+</tr>
+<tr>
+<td><code>request.operation</code></td>
+<td>创建、更新、删除等操作类型</td>
+</tr>
+<tr>
+<td><code>request.userInfo</code></td>
+<td>发起原始 API 请求的用户身份</td>
+</tr>
+<tr>
+<td><code>request.object</code></td>
+<td>本次待接纳的新对象；具体是否存在取决于操作类型</td>
+</tr>
+<tr>
+<td><code>request.oldObject</code></td>
+<td>更新或删除时的旧对象，可用于比较变更</td>
+</tr>
+<tr>
+<td><code>request.dryRun</code></td>
+<td>是否为服务端试运行</td>
+</tr>
+</tbody>
+</table>
+<p><code>request.uid</code> 用来对应本次回调，不能拿 Job 的 <code>metadata.uid</code> 代替。响应必须带回这个值。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">5</a></p>
+<h3 id="允许请求">允许请求</h3>
+<p>通过校验时，可以返回：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;apiVersion&quot;</span><span class="punctuation">:</span> <span class="string">&quot;admission.k8s.io/v1&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;kind&quot;</span><span class="punctuation">:</span> <span class="string">&quot;AdmissionReview&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;response&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">    <span class="attr">&quot;uid&quot;</span><span class="punctuation">:</span> <span class="string">&quot;f43e5313-2a37-4e65-96cd-e24fac76f199&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;allowed&quot;</span><span class="punctuation">:</span> <span class="literal"><span class="keyword">true</span></span></span><br><span class="line">  <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>这里的 <code>allowed: true</code> 表示通过当前 Webhook。其他校验、并发更新检查或持久化仍有可能失败，因此它不等于对象已经创建成功。</p>
+<h3 id="拒绝请求">拒绝请求</h3>
+<p>如果 <code>team-a</code> 中的作业指定了 <code>spec.queue: team-b</code>，示例校验器返回：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;apiVersion&quot;</span><span class="punctuation">:</span> <span class="string">&quot;admission.k8s.io/v1&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;kind&quot;</span><span class="punctuation">:</span> <span class="string">&quot;AdmissionReview&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;response&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">    <span class="attr">&quot;uid&quot;</span><span class="punctuation">:</span> <span class="string">&quot;f43e5313-2a37-4e65-96cd-e24fac76f199&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;allowed&quot;</span><span class="punctuation">:</span> <span class="literal"><span class="keyword">false</span></span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;status&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">      <span class="attr">&quot;reason&quot;</span><span class="punctuation">:</span> <span class="string">&quot;Forbidden&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;message&quot;</span><span class="punctuation">:</span> <span class="string">&quot;team-a 命名空间的训练作业只允许使用 team-a 队列&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;code&quot;</span><span class="punctuation">:</span> <span class="number">403</span></span><br><span class="line">    <span class="punctuation">&#125;</span></span><br><span class="line">  <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p><strong>正常的业务拒绝，应以 HTTP 200 返回有效的 AdmissionReview，再通过 <code>allowed: false</code> 表达。</strong> 上例 <code>status.code: 403</code> 属于协议中的拒绝信息，并不是要求 Webhook 的 HTTP 层直接返回 403。HTTP 层异常会进入调用失败的处理路径，语义不同。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">2</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">5</a></p>
+<p>创建请求被拒绝时，本次请求不会创建新对象；更新请求被拒绝时，本次变更不会落盘，原有对象仍然存在。后者尤其重要：新规则不会自动修改或删除已有对象，但它们之后进行匹配的更新时，即使只是修改标签，也可能因为最终对象不符合规则而遭到拒绝。上线时应考虑存量迁移或基于 <code>oldObject</code> 的过渡策略，并确认目标资源允许修改哪些字段。</p>
+<h2 id="四、Mutating-Webhook-如何修改对象">四、Mutating Webhook 如何修改对象</h2>
+<p>修改型 Webhook 通常通过返回 JSON Patch，让 API Server 修改当前处理中的对象。Webhook 不需要再向 API Server 发起一次更新请求来完成这次修改。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/mutating-webhook-configuration-v1/">4</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">5</a></p>
+<p>继续使用训练平台的例子。假设平台希望在<strong>新建</strong> VolcanoJob 时，为未设置清理期限的作业补充：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">ttlSecondsAfterFinished:</span> <span class="number">3600</span></span><br></pre></td></tr></table></figure>
+<p>VolcanoJob 支持 <code>ttlSecondsAfterFinished</code> 字段：作业成功完成或失败后，经过指定秒数具备自动清理资格；它不是作业的最大运行时长，也不保证恰好在期限到达时立即删除。这里的 3600 秒是本文假设的平台默认值。<a target="_blank" rel="noopener" href="https://volcano.sh/docs/v1.16.0/userguide/user_guide_how_to_use_job_ttl/">9</a></p>
+<p>如果请求是 <code>CREATE</code>，并且该字段未设置，Webhook 可以生成以下补丁：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">[</span></span><br><span class="line">  <span class="punctuation">&#123;</span></span><br><span class="line">    <span class="attr">&quot;op&quot;</span><span class="punctuation">:</span> <span class="string">&quot;add&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;path&quot;</span><span class="punctuation">:</span> <span class="string">&quot;/spec/ttlSecondsAfterFinished&quot;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="attr">&quot;value&quot;</span><span class="punctuation">:</span> <span class="number">3600</span></span><br><span class="line">  <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">]</span></span><br></pre></td></tr></table></figure>
+<p>上面展示的是解码后的补丁，前提是对象中已有 <code>spec</code>。实际 AdmissionResponse 中，应设置 <code>allowed: true</code>、<code>patchType: &quot;JSONPatch&quot;</code>，并将 JSON Patch 字节序列以 Base64 字符串放入 <code>patch</code> 字段，同时带回原 <code>uid</code>。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">5</a></p>
+<p>这里有三个实现细节：</p>
+<ul>
+<li>
+<p><strong>只补缺省值。</strong> 用户显式设置 0 或其他合法值时，不应把它当成“未填写”。</p>
+</li>
+<li>
+<p><strong>保持幂等。</strong> 同一个对象再次进入处理函数时，不应不断追加内容或反复改变默认值。</p>
+</li>
+<li>
+<p><strong>校验最终状态。</strong> 不应依赖多个 Mutating Webhook 的固定调用顺序；关键约束放到 Validating 阶段检查，因为后续修改可能影响前面的结果。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/cluster-administration/admission-webhooks-good-practices/">6</a></p>
+</li>
+</ul>
+<p>本例限定在 CREATE 时默认，避免某次普通更新意外改变已有作业的保留策略。如果实际业务要求所有作业都必须设置 TTL，则应明确设计存量迁移和更新校验，不能靠一个“顺手补默认值”的逻辑隐含完成。</p>
+<h2 id="五、一次创建请求的完整调用链">五、一次创建请求的完整调用链</h2>
+<p>下面把注册后的运行过程串起来。图中用同一个 Webhook 服务承载两个端点，省略其他准入插件和部分内部校验步骤；假设请求已经命中配置规则。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    sequenceDiagram
+    participant U as 客户端
+    participant A as API Server
+    participant W as Webhook 服务
+    participant E as etcd
+    participant C as Controller
+    U-&gt;&gt;A: 创建 VolcanoJob
+    A-&gt;&gt;A: 认证与授权
+    A-&gt;&gt;W: AdmissionReview &#x2F;mutate-vcjob
+    W--&gt;&gt;A: allowed&#x3D;true 与补丁
+    A-&gt;&gt;A: 应用补丁并完成相关校验
+    A-&gt;&gt;W: AdmissionReview &#x2F;validate-vcjob
+    alt 明确拒绝
+        W--&gt;&gt;A: allowed&#x3D;false 与原因
+        A--&gt;&gt;U: 创建失败
+    else 所有检查通过
+        W--&gt;&gt;A: allowed&#x3D;true
+        A-&gt;&gt;E: 持久化对象
+        E--&gt;&gt;A: 写入成功
+        par 返回客户端
+            A--&gt;&gt;U: 创建成功
+        and 传播对象变化
+            A--&gt;&gt;C: Watch 事件
+            C-&gt;&gt;C: 执行协调逻辑
+        end
+    end
+  </pre></div>
+<p>这个调用链说明，Webhook 位于原始 API 请求的同步路径上。它迟迟不返回，客户端的写请求也会等待；Controller 则通过观察已经存在的对象，持续推动实际状态接近期望状态。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/">1</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/architecture/controller/">7</a></p>
+<p>图中把创建成功响应和 Watch 事件画成并行分支，是为了避免一个常见误解：不需要等客户端收到成功响应，Controller 才“被允许”开始工作。对象成功持久化后，响应返回和变化传播之间不应被业务代码假定为严格的先后关系。</p>
+<p>还需要记住，Webhook 的 <code>allowed: true</code> 发生在持久化之前。它证明当前检查通过，不能用来证明作业已经入库，也不能用来证明作业已经开始执行。</p>
+<h2 id="六、放回-Volcano-场景，区分三种决策">六、放回 Volcano 场景，区分三种决策</h2>
+<p>以一个简化的训练作业为例：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">batch.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Job</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">train-demo</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">team-a</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">schedulerName:</span> <span class="string">volcano</span></span><br><span class="line">  <span class="attr">queue:</span> <span class="string">team-a</span></span><br><span class="line">  <span class="attr">minAvailable:</span> <span class="number">2</span></span><br><span class="line">  <span class="attr">tasks:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">worker</span></span><br><span class="line">      <span class="attr">replicas:</span> <span class="number">2</span></span><br><span class="line">      <span class="attr">template:</span></span><br><span class="line">        <span class="attr">spec:</span></span><br><span class="line">          <span class="attr">restartPolicy:</span> <span class="string">Never</span></span><br><span class="line">          <span class="attr">containers:</span></span><br><span class="line">            <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">trainer</span></span><br><span class="line">              <span class="attr">image:</span> <span class="string">registry.example.com/ml/train:1.0</span></span><br><span class="line">              <span class="attr">resources:</span></span><br><span class="line">                <span class="attr">requests:</span></span><br><span class="line">                  <span class="attr">cpu:</span> <span class="string">&quot;2&quot;</span></span><br><span class="line">                  <span class="attr">memory:</span> <span class="string">4Gi</span></span><br><span class="line">                  <span class="attr">nvidia.com/gpu:</span> <span class="number">1</span></span><br><span class="line">                <span class="attr">limits:</span></span><br><span class="line">                  <span class="attr">nvidia.com/gpu:</span> <span class="number">1</span></span><br></pre></td></tr></table></figure>
+<p>这是一份说明调用关系的示例；镜像地址是占位示例，实际环境还需准备命名空间、Queue 和 GPU 资源。为满足本文的队列规则，用户应显式填写 <code>spec.queue: team-a</code>，并确保对应 Queue 已存在。</p>
+<p>平台对它至少会作出三类不同决策：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>主要问题</th>
+<th>典型结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API 准入</td>
+<td>请求的对象定义是否允许进入集群？</td>
+<td>补充 TTL、允许创建，或拒绝不符合队列规则的请求</td>
+</tr>
+<tr>
+<td>Controller 协调</td>
+<td>已保存的作业需要哪些关联对象和状态转换？</td>
+<td>根据作业推进 PodGroup、Pod 等对象的创建和状态管理</td>
+</tr>
+<tr>
+<td>调度与资源准入</td>
+<td>队列和集群当前能否承接作业，Pod 应落到哪里？</td>
+<td>进入等待、满足准入条件、选择节点并执行绑定</td>
+</tr>
+</tbody>
+</table>
+<p>Volcano 的 <code>enqueue</code> Action 会处理作业进入可调度阶段的资源准入；后续分配还涉及节点资源与 Gang 等约束。具体行为取决于 Volcano 的版本、调度配置和插件。<a target="_blank" rel="noopener" href="https://volcano.sh/docs/scheduler/actions/">8</a></p>
+<p>因此，在本例策略下：</p>
+<p><strong>情况一：把队列改成 <code>team-b</code>。</strong> 自定义 Validating Webhook 返回拒绝；本次创建失败，没有新作业进入后续调度流程。</p>
+<p><strong>情况二：队列正确，但当前 GPU 不足。</strong> API 请求可以通过，Job 对象可以保存下来；后续组件依据队列和资源条件决定何时推进运行。具体停留在什么状态，取决于启用的准入和调度策略。</p>
+<p><strong>情况三：队列正确，资源条件也满足。</strong> API 准入通过后，控制器与调度器继续处理，最终由节点上的 kubelet 负责启动已绑定的 Pod。</p>
+<p>这里的设计原则是：<strong>需要持续等待、重试和观察资源变化的工作，应放在协调或调度循环中。</strong> 不应让 Webhook 保持 HTTP 请求，等待未来某个时刻释放 GPU。根据 API 请求同步等待的性质，可以直接推导出这种做法会把资源排队变成 API 请求超时。</p>
+<p>Webhook 也可以修改对象，让它携带后续等待所需的状态，例如注入某种暂停标记或调度门控。但 Webhook 完成对象修改后就应返回，后续等待与解除条件由相应组件处理。</p>
+<h2 id="七、failurePolicy-处理的是调用故障">七、failurePolicy 处理的是调用故障</h2>
+<p><code>failurePolicy</code> 最容易引发的误解是：配置 <code>Ignore</code> 之后，Webhook 的拒绝是否也可以被忽略？</p>
+<p>答案是否定的。它处理的是调用异常或超时，并不把正常返回的业务拒绝变成允许。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">2</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">3</a></p>
+<table>
+<thead>
+<tr>
+<th>Webhook 调用结果</th>
+<th><code>failurePolicy: Fail</code></th>
+<th><code>failurePolicy: Ignore</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>有效响应，<code>allowed: true</code></td>
+<td>继续其他检查</td>
+<td>继续其他检查</td>
+</tr>
+<tr>
+<td>有效响应，<code>allowed: false</code></td>
+<td>拒绝请求</td>
+<td>拒绝请求</td>
+</tr>
+<tr>
+<td>连接失败、TLS 校验失败、超时等调用错误</td>
+<td>以准入调用失败结束请求</td>
+<td>忽略本次调用错误，继续其他检查</td>
+</tr>
+</tbody>
+</table>
+<p>所以，“Webhook 认为不允许”和“API Server 没能正常调用 Webhook”是两条处理路径。</p>
+<p>在示例训练平台中，队列隔离属于平台希望强制保证的约束，因此示例选择 <code>Fail</code>。这同时意味着：一旦该 Webhook 不可用，匹配的 Job 写请求可能受阻。选择策略时，需要同时考虑规则的重要程度和服务的可用性。</p>
+<p><code>Ignore</code> 可以降低调用故障对 API 写入的影响，但不能保证该规则一定执行。采用它的前提，应当是平台明确接受这段时间内可能放过未检查的请求，或者存在其他可靠的约束机制。</p>
+<p>同样，不要为了“拒绝用户”直接返回 HTTP 500。那表示服务调用出了问题，会受到故障策略影响。业务拒绝应按 AdmissionReview 协议表达。</p>
+<h2 id="八、部署和排障时，沿着调用链定位">八、部署和排障时，沿着调用链定位</h2>
+<h3 id="TLS、Service-和网络必须同时成立">TLS、Service 和网络必须同时成立</h3>
+<p>如果使用 <code>clientConfig.service</code>，API Server 需要信任 Webhook 服务端证书。配置中的 <code>caBundle</code> 提供用于验证服务端证书的 CA；证书需要包含与 Service 相应的 DNS 身份，例如本例的：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">training-policy-webhook.platform-system.svc</span><br></pre></td></tr></table></figure>
+<p>同时，API Server 到该服务的网络路径必须可达。仅仅在某个业务 Pod 内能访问 Webhook，并不能证明控制平面也能访问。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">2</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">3</a></p>
+<p>因此，部署时需要把几项配置对应起来：注册对象中的命名空间与 Service 名称、Service 的端口与后端监听端口、证书中的服务名，以及签发 CA。它们中任何一处不一致，都可能在业务校验逻辑运行之前导致调用失败。</p>
+<h3 id="不要把耗时任务放进准入处理">不要把耗时任务放进准入处理</h3>
+<p>Webhook 增加了 API 写请求的延迟，应缩小匹配范围、控制执行时间，并减少对外部服务的同步依赖。多个修改型 Webhook 还会累积延迟。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/cluster-administration/admission-webhooks-good-practices/">6</a></p>
+<p>本例中的队列规则可以来自稳定的平台配置。如果每次校验都串行查询多个业务系统，那么这些系统的延迟和故障会传递到 Job 创建过程。使用缓存时，也必须明确：缓存陈旧到什么程度仍可以接受，数据不可用时应当拒绝还是放行。这是业务规则的可靠性设计，不能只由默认错误处理决定。</p>
+<h3 id="sideEffects-是对实现行为的声明">sideEffects 是对实现行为的声明</h3>
+<p><code>sideEffects: None</code> 表示声明该 Webhook 不产生对象修改之外的副作用，并不会自动阻止程序调用外部系统。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">3</a></p>
+<p>例如，在准入时直接创建云主机、扣减外部额度或写入不可回滚的账单，会遇到一个问题：Webhook 完成后，后续校验或对象持久化仍可能失败。此时外部动作已经发生，Kubernetes 对象却未必存在。</p>
+<p>更容易恢复的设计，是在对象成功创建后，由 Controller 依据对象状态执行可重试、可协调的外部操作。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/architecture/controller/">7</a></p>
+<p>如果使用服务端 dry-run，Webhook 也需要遵守对应的副作用声明和 <code>request.dryRun</code> 语义。试运行不是“只在本地检查 YAML”，它仍可能触发服务端准入流程。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">3</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">5</a></p>
+<h3 id="按症状选择检查点">按症状选择检查点</h3>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Webhook 完全没有收到请求</td>
+<td>注册对象、操作类型、API 组、资源名称、选择器</td>
+</tr>
+<tr>
+<td>更新状态时没有触发</td>
+<td>是否匹配了 <code>jobs/status</code>；它与 <code>jobs</code> 需要区分</td>
+</tr>
+<tr>
+<td>报 <code>x509</code> 或证书错误</td>
+<td>CA、证书有效期、服务端证书 DNS 身份</td>
+</tr>
+<tr>
+<td>连接失败或调用超时</td>
+<td>Service 后端、端口、API Server 网络路径、处理耗时</td>
+</tr>
+<tr>
+<td>返回了明确的策略拒绝</td>
+<td>AdmissionReview 的拒绝原因与对应业务规则</td>
+</tr>
+<tr>
+<td>Job 已创建但没有运行</td>
+<td>转向 Controller、PodGroup、Queue、Pod 事件及调度器检查</td>
+</tr>
+</tbody>
+</table>
+<p>示例环境中，可以从以下只读检查入手：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations</span><br><span class="line">kubectl get validatingwebhookconfiguration training-job-validator -o yaml</span><br><span class="line">kubectl get svc training-policy-webhook -n platform-system -o yaml</span><br><span class="line">kubectl get endpointslices -n platform-system -l kubernetes.io/service-name=training-policy-webhook</span><br><span class="line">kubectl logs -n platform-system deployment/training-policy-webhook</span><br><span class="line">kubectl apply --dry-run=server -f train-job.yaml -o yaml</span><br></pre></td></tr></table></figure>
+<p>最后一条命令可用于观察服务端校验和修改结果，不会持久化本次对象变更。它要求相关 Webhook 正确支持 dry-run。检查注册规则时，也要确认自己操作的是 VolcanoJob 的 API 组，而非同名的其他 Job 资源。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">3</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">5</a></p>
+<h2 id="九、写-Webhook-之前，先判断规则应该放在哪里">九、写 Webhook 之前，先判断规则应该放在哪里</h2>
+<p>Webhook 适合把平台逻辑接入准入流程，但每增加一个外部回调，就增加一项需要部署、升级和维护的服务依赖。</p>
+<p>可以先按规则性质选择实现位置：</p>
+<table>
+<thead>
+<tr>
+<th>需求</th>
+<th>优先考虑的位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>字段类型、范围、必填项、静态默认值</td>
+<td>CRD 的 OpenAPI Schema 与默认值</td>
+</tr>
+<tr>
+<td>同一自定义资源内部的字段关系</td>
+<td>CRD 的 CEL 校验规则</td>
+</tr>
+<tr>
+<td>可用声明式表达式描述的集群准入策略</td>
+<td>ValidatingAdmissionPolicy 与对应 Binding</td>
+</tr>
+<tr>
+<td>复杂的准入判断、必须接入外部平台信息</td>
+<td>Admission Webhook</td>
+</tr>
+<tr>
+<td>创建关联资源、持续观察状态、重试外部操作</td>
+<td>Controller</td>
+</tr>
+<tr>
+<td>等待资源、队列公平性、节点分配</td>
+<td>调度与资源准入组件</td>
+</tr>
+</tbody>
+</table>
+<p>CRD Schema 和 CEL 可以直接表达多种结构与字段约束；ValidatingAdmissionPolicy 则提供 API Server 内执行的声明式校验机制。这些能力可以减少为了简单规则而单独维护 HTTPS 服务的需要。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/">10</a><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/">11</a></p>
+<p>前文的 TTL 默认值示例主要用来说明 JSON Patch 协议。若它只是某个自定义 API 的统一静态默认值，Schema 默认值通常更直接；若默认值取决于租户、环境或平台策略，才需要进一步评估 Webhook 等方案。对第三方 CRD，还应考虑升级和维护责任，避免把业务需求变成难以跟随上游升级的改动。</p>
+<p>设计 API 扩展时，先明确规则约束的是“请求中的对象”，还是“对象创建后的运行过程”。前者可以进入准入逻辑，后者通常需要一个能够持续观察和协调的组件。这个职责划分，会直接影响故障范围、重试方式和系统的可维护性。</p>
+<h2 id="参考资料">参考资料</h2>
+<ol>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/">Admission Control in Kubernetes</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/">Dynamic Admission Control</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/validating-webhook-configuration-v1/">ValidatingWebhookConfiguration API</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/kubernetes-api/admissionregistration/mutating-webhook-configuration-v1/">MutatingWebhookConfiguration API</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/config-api/apiserver-admission.v1/">AdmissionReview API</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/cluster-administration/admission-webhooks-good-practices/">Admission Webhook Good Practices</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/architecture/controller/">Controllers</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://volcano.sh/docs/scheduler/actions/">Volcano Scheduler Actions</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://volcano.sh/docs/v1.16.0/userguide/user_guide_how_to_use_job_ttl/">Volcano Job Time to Live User Guide</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/">Custom Resource Definitions</a></p>
+</li>
+<li>
+<p><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/">ValidatingAdmissionPolicy</a></p>
+</li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/">https://roger-lv.github.io/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Volcano/">Volcano</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/Admission-Webhook/">Admission Webhook</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/19/2026-11-19-kueue-architecture-resource-governance/" title="理解 Kueue 的架构与训练推理资源治理"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">理解 Kueue 的架构与训练推理资源治理</div></div><div class="info-2"><div class="info-item-1">从作业准入到 Volcano、KServe 和多调度器协作 技术博客  ·  资料核对日期 2026 年 11 月 19 日 训练平台引入 Kueue 时，最容易产生的疑问是：调度器已经判断资源能否满足，Volcano 还有 gang、队列和抢占，为什么还要再加一层准入？回答这个问题，需要把一次任务运行拆成几个不同的决策，并明确谁拥有每个决策的最终解释权。 Kueue 将工作负载级的排队、配额共享与准入治理抽成独立控制层；Volcano 将队列治理、作业生命周期和批任务节点调度放进一套系统；KServe 负责模型服务的部署与服务化。 Kueue 和 Volcano 存在实质重叠，也可以在明确分工后组合。Kueue 的价值并不以多调度器为前提，组合后的收益也不能靠组件数量推断。[1][2][3] 本文以两台各有 4 张 GPU 的节点、一个包含两个 Worker 的训练作业为贯穿案例。Kueue 的基础流程按固定规模、受支持的 Job 集成解释；TAS、MultiKueue、弹性工作负载和服务型负载另行说明。Volcano 主要采用 v1.16.0 文档中的传统 Queue 与常见...</div></div></div></a><a class="pagination-related" href="/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/" title="从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO</div></div><div class="info-2"><div class="info-item-1">在上一篇文章中，我们讨论了 SR-IOV、VFIO，以及虚拟机与容器使用设备驱动的区别。沿着设备直通继续往下看，还会遇到三个问题：SR-IOV 中的 Single Root 究竟指什么；设备为何需要 IOMMU；QEMU、KVM、VFIO 是三个独立方案，还是一套方案里的不同部分？ 这三个问题分别涉及 PCIe 拓扑、设备访问内存的边界，以及虚拟机的软件分工。把它们放回各自的位置，就能理解一块物理设备如何交给虚拟机使用，以及这件事为什么不能只靠某一个组件完成。 本文以 Linux 宿主机、常规非机密的 x86 QEMU/KVM 虚拟机和 PCIe 设备直通为主要场景。其他体系结构及机密虚拟机可能采用不同的具体机制。  一、Single Root 描述的是怎样的 PCIe 拓扑 先区分 Root Complex 和 Root Port SR-IOV 的全称是 Single Root I/O Virtualization。理解 Single Root，首先要看设备如何接入处理器和系统内存一侧。    名词 在拓扑中的作用     Root Complex，RC PCIe 根端的硬件逻...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Volcano-Queue%E5%85%A8%E6%B5%81%E7%A8%8B%E6%8B%86%E8%A7%A3/" title="Volcano Queue 全流程拆解:一个 Job 从提交到运行"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Volcano Queue 全流程拆解:一个 Job 从提交到运行</div></div><div class="info-2"><div class="info-item-1">Volcano Queue 全流程拆解:一个 Job 从提交到运行  本文是 一个集群,多个调度器:Kubernetes 多调度器共存实践指南 的下篇——上一篇讲了多调度器并存,本文深入 Volcano 内部,回答一个更具体的问题:Queue 在整个调度流程中到底扮演什么角色?我用一个&quot;两个队列、三个 Job&quot;的资源博弈场景,把从 YAML 提交到 Pod 运行的每一步拆开看——包括 YAML 怎么写、每个字段如何影响调度决策、队列之间如何&quot;借用&quot;与&quot;回收&quot;资源。   引言:为什么需要理解 Queue 的完整流程 Volcano 的 Queue 是多租户资源分配的最上层抽象——它不参与&quot;Pod 放哪个节点&quot;的决策,而是先决定&quot;这个任务有没有资格、以什么优先级、能用多少资源进入调度&quot;。 如果没有 Queue,调度器只有&quot;先来后到&quot;一种公平观:谁先提交谁先用,大任务可能饿死小任务,一个团队的突发负载可以吃光整个集群。Queue 补上了配额隔离、弹性借用、公平分配三块...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Sky-Scheduler%E6%8B%93%E6%89%91%E6%84%9F%E7%9F%A5%E4%B8%8EQuota%E4%B8%A4%E7%BA%A7%E8%B0%83%E5%BA%A6/" title="Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器</div></div><div class="info-2"><div class="info-item-1">Sky-Scheduler:面向 AI 训练的拓扑感知与 Quota 两级调度器 把一个千卡训练任务调度好,比把一百个 Web 服务调度好难得多。难点不在&quot;算力够不够&quot;,而在三件 Web 服务从不操心的事:  通信拓扑要聚拢:TP/PP 切出来的通信组,必须落在同一片 RDMA 交换机域里,跨机架一跳,AllReduce 延迟能差好几倍。 资源要&quot;留得住&quot;:训练任务动辄跑几小时几天,中途被别的任务抢占、重启就要从头来;但集群又要混部在线/离线,不能不让抢。 同卡型才好比:A100 节点和 H100 节点不能混进同一个通信组,不然快的等慢的,贵的卡当便宜的用。  通用调度器(kube-scheduler)对这三件事基本无解,Volcano 解决了 Gang 但也没碰拓扑。Sky-Scheduler 就是冲着这三件事来的——一个 Volcano 衍生的 Kubernetes 调度器,在 Volcano 的 session 框架上做了几处关键改造:把&quot;Pod→Node 一跳&quot;改成 “Task→Quota→Node 两跳”,引入...</div></div></div></a><a class="pagination-related" href="/2026/09/10/2026-09-10-Kthena%E5%AE%9E%E6%88%98%E8%A7%A3%E6%9E%90%E8%AE%A9Kubernetes%E7%90%86%E8%A7%A3Prefill-Decode%E5%92%8CKVCache/" title="Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-10</div><div class="info-item-2">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache</div></div><div class="info-2"><div class="info-item-1">Kthena 实战解析:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache 如果想在 Kubernetes 中运行一个 Qwen 模型,只需准备好模型文件和 vLLM 镜像,写一个 vLLM 的 Deployment,申请 GPU,再配一个 Service,很快就能拿到 OpenAI 的 /v1/chat/completions 接口。 但当模型从一个变成一组、GPU 从一张变成多机多卡,问题就不再是&quot;Pod 能否启动&quot;了。Kthena 可以在 Kubernetes 上解决这些问题:vLLM 继续负责把模型跑快,Kubernetes 继续管理 Pod 和 Service,Kthena 则将 LLM 的角色、组、GPU 位置、KV Cache 和 Token 负载带进调度、路由与扩缩容过程。  本文基于微信公众号文章《Kthena:让 Kubernetes 真正理解 Prefill、Decode 和 KV Cache》整理,保留了全部实验数据与 YAML 配置。   一、为什么要有 Kthena:模型在 K8s 部署的痛点 D...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">321</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">524</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81Admission-Webhook-%E5%9C%A8-API-%E8%AF%B7%E6%B1%82%E4%B8%AD%E7%9A%84%E4%BD%8D%E7%BD%AE"><span class="toc-text">一、Admission Webhook 在 API 请求中的位置</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%89%80%E8%B0%93%E6%B3%A8%E5%86%8C%EF%BC%8C%E6%98%AF%E5%90%91-API-Server-%E5%A3%B0%E6%98%8E%E8%B0%83%E7%94%A8%E8%A7%84%E5%88%99"><span class="toc-text">二、所谓注册，是向 API Server 声明调用规则</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E8%AE%AD%E7%BB%83%E4%BD%9C%E4%B8%9A%E6%A0%A1%E9%AA%8C%E5%99%A8%E7%9A%84%E6%B3%A8%E5%86%8C%E7%A4%BA%E4%BE%8B"><span class="toc-text">一个训练作业校验器的注册示例</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81API-Server-%E9%80%9A%E8%BF%87-AdmissionReview-%E4%BC%A0%E9%80%92%E4%B8%8A%E4%B8%8B%E6%96%87"><span class="toc-text">三、API Server 通过 AdmissionReview 传递上下文</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%81%E8%AE%B8%E8%AF%B7%E6%B1%82"><span class="toc-text">允许请求</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8B%92%E7%BB%9D%E8%AF%B7%E6%B1%82"><span class="toc-text">拒绝请求</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81Mutating-Webhook-%E5%A6%82%E4%BD%95%E4%BF%AE%E6%94%B9%E5%AF%B9%E8%B1%A1"><span class="toc-text">四、Mutating Webhook 如何修改对象</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E4%B8%80%E6%AC%A1%E5%88%9B%E5%BB%BA%E8%AF%B7%E6%B1%82%E7%9A%84%E5%AE%8C%E6%95%B4%E8%B0%83%E7%94%A8%E9%93%BE"><span class="toc-text">五、一次创建请求的完整调用链</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E6%94%BE%E5%9B%9E-Volcano-%E5%9C%BA%E6%99%AF%EF%BC%8C%E5%8C%BA%E5%88%86%E4%B8%89%E7%A7%8D%E5%86%B3%E7%AD%96"><span class="toc-text">六、放回 Volcano 场景，区分三种决策</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81failurePolicy-%E5%A4%84%E7%90%86%E7%9A%84%E6%98%AF%E8%B0%83%E7%94%A8%E6%95%85%E9%9A%9C"><span class="toc-text">七、failurePolicy 处理的是调用故障</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E9%83%A8%E7%BD%B2%E5%92%8C%E6%8E%92%E9%9A%9C%E6%97%B6%EF%BC%8C%E6%B2%BF%E7%9D%80%E8%B0%83%E7%94%A8%E9%93%BE%E5%AE%9A%E4%BD%8D"><span class="toc-text">八、部署和排障时，沿着调用链定位</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#TLS%E3%80%81Service-%E5%92%8C%E7%BD%91%E7%BB%9C%E5%BF%85%E9%A1%BB%E5%90%8C%E6%97%B6%E6%88%90%E7%AB%8B"><span class="toc-text">TLS、Service 和网络必须同时成立</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%8D%E8%A6%81%E6%8A%8A%E8%80%97%E6%97%B6%E4%BB%BB%E5%8A%A1%E6%94%BE%E8%BF%9B%E5%87%86%E5%85%A5%E5%A4%84%E7%90%86"><span class="toc-text">不要把耗时任务放进准入处理</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#sideEffects-%E6%98%AF%E5%AF%B9%E5%AE%9E%E7%8E%B0%E8%A1%8C%E4%B8%BA%E7%9A%84%E5%A3%B0%E6%98%8E"><span class="toc-text">sideEffects 是对实现行为的声明</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8C%89%E7%97%87%E7%8A%B6%E9%80%89%E6%8B%A9%E6%A3%80%E6%9F%A5%E7%82%B9"><span class="toc-text">按症状选择检查点</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E5%86%99-Webhook-%E4%B9%8B%E5%89%8D%EF%BC%8C%E5%85%88%E5%88%A4%E6%96%AD%E8%A7%84%E5%88%99%E5%BA%94%E8%AF%A5%E6%94%BE%E5%9C%A8%E5%93%AA%E9%87%8C"><span class="toc-text">九、写 Webhook 之前，先判断规则应该放在哪里</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-kueue-architecture-resource-governance/" title="理解 Kueue 的架构与训练推理资源治理">理解 Kueue 的架构与训练推理资源治理</a><time datetime="2026-11-19T03:28:09.000Z" title="发表于 2026-11-19 11:28:09">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/" title="Kubernetes Admission Webhook 的注册机制与请求生命周期">Kubernetes Admission Webhook 的注册机制与请求生命周期</a><time datetime="2026-11-19T03:28:08.000Z" title="发表于 2026-11-19 11:28:08">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/" title="从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO">从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO</a><time datetime="2026-11-18T07:24:09.000Z" title="发表于 2026-11-18 15:24:09">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/" title="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</a><time datetime="2026-11-18T06:39:10.000Z" title="发表于 2026-11-18 14:39:10">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sky-scheduler-rdma-topology/" title="Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点">Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点</a><time datetime="2026-11-17T16:00:00.000Z" title="发表于 2026-11-18 00:00:00">2026-11-18</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

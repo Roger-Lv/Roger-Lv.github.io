@@ -1,0 +1,1003 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>理解 Kueue 的架构与训练推理资源治理 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="用两机八卡的训练作业拆解 Kueue 的配额、排队和准入流程，并梳理它与 Volcano、KServe 及多调度器协作时的职责边界。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="理解 Kueue 的架构与训练推理资源治理">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/19/2026-11-19-kueue-architecture-resource-governance/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="用两机八卡的训练作业拆解 Kueue 的配额、排队和准入流程，并梳理它与 Volcano、KServe 及多调度器协作时的职责边界。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-19T03:28:09.000Z">
+<meta property="article:modified_time" content="2026-11-19T03:28:09.127Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Volcano">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="Kueue">
+<meta property="article:tag" content="KServe">
+<meta property="article:tag" content="GPU调度">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "理解 Kueue 的架构与训练推理资源治理",
+  "url": "https://roger-lv.github.io/2026/11/19/2026-11-19-kueue-architecture-resource-governance/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-19T03:28:09.000Z",
+  "dateModified": "2026-11-19T03:28:09.127Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/19/2026-11-19-kueue-architecture-resource-governance/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '理解 Kueue 的架构与训练推理资源治理',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">321</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">524</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">理解 Kueue 的架构与训练推理资源治理</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">理解 Kueue 的架构与训练推理资源治理</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-19T03:28:09.000Z" title="发表于 2026-11-19 11:28:09">2026-11-19</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-19T03:28:09.127Z" title="更新于 2026-11-19 11:28:09">2026-11-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/19/2026-11-19-kueue-architecture-resource-governance/" data-flag-title="理解 Kueue 的架构与训练推理资源治理"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p><em>从作业准入到 Volcano、KServe 和多调度器协作</em></p>
+<p>技术博客  ·  资料核对日期 2026 年 11 月 19 日</p>
+<p>训练平台引入 Kueue 时，最容易产生的疑问是：调度器已经判断资源能否满足，Volcano 还有 gang、队列和抢占，为什么还要再加一层准入？回答这个问题，需要把一次任务运行拆成几个不同的决策，并明确谁拥有每个决策的最终解释权。</p>
+<p><strong>Kueue 将工作负载级的排队、配额共享与准入治理抽成独立控制层；Volcano 将队列治理、作业生命周期和批任务节点调度放进一套系统；KServe 负责模型服务的部署与服务化。</strong> Kueue 和 Volcano 存在实质重叠，也可以在明确分工后组合。Kueue 的价值并不以多调度器为前提，组合后的收益也不能靠组件数量推断。<a href="#kueue-ref-1">[1]</a><a href="#kueue-ref-2">[2]</a><a href="#kueue-ref-3">[3]</a></p>
+<p>本文以两台各有 4 张 GPU 的节点、一个包含两个 Worker 的训练作业为贯穿案例。Kueue 的基础流程按固定规模、受支持的 Job 集成解释；TAS、MultiKueue、弹性工作负载和服务型负载另行说明。Volcano 主要采用 v1.16.0 文档中的传统 Queue 与常见 Action 路径；引用主分支源码的地方仅用于说明实现结构。示例需要根据实际安装版本调整 API、集成开关和配置。</p>
+<span id="more"></span>
+<h2 id="一、先分清四类判断">一、先分清四类判断</h2>
+<table>
+<thead>
+<tr>
+<th>层次</th>
+<th>回答的问题</th>
+<th>常见参与者</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API 接收与校验</td>
+<td>这个对象是否合法，能否写入 API Server？</td>
+<td>API Server、验证及变更 Webhook</td>
+</tr>
+<tr>
+<td>作业资源准入</td>
+<td>哪个任务现在有资格消耗哪一类资源，能用多少？</td>
+<td>Kueue；Volcano 队列及 enqueue 等机制</td>
+</tr>
+<tr>
+<td>节点放置与绑定</td>
+<td>每个 Pod 放在哪个节点，是否满足资源和拓扑约束？</td>
+<td>kube-scheduler、Volcano 等 Pod 调度器</td>
+</tr>
+<tr>
+<td>节点执行与业务运行</td>
+<td>设备如何分配，进程是否启动，训练或推理是否有效工作？</td>
+<td>kubelet、运行时、设备插件、训练框架、推理引擎</td>
+</tr>
+</tbody>
+</table>
+<p>这里有两个容易混淆的 admission。Kubernetes Admission Webhook 在对象创建或更新时执行校验与变更；Kueue 的工作负载准入可以持续等待很久。典型路径是 Job 先被 API 接收并保持 suspend，Kueue 后续通过控制循环判断何时恢复它，并不会让一个 HTTP 创建请求一直等到 GPU 空闲。<a href="#kueue-ref-4">[4]</a></p>
+<p>节点调度器也会判断资源，但它面对的是具体的 Pod、节点状态和放置约束；平台治理还要处理整个作业、团队份额、资源借用、排队优先级与跨集群机会。两者可以由一个系统实现，也可以拆开。Volcano 选择了较完整的集成路径，因此把它描述为“只有 gang 的 Pod 调度器”会低估它的能力。<a href="#kueue-ref-2">[2]</a></p>
+<p>KServe 的职责又不同。它围绕模型服务对象协调运行时、部署、网络和扩缩容等能力，具体路径取决于部署模式；真正执行模型计算的是推理运行时。在线请求进入服务后的限流、动态批处理和 KV cache 调度，不是 Kueue 的工作负载队列。<a href="#kueue-ref-3">[3]</a></p>
+<h2 id="二、为什么把作业准入单独做成一层">二、为什么把作业准入单独做成一层</h2>
+<h3 id="2-1-等待可以发生在创建大量-Pod-之前">2.1 等待可以发生在创建大量 Pod 之前</h3>
+<p>假设一个分布式任务需要 8 张 GPU 才能开始有效计算，只先启动一部分 Worker 可能带来设备占用、镜像和数据准备，却持续等待其他成员。作业级准入可以先保留一个描述需求的 Workload，等到整体满足政策后再启动业务 Pod。对于通过 Pod scheduling gate 集成的对象，Pod 可能已经存在，但尚未进入正常调度；具体收益取决于集成路径。<a href="#kueue-ref-4">[4]</a><a href="#kueue-ref-5">[5]</a></p>
+<p>Kueue 最初的设计动机包括：减少无望立即运行的 Pod 对调度器和控制面的压力，提供跨命名空间的配额共享，并复用已有 Job controller、Pod scheduler 和自动扩容能力。ResourceQuota 能限制对象或资源使用，却不提供完整的作业等待、公平排序和恢复运行流程。<a href="#kueue-ref-6">[6]</a></p>
+<p>这是机制收益，不是普遍性能定理。举一个纯说明性的例子：16 张卡因任务成员不齐而空等 15 分钟，对应 4 GPU·小时。只有当新策略确实减少这段无效占用，并让其他任务获得有用计算时间，才产生收益；把相同等待从 Pod Pending 搬到 Workload Pending，本身不算加速。</p>
+<h3 id="2-2-统一的治理对象降低了对执行系统的绑定">2.2 统一的治理对象降低了对执行系统的绑定</h3>
+<p>训练可能通过 Kubernetes Job、Kubeflow Trainer、Ray 等不同 API 提交。Kueue 的集成层把资源需求转换成统一的 Workload，让平台在相同的配额和队列模型上管理不同任务；执行侧仍由各自的 controller 负责。这样更换某类训练控制器或 Pod 调度器时，租户政策可以相对独立。<a href="#kueue-ref-1">[1]</a><a href="#kueue-ref-7">[7]</a></p>
+<p>独立层还便于引入额外准入条件，例如资源供应是否完成、远端集群是否接受任务。它的成本同样明确：增加控制器、状态同步、版本兼容和故障排查路径。如果现有 Volcano 已经覆盖所需队列、回收和调度策略，再加 Kueue 必须能回答一个具体问题：哪个跨执行系统的治理需求只有新增这层才能更好地解决？</p>
+<h3 id="2-3-配额账本和节点资源是两个需要对齐的视图">2.3 配额账本和节点资源是两个需要对齐的视图</h3>
+<p>设物理池有 32 张 GPU，A、B 两个团队各配置 16 张 nominal quota。若允许共享、借贷限额允许且 A 暂无任务，B 可以申请使用 24 张，其中 8 张来自可借资源。这个过程改变的是额度归属和使用资格，不是把某 16 张卡永久划归 A。A 的需求回来后，能否、何时收回额度，还取决于回收与抢占政策。<a href="#kueue-ref-8">[8]</a><a href="#kueue-ref-9">[9]</a></p>
+<p>逻辑上有额度不意味着任何形状的 Pod 都放得下。总计空闲 8 张 GPU，若分散为四个节点各 2 张，就无法容纳一个需要单节点 4 张卡的 Pod。反过来，节点上有空卡，也可能因为租户限额、AdmissionCheck 或公平策略而继续排队。正确诊断必须同时观察政策资格和物理可放置性。</p>
+<h2 id="三、Kueue-的内部架构">三、Kueue 的内部架构</h2>
+<p>Kueue 的核心实现主要集中在 <code>kueue-controller-manager</code> 中。下图中的 Queue Manager、Scheduler Cache 和 Scheduler 是逻辑模块，不应理解为三个需要分别部署的微服务。Kubernetes API 中的对象承担声明式状态载体，模块通过 watch、reconcile、缓存和状态更新形成异步闭环。<a href="#kueue-ref-10">[10]</a></p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TD
+    API[&quot;Kubernetes API：任务、Workload、队列与状态&quot;]
+    subgraph KM[&quot;kueue-controller-manager：同一进程内的逻辑模块&quot;]
+        WH[&quot;Webhooks：校验与初始挂起&quot;]
+        JF[&quot;Job Framework：任务与 Workload 转换&quot;]
+        CC[&quot;Core Controllers：对象与状态调谐&quot;]
+        QM[&quot;Queue Manager：待准入队列&quot;]
+        KS[&quot;Kueue Scheduler：配额、Flavor 与抢占&quot;]
+        SC[&quot;Scheduler Cache：配额用量与拓扑视图&quot;]
+        EX[&quot;可选逻辑：AdmissionCheck 协调与 TAS&quot;]
+        CC --&gt;|&quot;维护队列&quot;| QM
+        CC --&gt;|&quot;维护资源视图&quot;| SC
+        QM --&gt;|&quot;候选&quot;| KS
+        SC --&gt;|&quot;快照&quot;| KS
+        KS --&gt;|&quot;决策与状态推进&quot;| CC
+        EX --&gt;|&quot;检查与拓扑条件&quot;| CC
+    end
+    API --&gt;|&quot;Admission 请求&quot;| WH
+    WH --&gt;|&quot;校验与变更结果&quot;| API
+    API &lt;--&gt;|&quot;对象读写&quot;| JF
+    API &lt;--&gt;|&quot;监听与状态更新&quot;| CC
+    JF --&gt;|&quot;恢复任务&quot;| JC[&quot;原 Job 或 Trainer Controller&quot;]
+    JC --&gt;|&quot;创建 Pod&quot;| PS[&quot;Pod Scheduler：选择节点与绑定&quot;]
+    JF -.-&gt;|&quot;直接纳管 Pod 时解除 gate&quot;| PS
+    PS --&gt;|&quot;节点绑定&quot;| RT[&quot;节点运行时：kubelet 与容器执行&quot;]
+  </pre></div>
+<p><em>图 1  Kueue 的逻辑模块与执行边界。箭头表示主要状态或控制关系，不表示跨组件事务。</em></p>
+<p>图中箭头表示逻辑协作；对象创建、状态更新与绑定均经 Kubernetes API。直接纳管 Pod 时，准入后解除调度门控，无需先创建 Job。AdmissionCheck 执行器也可独立部署，图内展示内置协调逻辑。</p>
+<table>
+<thead>
+<tr>
+<th>逻辑模块</th>
+<th>主要职责</th>
+<th>理解时的边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Webhooks</td>
+<td>初始化受管任务的挂起状态；校验约束；相关 Pod 集成注入 gate</td>
+<td>API 请求处理与长期排队是两个过程</td>
+</tr>
+<tr>
+<td>Job Framework 及集成控制器</td>
+<td>提取 Job 资源需求生成 Workload；同步准入、驱逐、完成等状态</td>
+<td>业务 Pod 主要由原 Job、Trainer、Ray 等控制器创建</td>
+</tr>
+<tr>
+<td>Core Controllers</td>
+<td>维护 Workload、队列等对象状态，驱动队列、缓存和准入条件更新</td>
+<td>状态经多轮 reconcile 收敛</td>
+</tr>
+<tr>
+<td>Queue Manager</td>
+<td>管理待准入、暂不可准入和重新入队的 Workload</td>
+<td>是内部内存结构，不是外部消息中间件</td>
+</tr>
+<tr>
+<td>Scheduler Cache</td>
+<td>维护资源类型、队列与共享关系、配额预留及相关放置视图</td>
+<td>不同于通用 informer cache，也不是实际 GPU 的设备分配器</td>
+</tr>
+<tr>
+<td>Kueue Scheduler</td>
+<td>选择候选任务，评估 flavor、配额、共享、公平与抢占，产生准入相关决策</td>
+<td>调度对象是 Workload；不负责最终 Pod-to-Node 绑定</td>
+</tr>
+<tr>
+<td>AdmissionCheck 与可选扩展</td>
+<td>执行额外条件；TAS 提供拓扑约束；MultiKueue 管理跨集群分发</td>
+<td>扩展有各自控制循环；不代表都必须独立部署</td>
+</tr>
+</tbody>
+</table>
+<p>准入调度循环会从队列取得候选任务，基于资源快照评估能否分配；控制器随后把决策、附加检查和工作负载状态推进到一致结果。实现中存在 leader election、缓存同步及多轮调谐，不能把架构图理解成同步调用链，也不能假设一个时刻所有对象状态都已经完成更新。<a href="#kueue-ref-11">[11]</a><a href="#kueue-ref-12">[12]</a></p>
+<p>需要特别纠正一句容易误读的话：Kueue 的核心算法面向 Workload，不等于整个 Kueue 从不修改 Job。Webhook 和集成控制器确实会处理 <code>suspend</code>、调度约束以及驱逐后的恢复逻辑。没有集成层，这些抽象决策不会自动作用到一个任意自定义 Job 上。<a href="#kueue-ref-7">[7]</a></p>
+<h2 id="四、核心对象怎样组成资源治理模型">四、核心对象怎样组成资源治理模型</h2>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TD
+    subgraph NS[&quot;Namespace 作用域&quot;]
+        W[&quot;Workload：PodSets、需求与状态&quot;]
+        L[&quot;LocalQueue：命名空间内队列入口&quot;]
+        W --&gt;|&quot;queueName&quot;| L
+    end
+    subgraph CL[&quot;Cluster 作用域&quot;]
+        C[&quot;ClusterQueue：配额、排队与共享策略&quot;]
+        F[&quot;ResourceFlavor：资源类型与节点约束&quot;]
+        H[&quot;Cohort：配额共享与层级&quot;]
+        A[&quot;AdmissionCheck：附加准入检查&quot;]
+        T[&quot;Topology：拓扑层级&quot;]
+        N[&quot;Node：节点标签&quot;]
+        C --&gt;|&quot;按 Flavor 配额&quot;| F
+        C --&gt;|&quot;加入&quot;| H
+        C --&gt;|&quot;引用检查&quot;| A
+        F --&gt;|&quot;可选&quot;| T
+        F --&gt;|&quot;标签匹配&quot;| N
+    end
+    L --&gt;|&quot;clusterQueue&quot;| C
+  </pre></div>
+<p><em>图 2  Workload、队列与资源政策之间的关系。Namespace 范围的提交入口与集群范围的配额政策分开。</em></p>
+<p>本例配额位于 ClusterQueue；Cohort 也可配置共享配额。ResourceFlavor 描述资源类型与节点约束。</p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>范围</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Workload</td>
+<td>Namespace</td>
+<td>描述一个受管工作负载的资源需求、PodSets 和准入状态</td>
+</tr>
+<tr>
+<td>LocalQueue</td>
+<td>Namespace</td>
+<td>用户提交入口；指向一个 ClusterQueue</td>
+</tr>
+<tr>
+<td>ClusterQueue</td>
+<td>Cluster</td>
+<td>按资源类型管理配额，配置排队、共享、抢占及相关准入策略</td>
+</tr>
+<tr>
+<td>ResourceFlavor</td>
+<td>Cluster</td>
+<td>描述 A100/H100、Spot/On-demand 等资源变体及节点选择约束</td>
+</tr>
+<tr>
+<td>Cohort</td>
+<td>Cluster</td>
+<td>组织可共享资源的队列；可声明额外共享配额，并支持层级组织</td>
+</tr>
+<tr>
+<td>AdmissionCheck</td>
+<td>Cluster</td>
+<td>声明额外准入检查及其负责控制器</td>
+</tr>
+<tr>
+<td>Topology</td>
+<td>Cluster</td>
+<td>描述机架、区块、主机等拓扑层级，供 TAS 使用</td>
+</tr>
+</tbody>
+</table>
+<p>三个边界最值得记住。第一，LocalQueue 是入口，通常不是一个独立 GPU 池；多个 LocalQueue 可以指向同一 ClusterQueue。第二，ResourceFlavor 不直接持有额度；本例将额度定义在 ClusterQueue 的 flavor/resource 项中，当前版本还允许在 Cohort 层配置额外共享配额。第三，Workload 是资源治理对象，不是执行进程，也不能用它的 Admitted 状态代替业务运行状态。<a href="#kueue-ref-8">[8]</a><a href="#kueue-ref-9">[9]</a><a href="#kueue-ref-13">[13]</a><a href="#kueue-ref-14">[14]</a><a href="#kueue-ref-15">[15]</a></p>
+<p>Workload 的 <code>podSets</code> 对相同模板的 Pod 分组。例如两个相同 Worker 可以用一个 PodSet 表示，<code>count=2</code>，每个 Pod 申请 4 GPU，总需求为 8 GPU。具有参数服务器、Worker、Launcher 等不同角色时可以使用多个 PodSet。典型固定规模 Job 常对应一个 Workload，但弹性、切片或并发准入等高级机制不宜用“永远一对一”概括。<a href="#kueue-ref-15">[15]</a></p>
+<h2 id="五、两机八卡任务在-Kueue-中怎样运行">五、两机八卡任务在 Kueue 中怎样运行</h2>
+<p>案例假设 node-a 和 node-b 各有 4 张同类 GPU，任务需要两个 Worker；每个 Worker 申请 4 GPU、8 CPU、32 GiB 内存。总需求为 8 GPU、16 CPU、64 GiB。这里用常规 <code>nvidia.com/gpu</code> 整卡资源解释；MIG、共享 GPU 和 DRA 的资源表示及设备分配路径需要另行配置。</p>
+<p>资源抽象可以写成下面的简化片段。它用于说明 PodSet，省略了完整对象结构；正常使用时通常由对应的 Job 集成生成 Workload，不需要用户同时手工维护两份生命周期。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">queueName:</span> <span class="string">research</span></span><br><span class="line">  <span class="attr">podSets:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">worker</span></span><br><span class="line">    <span class="attr">count:</span> <span class="number">2</span></span><br><span class="line">    <span class="attr">template:</span></span><br><span class="line">      <span class="attr">spec:</span></span><br><span class="line">        <span class="attr">containers:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">trainer</span></span><br><span class="line">          <span class="attr">resources:</span></span><br><span class="line">            <span class="attr">requests:</span></span><br><span class="line">              <span class="attr">cpu:</span> <span class="string">&quot;8&quot;</span></span><br><span class="line">              <span class="attr">memory:</span> <span class="string">32Gi</span></span><br><span class="line">              <span class="attr">nvidia.com/gpu:</span> <span class="string">&quot;4&quot;</span></span><br><span class="line">            <span class="attr">limits:</span></span><br><span class="line">              <span class="attr">nvidia.com/gpu:</span> <span class="string">&quot;4&quot;</span></span><br></pre></td></tr></table></figure>
+<h3 id="5-1-从提交到计算的九个阶段">5.1 从提交到计算的九个阶段</h3>
+<p><strong>第一步，API 接收任务。</strong> 任务被标记到 LocalQueue，并保持挂起。对具备 suspend 接口的 Job，原控制器此时不应启动训练 Pod；普通 Pod 集成则通过 gate 控制后续调度。</p>
+<p><strong>第二步，生成 Workload。</strong> 集成控制器抽取两个 Worker 的模板和数量，把总资源请求交给 Kueue；业务启动命令、通信配置和训练逻辑仍属于原任务体系。<a href="#kueue-ref-4">[4]</a><a href="#kueue-ref-5">[5]</a></p>
+<p><strong>第三步，进入队列。</strong> Queue Manager 维护候选次序。严格 FIFO 和尽力 FIFO 等策略会影响大任务遇到资源不足时，后面的可运行任务能否先获得机会。队列策略改变等待分布，也会影响大作业饥饿风险。<a href="#kueue-ref-8">[8]</a></p>
+<p><strong>第四步，评估额度与资源变体。</strong> Kueue 检查目标 ClusterQueue 在相应 flavor 下是否有足够 quota，是否可以借用共享额度，是否需要和允许抢占。配置了 TAS 时，还会涉及节点拓扑与可放置容量评估。<a href="#kueue-ref-8">[8]</a><a href="#kueue-ref-16">[16]</a></p>
+<p><strong>第五步，预留配额。</strong> Workload 获得资源分配信息和配额预留状态。预留不等于节点绑定，也不一定已经完成最终准入；它可能仍在等待额外的 AdmissionCheck。</p>
+<p><strong>第六步，完成准入。</strong> 配置的检查满足条件后，相关控制循环推进 Admitted。某些检查会等待资源供应或远端集群响应，因此应分别观察“没有额度”和“已有额度、检查未完成”。<a href="#kueue-ref-17">[17]</a><a href="#kueue-ref-18">[18]</a></p>
+<p><strong>第七步，恢复原任务。</strong> 集成控制器解除挂起，并应用必要的 flavor 或拓扑相关约束；原 Job 或训练控制器开始创建业务 Pod。</p>
+<p><strong>第八步，放置、启动并开始计算。</strong> Pod 调度器选择节点并绑定，kubelet、设备插件和运行时完成节点执行；训练进程还需完成数据准备、通信初始化等步骤。两个 Pod 都 Ready，也不必然代表第一个有效训练 step 已发生。</p>
+<p><strong>第九步，完成、回收或重排。</strong> 原任务状态经集成回写，Kueue 更新配额账本；被驱逐或启动超时的任务按配置停止、清理并重新排队。物理 GPU 的释放要等节点侧资源实际退出，不能把一次状态写入当成设备立即可用。<a href="#kueue-ref-7">[7]</a><a href="#kueue-ref-12">[12]</a></p>
+<p>附录 A 给出最小队列与任务资源形状示例。它只演示准入接线；训练镜像、Launcher、rendezvous、存储和数据集必须由执行框架补齐。</p>
+<h3 id="5-2-TAS-与等待就绪分别补足什么">5.2 TAS 与等待就绪分别补足什么</h3>
+<p>**Topology-Aware Scheduling，简称 TAS，**使 Kueue 的判断深入到物理拓扑和容量。官方文档说明，它会基于可调度的 Ready 节点、其他已准入 TAS 工作负载以及非 TAS Pod 的占用计算容量，并形成拓扑放置约束。因而“今天的 Kueue 完全不看节点，只看一个总数”已经不准确；不过最终 Pod 绑定仍属于 Pod 调度器。<a href="#kueue-ref-16">[16]</a></p>
+<p><code>waitForPodsReady</code> 则在准入之后观察任务能否按要求就绪，超时可触发驱逐和重排；相关配置还可控制是否继续准入后续任务。这是一种减少长时间部分启动的恢复机制，并不把多个 Pod 的绑定和容器启动变成原子操作。超时过短会造成反复重启，过长则让配额和 GPU 继续等待，阈值应覆盖正常镜像、数据和模型初始化时间。<a href="#kueue-ref-19">[19]</a><a href="#kueue-ref-20">[20]</a></p>
+<h2 id="六、Volcano-的架构与同一任务的运行路径">六、Volcano 的架构与同一任务的运行路径</h2>
+<h3 id="6-1-作业控制与调度是两套不同的职责">6.1 作业控制与调度是两套不同的职责</h3>
+<p>Volcano 的常见部署包含 Admission/Webhooks、Controller Manager 和 Scheduler，另有 vcctl 等工具。Controller Manager 中的 Job、PodGroup、Queue 等控制器协调对象生命周期；Scheduler 维护调度视图并执行策略。它们通过 API Server 与事件、状态交互，节点上的 kubelet、运行时和设备组件负责实际执行。</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>在 Volcano 中的含义</th>
+<th>容易混淆之处</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VolcanoJob</td>
+<td><a target="_blank" rel="noopener" href="http://batch.volcano.sh/v1alpha1">batch.volcano.sh/v1alpha1</a> 下的 Job，自身有任务、策略和重试配置</td>
+<td>与 batch/v1 的原生 Job 是不同 API</td>
+</tr>
+<tr>
+<td>Task</td>
+<td>VolcanoJob 内的角色或一类副本，例如 Worker、PS</td>
+<td>不是独立的 Kubernetes 调度绑定对象</td>
+</tr>
+<tr>
+<td>PodGroup</td>
+<td>表达一组 Pod 的联合调度要求与聚合状态</td>
+<td>不是训练进程，也不等于 VolcanoJob 全部生命周期状态</td>
+</tr>
+<tr>
+<td>Queue</td>
+<td>资源份额、公平与回收的政策范围</td>
+<td>额度通常不是固定物理 GPU 所有权</td>
+</tr>
+<tr>
+<td>Pod</td>
+<td>实际放置到节点上的执行单位</td>
+<td>容器 Ready 与应用已进入有效训练仍有距离</td>
+</tr>
+</tbody>
+</table>
+<p>这些对象解释了为什么只写 <code>schedulerName: volcano</code> 还不够。该字段选择负责 Pod 的调度器；gang 所需的 PodGroup、成员关联及队列信息，还必须由受支持的集成或相应控制器正确建立。使用 Trainer 或其他算子时，其原控制器不会因为 schedulerName 改变而自动变成 VolcanoJob controller。<a href="#kueue-ref-21">[21]</a><a href="#kueue-ref-22">[22]</a></p>
+<h3 id="6-2-Session、Action-与-Plugin">6.2 Session、Action 与 Plugin</h3>
+<p>Volcano Scheduler 的 Session 可以理解为一轮调度的对象视图和策略扩展上下文。Action 组织要执行的步骤；plugin 在对应扩展点提供排序、过滤、资源和 gang 等判断。不同配置可以采用不同 Action 序列与插件组合，下面列的是常见基本路径，不是对所有版本能力的完整清单。</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>常见作用</th>
+<th>配置边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>enqueue</td>
+<td>进行作业入队与资源准入判断</td>
+<td>不等同于已选好节点；具体准入条件依赖插件与配置</td>
+</tr>
+<tr>
+<td>allocate</td>
+<td>筛选、评分节点，暂存分配并在满足条件后提交</td>
+<td>gang 等约束可能阻止提交</td>
+</tr>
+<tr>
+<td>preempt / reclaim</td>
+<td>经典路径中分别处理队列内抢占与跨队列回收</td>
+<td>需对应 Action 和插件；新版还有更细的作业级机制</td>
+</tr>
+<tr>
+<td>backfill</td>
+<td>处理相关路径中的 BestEffort、无显式资源请求任务</td>
+<td>不能笼统等同于全部 HPC backfill 算法</td>
+</tr>
+<tr>
+<td>gang / priority</td>
+<td>检查最低成员门槛；参与优先级决策</td>
+<td>minMember 是成员数，不是 GPU 数</td>
+</tr>
+<tr>
+<td>capacity / proportion</td>
+<td>按容量或权重管理队列份额</td>
+<td>是不同资源管理模型，不能照抄为同时启用</td>
+</tr>
+<tr>
+<td>predicates / nodeorder / binpack</td>
+<td>节点过滤、打分和紧凑放置等</td>
+<td>负责不同策略扩展点</td>
+</tr>
+</tbody>
+</table>
+<p>scheduler plugins 还应与 Job controller plugins 分开：<code>env</code>、<code>svc</code>、<code>ssh</code> 处理环境变量、服务发现、SSH 等作业启动辅助；<code>gang</code>、<code>capacity</code> 等处理调度政策。启用 svc/env 并不会自动把任意训练脚本变成正确的分布式训练程序。<a href="#kueue-ref-23">[23]</a><a href="#kueue-ref-24">[24]</a><a href="#kueue-ref-25">[25]</a></p>
+<h3 id="6-3-两个-Worker-怎样从-VolcanoJob-走到-GPU">6.3 两个 Worker 怎样从 VolcanoJob 走到 GPU</h3>
+<p>仍以每个 Worker 4 GPU、8 CPU、32 GiB 为例：VolcanoJob 的 <code>minAvailable: 2</code> 描述最低成员数量；典型生成的 PodGroup 包含 <code>minMember: 2</code>，对应最低资源需求 8 GPU、16 CPU、64 GiB。</p>
+<p>在启用 enqueue 的典型初始路径中，Job controller 先创建 PodGroup；当其状态仍为空或 Pending 时，暂不进入任务 Pod 的同步。Scheduler 根据入队政策通常将 PodGroup 推进到 Inqueue，controller 随后创建 Worker Pod。当前主分支源码中的同步条件实际是“状态非空且不为 Pending”，并非只允许 <code>phase == Inqueue</code>；后续 Running 等状态也需要继续调谐。<a href="#kueue-ref-23">[23]</a><a href="#kueue-ref-26">[26]</a></p>
+<p>Worker Pod 出现后，allocate 为它们寻找节点并形成暂定分配。假设 node-a、node-b 各能容纳一个 Worker，gang 条件得到满足后，调度器提交相关操作；否则在该轮放弃或回滚相应暂定分配，等待新机会。Action 流水线可配置；未启用 enqueue 时，allocate 实现还存在相应的状态推进路径，不能把一种配置写成所有版本的必经步骤。<a href="#kueue-ref-23">[23]</a><a href="#kueue-ref-27">[27]</a></p>
+<p>提交后仍由 Kubernetes 的单个 Pod 绑定和节点执行流程推进。常规扩展资源 GPU 路径下，调度器决定节点和资源数量，kubelet 与设备插件完成实际设备分配；训练框架再处理成员发现、通信、失败重试与 checkpoint 恢复。</p>
+<p>PodGroup Running 不能直接解释为所有容器已经 Ready。VolcanoJob、PodGroup、Pod 是三个状态层次；作业重启政策、容器 restartPolicy、应用从 checkpoint 恢复也是三个不同层次。<code>ttlSecondsAfterFinished: 600</code> 表示完成后的对象清理安排，不意味着 GPU 在计算结束后必须再被占用 600 秒。<a href="#kueue-ref-21">[21]</a><a href="#kueue-ref-42">[42]</a><a href="#kueue-ref-43">[43]</a></p>
+<h3 id="6-4-Queue-字段不能与-Kueue-逐项硬套">6.4 Queue 字段不能与 Kueue 逐项硬套</h3>
+<table>
+<thead>
+<tr>
+<th>Volcano 字段</th>
+<th>在相关队列模型中的含义</th>
+<th>与 Kueue 对比时的注意点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>guarantee</td>
+<td>保留给本队列、其他队列不能使用的额度</td>
+<td>不能直接等同于可参与借贷的 nominalQuota</td>
+</tr>
+<tr>
+<td>deserved</td>
+<td>应得份额；闲置部分可被利用，超出份额部分可按策略回收</td>
+<td>不是使用硬上限</td>
+</tr>
+<tr>
+<td>capability</td>
+<td>资源使用硬上限</td>
+<td>不能简单替换为一个借贷字段</td>
+</tr>
+<tr>
+<td>weight</td>
+<td>proportion 模型下计算份额的权重</td>
+<td>不同于 capacity 的固定 deserved</td>
+</tr>
+<tr>
+<td>reclaimable</td>
+<td>是否允许其他队列按相关规则回收本队列资源</td>
+<td>false 不意味着免疫所有抢占、故障或终止</td>
+</tr>
+</tbody>
+</table>
+<p>官方文档给出的资源关系包括 guarantee ≤ deserved ≤ capability，并明确 capacity 与 proportion 的不同使用方式。比较两个系统时应比较“保留多少、可借多少、如何回收、谁能抢占”这些业务规则，而不是为 API 字段制造一一对应关系。<a href="#kueue-ref-28">[28]</a></p>
+<h2 id="七、Kueue-与-Volcano-的-gang-到底重叠在哪里">七、Kueue 与 Volcano 的 gang 到底重叠在哪里</h2>
+<p>讨论 gang，首先要说明所谓“一起”发生在哪个阶段。固定规模任务一次获得完整配额，是作业级准入；调度器找到满足最低成员数的放置方案后再提交，是放置阶段的协调；全部容器 Ready、通信完成并开始训练，又是更晚的执行结果。</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Kueue</th>
+<th>Volcano</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>整体资源资格</td>
+<td>按 Workload 进行配额预留与准入；部分准入等高级配置另论</td>
+<td>通过 Queue、PodGroup、enqueue 及插件进行作业准入</td>
+</tr>
+<tr>
+<td>节点可放置性</td>
+<td>基础配额判断不等于 placement；TAS 可进一步检查拓扑容量</td>
+<td>allocate 与节点策略直接参与成员放置</td>
+</tr>
+<tr>
+<td>部分启动治理</td>
+<td>waitForPodsReady 等机制观察、超时回收和重排</td>
+<td>gang 在调度阶段检查最低成员门槛</td>
+</tr>
+<tr>
+<td>最终 Pod 绑定</td>
+<td>交给选定的 Pod 调度器</td>
+<td>Volcano Scheduler 负责其管理 Pod 的绑定流程</td>
+</tr>
+<tr>
+<td>应用恢复</td>
+<td>依赖任务集成、原控制器与应用 checkpoint</td>
+<td>Job policy 可组织重试，模型状态恢复仍依赖应用</td>
+</tr>
+<tr>
+<td>多 Pod 原子启动</td>
+<td>不保证</td>
+<td>也不提供跨 Pod API 原子绑定或同时 Ready 的保证</td>
+</tr>
+</tbody>
+</table>
+<p>Volcano 的 Statement.Commit 会遍历已记录操作并分别执行。调度器内部能暂存或回滚一组候选分配，不等于 API Server 提供多个 Pod 同时生效的事务。因此 <code>JobReady</code> 在调度框架中的含义，也不能直接翻译成所有 Pod 的 <code>Ready=True</code>。<a href="#kueue-ref-29">[29]</a></p>
+<p>这回答了“Kueue 和 Volcano 是否不太对付”：<strong>能力重叠是真实的，架构上的不兼容并非必然。</strong> 若已有 Volcano 平台且团队共享、抢占与训练运行管理都满意，新增 Kueue 可能只是重复队列。若需要把采用不同控制器、不同执行环境的任务放在统一资源治理入口之下，它才有更清楚的增量价值。</p>
+<h2 id="八、多调度器共存能用-Kueue-但不能省略协调设计">八、多调度器共存能用 Kueue 但不能省略协调设计</h2>
+<h3 id="8-1-一个调度器也完全可以使用-Kueue">8.1 一个调度器也完全可以使用 Kueue</h3>
+<p>Kueue 的常见组合就是 Kueue 加默认 kube-scheduler。它独立出来的原因，是平台级资源治理可以复用，而不是只有出现两个调度器才需要准入层。多调度器是可适用的部署形态之一。</p>
+<p>一个集群可以通过 <code>schedulerName</code> 让不同 Pod 走不同调度器。Kueue 可以先依据统一队列政策放行受支持的任务，再由各自的调度器完成放置。但“使用相同 API Server”并不自动使独立调度器拥有相同的瞬时缓存或统一的原子资源预留。Kubernetes 官方文档也区分同一调度器进程内的多个 profile 与多个独立调度器：前者共享相关调度状态，后者可能对同一节点发生资源竞争，通常建议考虑独立节点集合。<a href="#kueue-ref-30">[30]</a></p>
+<h3 id="8-2-真正的组合至少要对齐四个契约">8.2 真正的组合至少要对齐四个契约</h3>
+<p><strong>任务控制契约。</strong> 谁创建 Workload，谁负责 suspend/resume，谁创建业务 Pod，谁在驱逐后清理并回写完成？某个框架分别支持 Kueue 和 Volcano，不等于任意版本、任意配置的组合已经被支持。尤其不能仅凭给 VolcanoJob 加一个队列标签，就宣称它获得 Kueue 原生集成。</p>
+<p><strong>资源记账契约。</strong> Kueue 与下层队列需要对资源类型、计量单位和容量范围建立明确映射，并协调保留、借用与回收规则。两层规则不必逐项相同，但不能相互矛盾或重复承诺同一份容量。未纳入治理的工作负载会影响实际容量，不能因为总配额数字自洽就忽略它们。</p>
+<p><strong>政策归属契约。</strong> 需要明确哪个系统决定租户份额、优先级与抢占，哪个系统决定节点和 gang。比如 Kueue 按借贷规则回收一项任务，下层 Volcano 又按另一套份额规则回收另一项任务，就可能引起本可避免的重排与振荡。这是需要验证的设计风险，不是已经对所有组合观察到的必然故障。</p>
+<p><strong>放置和回收契约。</strong> 下层调度器是否正确处理 flavor 选择、拓扑约束与 scheduling gates？驱逐状态如何传播？终止宽限期与 checkpoint 需要多长时间？从逻辑额度返回到 GPU 真正可用之间的延迟，必须纳入上线验收。</p>
+<p>因此，Kueue 可以是多个执行路径之前的共同治理层，但不会自动成为这些调度器共享的节点事务协调器。没有明确集成文档和验证结果时，应把 Kueue 加 Volcano 视为需要集成验证的架构选项，而非默认即插即用。</p>
+<h3 id="8-3-MultiKueue-处理的是另一个维度">8.3 MultiKueue 处理的是另一个维度</h3>
+<p>MultiKueue 的 manager 集群负责把候选工作负载分发到 worker 集群，选择接纳者并同步远端作业状态；执行集群再按自己的 Kueue 和 Pod 调度流程运行。它处理的是跨集群容量选择与执行分发，不是同一集群中多个 Pod 调度器的缓存一致性。manager 的额度与 worker 可用配额也需合理对应，不能把跨集群 API 连接直接当成无限容量。<a href="#kueue-ref-31">[31]</a></p>
+<h2 id="九、在训练和推理生命周期中放在哪里">九、在训练和推理生命周期中放在哪里</h2>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>Kueue 合适介入的环节</th>
+<th>执行侧还需要什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>固定规模分布式训练</td>
+<td>提交后排队、整体资源准入、资源类型选择、按策略回收和重排</td>
+<td>训练算子、Launcher、通信、checkpoint；需要时加 gang 或拓扑能力</td>
+</tr>
+<tr>
+<td>弹性训练与可中断研究任务</td>
+<td>在受支持集成下处理资源变化与共享</td>
+<td>应用真正支持副本变化、恢复和抢占成本控制</td>
+</tr>
+<tr>
+<td>离线评估、批量转写、批量生成</td>
+<td>将有限作业统一排队、分配 GPU 并统计完成时间</td>
+<td>Job 或工作流控制器、数据切分与结果落盘</td>
+</tr>
+<tr>
+<td>在线模型服务创建或扩容</td>
+<td>在支持的 Deployment、Pod 等集成下控制新增实例的资源资格</td>
+<td>KServe、扩缩容器、推理引擎及网络层</td>
+</tr>
+<tr>
+<td>单个在线请求进入已运行模型</td>
+<td>通常不在这个控制循环中</td>
+<td>网关、请求队列、限流、动态批处理、KV cache 和引擎调度</td>
+</tr>
+</tbody>
+</table>
+<p>对训练而言，Kueue 贯穿“提交—排队—获准—运行反馈—回收或结束”的资源治理闭环；它不管理每一步反向传播，也不自动保证 checkpoint 完整。可被安全暂停和恢复的工作负载，更容易通过共享和抢占提高资源池使用效率。</p>
+<p>批量推理的运行形态接近 batch job，因此 Kueue 的作用也接近训练准入。在线推理要多考虑一个关键约束：服务实例晚几分钟启动，可能直接影响延迟和可用性。提高集群 GPU 利用率与缩短在线扩容时间，未必总朝同一方向变化。</p>
+<h3 id="9-1-KServe-与-Kueue-的连接需要落到具体对象">9.1 KServe 与 Kueue 的连接需要落到具体对象</h3>
+<p>KServe 的控制面管理模型服务对象及相应部署；Kueue 若参与，通常控制的是这些执行资源何时获得资格。当前 Kueue 的 Deployment 文档描述了按 Pod 分别创建 Workload 的方式，扩容时新增 Pod 需逐个获得准入；配额不足时可能只有一部分副本获准。因此不能把它解释成任意 Deployment 天然具有整组 gang，也不能由此直接推导任意 KServe InferenceService 都可无配置接入。<a href="#kueue-ref-32">[32]</a><a href="#kueue-ref-33">[33]</a></p>
+<p>实际接入必须核对：所用 KServe 部署模式产出什么对象，是否采用相应版本规定的队列标签入口，以及管理信息是否正确传播。官方 Deployment 示例的入口是 <code>Deployment.metadata.labels</code>，不应笼统要求所有部署都由用户手工给 Pod template 加队列标签。还需确认相关 Kueue 集成已启用，以及上层控制器与 gate、驱逐、重建行为是否协调。对于多个 Pod 协同提供一个模型实例的架构，需要支持相应分组语义的运行控制器和调度集成，不能套用每个 Deployment Pod 独立获准的简单模型。<a href="#kueue-ref-32">[32]</a></p>
+<h3 id="9-2-在线容量优先看回收时间与服务目标">9.2 在线容量优先看回收时间与服务目标</h3>
+<p>一种可评估的政策是为在线服务保留稳定容量，把部分剩余额度借给可恢复的离线任务。Kueue 的 lendingLimit 等政策可以控制可借出范围；若所有容量都借满，再期待流量突增时立即取回，会遇到终止宽限期、存储卸载、checkpoint、镜像拉取和模型装载等延迟。<a href="#kueue-ref-8">[8]</a><a href="#kueue-ref-32">[32]</a> 这里保留的是逻辑配额；能否立即放置新增实例，仍取决于节点占用、资源碎片和拓扑条件。</p>
+<p>设计时应把“从扩容决策到新实例可接流量”的时间与 TTFT、尾延迟、SLO 达标吞吐同时测量。若服务目标要求几十秒恢复，而实测抢占与模型启动要数分钟，就需要更多预留或不同的容量策略。Kueue 的准入算法耗时再短，也无法消掉这条执行链。</p>
+<p>减少无效 Pending 和错误扩容信号同样不是 Kueue 的独占价值。Volcano 的 Scheduling Gates Queue Admission 文档也区分“因队列额度等待”和“因节点容量不足等待”，以避免将二者都解释成扩容需求。比较时应对齐实际启用的功能与版本。<a href="#kueue-ref-34">[34]</a></p>
+<h2 id="十、公开量化证据能证明什么">十、公开量化证据能证明什么</h2>
+<h3 id="10-1-Runway-的生产案例">10.1 Runway 的生产案例</h3>
+<p>Runway 于 2026 年 4 月发布的工程文章报告，引入基于 Kueue 的资源治理后，GPU utilization 提升超过 20 个百分点。其配置包括关键任务的保留额度、共享借用与抢占。这说明在该生产环境中，资源共享政策和控制链改造有显著价值；文章是团队自述，并未提供足以复现实验的完整测量口径，因此不能把这个幅度当成所有集群的预期收益。<a href="#kueue-ref-35">[35]</a></p>
+<p>同一篇文章还报告，在他们的系统里，从发起抢占到保留额度内的新任务开始运行，可能耗费 20—30 分钟；原因涉及宽限期、控制器清理和任务终止链路。它描述的是该部署的端到端回收时间，不是 Kueue 准入循环本身的通用延迟。这个结果也提醒我们，利用率收益要和可恢复性、回收时延一起评价。</p>
+<h3 id="10-2-一个可对照的批量推理实验">10.2 一个可对照的批量推理实验</h3>
+<p>论文 Evaluating Kubernetes Performance for GenAI Inference: From Automatic Speech Recognition to LLM Summarization 在 ROSA、Kubernetes 1.32 的环境中，用一个配备 8 张 A100 的 GPU 节点运行 32 个 Whisper 作业（16 medium、16 large），每种配置执行三次。以下是论文表 3 的 makespan 中位数，即完成固定整批工作所需时间；百分比由本文按原始数值计算。<a href="#kueue-ref-36">[36]</a><a href="#kueue-ref-37">[37]</a></p>
+<table>
+<thead>
+<tr>
+<th>配置</th>
+<th>Makespan 中位数</th>
+<th>相对原生 Jobs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>原生 Kubernetes Jobs</td>
+<td>60.5 分钟</td>
+<td>基线</td>
+</tr>
+<tr>
+<td>Kueue BestEffortFIFO</td>
+<td>62.5 分钟</td>
+<td>增加 3.3%</td>
+</tr>
+<tr>
+<td>Kueue 加优先级</td>
+<td>54.7 分钟</td>
+<td>减少 9.6%</td>
+</tr>
+<tr>
+<td>Kueue 加优先级及抢占</td>
+<td>51.1 分钟</td>
+<td>减少 15.5%</td>
+</tr>
+<tr>
+<td>两个 ClusterQueue 加借用</td>
+<td>55.0 分钟</td>
+<td>减少 9.1%</td>
+</tr>
+</tbody>
+</table>
+<p>对上述四个 Kueue 配置，论文报告的准入尝试耗时 P99 均低于 25 ms。这个数字衡量一轮准入尝试的处理时间，一次尝试可能处理多个 Workload，不包含任务等待额度、节点扩容、镜像或模型启动的时间。上述结果支持“政策选择会改变整批完成效率”，并不支持“只要安装 Kueue 就会更快”。</p>
+<p>还应注意论文中的基线执行时间口径包含 Pod Pending，不能把其降低直接解释成模型计算速度成倍提升。该实验也没有用同等优化、正确配置的 Volcano 作为比较组，所以不能推出 Kueue 优于 Volcano。Runway 案例和这项小规模实验分别提供生产观察与受限对照证据，都不足以给出通用性能排名。</p>
+<h2 id="十一、在自己的平台上怎样量化收益">十一、在自己的平台上怎样量化收益</h2>
+<h3 id="11-1-先定义业务完成而不是只看准入快慢">11.1 先定义业务完成而不是只看准入快慢</h3>
+<p>把关键时间点串起来：任务提交、获准、Pod 绑定、容器就绪、首个有效训练 step 或推理结果、整项任务完成。分布式任务应按关键路径统计，避免把并行阶段机械相加。被驱逐后还要记录终止、再次获准、恢复完成以及重算的工作量。</p>
+<table>
+<thead>
+<tr>
+<th>要回答的问题</th>
+<th>建议指标</th>
+<th>常见误读</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>用户是否更早拿到结果</td>
+<td>提交到首个有效工作、提交到完成的 P50/P95/P99；固定任务集 makespan</td>
+<td>只看 Pod 创建之后的时间，隐藏队列等待</td>
+</tr>
+<tr>
+<td>GPU 是否产生更多有用工作</td>
+<td>有效 samples 或 tokens / GPU·小时；GPU 活跃度、显存与带宽指标；等待和重算 GPU·小时</td>
+<td>把已申请 GPU 数直接当成实际利用率</td>
+</tr>
+<tr>
+<td>在线服务是否达标</td>
+<td>TTFT、TPOT、端到端 P99、SLO 达标吞吐、扩容到可接流量耗时</td>
+<td>提高总体吞吐却恶化尾延迟</td>
+</tr>
+<tr>
+<td>资源共享是否公平</td>
+<td>各团队需求满足率、队列最长等待、借用/回收量、大任务饥饿</td>
+<td>只报平均值，掩盖某一队列长期受阻</td>
+</tr>
+<tr>
+<td>抢占是否值得</td>
+<td>终止到资源可复用时间、恢复时间、checkpoint 与重算损失</td>
+<td>只统计抢占成功次数</td>
+</tr>
+<tr>
+<td>控制面是否更轻</td>
+<td>API QPS、etcd/控制器/调度器资源、事件量、调度重试量</td>
+<td>忽略新引入 Kueue 控制器的成本</td>
+</tr>
+</tbody>
+</table>
+<p>固定工作量下可以计算 makespan 改善率 =（基线耗时 − 新方案耗时）÷ 基线耗时。若比较不同大小任务的吞吐，单看每小时完成作业数会失真；应固定任务集合，或按可比的有效工作量归一化。对于抢占任务，已经完成但被回滚的计算也应计入成本。</p>
+<h3 id="11-2-Kueue-自带指标怎样使用">11.2 Kueue 自带指标怎样使用</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>能说明什么</th>
+<th>需要补充什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>kueue_admission_wait_time_seconds</td>
+<td>从创建或重新入队到准入的等待时间</td>
+<td>结合重排次数与完整用户任务时间线</td>
+</tr>
+<tr>
+<td>kueue_admission_attempt_duration_seconds</td>
+<td>一轮准入尝试的处理耗时；可能涉及多个 Workload</td>
+<td>不能代替队列等待和启动时间</td>
+</tr>
+<tr>
+<td>kueue_admitted_until_ready_wait_time_seconds</td>
+<td>从准入到就绪的延迟</td>
+<td>需相应 waitForPodsReady 配置；Ready 不代表有效训练开始</td>
+</tr>
+<tr>
+<td>kueue_cluster_queue_resource_reservation<br>kueue_cluster_queue_resource_usage</td>
+<td>ClusterQueue 的配额预留及准入资源记账</td>
+<td>需相应资源指标配置；不是 GPU SM 利用率</td>
+</tr>
+<tr>
+<td>kueue_evicted_workloads_total</td>
+<td>驱逐次数及原因分布</td>
+<td>结合丢失工作量、恢复时间和业务结果</td>
+</tr>
+<tr>
+<td>kueue_finished_workloads_total</td>
+<td>结束的工作负载计数</td>
+<td>不能直接当成成功业务吞吐或等工作量产出</td>
+</tr>
+</tbody>
+</table>
+<p>指标名、可选开关和标签应以安装版本的 metrics 文档为准。建议把 queue、job 与实际 GPU 监控及应用进度关联起来：Kueue 提供资格与等待视图，设备监控提供计算活动，应用指标提供有效产出。只看其中一层都不够。<a href="#kueue-ref-38">[38]</a><a href="#kueue-ref-39">[39]</a><a href="#kueue-ref-40">[40]</a></p>
+<h3 id="11-3-做一组有解释力的对照">11.3 做一组有解释力的对照</h3>
+<p>选择真实提交轨迹，覆盖小任务、大型 gang、低优先级可中断训练和在线扩容。固定硬件、镜像缓存、数据位置、资源 requests、优先级、checkpoint 周期和失败注入条件。比较当前已优化方案与候选方案；若当前已经使用 Volcano，基线就应是正确配置的 Volcano，而不是刻意退回缺少队列政策的原生调度。</p>
+<p>先验证任务正确完成，再比较整批耗时、有效 GPU 产出、公平与服务目标，最后分析控制面成本。重复测量并报告分布、规模和异常。收益可能是更高利用率，也可能是在吞吐相近时提供可预测的团队份额；后一种治理收益同样需要用等待与需求满足指标体现。</p>
+<h2 id="十二、按状态边界排查问题">十二、按状态边界排查问题</h2>
+<table>
+<thead>
+<tr>
+<th>观察到的状态</th>
+<th>优先检查什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kueue 中没有 Workload</td>
+<td>队列标签、集成是否启用、原对象是否属于受支持路径、Webhook 与控制器事件</td>
+</tr>
+<tr>
+<td>有 Workload 但未预留额度</td>
+<td>LocalQueue 到 ClusterQueue 的关系、额度、flavor、借贷上限、排队和优先级政策</td>
+</tr>
+<tr>
+<td>已预留但未 Admitted</td>
+<td>AdmissionCheck 状态、资源供应或远端集群进展、相关控制器</td>
+</tr>
+<tr>
+<td>Admitted 但 Pod 仍 Pending</td>
+<td>gate、schedulerName、节点资源形状、亲和/污点、拓扑、PVC 与所选调度器事件</td>
+</tr>
+<tr>
+<td>Pod Running 或 Ready 但没有有效计算</td>
+<td>训练成员与 rendezvous、通信、数据、模型初始化、应用错误</td>
+</tr>
+<tr>
+<td>VolcanoJob 有对象但没有业务 Pod</td>
+<td>PodGroup 状态、入队政策、controller 事件；不要只盯 Pod 调度器</td>
+</tr>
+<tr>
+<td>Volcano PodGroup 已 Inqueue 但任务未运行</td>
+<td>allocate、gang 门槛、节点筛选、队列政策和抢占/回收路径</td>
+</tr>
+<tr>
+<td>驱逐已发起但 GPU 没回来</td>
+<td>终止宽限期、finalizer、控制器清理、设备释放、存储卸载和应用退出</td>
+</tr>
+</tbody>
+</table>
+<p>排查顺序体现了架构边界：先确认对象与集成，再查资源资格，接着查具体放置，最后查节点执行和业务进度。所有层都显示“成功”的标准不同，不应把一个上游条件当成下游运行成功的证明。</p>
+<h2 id="十三、选型从治理目标开始">十三、选型从治理目标开始</h2>
+<table>
+<thead>
+<tr>
+<th>已有条件或目标</th>
+<th>优先评估的路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>默认 kube-scheduler 足够，主要缺团队配额、共享与作业排队</td>
+<td>Kueue 加已有 Job 或训练控制器</td>
+</tr>
+<tr>
+<td>已经依赖 VolcanoJob、gang 与队列治理，现有政策满足需求</td>
+<td>继续完善 Volcano，先度量是否存在未解决的治理问题</td>
+</tr>
+<tr>
+<td>多个执行框架需要共同政策，或希望治理层与 Pod 调度器解耦</td>
+<td>评估 Kueue，逐项核对任务集成与下层政策归属</td>
+</tr>
+<tr>
+<td>任务需在多个 Kubernetes 集群之间选择执行容量</td>
+<td>评估 MultiKueue 及匹配的工作负载集成</td>
+</tr>
+<tr>
+<td>主要目标是模型发布、路由、运行时和弹性服务</td>
+<td>以 KServe 等服务系统为主；资源准入作为另外的容量设计</td>
+</tr>
+<tr>
+<td>在线扩容时延严格，抢占恢复较慢</td>
+<td>先确定保留容量和可回收预算，再决定借贷及准入策略</td>
+</tr>
+</tbody>
+</table>
+<p>Kueue 可以为“谁先用、能用多少、能否借、何时收回”提供统一治理；Volcano 已经在同类问题上提供不少能力，并进一步承担批任务的节点调度。平台真正需要选择的是这些决策由谁负责，以及它们能否形成稳定、可观测的闭环。用提交到结果的时间、有效 GPU 产出、服务目标和团队公平验证设计，比只问“是否支持 gang”更接近实际收益。</p>
+<h2 id="附录-A-Kueue-最小配置形状">附录 A Kueue 最小配置形状</h2>
+<p>以下配置按核对时官方文档中的 <code>kueue.x-k8s.io/v1beta2</code> 表达。假设已经安装并启用 Job 集成，存在 team-a 命名空间，两台 GPU 节点具有 <code>accelerator: a100</code> 标签，且 CPU、内存和 GPU 的可分配资源充足。此处使用 Kubernetes 自动维护的 namespace 名称标签选择 team-a。<a href="#kueue-ref-41">[41]</a></p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">kueue.x-k8s.io/v1beta2</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ResourceFlavor</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">a100</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">nodeLabels:</span></span><br><span class="line">    <span class="attr">accelerator:</span> <span class="string">a100</span></span><br><span class="line"><span class="meta">---</span></span><br><span class="line"><span class="attr">apiVersion:</span> <span class="string">kueue.x-k8s.io/v1beta2</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">ClusterQueue</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">team-a</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">namespaceSelector:</span></span><br><span class="line">    <span class="attr">matchLabels:</span></span><br><span class="line">      <span class="attr">kubernetes.io/metadata.name:</span> <span class="string">team-a</span></span><br><span class="line">  <span class="attr">queueingStrategy:</span> <span class="string">BestEffortFIFO</span></span><br><span class="line">  <span class="attr">resourceGroups:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">coveredResources:</span> [<span class="string">cpu</span>, <span class="string">memory</span>, <span class="string">nvidia.com/gpu</span>]</span><br><span class="line">    <span class="attr">flavors:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">a100</span></span><br><span class="line">      <span class="attr">resources:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">cpu</span></span><br><span class="line">        <span class="attr">nominalQuota:</span> <span class="number">16</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">memory</span></span><br><span class="line">        <span class="attr">nominalQuota:</span> <span class="string">64Gi</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">nvidia.com/gpu</span></span><br><span class="line">        <span class="attr">nominalQuota:</span> <span class="number">8</span></span><br><span class="line"><span class="meta">---</span></span><br><span class="line"><span class="attr">apiVersion:</span> <span class="string">kueue.x-k8s.io/v1beta2</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">LocalQueue</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">research</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">team-a</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">clusterQueue:</span> <span class="string">team-a</span></span><br></pre></td></tr></table></figure>
+<p>下面的原生 Job 只展示两个并行 Pod 的资源形状与 suspend 接入。示例镜像是占位符；它没有配置分布式 Launcher、rendezvous 和共享存储，不能直接当成可运行的两机训练程序。实际训练可采用已支持的 TrainJob、JobSet 等控制器，让它们正确管理分布式执行语义。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">batch/v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Job</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">two-workers</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">team-a</span></span><br><span class="line">  <span class="attr">labels:</span></span><br><span class="line">    <span class="attr">kueue.x-k8s.io/queue-name:</span> <span class="string">research</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">suspend:</span> <span class="literal">true</span></span><br><span class="line">  <span class="attr">parallelism:</span> <span class="number">2</span></span><br><span class="line">  <span class="attr">completions:</span> <span class="number">2</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">spec:</span></span><br><span class="line">      <span class="attr">restartPolicy:</span> <span class="string">Never</span></span><br><span class="line">      <span class="attr">containers:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">trainer</span></span><br><span class="line">        <span class="attr">image:</span> <span class="string">example.com/train:replace-me</span></span><br><span class="line">        <span class="attr">resources:</span></span><br><span class="line">          <span class="attr">requests:</span></span><br><span class="line">            <span class="attr">cpu:</span> <span class="string">&quot;8&quot;</span></span><br><span class="line">            <span class="attr">memory:</span> <span class="string">32Gi</span></span><br><span class="line">            <span class="attr">nvidia.com/gpu:</span> <span class="string">&quot;4&quot;</span></span><br><span class="line">          <span class="attr">limits:</span></span><br><span class="line">            <span class="attr">nvidia.com/gpu:</span> <span class="string">&quot;4&quot;</span></span><br></pre></td></tr></table></figure>
+<p>本例没有配置 cohort、借贷、TAS、AdmissionCheck 或 waitForPodsReady，用于把最基本的对象接线讲清楚，不代表仅凭这份 YAML 就建立了所有整体放置和恢复能力。现有集群若使用其他 API 版本，应按其 CRD schema 调整，而不是直接替换版本字符串。</p>
+<h2 id="附录-B-同一资源形状的-VolcanoJob">附录 B 同一资源形状的 VolcanoJob</h2>
+<p>假设已经创建并配置 team-a Queue，Volcano 对应插件和 Action 已启用，namespace 与设备环境就绪。下例同样使用占位镜像；两种方案用于比较资源控制路径，不是可以同时提交的联合集成配置。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">batch.volcano.sh/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Job</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">two-workers</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">team-a</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">schedulerName:</span> <span class="string">volcano</span></span><br><span class="line">  <span class="attr">queue:</span> <span class="string">team-a</span></span><br><span class="line">  <span class="attr">minAvailable:</span> <span class="number">2</span></span><br><span class="line">  <span class="attr">maxRetry:</span> <span class="number">3</span></span><br><span class="line">  <span class="attr">ttlSecondsAfterFinished:</span> <span class="number">600</span></span><br><span class="line">  <span class="attr">plugins:</span></span><br><span class="line">    <span class="attr">env:</span> []</span><br><span class="line">    <span class="attr">svc:</span> []</span><br><span class="line">  <span class="attr">policies:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">event:</span> <span class="string">PodFailed</span></span><br><span class="line">    <span class="attr">action:</span> <span class="string">RestartJob</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">event:</span> <span class="string">PodEvicted</span></span><br><span class="line">    <span class="attr">action:</span> <span class="string">RestartJob</span></span><br><span class="line">  <span class="attr">tasks:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">worker</span></span><br><span class="line">    <span class="attr">replicas:</span> <span class="number">2</span></span><br><span class="line">    <span class="attr">template:</span></span><br><span class="line">      <span class="attr">spec:</span></span><br><span class="line">        <span class="attr">restartPolicy:</span> <span class="string">Never</span></span><br><span class="line">        <span class="attr">containers:</span></span><br><span class="line">        <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">trainer</span></span><br><span class="line">          <span class="attr">image:</span> <span class="string">example.com/train:replace-me</span></span><br><span class="line">          <span class="attr">resources:</span></span><br><span class="line">            <span class="attr">requests:</span></span><br><span class="line">              <span class="attr">cpu:</span> <span class="string">&quot;8&quot;</span></span><br><span class="line">              <span class="attr">memory:</span> <span class="string">32Gi</span></span><br><span class="line">              <span class="attr">nvidia.com/gpu:</span> <span class="string">&quot;4&quot;</span></span><br><span class="line">            <span class="attr">limits:</span></span><br><span class="line">              <span class="attr">nvidia.com/gpu:</span> <span class="string">&quot;4&quot;</span></span><br></pre></td></tr></table></figure>
+<p><code>minAvailable: 2</code> 是最低成员门槛；RestartJob 组织作业重试，无法替应用保存训练状态。生产配置还需为可恢复性、成功条件和训练通信做专门设计。<a href="#kueue-ref-42">[42]</a><a href="#kueue-ref-43">[43]</a> 两套示例均用于解释结构，本文未在真实 Kubernetes 集群部署验证。</p>
+<h2 id="附录-C-常用观察入口">附录 C 常用观察入口</h2>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">kubectl get workloads.kueue.x-k8s.io -n team-a</span><br><span class="line">kubectl get localqueues.kueue.x-k8s.io -n team-a</span><br><span class="line">kubectl describe clusterqueues.kueue.x-k8s.io team-a</span><br><span class="line"></span><br><span class="line">kubectl get jobs.batch.volcano.sh -n team-a</span><br><span class="line">kubectl get podgroups.scheduling.volcano.sh -n team-a</span><br><span class="line">kubectl describe queues.scheduling.volcano.sh team-a</span><br><span class="line"></span><br><span class="line">kubectl get pods -n team-a -o wide</span><br><span class="line">kubectl get events -n team-a --sort-by=.lastTimestamp</span><br></pre></td></tr></table></figure>
+<p>先用列表定位具体对象，再 describe 对应 Workload、PodGroup 或 Pod。驱逐和重排场景建议保留 Job UID、Workload UID、Pod UID 与关键时间戳，避免把一次逻辑任务的多个尝试误当成不同业务任务。</p>
+<h2 id="参考资料">参考资料</h2>
+<p>资料核对日期为 2026 年 11 月 19 日。官方文档与主分支源码会继续变化；涉及 API、特性成熟度、默认值、集成开关及指标时，以实际部署版本为准。本文中的数值案例与公开实测已分别标明，未将不同来源的指标混作同一实验。</p>
+<ol>
+<li><span id="kueue-ref-1"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/overview/">Kueue Overview</a></li>
+<li><span id="kueue-ref-2"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/v1.16.0/keyfeatures/queueresourcemanagement/">Volcano Queue Resource Management v1.16.0</a></li>
+<li><span id="kueue-ref-3"></span><a target="_blank" rel="noopener" href="https://kserve.github.io/website/docs/concepts/architecture">KServe Architecture</a></li>
+<li><span id="kueue-ref-4"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/run/jobs/">Kueue Run Kubernetes Jobs</a></li>
+<li><span id="kueue-ref-5"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/run/plain_pods/">Kueue Run Plain Pods</a></li>
+<li><span id="kueue-ref-6"></span><a target="_blank" rel="noopener" href="https://kubernetes.io/blog/2022/10/04/introducing-kueue/">Introducing Kueue — Kubernetes Blog, 2022</a></li>
+<li><span id="kueue-ref-7"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/dev/integrate_a_custom_job/">Kueue Integrate a Custom Job</a></li>
+<li><span id="kueue-ref-8"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/cluster_queue/">Kueue ClusterQueue</a></li>
+<li><span id="kueue-ref-9"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/cohort/">Kueue Cohort</a></li>
+<li><span id="kueue-ref-10"></span><a target="_blank" rel="noopener" href="https://github.com/kubernetes-sigs/kueue/blob/main/cmd/kueue/main.go">Kueue Controller Manager 入口源码 — main 分支</a></li>
+<li><span id="kueue-ref-11"></span><a target="_blank" rel="noopener" href="https://github.com/kubernetes-sigs/kueue/blob/main/pkg/scheduler/scheduler.go">Kueue Scheduler 源码 — main 分支</a></li>
+<li><span id="kueue-ref-12"></span><a target="_blank" rel="noopener" href="https://github.com/kubernetes-sigs/kueue/blob/main/pkg/controller/core/workload_controller.go">Kueue Workload Controller 源码 — main 分支</a></li>
+<li><span id="kueue-ref-13"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/local_queue/">Kueue LocalQueue</a></li>
+<li><span id="kueue-ref-14"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/resource_flavor/">Kueue ResourceFlavor</a></li>
+<li><span id="kueue-ref-15"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/workload/">Kueue Workload</a></li>
+<li><span id="kueue-ref-16"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/topology_aware_scheduling/">Kueue Topology-Aware Scheduling</a></li>
+<li><span id="kueue-ref-17"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/admission/">Kueue Admission</a></li>
+<li><span id="kueue-ref-18"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/admission_check/">Kueue AdmissionCheck</a></li>
+<li><span id="kueue-ref-19"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/all_or_nothing/">Kueue All-or-nothing Scheduling</a></li>
+<li><span id="kueue-ref-20"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/manage/setup_wait_for_pods_ready/">Kueue Setup All-or-nothing with Ready Pods</a></li>
+<li><span id="kueue-ref-21"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/concepts/podgroup/">Volcano PodGroup</a></li>
+<li><span id="kueue-ref-22"></span><a target="_blank" rel="noopener" href="https://trainer.kubeflow.org/en/latest/operator-guides/job-scheduling/volcano.html">Kubeflow Trainer Volcano Integration</a></li>
+<li><span id="kueue-ref-23"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/scheduler/actions/">Volcano Scheduler Actions</a></li>
+<li><span id="kueue-ref-24"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/v1.16.0/userguide/user_guide_how_to_use_env_plugin/">Volcano Env Plugin v1.16.0</a></li>
+<li><span id="kueue-ref-25"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/v1.16.0/userguide/user_guide_how_to_use_svc_plugin/">Volcano SVC Plugin v1.16.0</a></li>
+<li><span id="kueue-ref-26"></span><a target="_blank" rel="noopener" href="https://github.com/volcano-sh/volcano/blob/master/pkg/controllers/job/job_controller_actions.go">Volcano Job Controller Actions 源码 — master 分支</a></li>
+<li><span id="kueue-ref-27"></span><a target="_blank" rel="noopener" href="https://github.com/volcano-sh/volcano/blob/master/pkg/scheduler/actions/allocate/allocate.go">Volcano Allocate Action 源码 — master 分支</a></li>
+<li><span id="kueue-ref-28"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/v1.16.0/concepts/queue/">Volcano Queue v1.16.0</a></li>
+<li><span id="kueue-ref-29"></span><a target="_blank" rel="noopener" href="https://github.com/volcano-sh/volcano/blob/v1.16.0/pkg/scheduler/framework/statement.go">Volcano Statement Commit 源码 — v1.16.0</a></li>
+<li><span id="kueue-ref-30"></span><a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/scheduling-eviction/running-multiple-schedulers/">Kubernetes Running Multiple Schedulers</a></li>
+<li><span id="kueue-ref-31"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/multikueue/">Kueue MultiKueue</a></li>
+<li><span id="kueue-ref-32"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/run/deployment/">Kueue Run Deployment</a></li>
+<li><span id="kueue-ref-33"></span><a target="_blank" rel="noopener" href="https://kserve.github.io/website/docs/concepts/architecture/control-plane">KServe Control Plane Architecture</a></li>
+<li><span id="kueue-ref-34"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/v1.16.0/userguide/user_guide_how_to_use_scheduling_gates_queue_admission/">Volcano Scheduling Gates Queue Admission v1.16.0</a></li>
+<li><span id="kueue-ref-35"></span><a target="_blank" rel="noopener" href="https://runway.com/news/engineering/no-idle-gpus-managing-research-compute-at-runway">Runway — No Idle GPUs: Managing Research Compute at Runway, 2026-04-27</a></li>
+<li><span id="kueue-ref-36"></span><a target="_blank" rel="noopener" href="https://arxiv.org/html/2602.04900v3">Evaluating Kubernetes Performance for GenAI Inference — arXiv:2602.04900v3</a></li>
+<li><span id="kueue-ref-37"></span><a target="_blank" rel="noopener" href="https://research.redhat.com/blog/article/kubernetes-meets-genai-evaluating-performance-for-ai-inference-workloads/">Red Hat Research — Kubernetes Meets GenAI</a></li>
+<li><span id="kueue-ref-38"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/reference/metrics/">Kueue Metrics Reference</a></li>
+<li><span id="kueue-ref-39"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/manage/observability/common_grafana_queries/">Kueue Common Grafana Queries</a></li>
+<li><span id="kueue-ref-40"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/manage/observability/monitor_resource_usage/">Kueue Monitor Actual Resource Usage</a></li>
+<li><span id="kueue-ref-41"></span><a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/manage/administer_cluster_quotas/">Kueue Administer Cluster Quotas</a></li>
+<li><span id="kueue-ref-42"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/concepts/volcanojob/">Volcano Job</a></li>
+<li><span id="kueue-ref-43"></span><a target="_blank" rel="noopener" href="https://volcano.sh/docs/userguide/user_guide_how_to_use_job_policy/">Volcano Job Policy</a></li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/19/2026-11-19-kueue-architecture-resource-governance/">https://roger-lv.github.io/2026/11/19/2026-11-19-kueue-architecture-resource-governance/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Volcano/">Volcano</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/Kueue/">Kueue</a><a class="post-meta__tags" href="/tags/KServe/">KServe</a><a class="post-meta__tags" href="/tags/GPU%E8%B0%83%E5%BA%A6/">GPU调度</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/" title="Kubernetes Admission Webhook 的注册机制与请求生命周期"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Kubernetes Admission Webhook 的注册机制与请求生命周期</div></div><div class="info-2"><div class="info-item-1">在 Kubernetes 训练平台中，提交一个作业后，常见的两种结果是：API 直接返回“禁止使用这个队列”；或者作业创建成功，但一直等待 GPU。 这两种结果发生在不同阶段。前者可以由 Admission Webhook 在 API 请求处理过程中作出决定；后者通常由作业控制器和调度器在对象创建之后处理。 Admission Webhook 的核心机制是：我们运行一个 HTTPS 服务，再通过 Kubernetes API 对象声明调用规则；API Server 在处理匹配的请求时，同步调用这个服务，根据响应继续修改、接纳或拒绝请求。 本文以 VolcanoJob 为例，介绍 Webhook 如何注册、API Server 如何回调、AdmissionReview 如何表达校验结果，以及它与 Controller、资源调度之间的职责边界。文中的 training-policy-webhook 是假设的训练平台组件，队列限制和默认值均为示例策略，并非声称 Volcano 默认采用这些规则。  一、Admission Webhook 在 API 请求中的位置 客户端向 Kubern...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E5%AE%9E%E8%B7%B5%E6%8C%87%E5%8D%97/" title="一个集群,多个调度器:Kubernetes 多调度器共存实践指南"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">一个集群,多个调度器:Kubernetes 多调度器共存实践指南</div></div><div class="info-2"><div class="info-item-1">一个集群,多个调度器:Kubernetes 多调度器共存实践指南 “我们集群里已经有 kube-scheduler 了,还能再装一个 Volcano 吗?会不会打架?”——这是 AI Infra 团队在做调度器选型时最常被问到的第一个问题。答案是:可以,而且这正是 Kubernetes 的设计初衷之一。但&quot;装上就能用&quot;和&quot;用对&quot;之间,隔着一整篇本文要讲的内容。  一、为什么这个问题重要 大模型时代的集群里,工作负载的分裂前所未有:在线服务要打散、要低延迟;训练任务要 Gang 调度、要拓扑聚拢;推理服务要 SLO 感知、要弹性伸缩。没有任何一个调度器能同时把这些语义做到极致,于是&quot;多调度器共存&quot;从边缘玩法变成了生产标配——华为云 CCE 的&quot;kube-scheduler 管在线 + Volcano 管训练&quot;双轨架构就是典型代表。 Kubernetes 从设计之初就考虑了这个需求:每个 Pod 通过 schedulerName 字段指定由谁来调度,各调度器通过 watch API Server 只处理与...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战</div></div><div class="info-2"><div class="info-item-1">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战 这篇长文写给算法工程师和平台工程师,从最基础的&quot;一张 GPU 卡怎么被 K8s 认识&quot;讲起,到&quot;一万张卡怎么不崩&quot;,再到&quot;大模型服务怎么在集群上跑起来&quot;,最后聊 Slurm。六大主题:K8s GPU 调度原理、万卡集群治理、资源池化、弹性伸缩、vLLM/SGLang 集群化部署、Slurm 实战。  一、开篇:为什么 GPU 调度比 CPU 调度难十倍 如果你做过 K8s 的 CPU/内存调度,可能觉得资源调度就是&quot;分配数字资源,加个 request/limit 完事&quot;。但当资源变成 GPU 之后,画风完全变了,原因有五个: 1. GPU 不可分割(默认情况下)。 CPU 可以按 0.1 核这样细粒度分配,内存可以按 MB 分配,但一张物理 GPU 卡,默认情况下,K8s 只能把它当作一个&quot;整数资源&quot;分配给一个容器——要么给你一整张卡,要么不给。这就导致一个尴尬场景:推理服...</div></div></div></a><a class="pagination-related" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-15</div><div class="info-item-2">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</div></div><div class="info-2"><div class="info-item-1">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析 本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill/preempt/reclaim 的跨队列语义,一次讲透。 核心观点先抛出来:Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。 一、GPU 性能与分布式训练:Nsight 与并行策略 1.1 Nsight 是什么、怎么用 Nsight 是 NVIDIA 提供的 GPU 性能分析工具套件,其中最核心的是两把&quot;不同倍率的放大镜&quot;:    工具 定位 分析粒度 典型命令     Nsight Systems (nsys) 全系统时间...</div></div></div></a><a class="pagination-related" href="/2026/10/19/2026-10-19-QueueQuota%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90%E4%BB%8EVolcano%E4%B8%89%E7%BA%A7%E6%A8%A1%E5%9E%8B%E5%88%B0MiniMax%E7%BA%A7AI%E9%9B%86%E7%BE%A4%E7%9A%84%E8%B0%83%E5%BA%A6%E6%B2%BB%E7%90%86%E5%AE%9E%E8%B7%B5/" title="Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-19</div><div class="info-item-2">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践</div></div><div class="info-2"><div class="info-item-1">Queue Quota 深度解析:从 Volcano 三级模型到 MiniMax 级 AI 集群的调度治理实践 Queue Quota 的本质一句话就能说清:它是队列级别的资源记账单元,声明&quot;这个队列能用多少资源、必须保多少资源、最多借多少资源、愿意借出多少资源&quot;——区别于 namespace 级的 ResourceQuota,它的作用域是队列而不是命名空间,并且支持跨队列的借用与回收。 而 MiniMax 这类大模型公司的实际做法,是基于 Volcano 二次开发批调度器,把 Quota 建模从单纯的 CPU/内存扩展到 GPU 卡数、卡型、NVLink 域、IB 域、CPU 沙盒等多个维度,队列树直接对齐业务组织结构,配合夜间潮汐复用把 ETTR(有效训练时间比例)做到 97% 这个业界最高档位。 以下分两个层面展开:先把 Queue Quota 的理论语义讲透,再切到一线调度器研发的真实工作。  一、Queue Quota 的完整语义 1.1 为什么不能只用 ResourceQuota 原生 Kubernetes 的 ResourceQuota 工作在 ...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-Volcano-backfill%E4%B8%8D%E6%98%AF%E5%85%9C%E5%BA%95%E8%80%8C%E6%98%AF%E5%90%8C%E5%91%A8%E6%9C%9F%E5%8A%A0%E9%80%9F%E9%80%9A%E9%81%93/" title="Volcano backfill 不是「调度兜底」，而是为 BestEffort 设计的同周期加速通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">Volcano backfill 不是「调度兜底」，而是为 BestEffort 设计的同周期加速通道</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：Volcano 的 backfill 常被误解成「防止任务被遗忘的兜底机制」。但即使完全去掉它，BestEffort 任务在下一个调度周期依然会被重新评估，不会永久滞留。它真正的价值是：在同一个 Session 内、用一条轻量无干扰的路径，把集群的碎片化空闲资源即刻消化掉，同时保护主调度流程不被拖慢。这是一次工程优化，不是正确性必需品。  本文沿「问题 → 设计 → 源码 → 对比」四条线索展开。所有源码结论基于 Volcano master 分支的 pkg/scheduler/actions/backfill/backfill.go（229 行）逐行核对，核对时间 2026-11-04。  一、背景：BestEffort 的「轻」既是优势也是困境 BestEffort 任务的定义很简单：不声明任何资源请求（CPU / Memory request 为空）。它单任务即可独立运行，不依赖其他任务协同就位，也不需要集群做任何复杂预留。 这种「轻」在调度器里却常常变成劣势：  Volcano 的主流程（enqueue → allocate）优先处理的是声明了资源请求、需要...</div></div></div></a><a class="pagination-related" href="/2026/08/23/2026-08-23-Kthena%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90/" title="Kthena 源码解析：云原生 LLM 推理平台的架构与实现"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/kubernetes.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kthena 源码解析：云原生 LLM 推理平台的架构与实现</div></div><div class="info-2"><div class="info-item-1">Kthena 源码解析：云原生 LLM 推理平台的架构与实现  项目地址：https://github.com/volcano-sh/kthena ｜ 官网：https://kthena.volcano.sh 本文基于 kthena 仓库 main 分支源码进行系统分析，覆盖整体架构、控制面 CRD 与控制器、数据面路由与调度器、PD 分离、弹性扩缩容与运行时 Agent 等核心模块。  一、Kthena 是什么 Kthena 是 Volcano 社区推出的 Kubernetes 原生 LLM 推理平台，目标是把大模型推理这件事在 K8s 上变得简单、可扩展、低成本。它不替代 vLLM / SGLang 这类推理引擎，而是作为推理引擎之上的「流量枢纽 + 调度中心」，用声明式 CRD 管理模型全生命周期，用智能路由分发推理流量。 定位上有三个关键词值得记住：  Lightweight（轻量）：整个平台就是两个自包含的 Go 二进制，依赖面小，安装便宜、升级简单。 Modular（可组合）：控制面（workload）和数据面（networking）是两个独立的 Helm 子 cha...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">321</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">524</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E5%88%86%E6%B8%85%E5%9B%9B%E7%B1%BB%E5%88%A4%E6%96%AD"><span class="toc-text">一、先分清四类判断</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E4%B8%BA%E4%BB%80%E4%B9%88%E6%8A%8A%E4%BD%9C%E4%B8%9A%E5%87%86%E5%85%A5%E5%8D%95%E7%8B%AC%E5%81%9A%E6%88%90%E4%B8%80%E5%B1%82"><span class="toc-text">二、为什么把作业准入单独做成一层</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E7%AD%89%E5%BE%85%E5%8F%AF%E4%BB%A5%E5%8F%91%E7%94%9F%E5%9C%A8%E5%88%9B%E5%BB%BA%E5%A4%A7%E9%87%8F-Pod-%E4%B9%8B%E5%89%8D"><span class="toc-text">2.1 等待可以发生在创建大量 Pod 之前</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E7%BB%9F%E4%B8%80%E7%9A%84%E6%B2%BB%E7%90%86%E5%AF%B9%E8%B1%A1%E9%99%8D%E4%BD%8E%E4%BA%86%E5%AF%B9%E6%89%A7%E8%A1%8C%E7%B3%BB%E7%BB%9F%E7%9A%84%E7%BB%91%E5%AE%9A"><span class="toc-text">2.2 统一的治理对象降低了对执行系统的绑定</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-%E9%85%8D%E9%A2%9D%E8%B4%A6%E6%9C%AC%E5%92%8C%E8%8A%82%E7%82%B9%E8%B5%84%E6%BA%90%E6%98%AF%E4%B8%A4%E4%B8%AA%E9%9C%80%E8%A6%81%E5%AF%B9%E9%BD%90%E7%9A%84%E8%A7%86%E5%9B%BE"><span class="toc-text">2.3 配额账本和节点资源是两个需要对齐的视图</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81Kueue-%E7%9A%84%E5%86%85%E9%83%A8%E6%9E%B6%E6%9E%84"><span class="toc-text">三、Kueue 的内部架构</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E6%A0%B8%E5%BF%83%E5%AF%B9%E8%B1%A1%E6%80%8E%E6%A0%B7%E7%BB%84%E6%88%90%E8%B5%84%E6%BA%90%E6%B2%BB%E7%90%86%E6%A8%A1%E5%9E%8B"><span class="toc-text">四、核心对象怎样组成资源治理模型</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E4%B8%A4%E6%9C%BA%E5%85%AB%E5%8D%A1%E4%BB%BB%E5%8A%A1%E5%9C%A8-Kueue-%E4%B8%AD%E6%80%8E%E6%A0%B7%E8%BF%90%E8%A1%8C"><span class="toc-text">五、两机八卡任务在 Kueue 中怎样运行</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E4%BB%8E%E6%8F%90%E4%BA%A4%E5%88%B0%E8%AE%A1%E7%AE%97%E7%9A%84%E4%B9%9D%E4%B8%AA%E9%98%B6%E6%AE%B5"><span class="toc-text">5.1 从提交到计算的九个阶段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-TAS-%E4%B8%8E%E7%AD%89%E5%BE%85%E5%B0%B1%E7%BB%AA%E5%88%86%E5%88%AB%E8%A1%A5%E8%B6%B3%E4%BB%80%E4%B9%88"><span class="toc-text">5.2 TAS 与等待就绪分别补足什么</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81Volcano-%E7%9A%84%E6%9E%B6%E6%9E%84%E4%B8%8E%E5%90%8C%E4%B8%80%E4%BB%BB%E5%8A%A1%E7%9A%84%E8%BF%90%E8%A1%8C%E8%B7%AF%E5%BE%84"><span class="toc-text">六、Volcano 的架构与同一任务的运行路径</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E4%BD%9C%E4%B8%9A%E6%8E%A7%E5%88%B6%E4%B8%8E%E8%B0%83%E5%BA%A6%E6%98%AF%E4%B8%A4%E5%A5%97%E4%B8%8D%E5%90%8C%E7%9A%84%E8%81%8C%E8%B4%A3"><span class="toc-text">6.1 作业控制与调度是两套不同的职责</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-2-Session%E3%80%81Action-%E4%B8%8E-Plugin"><span class="toc-text">6.2 Session、Action 与 Plugin</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-3-%E4%B8%A4%E4%B8%AA-Worker-%E6%80%8E%E6%A0%B7%E4%BB%8E-VolcanoJob-%E8%B5%B0%E5%88%B0-GPU"><span class="toc-text">6.3 两个 Worker 怎样从 VolcanoJob 走到 GPU</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#6-4-Queue-%E5%AD%97%E6%AE%B5%E4%B8%8D%E8%83%BD%E4%B8%8E-Kueue-%E9%80%90%E9%A1%B9%E7%A1%AC%E5%A5%97"><span class="toc-text">6.4 Queue 字段不能与 Kueue 逐项硬套</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81Kueue-%E4%B8%8E-Volcano-%E7%9A%84-gang-%E5%88%B0%E5%BA%95%E9%87%8D%E5%8F%A0%E5%9C%A8%E5%93%AA%E9%87%8C"><span class="toc-text">七、Kueue 与 Volcano 的 gang 到底重叠在哪里</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E5%A4%9A%E8%B0%83%E5%BA%A6%E5%99%A8%E5%85%B1%E5%AD%98%E8%83%BD%E7%94%A8-Kueue-%E4%BD%86%E4%B8%8D%E8%83%BD%E7%9C%81%E7%95%A5%E5%8D%8F%E8%B0%83%E8%AE%BE%E8%AE%A1"><span class="toc-text">八、多调度器共存能用 Kueue 但不能省略协调设计</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#8-1-%E4%B8%80%E4%B8%AA%E8%B0%83%E5%BA%A6%E5%99%A8%E4%B9%9F%E5%AE%8C%E5%85%A8%E5%8F%AF%E4%BB%A5%E4%BD%BF%E7%94%A8-Kueue"><span class="toc-text">8.1 一个调度器也完全可以使用 Kueue</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-2-%E7%9C%9F%E6%AD%A3%E7%9A%84%E7%BB%84%E5%90%88%E8%87%B3%E5%B0%91%E8%A6%81%E5%AF%B9%E9%BD%90%E5%9B%9B%E4%B8%AA%E5%A5%91%E7%BA%A6"><span class="toc-text">8.2 真正的组合至少要对齐四个契约</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#8-3-MultiKueue-%E5%A4%84%E7%90%86%E7%9A%84%E6%98%AF%E5%8F%A6%E4%B8%80%E4%B8%AA%E7%BB%B4%E5%BA%A6"><span class="toc-text">8.3 MultiKueue 处理的是另一个维度</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E5%9C%A8%E8%AE%AD%E7%BB%83%E5%92%8C%E6%8E%A8%E7%90%86%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E4%B8%AD%E6%94%BE%E5%9C%A8%E5%93%AA%E9%87%8C"><span class="toc-text">九、在训练和推理生命周期中放在哪里</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#9-1-KServe-%E4%B8%8E-Kueue-%E7%9A%84%E8%BF%9E%E6%8E%A5%E9%9C%80%E8%A6%81%E8%90%BD%E5%88%B0%E5%85%B7%E4%BD%93%E5%AF%B9%E8%B1%A1"><span class="toc-text">9.1 KServe 与 Kueue 的连接需要落到具体对象</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#9-2-%E5%9C%A8%E7%BA%BF%E5%AE%B9%E9%87%8F%E4%BC%98%E5%85%88%E7%9C%8B%E5%9B%9E%E6%94%B6%E6%97%B6%E9%97%B4%E4%B8%8E%E6%9C%8D%E5%8A%A1%E7%9B%AE%E6%A0%87"><span class="toc-text">9.2 在线容量优先看回收时间与服务目标</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E5%85%AC%E5%BC%80%E9%87%8F%E5%8C%96%E8%AF%81%E6%8D%AE%E8%83%BD%E8%AF%81%E6%98%8E%E4%BB%80%E4%B9%88"><span class="toc-text">十、公开量化证据能证明什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#10-1-Runway-%E7%9A%84%E7%94%9F%E4%BA%A7%E6%A1%88%E4%BE%8B"><span class="toc-text">10.1 Runway 的生产案例</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-2-%E4%B8%80%E4%B8%AA%E5%8F%AF%E5%AF%B9%E7%85%A7%E7%9A%84%E6%89%B9%E9%87%8F%E6%8E%A8%E7%90%86%E5%AE%9E%E9%AA%8C"><span class="toc-text">10.2 一个可对照的批量推理实验</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E5%9C%A8%E8%87%AA%E5%B7%B1%E7%9A%84%E5%B9%B3%E5%8F%B0%E4%B8%8A%E6%80%8E%E6%A0%B7%E9%87%8F%E5%8C%96%E6%94%B6%E7%9B%8A"><span class="toc-text">十一、在自己的平台上怎样量化收益</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#11-1-%E5%85%88%E5%AE%9A%E4%B9%89%E4%B8%9A%E5%8A%A1%E5%AE%8C%E6%88%90%E8%80%8C%E4%B8%8D%E6%98%AF%E5%8F%AA%E7%9C%8B%E5%87%86%E5%85%A5%E5%BF%AB%E6%85%A2"><span class="toc-text">11.1 先定义业务完成而不是只看准入快慢</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-2-Kueue-%E8%87%AA%E5%B8%A6%E6%8C%87%E6%A0%87%E6%80%8E%E6%A0%B7%E4%BD%BF%E7%94%A8"><span class="toc-text">11.2 Kueue 自带指标怎样使用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#11-3-%E5%81%9A%E4%B8%80%E7%BB%84%E6%9C%89%E8%A7%A3%E9%87%8A%E5%8A%9B%E7%9A%84%E5%AF%B9%E7%85%A7"><span class="toc-text">11.3 做一组有解释力的对照</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%BA%8C%E3%80%81%E6%8C%89%E7%8A%B6%E6%80%81%E8%BE%B9%E7%95%8C%E6%8E%92%E6%9F%A5%E9%97%AE%E9%A2%98"><span class="toc-text">十二、按状态边界排查问题</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%89%E3%80%81%E9%80%89%E5%9E%8B%E4%BB%8E%E6%B2%BB%E7%90%86%E7%9B%AE%E6%A0%87%E5%BC%80%E5%A7%8B"><span class="toc-text">十三、选型从治理目标开始</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%E5%BD%95-A-Kueue-%E6%9C%80%E5%B0%8F%E9%85%8D%E7%BD%AE%E5%BD%A2%E7%8A%B6"><span class="toc-text">附录 A Kueue 最小配置形状</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%E5%BD%95-B-%E5%90%8C%E4%B8%80%E8%B5%84%E6%BA%90%E5%BD%A2%E7%8A%B6%E7%9A%84-VolcanoJob"><span class="toc-text">附录 B 同一资源形状的 VolcanoJob</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%99%84%E5%BD%95-C-%E5%B8%B8%E7%94%A8%E8%A7%82%E5%AF%9F%E5%85%A5%E5%8F%A3"><span class="toc-text">附录 C 常用观察入口</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-kueue-architecture-resource-governance/" title="理解 Kueue 的架构与训练推理资源治理">理解 Kueue 的架构与训练推理资源治理</a><time datetime="2026-11-19T03:28:09.000Z" title="发表于 2026-11-19 11:28:09">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/" title="Kubernetes Admission Webhook 的注册机制与请求生命周期">Kubernetes Admission Webhook 的注册机制与请求生命周期</a><time datetime="2026-11-19T03:28:08.000Z" title="发表于 2026-11-19 11:28:08">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-single-root-iommu-qemu-kvm-vfio/" title="从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO">从 Single Root 到设备直通，理解 IOMMU 与 QEMU、KVM、VFIO</a><time datetime="2026-11-18T07:24:09.000Z" title="发表于 2026-11-18 15:24:09">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/" title="从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化">从 SR-IOV 和 VFIO 理解云原生 GPU 与网络虚拟化</a><time datetime="2026-11-18T06:39:10.000Z" title="发表于 2026-11-18 14:39:10">2026-11-18</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/18/2026-11-18-sky-scheduler-rdma-topology/" title="Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点">Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点</a><time datetime="2026-11-17T16:00:00.000Z" title="发表于 2026-11-18 00:00:00">2026-11-18</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
