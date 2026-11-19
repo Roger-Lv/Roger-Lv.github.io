@@ -1,0 +1,320 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>用 JuiceFS 保存训练 Checkpoint 时的容器权限边界 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从具身智能训练的 checkpoint 写入和恢复出发，解释 JuiceFS 特权 sidecar、BASE_URL 和挂载准入，以及容器、节点、虚拟机和控制面的权限边界。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="用 JuiceFS 保存训练 Checkpoint 时的容器权限边界">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从具身智能训练的 checkpoint 写入和恢复出发，解释 JuiceFS 特权 sidecar、BASE_URL 和挂载准入，以及容器、节点、虚拟机和控制面的权限边界。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-19T11:49:12.000Z">
+<meta property="article:modified_time" content="2026-11-19T11:50:33.185Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="训练">
+<meta property="article:tag" content="存储">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="具身智能">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "用 JuiceFS 保存训练 Checkpoint 时的容器权限边界",
+  "url": "https://roger-lv.github.io/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-19T11:49:12.000Z",
+  "dateModified": "2026-11-19T11:50:33.185Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '用 JuiceFS 保存训练 Checkpoint 时的容器权限边界',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">324</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">524</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-19T11:49:12.000Z" title="发表于 2026-11-19 19:49:12">2026-11-19</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-19T11:50:33.185Z" title="更新于 2026-11-19 19:50:33">2026-11-19</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/" data-flag-title="用 JuiceFS 保存训练 Checkpoint 时的容器权限边界"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>训练一个机器人策略模型时，通常希望任务中断后能换一批机器，从上一次完整的 checkpoint（CKPT）接着跑。用 JuiceFS 做共享存储时，训练代码可以直接写 <code>/mnt/jfs/ckpt</code>。但在一次托管 CPU 资源的对接中，平台支持方表示，企业版 JuiceFS 的挂载方式没有通过安全评估。为什么存一个模型文件会碰到容器特权？因为写文件之前，平台得先让另一个进程把远端文件系统挂进容器。</p>
+<span id="more"></span>
+<h2 id="一次-CKPT-写入经过哪些组件">一次 CKPT 写入经过哪些组件</h2>
+<p>假设一个多卡任务每 5,000 步保存一次。它在第 23,000 步中断，下一个任务就从第 20,000 步那份完整的 CKPT 恢复。用于续训的 CKPT 通常包含模型权重、优化器状态和训练步数。使用 PyTorch Distributed Checkpoint 等分布式保存方式时，一份 CKPT 还可能包含多个数据分片和全局元数据。只做仿真评测的任务，则可能只需要单独导出的权重。 <a target="_blank" rel="noopener" href="https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html">PyTorch 保存与恢复指南</a> · <a target="_blank" rel="noopener" href="https://docs.pytorch.org/docs/stable/distributed.checkpoint.html">PyTorch Distributed Checkpoint</a></p>
+<p>采用 JuiceFS CSI 的 sidecar 模式时，JuiceFS 客户端运行在同一个 Pod 的辅助容器里。它借助 FUSE（用户态文件系统）提供文件系统接口。挂载准备好后，训练容器通过普通文件 API 写入目录，JuiceFS 客户端负责处理文件请求，分别访问元数据服务和后端对象存储。以下是这类部署的简化示意，云平台可以使用不同的挂载实现。 <a target="_blank" rel="noopener" href="https://juicefs.com/docs/zh/csi/introduction/">JuiceFS CSI 架构</a> · <a target="_blank" rel="noopener" href="https://juicefs.com/docs/zh/cloud/introduction/architecture/">JuiceFS 存储架构</a></p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TD
+    platform[托管平台] --&gt;|启动挂载容器| mount[JuiceFS sidecar]
+    train[训练容器] --&gt;|写入 CKPT| path[共享挂载目录]
+    path --&gt;|文件操作| mount
+    mount --&gt; meta[元数据服务]
+    mount --&gt; objects[对象存储]
+  </pre></div>
+<h2 id="特权给了谁">特权给了谁</h2>
+<p>在这次对接描述的方案里，<strong>平台把 <code>privileged: true</code> 给了负责挂载的 sidecar</strong>。Kubernetes 在容器级配置这项权限，训练容器仍受自己的 <code>securityContext</code> 约束。写入 <code>step_20000.pt</code> 会让 sidecar 处理一次文件写操作，文件内容在这里仍然是数据。即使训练任务只写空文件，平台也得先启动挂载程序。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/security/linux-kernel-security-constraints/">Kubernetes 特权容器说明</a></p>
+<p>开特权是平台选用的挂载实现。Linux 特权容器会获得更广的系统能力，并放宽 seccomp、AppArmor 或 SELinux 等限制。平台因此需要判断，<strong>哪些代码会在这个容器里执行，它们能接触哪些设备、目录和网络资源</strong>。挂载程序自身的漏洞、构建产物的完整性和运行时加载的组件，都比业务文件的用途更直接地影响这项判断。特权也并非所有 JuiceFS 接入方式的统一要求，是否需要取决于挂载模式和运行环境。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/security/linux-kernel-security-constraints/">Kubernetes 特权容器说明</a> · <a target="_blank" rel="noopener" href="https://juicefs.com/docs/zh/csi/getting_started/">JuiceFS CSI 安装模式</a></p>
+<h2 id="为什么平台会问到-BASE-URL">为什么平台会问到 BASE_URL</h2>
+<p><code>BASE_URL</code> 在 JuiceFS 私有部署中有正常用途。企业版客户端需要访问私有控制台做挂载认证并获取配置，CSI 文档说明了如何用这个环境变量指定地址。平台在对接中提出的额外顾虑是，该地址在特定版本或启动流程中是否还会影响可执行文件的下载与运行。公开挂载文档能确认控制台地址和配置的用途。具体镜像是否存在下载执行行为，需要按实际版本、启动参数和升级设置向厂商核实。 <a target="_blank" rel="noopener" href="https://juicefs.com/docs/zh/csi/guide/pv/">JuiceFS 企业版私有部署挂载文档</a></p>
+<p>这个区别会改变审核范围。如果挂载镜像内置客户端，固定镜像摘要能锁定初始镜像的内容。如果启动或升级时还会引入可执行文件，平台就要继续确认这些文件的来源、完整性校验，以及谁能变更来源。闭源或加壳会影响平台直接审查行为的能力，安全评估可以要求厂商说明发布、更新和校验机制。能否准入取决于平台接受什么证据。</p>
+<h2 id="影响范围从节点算起">影响范围从节点算起</h2>
+<ul>
+<li><strong>工作节点。</strong> 如果挂载进程被攻陷，首先要评估承载它的节点和节点可访问的资源。具体范围取决于运行时隔离、挂入的目录与设备、网络以及节点身份。共享节点上还要考虑其他工作负载。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/security/multi-tenancy/">Kubernetes 多租户隔离</a></li>
+<li><strong>虚拟机。</strong> 如果工作节点是一台 VM，上述节点指 VM 里的操作系统。触及物理宿主机需要再跨过虚拟化边界。仅凭容器开了特权，无法推断云平台的 VM 隔离被突破。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/security/multi-tenancy/">Kubernetes 多租户隔离</a></li>
+<li><strong>控制面。</strong> 工作节点会用自己的身份与 Kubernetes API 通信。节点失陷后能对 API 做什么，取决于可用身份及其授权。集群控制面和云厂商自身的管理控制面也要按各自的边界判断。这次挂载评估本身没有给出控制面可达或受影响的结论。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/architecture/control-plane-node-communication/">Kubernetes 节点与控制面通信</a> · <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/access-authn-authz/node/">Kubernetes 节点鉴权</a></li>
+</ul>
+<h2 id="按读写方选择-CKPT-存储">按读写方选择 CKPT 存储</h2>
+<p>先确认谁写、谁读，以及读方需要完整训练状态还是一份推理权重。支持方在这个案例里谈的是某类通用 CPU 资源上的托管挂载。如果写入方跑在 GPU 资源组，需要单独确认那一侧的挂载能力。</p>
+<table>
+<thead>
+<tr>
+<th>训练和评测的需求</th>
+<th>可以验证的接入方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>新任务要从目录恢复完整的分片 CKPT，存储可以替换</td>
+<td>在实际资源组上试平台支持的 NAS 或 CPFS，保留目录型读写，并验证多机恢复。</td>
+</tr>
+<tr>
+<td>GPU 已经能写 JuiceFS，CPU 只读权重做评测</td>
+<td>导出评测权重并上传 OSS，CPU 任务按版本下载。</td>
+</tr>
+<tr>
+<td>读取方必须访问已有企业版 JuiceFS 文件</td>
+<td>评估在可管理的环境中部署 JuiceFS S3 网关，读方通过 S3 接口取文件。网关提供的是文件视图，底层对象存储按默认格式保存的是数据块。</td>
+</tr>
+</tbody>
+</table>
+<p><a target="_blank" rel="noopener" href="https://help.aliyun.com/zh/pai/use-cloud-storage-for-a-dlc-job">阿里云 PAI DLC 存储文档</a> · <a target="_blank" rel="noopener" href="https://juicefs.com/docs/zh/cloud/guide/gateway/">JuiceFS S3 网关</a></p>
+<p>必须保留企业版的目录挂载时，可以请平台和 JuiceFS 厂商基于同一版本确认，<strong>使用固定镜像摘要，并把运行时的远程操作限定为获取配置，能否满足平台准入条件</strong>。存储方案的验收可以用一次真实的续训测试。保存 CKPT，等所有分片和元数据完整写入持久存储，结束原任务，再用新任务从预期步数恢复。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/">https://roger-lv.github.io/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E8%AE%AD%E7%BB%83/">训练</a><a class="post-meta__tags" href="/tags/%E5%AD%98%E5%82%A8/">存储</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/" title="从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门</div></div><div class="info-2"><div class="info-item-1"> 面向读者：理解基本深度学习或软件工程，希望读懂具身模型论文、训练代码和推理系统的工程师。 本文围绕“把蓝色盘子左边的红杯子拿起来”展开，解释模型怎样获得视觉能力、怎样理解指令、怎样生成动作，以及基础设施怎样支撑这条链路。默认读者了解 loss、梯度和优化器，不重复通用机器学习入门。 资料核对日期：2026 年 11 月 19 日。OpenVLA、ACT、原版 π₀ 等用于说明代表性的设计，并非所有 VLA 的统一规范。除明确引用的模型配置外，文中的维度、时域和频率均为教学示例。     #article-container .katex-display {   overflow-x: auto;   overflow-y: hidden;   padding: .2em 0; } #article-container .katex-display > .katex {   min-width: 100%;   width: max-content; }  阅读导航    想弄清的问题 对应章节     机器人到底观察什么、输出什么？ 第 1 章   视觉编码器最开始怎样训练？ ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/" title="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-22</div><div class="info-item-2">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</div></div><div class="info-2"><div class="info-item-1">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践 具身智能的存储问题,难点不在&quot;存得下&quot;,而在&quot;读得随机、写得突发、流得动&quot;——一段双臂叠衣 episode 里藏着 3 路 30Hz 相机视频、100Hz 关节状态、未来 50 步的 action chunk,训练时 DataLoader 要从数万条 episode 里随机抽 timestep 并把这几路异频流对齐成同一行。 招商局狮岩 AI Lab 的实测给出了量化答案:用 Lance 把长视频切成 GOP 尺度 blob 后,随机读吞吐相对 LeRobot 提升 1.7–6×、存储降低 42%;而地瓜机器人的集群数据则验证了另一端:JuiceFS 多云 + 分布式缓存把训练任务启动从 20 分钟压到 3 分钟、缓存命中率从 45% 提到 92%。本文把这两套栈拼成具身训练的完整存储底座。  一、具身训练的 I/O 画像:与 LLM/CV 根本不是一回事 先明确负载形态,后面所有选型推理都从这里出发。 具身数据的最小单元是 episode,不是 token,也不是单张图...</div></div></div></a><a class="pagination-related" href="/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/" title="从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-19</div><div class="info-item-2">从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门</div></div><div class="info-2"><div class="info-item-1"> 面向读者：理解基本深度学习或软件工程，希望读懂具身模型论文、训练代码和推理系统的工程师。 本文围绕“把蓝色盘子左边的红杯子拿起来”展开，解释模型怎样获得视觉能力、怎样理解指令、怎样生成动作，以及基础设施怎样支撑这条链路。默认读者了解 loss、梯度和优化器，不重复通用机器学习入门。 资料核对日期：2026 年 11 月 19 日。OpenVLA、ACT、原版 π₀ 等用于说明代表性的设计，并非所有 VLA 的统一规范。除明确引用的模型配置外，文中的维度、时域和频率均为教学示例。     #article-container .katex-display {   overflow-x: auto;   overflow-y: hidden;   padding: .2em 0; } #article-container .katex-display > .katex {   min-width: 100%;   width: max-content; }  阅读导航    想弄清的问题 对应章节     机器人到底观察什么、输出什么？ 第 1 章   视觉编码器最开始怎样训练？ ...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E4%BB%BF%E7%9C%9F%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B2%99%E7%9B%92%E9%80%89%E5%9E%8B/" title="具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">具身智能仿真场景的沙盒选型：为什么主力是裸金属容器，而不是 microVM</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：具身智能公司的仿真主力沙盒应当是「裸金属容器 + K8s GPU 调度」，而不是 DSec / AgentENV 那套 Firecracker microVM 层。只有轻量 Agent 工具调用和不可信代码执行才下沉到 microVM。这不是对多级运行时架构的否定，而是该框架在具身场景下的正确映射——仿真吃的是 NVIDIA 专有计算栈，而虚拟化层的 GPU 转发方案恰恰覆盖不到这里。  这篇是 Agent 沙盒基础设施实践：从 DSec 与 AgentENV 看调度层的选型与落地 的延伸。那篇里有一节（§3.5）讲具身仿真的 GPU 路线，结论是「虚拟化不是默认选项」；本文把那个结论展开成一份完整的选型依据——为什么 microVM 接不住仿真、虚拟化 GPU 的四条路径各自能到哪、以及三层负载该怎么分别匹配。  一、为什么这不是一个「通用沙盒」问题 讨论的对象是一类典型的具身智能公司：自研端到端具身大模型，部署轮式双臂仿人机器人与高自由度灵巧手，自建数据工厂沉淀了数万小时多模态具身数据集，机器人已规模化进入真实家庭。 这个形态决定了基础设施要同时承载三类性质完全...</div></div></div></a><a class="pagination-related" href="/2026/01/13/2026-01-13-%E4%B8%87%E4%BA%BF%E5%8F%82%E6%95%B0%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E7%9A%84%E7%BD%91%E7%BB%9C%E6%9E%B6%E6%9E%84%E9%9D%A9%E6%96%B0%EF%BC%9ARail-only-%E6%97%8B%E8%BD%AC%E6%98%9F%E4%BA%91%E5%BC%8F%E6%8B%93%E6%89%91%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB/" title="万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/Rail-only.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-01-13</div><div class="info-item-2">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读</div></div><div class="info-2"><div class="info-item-1">万亿参数大模型训练的网络架构革新：Rail-only 旋转星云式拓扑深度解读 随着生成式人工智能（GenAI）的爆发，大型语言模型（LLM）的参数规模已从百亿量级迅速跨越至万亿量级 1。2020 年发布的 GPT-3 模型需要 NVIDIA V100 GPU 运行 355 个 GPU 年才能完成训练，而当前的 GPT-4 等模型估计拥有超过一万亿个参数，训练周期长达数月 1。在摩尔定律放缓的背景下，单枚加速器的算力增长速度已无法跟上模型规模及计算需求的指数级飙升，这使得超大规模 GPU 集群的部署成为必然趋势。行业领先的机器学习架构师预测，下一代 LLM 训练可能需要超过 30,000 个 GPU 的计算能力才能在合理时间内完成 1。然而，如何高效、低成本地连接这些数以万计的 GPU，已成为制约人工智能发展的关键基础设施瓶颈。 算力中心的基石：GPU 互连域的划分 在理解 Rail-only 架构之前，必须深入剖析当前超大规模 GPU 数据中心的设计范式。现代 GPU 集群通常被划分为两个截然不同的通信域：高带宽域（High-Bandwidth Domain, HBD）和网络接口...</div></div></div></a><a class="pagination-related" href="/2026/07/17/2026-07-17-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%98%BE%E5%AD%98%E8%AE%A1%E7%AE%97%E6%B3%95%E5%88%99/" title="大模型显存计算法则——训练与推理全景图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-17</div><div class="info-item-2">大模型显存计算法则——训练与推理全景图</div></div><div class="info-2"><div class="info-item-1">大模型显存计算法则——训练与推理全景图  本文目标：面试官问&quot;一个 70B 模型 fp16 训练要多少显存？为什么混合精度训练 Adam 优化器要 16 bytes/参数？ZeRO-3 之后能降到多少？推理 KV cache 占多大？&quot;——你能张口就算、并且讲清每个数的来源。 全文以**“算清训练显存 → 算清推理显存 → 进阶优化对显存的影响 → 面试速算题”**为主线。   一、前置：精度与字节换算（所有计算的基石）    精度 1 个参数占多少字节 常见用途     FP64 / double 8 B 几乎不用   FP32 4 B 优化器状态、master weight、科学计算   TF32 4 B（存储同 fp32，计算用 19 bit 尾数） A100 训练加速，存储仍 4B   BF16 / FP16 2 B 训练前向/反向权重、推理权重   FP8 (E4M3/E5M2) 1 B H100+ 训练/推理加速   INT8 1 B 推理量化、部分训练激活量化   INT4 0.5 B 推理量化（W4A16、GPTQ/AWQ）   INT3 / ...</div></div></div></a><a class="pagination-related" href="/2026/07/19/2026-07-19-Megatron-LM%E6%BA%90%E7%A0%81%E7%B2%BE%E8%AF%BB/" title="Megatron-LM 源码精读——大模型并行训练全景"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-07-19</div><div class="info-item-2">Megatron-LM 源码精读——大模型并行训练全景</div></div><div class="info-2"><div class="info-item-1">Megatron-LM 源码精读——大模型并行训练全景 https://blog.csdn.net/Antai_ZHU/article/details/144409187  本文基于 NVIDIA Megatron-LM 源码（megatron/core/，即 Megatron-Core）。目标：让你在面试时能从&quot;5D 并行 + rank 排布&quot;讲到&quot;ColumnParallelLinear 的 autograd 通信插入&quot;、从&quot;1F1B vs Interleaved&quot;讲到&quot;DDP 的 param/grad buffer 与 distributed optimizer&quot;、从源码结构讲到工程取舍。读完这篇，Megatron 这关基本通杀。   一、Megatron 是什么、为什么面试要问 Megatron-LM 是 NVIDIA 开源的大模型分布式训练框架，论文从 2019（张量并行）一路到 2022（PP+SP）、2023（CP、MoE）。它的核心价值是把&quot;怎么把一个 Transformer...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">324</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">524</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E6%AC%A1-CKPT-%E5%86%99%E5%85%A5%E7%BB%8F%E8%BF%87%E5%93%AA%E4%BA%9B%E7%BB%84%E4%BB%B6"><span class="toc-text">一次 CKPT 写入经过哪些组件</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%89%B9%E6%9D%83%E7%BB%99%E4%BA%86%E8%B0%81"><span class="toc-text">特权给了谁</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%B9%B3%E5%8F%B0%E4%BC%9A%E9%97%AE%E5%88%B0-BASE-URL"><span class="toc-text">为什么平台会问到 BASE_URL</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%BD%B1%E5%93%8D%E8%8C%83%E5%9B%B4%E4%BB%8E%E8%8A%82%E7%82%B9%E7%AE%97%E8%B5%B7"><span class="toc-text">影响范围从节点算起</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8C%89%E8%AF%BB%E5%86%99%E6%96%B9%E9%80%89%E6%8B%A9-CKPT-%E5%AD%98%E5%82%A8"><span class="toc-text">按读写方选择 CKPT 存储</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/" title="用 JuiceFS 保存训练 Checkpoint 时的容器权限边界">用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</a><time datetime="2026-11-19T11:49:12.000Z" title="发表于 2026-11-19 19:49:12">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/" title="从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门">从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门</a><time datetime="2026-11-19T08:56:46.000Z" title="发表于 2026-11-19 16:56:46">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-volcano-action-plugin-lifecycle-v1-16/" title="Volcano Action 与 Plugin 如何协作：生命周期、扩展点与调用关系">Volcano Action 与 Plugin 如何协作：生命周期、扩展点与调用关系</a><time datetime="2026-11-19T04:54:51.000Z" title="发表于 2026-11-19 12:54:51">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-kueue-architecture-resource-governance/" title="理解 Kueue 的架构与训练推理资源治理">理解 Kueue 的架构与训练推理资源治理</a><time datetime="2026-11-19T03:28:09.000Z" title="发表于 2026-11-19 11:28:09">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-kubernetes-admission-webhook-lifecycle/" title="Kubernetes Admission Webhook 的注册机制与请求生命周期">Kubernetes Admission Webhook 的注册机制与请求生命周期</a><time datetime="2026-11-19T03:28:08.000Z" title="发表于 2026-11-19 11:28:08">2026-11-19</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>

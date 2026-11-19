@@ -4,6 +4,34 @@
   
     
     <entry>
+      <title>用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</title>
+      <link href="/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/"/>
+      <url>/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/</url>
+      
+        <content type="html"><![CDATA[<p>训练一个机器人策略模型时，通常希望任务中断后能换一批机器，从上一次完整的 checkpoint（CKPT）接着跑。用 JuiceFS 做共享存储时，训练代码可以直接写 <code>/mnt/jfs/ckpt</code>。但在一次托管 CPU 资源的对接中，平台支持方表示，企业版 JuiceFS 的挂载方式没有通过安全评估。为什么存一个模型文件会碰到容器特权？因为写文件之前，平台得先让另一个进程把远端文件系统挂进容器。</p><span id="more"></span><h2 id="一次-CKPT-写入经过哪些组件">一次 CKPT 写入经过哪些组件</h2><p>假设一个多卡任务每 5,000 步保存一次。它在第 23,000 步中断，下一个任务就从第 20,000 步那份完整的 CKPT 恢复。用于续训的 CKPT 通常包含模型权重、优化器状态和训练步数。使用 PyTorch Distributed Checkpoint 等分布式保存方式时，一份 CKPT 还可能包含多个数据分片和全局元数据。只做仿真评测的任务，则可能只需要单独导出的权重。 <a href="https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html">PyTorch 保存与恢复指南</a> · <a href="https://docs.pytorch.org/docs/stable/distributed.checkpoint.html">PyTorch Distributed Checkpoint</a></p><p>采用 JuiceFS CSI 的 sidecar 模式时，JuiceFS 客户端运行在同一个 Pod 的辅助容器里。它借助 FUSE（用户态文件系统）提供文件系统接口。挂载准备好后，训练容器通过普通文件 API 写入目录，JuiceFS 客户端负责处理文件请求，分别访问元数据服务和后端对象存储。以下是这类部署的简化示意，云平台可以使用不同的挂载实现。 <a href="https://juicefs.com/docs/zh/csi/introduction/">JuiceFS CSI 架构</a> · <a href="https://juicefs.com/docs/zh/cloud/introduction/architecture/">JuiceFS 存储架构</a></p><div class="mermaid-wrap"><pre class="mermaid-src" hidden>    flowchart TD    platform[托管平台] --&gt;|启动挂载容器| mount[JuiceFS sidecar]    train[训练容器] --&gt;|写入 CKPT| path[共享挂载目录]    path --&gt;|文件操作| mount    mount --&gt; meta[元数据服务]    mount --&gt; objects[对象存储]  </pre></div><h2 id="特权给了谁">特权给了谁</h2><p>在这次对接描述的方案里，<strong>平台把 <code>privileged: true</code> 给了负责挂载的 sidecar</strong>。Kubernetes 在容器级配置这项权限，训练容器仍受自己的 <code>securityContext</code> 约束。写入 <code>step_20000.pt</code> 会让 sidecar 处理一次文件写操作，文件内容在这里仍然是数据。即使训练任务只写空文件，平台也得先启动挂载程序。 <a href="https://kubernetes.io/docs/concepts/security/linux-kernel-security-constraints/">Kubernetes 特权容器说明</a></p><p>开特权是平台选用的挂载实现。Linux 特权容器会获得更广的系统能力，并放宽 seccomp、AppArmor 或 SELinux 等限制。平台因此需要判断，<strong>哪些代码会在这个容器里执行，它们能接触哪些设备、目录和网络资源</strong>。挂载程序自身的漏洞、构建产物的完整性和运行时加载的组件，都比业务文件的用途更直接地影响这项判断。特权也并非所有 JuiceFS 接入方式的统一要求，是否需要取决于挂载模式和运行环境。 <a href="https://kubernetes.io/docs/concepts/security/linux-kernel-security-constraints/">Kubernetes 特权容器说明</a> · <a href="https://juicefs.com/docs/zh/csi/getting_started/">JuiceFS CSI 安装模式</a></p><h2 id="为什么平台会问到-BASE-URL">为什么平台会问到 BASE_URL</h2><p><code>BASE_URL</code> 在 JuiceFS 私有部署中有正常用途。企业版客户端需要访问私有控制台做挂载认证并获取配置，CSI 文档说明了如何用这个环境变量指定地址。平台在对接中提出的额外顾虑是，该地址在特定版本或启动流程中是否还会影响可执行文件的下载与运行。公开挂载文档能确认控制台地址和配置的用途。具体镜像是否存在下载执行行为，需要按实际版本、启动参数和升级设置向厂商核实。 <a href="https://juicefs.com/docs/zh/csi/guide/pv/">JuiceFS 企业版私有部署挂载文档</a></p><p>这个区别会改变审核范围。如果挂载镜像内置客户端，固定镜像摘要能锁定初始镜像的内容。如果启动或升级时还会引入可执行文件，平台就要继续确认这些文件的来源、完整性校验，以及谁能变更来源。闭源或加壳会影响平台直接审查行为的能力，安全评估可以要求厂商说明发布、更新和校验机制。能否准入取决于平台接受什么证据。</p><h2 id="影响范围从节点算起">影响范围从节点算起</h2><ul><li><strong>工作节点。</strong> 如果挂载进程被攻陷，首先要评估承载它的节点和节点可访问的资源。具体范围取决于运行时隔离、挂入的目录与设备、网络以及节点身份。共享节点上还要考虑其他工作负载。 <a href="https://kubernetes.io/docs/concepts/security/multi-tenancy/">Kubernetes 多租户隔离</a></li><li><strong>虚拟机。</strong> 如果工作节点是一台 VM，上述节点指 VM 里的操作系统。触及物理宿主机需要再跨过虚拟化边界。仅凭容器开了特权，无法推断云平台的 VM 隔离被突破。 <a href="https://kubernetes.io/docs/concepts/security/multi-tenancy/">Kubernetes 多租户隔离</a></li><li><strong>控制面。</strong> 工作节点会用自己的身份与 Kubernetes API 通信。节点失陷后能对 API 做什么，取决于可用身份及其授权。集群控制面和云厂商自身的管理控制面也要按各自的边界判断。这次挂载评估本身没有给出控制面可达或受影响的结论。 <a href="https://kubernetes.io/docs/concepts/architecture/control-plane-node-communication/">Kubernetes 节点与控制面通信</a> · <a href="https://kubernetes.io/docs/reference/access-authn-authz/node/">Kubernetes 节点鉴权</a></li></ul><h2 id="按读写方选择-CKPT-存储">按读写方选择 CKPT 存储</h2><p>先确认谁写、谁读，以及读方需要完整训练状态还是一份推理权重。支持方在这个案例里谈的是某类通用 CPU 资源上的托管挂载。如果写入方跑在 GPU 资源组，需要单独确认那一侧的挂载能力。</p><table><thead><tr><th>训练和评测的需求</th><th>可以验证的接入方式</th></tr></thead><tbody><tr><td>新任务要从目录恢复完整的分片 CKPT，存储可以替换</td><td>在实际资源组上试平台支持的 NAS 或 CPFS，保留目录型读写，并验证多机恢复。</td></tr><tr><td>GPU 已经能写 JuiceFS，CPU 只读权重做评测</td><td>导出评测权重并上传 OSS，CPU 任务按版本下载。</td></tr><tr><td>读取方必须访问已有企业版 JuiceFS 文件</td><td>评估在可管理的环境中部署 JuiceFS S3 网关，读方通过 S3 接口取文件。网关提供的是文件视图，底层对象存储按默认格式保存的是数据块。</td></tr></tbody></table><p><a href="https://help.aliyun.com/zh/pai/use-cloud-storage-for-a-dlc-job">阿里云 PAI DLC 存储文档</a> · <a href="https://juicefs.com/docs/zh/cloud/guide/gateway/">JuiceFS S3 网关</a></p><p>必须保留企业版的目录挂载时，可以请平台和 JuiceFS 厂商基于同一版本确认，<strong>使用固定镜像摘要，并把运行时的远程操作限定为获取配置，能否满足平台准入条件</strong>。存储方案的验收可以用一次真实的续训测试。保存 CKPT，等所有分片和元数据完整写入持久存储，结束原任务，再用新任务从预期步数恢复。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> AI Infra </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 训练 </tag>
+            
+            <tag> 存储 </tag>
+            
+            <tag> Kubernetes </tag>
+            
+            <tag> 具身智能 </tag>
+            
+        </tags>
+      
+    </entry>
+  <entry>
       <title>从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门</title>
       <link href="/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/"/>
       <url>/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/</url>
