@@ -1,0 +1,983 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从跨宿主机的数据包转发出发，解释 VPC 控制面、虚拟路由、安全策略、VXLAN 与高性能数据面的分工，并给出逐层排障示例。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从跨宿主机的数据包转发出发，解释 VPC 控制面、虚拟路由、安全策略、VXLAN 与高性能数据面的分工，并给出逐层排障示例。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-20T02:25:00.000Z">
+<meta property="article:modified_time" content="2026-11-20T02:25:00.224Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="数据面">
+<meta property="article:tag" content="VPC">
+<meta property="article:tag" content="VXLAN">
+<meta property="article:tag" content="OVS">
+<meta property="article:tag" content="Netfilter">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发",
+  "url": "https://roger-lv.github.io/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-20T02:25:00.000Z",
+  "dateModified": "2026-11-20T02:25:00.224Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">325</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">526</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-20T02:25:00.000Z" title="发表于 2026-11-20 10:25:00">2026-11-20</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-20T02:25:00.224Z" title="更新于 2026-11-20 10:25:00">2026-11-20</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/" data-flag-title="VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><blockquote>
+<p>一份面向云计算、容器平台和 AI 基础设施工程师的技术梳理<br>
+重点回答：VPC 中的 VRouter、VFW 如何实现？路由是否由 iptables 完成？VXLAN 在哪里发挥作用？控制面如何把网络策略变成真实的数据包转发行为？</p>
+</blockquote>
+<span id="more"></span>
+<hr>
+<h2 id="1-核心结论先行">1. 核心结论先行</h2>
+<p>理解 VPC 虚拟网络，首先要把<strong>网络功能、协议、实现技术和控制机制</strong>分开：</p>
+<ul>
+<li><strong>VRouter（虚拟路由器）</strong> 是一种三层网络功能，核心工作是根据目的 IP 查找路由，决定下一跳和出口。</li>
+<li><strong>VFW（虚拟防火墙）</strong> 是一种安全功能，根据安全策略决定数据包是否允许通过；有状态防火墙还会跟踪连接状态。</li>
+<li><strong>VXLAN</strong>是一种 Overlay 隧道封装协议，主要解决虚拟网络跨物理宿主机承载的问题。它本身不是路由协议，也不是防火墙。</li>
+<li><strong>iptables / nftables</strong>是配置 Linux Netfilter 规则的用户态工具；Netfilter 是 Linux 内核中的包处理框架。它们可用于过滤、NAT、标记等，但不是 Linux 路由功能本身。</li>
+<li><strong>Linux 路由表 / RPDB / FIB</strong>负责路由决策和快速查找。<code>ip route</code>、<code>ip rule</code> 是配置与查看接口。</li>
+<li><strong>OVS（Open vSwitch）</strong> 是虚拟交换机，可通过流表完成二层转发、隧道封装、报文修改、连接跟踪配合等操作，也可参与三层转发。</li>
+<li><strong>DPDK、eBPF、SmartNIC</strong>是构建或加速数据面的技术路径，不是与 VRouter、VFW 同一层级的网络功能。</li>
+<li><strong>BGP、EVPN</strong>主要用于控制面路由或 MAC/IP 信息分发；它们通常不直接逐包转发业务数据。</li>
+</ul>
+<p>因此，回答&quot;VRouter 用什么路由，是不是 iptables？&quot;最准确的方式是：</p>
+<blockquote>
+<p>VRouter 的路由核心通常是路由表和 FIB（或等价的硬件/软件转发表）；iptables/nftables 主要承担包过滤、NAT、标记等功能。具体云厂商可能用 Linux 内核、OVS、DPDK、eBPF 或 SmartNIC 组合实现数据面。</p>
+</blockquote>
+<p>不同云厂商和不同产品的内部实现并不完全相同。下文讲的是通用架构和常见实现方式，不代表所有厂商都采用同一套组件。</p>
+<hr>
+<h2 id="2-从存储、计算到网络：先建立-VPC-的抽象">2. 从存储、计算到网络：先建立 VPC 的抽象</h2>
+<p>VPC（Virtual Private Cloud）是云平台提供给租户的一套逻辑隔离网络。用户通常可以在 VPC 中创建：</p>
+<ul>
+<li>子网（Subnet）</li>
+<li>虚拟机或弹性网卡（ENI）</li>
+<li>路由表（Route Table）</li>
+<li>安全组（Security Group）</li>
+<li>网络 ACL（Network ACL）</li>
+<li>NAT Gateway</li>
+<li>Internet Gateway</li>
+<li>对等连接、专线或 VPN 等连接设施</li>
+</ul>
+<p>例如：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">VPC-A: 10.0.0.0/16</span><br><span class="line">|</span><br><span class="line">+-- Subnet-A: 10.0.1.0/24</span><br><span class="line">|   +-- VM-A: 10.0.1.10</span><br><span class="line">|</span><br><span class="line">+-- Subnet-B: 10.0.2.0/24</span><br><span class="line">|   +-- VM-B: 10.0.2.10</span><br><span class="line">|</span><br><span class="line">+-- Route Table</span><br><span class="line">+-- Security Policy</span><br><span class="line">+-- VRouter / Distributed Router</span><br></pre></td></tr></table></figure>
+<p>VPC 是逻辑资源模型，不一定对应一台独立的物理路由器。云平台可以把一个逻辑 VPC 分布式地实现到许多物理宿主机、交换机和网卡上。</p>
+<h3 id="2-1-控制面与数据面">2.1 控制面与数据面</h3>
+<p>这是理解云网络架构最重要的切入点。</p>
+<p><strong>控制面（Control Plane）</strong> 负责管理意图和计算规则：</p>
+<ul>
+<li>用户创建 VPC、子网、路由、安全组。</li>
+<li>控制器验证配置是否合法。</li>
+<li>路由控制器计算路由、下一跳和隧道端点信息。</li>
+<li>策略控制器将安全组规则转换成数据面可以执行的规则。</li>
+<li>控制器把配置分发到宿主机、虚拟交换机、网关或 SmartNIC。</li>
+</ul>
+<p><strong>数据面（Data Plane）</strong> 负责处理真实数据包：</p>
+<ul>
+<li>接收数据包。</li>
+<li>查找转发表。</li>
+<li>执行安全策略和 NAT。</li>
+<li>必要时进行 VXLAN 封装或解封装。</li>
+<li>将数据包送到目标虚拟机、宿主机或外部网络。</li>
+</ul>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">                控制面</span><br><span class="line">用户 API -&gt; VPC Controller -&gt; Route / Policy Controller</span><br><span class="line">                                |</span><br><span class="line">                                | 下发配置、流表、路由</span><br><span class="line">                                v</span><br><span class="line">                数据面</span><br><span class="line">VM -&gt; vNIC -&gt; vSwitch / Router / Firewall -&gt; NIC</span><br><span class="line">                     |</span><br><span class="line">               查表、过滤、封装</span><br><span class="line">                     |</span><br><span class="line">               Underlay 网络</span><br></pre></td></tr></table></figure>
+<p>正常情况下，数据包不会为了每次转发都向控制器询问&quot;下一跳是什么&quot;。控制面提前把路由和策略安装到数据面，数据面本地查表处理。</p>
+<h3 id="2-2-一个逻辑组件不等于一台独立设备">2.2 一个逻辑组件不等于一台独立设备</h3>
+<p>控制台上看到的 VRouter、VFW、NAT Gateway，首先是<strong>网络功能或云资源抽象</strong>。底层可能是：</p>
+<ol>
+<li>一台或多台专用网关设备；</li>
+<li>宿主机上的 Linux 网络栈；</li>
+<li>OVS 等虚拟交换机中的流表；</li>
+<li>DPDK 用户态转发进程；</li>
+<li>SmartNIC / DPU 上的硬件流水线；</li>
+<li>上述方案的混合部署。</li>
+</ol>
+<p>所以不要从产品名称推断物理部署方式。逻辑上的 VRouter 可以是分布式实现的。</p>
+<hr>
+<h2 id="3-VRouter：路由到底由什么完成？">3. VRouter：路由到底由什么完成？</h2>
+<h3 id="3-1-路由的本质">3.1 路由的本质</h3>
+<p>路由器收到一个 IP 数据包后，需要根据目的 IP 地址决定：</p>
+<ul>
+<li>应该走哪条路由；</li>
+<li>下一跳是谁；</li>
+<li>从哪个接口发出；</li>
+<li>是否需要经过策略路由、NAT 或其他处理。</li>
+</ul>
+<p>例如：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">目的网段</th>
+<th style="text-align:left">下一跳</th>
+<th style="text-align:left">说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>10.0.1.0/24</code></td>
+<td style="text-align:left">本地子网 / 本地接口</td>
+<td style="text-align:left">到 Subnet-A</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>10.0.2.0/24</code></td>
+<td style="text-align:left">本地子网 / 本地接口</td>
+<td style="text-align:left">到 Subnet-B</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>10.1.0.0/16</code></td>
+<td style="text-align:left">VPC Peering</td>
+<td style="text-align:left">到对端 VPC</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>0.0.0.0/0</code></td>
+<td style="text-align:left">NAT / Internet Gateway</td>
+<td style="text-align:left">默认路由</td>
+</tr>
+</tbody>
+</table>
+<p>实际路由表会包含更多属性，例如路由来源、优先级、下一跳类型、状态、作用域和策略信息。</p>
+<h3 id="3-2-Linux-中的路由相关概念">3.2 Linux 中的路由相关概念</h3>
+<p>Linux 路由路径中有几个容易混淆的概念：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">名称</th>
+<th style="text-align:left">含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">Routing Table</td>
+<td style="text-align:left">路由表，保存目的前缀到下一跳等信息</td>
+</tr>
+<tr>
+<td style="text-align:left">RPDB</td>
+<td style="text-align:left">Routing Policy Database，策略路由规则数据库</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>ip rule</code></td>
+<td style="text-align:left">配置策略路由规则，决定查询哪张路由表</td>
+</tr>
+<tr>
+<td style="text-align:left">FIB</td>
+<td style="text-align:left">Forwarding Information Base，面向转发查找的路由信息结构</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>ip route</code></td>
+<td style="text-align:left">查看和配置路由</td>
+</tr>
+<tr>
+<td style="text-align:left">ARP / NDP</td>
+<td style="text-align:left">将下一跳 IPv4 / IPv6 地址解析为二层地址</td>
+</tr>
+</tbody>
+</table>
+<p>典型命令：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 查看主路由表</span></span><br><span class="line">ip route show</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看所有路由表</span></span><br><span class="line">ip route show table all</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看策略路由规则</span></span><br><span class="line">ip rule show</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看路由表编号和名称</span></span><br><span class="line"><span class="built_in">cat</span> /etc/iproute2/rt_tables</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查询到某个目的地址时内核会选择什么路由</span></span><br><span class="line">ip route get 10.0.2.10</span><br></pre></td></tr></table></figure>
+<p>例如：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ip route add 10.0.2.0/24 via 192.168.1.1 dev eth1</span><br></pre></td></tr></table></figure>
+<p>含义是：目的地址属于 <code>10.0.2.0/24</code> 的数据包，下一跳交给 <code>192.168.1.1</code>，从 <code>eth1</code> 发出。</p>
+<h3 id="3-3-RPDB、策略路由与多租户">3.3 RPDB、策略路由与多租户</h3>
+<p>只有一张路由表时，路由选择相对简单。但云网络可能存在：</p>
+<ul>
+<li>多个租户使用重叠 CIDR；</li>
+<li>不同源地址要走不同出口；</li>
+<li>不同业务流量要经过不同网关；</li>
+<li>VPN、专线和公网出口需要不同路由策略。</li>
+</ul>
+<p>Linux 可以使用策略路由：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 查看规则</span></span><br><span class="line">ip rule show</span><br><span class="line"></span><br><span class="line"><span class="comment"># 将源地址来自 10.10.1.0/24 的流量导向表 100</span></span><br><span class="line">ip rule add from 10.10.1.0/24 table 100</span><br><span class="line"></span><br><span class="line"><span class="comment"># 在表 100 中配置默认路由</span></span><br><span class="line">ip route add default via 192.0.2.1 dev eth1 table 100</span><br></pre></td></tr></table></figure>
+<p>路由规则可以根据源地址、目的地址、fwmark、入接口等条件选择路由表。规则按优先级处理，匹配后执行相应动作。</p>
+<h3 id="3-4-VRF：让不同租户拥有独立路由域">3.4 VRF：让不同租户拥有独立路由域</h3>
+<p>VRF（Virtual Routing and Forwarding）允许同一台 Linux 主机维护多个相互隔离的路由表/路由域。</p>
+<p>例如 Tenant-A 和 Tenant-B 都使用 <code>10.0.0.0/16</code>，如果放在同一张路由表里会产生地址冲突；VRF 可以把它们放进不同路由域。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 创建 VRF 设备，绑定路由表 10</span></span><br><span class="line">ip <span class="built_in">link</span> add vrf-blue <span class="built_in">type</span> vrf table 10</span><br><span class="line">ip <span class="built_in">link</span> <span class="built_in">set</span> vrf-blue up</span><br><span class="line"></span><br><span class="line"><span class="comment"># 将接口加入 VRF</span></span><br><span class="line">ip <span class="built_in">link</span> <span class="built_in">set</span> eth1 master vrf-blue</span><br><span class="line"></span><br><span class="line"><span class="comment"># 在 VRF 对应路由表中配置路由</span></span><br><span class="line">ip route add table 10 10.0.1.0/24 dev eth1</span><br></pre></td></tr></table></figure>
+<p>VRF 是 Linux 中实现多路由域的一种方式。云厂商也可能使用网络命名空间、独立转发实例、OVS 流表或硬件虚拟化机制实现租户隔离。</p>
+<h3 id="3-5-FIB：真正用于快速转发查找">3.5 FIB：真正用于快速转发查找</h3>
+<p>可以把 Routing Table 理解为路由配置和管理视角，把 FIB 理解为数据面快速查找视角。Linux 内核会维护用于转发的路由结构。</p>
+<p>路由查找通常使用<strong>最长前缀匹配（Longest Prefix Match, LPM）</strong>：多个路由都匹配目的 IP 时，选择前缀最长、最具体的路由。</p>
+<p>例如：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">路由</th>
+<th style="text-align:left">匹配范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left"><code>0.0.0.0/0</code></td>
+<td style="text-align:left">所有 IPv4 地址</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>10.0.0.0/8</code></td>
+<td style="text-align:left">10.x.x.x</td>
+</tr>
+<tr>
+<td style="text-align:left"><code>10.0.2.0/24</code></td>
+<td style="text-align:left">10.0.2.x</td>
+</tr>
+</tbody>
+</table>
+<p>目的 IP 为 <code>10.0.2.10</code> 时，通常选择 <code>10.0.2.0/24</code>，因为它比 <code>/8</code> 和 <code>/0</code> 更具体。</p>
+<p>在高性能数据面中，FIB 不一定是 Linux 内核中的传统路由表结构，也可能被编译为 OVS flow、DPDK LPM 表或 SmartNIC 硬件查找表。概念仍然是&quot;根据报文字段查找下一跳&quot;，实现可以不同。</p>
+<h3 id="3-6-路由查找之后还需要-ARP-NDP">3.6 路由查找之后还需要 ARP / NDP</h3>
+<p>路由查找通常得到下一跳 IP 和出口接口。要在以太网上发送，还需要知道下一跳的 MAC 地址：</p>
+<ul>
+<li>IPv4 通常使用 ARP；</li>
+<li>IPv6 通常使用 NDP（Neighbor Discovery Protocol）。</li>
+</ul>
+<p>因此，路由和邻居解析是相关但不同的步骤。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">目的 IP: 10.0.2.10</span><br><span class="line">       |</span><br><span class="line">       v</span><br><span class="line">FIB 查询</span><br><span class="line">       |</span><br><span class="line">       +--&gt; 下一跳 IP: 192.168.1.1</span><br><span class="line">       +--&gt; 出口接口: eth1</span><br><span class="line">                    |</span><br><span class="line">                    v</span><br><span class="line">             ARP 查询 192.168.1.1</span><br><span class="line">                    |</span><br><span class="line">                    v</span><br><span class="line">             得到下一跳 MAC</span><br><span class="line">                    |</span><br><span class="line">                    v</span><br><span class="line">             构造以太网帧并发送</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="4-VFW：虚拟防火墙如何工作？">4. VFW：虚拟防火墙如何工作？</h2>
+<h3 id="4-1-VFW-的职责">4.1 VFW 的职责</h3>
+<p>VFW（Virtual Firewall）是云平台提供的虚拟防火墙功能。它通常根据以下字段做决策：</p>
+<ul>
+<li>源 IP / 目的 IP；</li>
+<li>源端口 / 目的端口；</li>
+<li>协议（TCP、UDP、ICMP 等）；</li>
+<li>入方向 / 出方向；</li>
+<li>网络接口、子网、租户、安全组；</li>
+<li>连接状态；</li>
+<li>有时还包括报文标记、应用或更高层信息。</li>
+</ul>
+<p>示例策略：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">优先级</th>
+<th style="text-align:left">源</th>
+<th style="text-align:left">目的</th>
+<th style="text-align:left">协议/端口</th>
+<th style="text-align:left">动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">1</td>
+<td style="text-align:left"><code>10.0.1.0/24</code></td>
+<td style="text-align:left"><code>10.0.2.0/24</code></td>
+<td style="text-align:left">TCP/8080</td>
+<td style="text-align:left">Allow</td>
+</tr>
+<tr>
+<td style="text-align:left">2</td>
+<td style="text-align:left"><code>10.0.3.0/24</code></td>
+<td style="text-align:left"><code>10.0.2.10</code></td>
+<td style="text-align:left">TCP/22</td>
+<td style="text-align:left">Deny</td>
+</tr>
+<tr>
+<td style="text-align:left">默认</td>
+<td style="text-align:left">Any</td>
+<td style="text-align:left">Any</td>
+<td style="text-align:left">Any</td>
+<td style="text-align:left">Deny</td>
+</tr>
+</tbody>
+</table>
+<p>云厂商产品中的安全组、网络 ACL、分布式防火墙可能有不同语义。例如安全组常见为有状态规则，网络 ACL 常见为无状态规则，但具体行为应以产品文档为准。</p>
+<h3 id="4-2-Linux-Netfilter、iptables、nftables">4.2 Linux Netfilter、iptables、nftables</h3>
+<p>Linux 内核中的 Netfilter 提供数据包处理钩子（hooks）和相关机制。iptables、nftables 是配置规则的工具/接口。</p>
+<p>常见 Netfilter 路径包括：</p>
+<ul>
+<li><code>PREROUTING</code>：路由决策之前；</li>
+<li><code>INPUT</code>：发往本机的数据包；</li>
+<li><code>FORWARD</code>：经过本机转发的数据包；</li>
+<li><code>OUTPUT</code>：本机产生的数据包；</li>
+<li><code>POSTROUTING</code>：路由决策之后、发出之前。</li>
+</ul>
+<p>简化示意：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">       收到报文</span><br><span class="line">          |</span><br><span class="line">          v</span><br><span class="line">     PREROUTING</span><br><span class="line">          |</span><br><span class="line">          v</span><br><span class="line">      路由决策</span><br><span class="line">       /     \</span><br><span class="line">      /       \</span><br><span class="line">发往本机       转发</span><br><span class="line">   |            |</span><br><span class="line">   v            v</span><br><span class="line"> INPUT       FORWARD</span><br><span class="line">   |            |</span><br><span class="line">   v            v</span><br><span class="line">本机协议栈   POSTROUTING</span><br><span class="line">                |</span><br><span class="line">                v</span><br><span class="line">              发出</span><br></pre></td></tr></table></figure>
+<p>具体 hook 的优先级、Netfilter 子系统、桥接路径和内核版本会影响真实处理顺序；上图是帮助建立概念的简化图。</p>
+<p>iptables 示例：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">iptables -A FORWARD \</span><br><span class="line">  -s 10.0.1.0/24 \</span><br><span class="line">  -d 10.0.2.0/24 \</span><br><span class="line">  -p tcp --dport 8080 \</span><br><span class="line">  -j ACCEPT</span><br></pre></td></tr></table></figure>
+<p>它表示允许匹配条件的数据包经过本机转发路径。若默认策略是 DROP，还需要根据实际规则设计放行和返回流量处理。</p>
+<p>nftables 示例：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">nft add table inet vpc</span><br><span class="line"></span><br><span class="line">nft <span class="string">&#x27;add chain inet vpc forward &#123;</span></span><br><span class="line"><span class="string">  type filter hook forward priority 0;</span></span><br><span class="line"><span class="string">  policy drop;</span></span><br><span class="line"><span class="string">&#125;&#x27;</span></span><br><span class="line"></span><br><span class="line">nft add rule inet vpc forward \</span><br><span class="line">  ip saddr 10.0.1.0/24 \</span><br><span class="line">  ip daddr 10.0.2.0/24 \</span><br><span class="line">  tcp dport 8080 accept</span><br></pre></td></tr></table></figure>
+<p>注意：iptables/nftables 是规则配置入口，真正执行过滤的是内核中的 Netfilter 路径。iptables 也不是路由表。</p>
+<h3 id="4-3-Conntrack：有状态防火墙的关键">4.3 Conntrack：有状态防火墙的关键</h3>
+<p>有状态防火墙不仅判断单个报文，还会跟踪连接状态。Linux 常见实现是 conntrack。</p>
+<p>假设 VM-A 主动访问 VM-B：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">VM-A: 10.0.1.10:50000</span><br><span class="line">VM-B: 10.0.2.10:8080</span><br></pre></td></tr></table></figure>
+<p>请求方向：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">10.0.1.10:50000  ---&gt;  10.0.2.10:8080</span><br></pre></td></tr></table></figure>
+<p>防火墙允许新连接后，conntrack 记录连接元组和状态。返回方向：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">10.0.2.10:8080  ---&gt;  10.0.1.10:50000</span><br></pre></td></tr></table></figure>
+<p>返回包可以被识别为已有连接的返回流量，常见状态包括：</p>
+<ul>
+<li><code>NEW</code>：新连接或尚未见到双向流量的连接；</li>
+<li><code>ESTABLISHED</code>：已建立连接的后续流量；</li>
+<li><code>RELATED</code>：与已有连接相关的流量；</li>
+<li><code>INVALID</code>：无法关联到有效连接状态的报文。</li>
+</ul>
+<p>查看连接跟踪表：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">conntrack -L</span><br></pre></td></tr></table></figure>
+<p>典型 iptables 规则：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 允许已建立或相关连接的返回流量</span></span><br><span class="line">iptables -A FORWARD \</span><br><span class="line">  -m conntrack --ctstate ESTABLISHED,RELATED \</span><br><span class="line">  -j ACCEPT</span><br><span class="line"></span><br><span class="line"><span class="comment"># 允许指定网段发起 TCP 8080 新连接</span></span><br><span class="line">iptables -A FORWARD \</span><br><span class="line">  -s 10.0.1.0/24 \</span><br><span class="line">  -d 10.0.2.0/24 \</span><br><span class="line">  -p tcp --dport 8080 \</span><br><span class="line">  -m conntrack --ctstate NEW \</span><br><span class="line">  -j ACCEPT</span><br></pre></td></tr></table></figure>
+<p>真实规则顺序、默认策略和双向策略要结合网络拓扑设计。Conntrack 也有容量、超时、哈希表和性能方面的运维问题。</p>
+<h3 id="4-4-NAT-与防火墙不是一回事">4.4 NAT 与防火墙不是一回事</h3>
+<p>NAT（Network Address Translation）修改报文中的 IP 地址或端口，常见有：</p>
+<ul>
+<li>SNAT：修改源地址；</li>
+<li>DNAT：修改目的地址；</li>
+<li>MASQUERADE：常见的动态源地址伪装方式。</li>
+</ul>
+<p>例如私网 VM 访问公网时，可能由 NAT Gateway 将私网源 IP 转换为公网出口地址：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">转换前：</span><br><span class="line">10.0.1.10:50000 -&gt; 203.0.113.10:443</span><br><span class="line"></span><br><span class="line">转换后：</span><br><span class="line">198.51.100.20:62001 -&gt; 203.0.113.10:443</span><br></pre></td></tr></table></figure>
+<p>防火墙回答&quot;是否允许&quot;，NAT 回答&quot;地址如何转换&quot;。二者可以由同一套 Netfilter 基础设施实现，但概念上不同。</p>
+<hr>
+<h2 id="5-VXLAN：Overlay-网络如何跨物理宿主机？">5. VXLAN：Overlay 网络如何跨物理宿主机？</h2>
+<h3 id="5-1-Underlay-与-Overlay">5.1 Underlay 与 Overlay</h3>
+<p>Overlay 是建立在底层网络之上的逻辑网络。</p>
+<ul>
+<li><strong>Underlay</strong>：真实物理网络，负责宿主机、交换机、路由器之间的 IP 连通。</li>
+<li><strong>Overlay</strong>：虚拟网络，承载租户 VM、容器等的逻辑地址和隔离域。</li>
+</ul>
+<p>例子：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">Overlay:</span><br><span class="line">  VM-A: 10.0.1.10</span><br><span class="line">  VM-B: 10.0.2.10</span><br><span class="line"></span><br><span class="line">Underlay:</span><br><span class="line">  Host-1 VTEP: 192.168.100.1</span><br><span class="line">  Host-2 VTEP: 192.168.100.2</span><br></pre></td></tr></table></figure>
+<p>Overlay 地址与 Underlay 地址属于不同层次。外层 IP 负责让隧道端点之间可达，内层 IP 是租户业务流量的地址。</p>
+<h3 id="5-2-VXLAN-封装结构">5.2 VXLAN 封装结构</h3>
+<p>VXLAN 使用 UDP 承载，标准目的端口通常为 UDP 4789。一个封装后的报文可以简化表示为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line">+---------------------------------------+</span><br><span class="line">| Outer Ethernet Header                 |</span><br><span class="line">+---------------------------------------+</span><br><span class="line">| Outer IP Header                       |</span><br><span class="line">| 192.168.100.1 -&gt; 192.168.100.2        |</span><br><span class="line">+---------------------------------------+</span><br><span class="line">| UDP Header                            |</span><br><span class="line">| Destination Port: 4789                |</span><br><span class="line">+---------------------------------------+</span><br><span class="line">| VXLAN Header                          |</span><br><span class="line">| VNI: 10001                            |</span><br><span class="line">+---------------------------------------+</span><br><span class="line">| Inner Ethernet Header                 |</span><br><span class="line">+---------------------------------------+</span><br><span class="line">| Inner IP Header                       |</span><br><span class="line">| 10.0.1.10 -&gt; 10.0.2.10                |</span><br><span class="line">+---------------------------------------+</span><br><span class="line">| TCP / UDP / Application Data          |</span><br><span class="line">+---------------------------------------+</span><br></pre></td></tr></table></figure>
+<p>关键概念：</p>
+<ul>
+<li><strong>VTEP</strong>：VXLAN Tunnel Endpoint，负责封装和解封装。</li>
+<li><strong>VNI</strong>：VXLAN Network Identifier，24 bit 的网络标识符，用来区分 VXLAN 网络。</li>
+<li><strong>Outer IP</strong>：Underlay 中 VTEP 的 IP。</li>
+<li><strong>Inner Ethernet/IP</strong>：租户 Overlay 原始报文。</li>
+</ul>
+<p>VNI 与 VLAN ID 不同。VLAN ID 通常为 12 bit，VXLAN VNI 为 24 bit，能提供更多逻辑网络标识空间。</p>
+<h3 id="5-3-VXLAN-解决什么，不解决什么？">5.3 VXLAN 解决什么，不解决什么？</h3>
+<p>VXLAN 解决：</p>
+<ul>
+<li>在三层 Underlay 上承载二层 Overlay 网络；</li>
+<li>让不同物理宿主机上的虚拟机处于同一个逻辑二层网络；</li>
+<li>通过 VNI 区分不同租户或逻辑网络；</li>
+<li>降低对物理网络 VLAN 数量的依赖。</li>
+</ul>
+<p>VXLAN 本身不负责：</p>
+<ul>
+<li>决定任意目的 IP 的三层下一跳；</li>
+<li>定义租户安全策略；</li>
+<li>自动提供完整的路由控制平面；</li>
+<li>自动解决所有 MTU、拥塞和故障恢复问题。</li>
+</ul>
+<p>VXLAN 常与 EVPN 等控制平面结合，学习和分发 MAC/IP 与 VTEP 信息。也可以使用静态配置或其他控制机制。</p>
+<h3 id="5-4-VTEP-如何知道封装给谁？">5.4 VTEP 如何知道封装给谁？</h3>
+<p>当 Host-1 需要把帧发往 Host-2 时，需要知道目标 MAC/IP 对应的远端 VTEP。这个映射可以由控制面分发，也可能通过数据面学习或静态配置建立。</p>
+<p>典型映射关系：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">Overlay MAC / IP</span><br><span class="line">       |</span><br><span class="line">       v</span><br><span class="line">远端 VTEP IP</span><br><span class="line">       |</span><br><span class="line">       v</span><br><span class="line">VXLAN 封装</span><br><span class="line">       |</span><br><span class="line">       v</span><br><span class="line">Underlay 路由到远端 VTEP</span><br></pre></td></tr></table></figure>
+<p>EVPN（Ethernet VPN）常作为 VXLAN 的控制平面，利用 BGP EVPN 路由类型分发 MAC、IP、VTEP 等信息。需要区分：</p>
+<ul>
+<li>VXLAN：数据面封装；</li>
+<li>EVPN：常见控制面信息分发机制；</li>
+<li>Underlay IGP/BGP：保证 VTEP IP 之间可达；</li>
+<li>VRouter/FIB：完成具体三层转发。</li>
+</ul>
+<h3 id="5-5-MTU-问题">5.5 MTU 问题</h3>
+<p>VXLAN 在原始帧外增加 Outer Ethernet、Outer IP、UDP 和 VXLAN 头部，因此会产生额外封装开销。</p>
+<p>如果 Overlay MTU 与 Underlay MTU 配置不匹配，可能导致：</p>
+<ul>
+<li>大包被分片或丢弃；</li>
+<li>Path MTU Discovery 失效；</li>
+<li>某些应用小包正常、大包异常；</li>
+<li>TCP 性能下降或连接表现异常。</li>
+</ul>
+<p>工程上要结合 IPv4/IPv6 外层、物理网络 MTU、隧道实现和是否允许分片，统一规划 Underlay 与 Overlay MTU，不能只凭固定数值假设所有环境一致。</p>
+<hr>
+<h2 id="6-VRouter、VFW、VXLAN-如何协作？">6. VRouter、VFW、VXLAN 如何协作？</h2>
+<p>构造一个跨宿主机的例子：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">VPC-A: 10.0.0.0/16</span><br><span class="line"></span><br><span class="line">Host-1                                  Host-2</span><br><span class="line">+----------------------+                +----------------------+</span><br><span class="line">| VM-A                 |                | VM-B                 |</span><br><span class="line">| 10.0.1.10            |                | 10.0.2.10            |</span><br><span class="line">|      |               |                |      ^               |</span><br><span class="line">| vNIC / vSwitch       |                | vNIC / vSwitch       |</span><br><span class="line">|      |               |                |      |               |</span><br><span class="line">| VRouter / VFW / VTEP |==== VXLAN =====| VTEP / VRouter / VFW |</span><br><span class="line">| 192.168.100.1        |  Underlay      | 192.168.100.2        |</span><br><span class="line">+----------------------+                +----------------------+</span><br></pre></td></tr></table></figure>
+<p>当 VM-A 访问 VM-B 时，逻辑上可能经历：</p>
+<ol>
+<li>VM-A 生成目的 IP 为 <code>10.0.2.10</code> 的报文。</li>
+<li>Host-1 的虚拟网络数据面接收报文。</li>
+<li>根据目标 IP、租户上下文或虚拟网络配置执行路由查找。</li>
+<li>根据策略执行安全检查；如果是有状态防火墙，可能查询或更新连接跟踪状态。</li>
+<li>确定远端 VTEP，进行 VXLAN 封装。</li>
+<li>Underlay 根据外层目的 IP 将封装报文送往 Host-2。</li>
+<li>Host-2 的 VTEP 解封装。</li>
+<li>Host-2 根据内层目标 MAC/IP 将报文送到 VM-B。</li>
+</ol>
+<p><strong>注意：这只是逻辑流程，不是所有产品固定的数据包处理顺序。</strong> 有的架构在路由前执行安全策略，有的在路由后执行；有的把路由、ACL、隧道动作合并到一个 flow pipeline；有的在源宿主机执行主要策略，也可能在目的宿主机再次执行检查。</p>
+<h3 id="6-1-分布式路由与集中式路由">6.1 分布式路由与集中式路由</h3>
+<p><strong>集中式路由</strong>：跨子网或跨网络的流量集中经过某个网关/路由节点。</p>
+<p>优点：</p>
+<ul>
+<li>路由策略集中；</li>
+<li>便于统一做 NAT、审计和流量控制。</li>
+</ul>
+<p>缺点：</p>
+<ul>
+<li>可能形成流量瓶颈；</li>
+<li>额外转发跳数和延迟；</li>
+<li>网关需要高可用和扩展设计。</li>
+</ul>
+<p><strong>分布式路由</strong>：将路由能力下沉到各个宿主机或边缘节点。</p>
+<p>优点：</p>
+<ul>
+<li>流量可就近转发；</li>
+<li>减少集中网关压力；</li>
+<li>更容易横向扩展。</li>
+</ul>
+<p>缺点：</p>
+<ul>
+<li>路由和策略需要分发到更多节点；</li>
+<li>状态同步、故障收敛和一致性更复杂；</li>
+<li>排障需要理解分布式数据面。</li>
+</ul>
+<p>现实系统常采用混合模式：东西向流量尽可能分布式转发，公网出口、NAT、专线等特定流量经过集中式网关或专用服务节点。</p>
+<hr>
+<h2 id="7-数据面实现技术：Linux、OVS、DPDK、eBPF、SmartNIC">7. 数据面实现技术：Linux、OVS、DPDK、eBPF、SmartNIC</h2>
+<p>这些技术不是同一层级，也不必互斥。它们可以组成一个混合数据面。</p>
+<h3 id="7-1-Linux-Kernel-Netfilter">7.1 Linux Kernel + Netfilter</h3>
+<p>典型能力：</p>
+<ul>
+<li>Linux bridge；</li>
+<li>VXLAN netdevice；</li>
+<li>IP routing / FIB；</li>
+<li>Netfilter；</li>
+<li>Conntrack；</li>
+<li>iptables / nftables；</li>
+<li>TC。</li>
+</ul>
+<p>优点：</p>
+<ul>
+<li>与 Linux 网络栈集成；</li>
+<li>工具成熟，生态完善；</li>
+<li>便于运维和排查；</li>
+<li>适合大量通用网络场景。</li>
+</ul>
+<p>需要关注：</p>
+<ul>
+<li>内核数据路径开销；</li>
+<li>规则规模与查找性能；</li>
+<li>Conntrack 容量；</li>
+<li>多队列、RSS、NUMA、软中断分布；</li>
+<li>MTU、GRO/GSO/TSO 等卸载行为。</li>
+</ul>
+<h3 id="7-2-Open-vSwitch（OVS）">7.2 Open vSwitch（OVS）</h3>
+<p>OVS 是面向虚拟化环境的多层虚拟交换机。它常用于连接 VM、容器、物理网卡和隧道端口。</p>
+<p>重要概念：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">OVS 概念</th>
+<th style="text-align:left">含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">Bridge</td>
+<td style="text-align:left">逻辑交换机</td>
+</tr>
+<tr>
+<td style="text-align:left">Port</td>
+<td style="text-align:left">Bridge 上的端口，可连接 VM、物理 NIC、隧道等</td>
+</tr>
+<tr>
+<td style="text-align:left">Interface</td>
+<td style="text-align:left">具体接口</td>
+</tr>
+<tr>
+<td style="text-align:left">Flow Table</td>
+<td style="text-align:left">流表，定义匹配条件和动作</td>
+</tr>
+<tr>
+<td style="text-align:left">Match</td>
+<td style="text-align:left">匹配字段，如 MAC、IP、端口、VLAN、隧道 ID</td>
+</tr>
+<tr>
+<td style="text-align:left">Action</td>
+<td style="text-align:left">动作，如 output、drop、修改字段、封装等</td>
+</tr>
+<tr>
+<td style="text-align:left">Datapath</td>
+<td style="text-align:left">实际执行数据包处理的路径</td>
+</tr>
+</tbody>
+</table>
+<p>简化示例：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">VM-A vNIC</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">OVS Bridge</span><br><span class="line">   |</span><br><span class="line">   +--&gt; Flow Table</span><br><span class="line">   |      |</span><br><span class="line">   |      +--&gt; match: dst IP / MAC / VNI</span><br><span class="line">   |      +--&gt; action: output / set field / tunnel</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">VXLAN Port</span><br><span class="line">   |</span><br><span class="line">   v</span><br><span class="line">Physical NIC</span><br></pre></td></tr></table></figure>
+<p>OVS 可以使用 OpenFlow 或其他控制接口管理流表。常见部署中，OVS 用户态组件负责控制和流表管理，数据包快速路径可能由内核 datapath 或 DPDK datapath 执行。</p>
+<p>OVS 不只是&quot;二层交换机&quot;。通过流表动作、路由信息和连接跟踪配合，它可以参与更复杂的网络功能。</p>
+<h3 id="7-3-DPDK">7.3 DPDK</h3>
+<p>DPDK 是一组用户态高速数据包处理库和驱动框架。典型思路是让应用在用户态轮询网卡队列，减少传统内核网络路径中的开销。</p>
+<p>常见机制：</p>
+<ul>
+<li>Poll Mode Driver（PMD）；</li>
+<li>Hugepage；</li>
+<li>多队列；</li>
+<li>CPU core pinning；</li>
+<li>NUMA 本地化；</li>
+<li>批量收发包；</li>
+<li>用户态转发和查表。</li>
+</ul>
+<p>优点：</p>
+<ul>
+<li>可构建高吞吐、低延迟数据面；</li>
+<li>数据路径可高度定制；</li>
+<li>适合软件路由器、虚拟交换机、NFV 等场景。</li>
+</ul>
+<p>代价：</p>
+<ul>
+<li>CPU 核心可能需要专门用于轮询；</li>
+<li>内存、NUMA、队列和核绑定需要精细调优；</li>
+<li>与内核网络栈、运维工具和主机网络的集成更复杂。</li>
+</ul>
+<h3 id="7-4-eBPF-与-TC">7.4 eBPF 与 TC</h3>
+<p>eBPF 允许在内核中安全地运行受验证的程序。网络场景常见挂载点包括：</p>
+<ul>
+<li>XDP：较早的接收路径，可用于高效丢弃、重定向和部分处理；</li>
+<li>TC ingress / egress：流量控制路径，可执行分类、修改和重定向；</li>
+<li>socket 层相关 hook：在套接字路径处理流量。</li>
+</ul>
+<p>eBPF 常用于：</p>
+<ul>
+<li>ACL；</li>
+<li>负载均衡；</li>
+<li>可观测性；</li>
+<li>网络策略；</li>
+<li>转发和重定向；</li>
+<li>流量采样。</li>
+</ul>
+<p>eBPF 并不自动等于&quot;比内核网络栈快&quot;。性能取决于挂载点、程序复杂度、map 查找、数据路径、硬件和流量模式。</p>
+<h3 id="7-5-SmartNIC-DPU">7.5 SmartNIC / DPU</h3>
+<p>SmartNIC 或 DPU 将部分网络、存储、安全和虚拟化处理能力卸载到网卡侧处理器或硬件流水线。</p>
+<p>可能卸载的工作：</p>
+<ul>
+<li>VXLAN 封装/解封装；</li>
+<li>ACL / 安全组；</li>
+<li>NAT；</li>
+<li>流表匹配；</li>
+<li>虚拟交换；</li>
+<li>加密或遥测等功能（依产品而定）。</li>
+</ul>
+<p>好处是减少宿主机 CPU 的网络处理负担，并改善隔离和性能。代价是硬件能力、驱动、固件、可编程性和运维复杂度。</p>
+<hr>
+<h2 id="8-路由、安全和隧道并不一定由三个独立进程实现">8. 路由、安全和隧道并不一定由三个独立进程实现</h2>
+<p>逻辑上可以把网络功能拆成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">VRouter: 目的地址 -&gt; 下一跳</span><br><span class="line">VFW:     报文是否允许通过</span><br><span class="line">VXLAN:   如何把报文送到远端 VTEP</span><br></pre></td></tr></table></figure>
+<p>但真实数据面可能把它们合并成一个 pipeline：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">Ingress</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">Parse Packet</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">Tenant / VNI Classification</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">ACL / Security Policy</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">Conntrack</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">Route / FIB Lookup</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">NAT / Rewrite</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">Tunnel Encapsulation</span><br><span class="line">  |</span><br><span class="line">  v</span><br><span class="line">Egress</span><br></pre></td></tr></table></figure>
+<p>这只是一个示意 pipeline。具体系统可能调整顺序、拆分到多个节点，或把部分功能下沉到硬件。</p>
+<p>理解这一点很重要：<strong>VRouter、VFW 是功能抽象；Linux、OVS、DPDK、eBPF、SmartNIC 是实现载体。</strong></p>
+<hr>
+<h2 id="9-BGP、EVPN、VXLAN、FIB-的关系">9. BGP、EVPN、VXLAN、FIB 的关系</h2>
+<p>这几个名词经常一起出现，但职责不同：</p>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">技术</th>
+<th style="text-align:left">主要职责</th>
+<th style="text-align:left">更接近哪一层</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">BGP</td>
+<td style="text-align:left">在路由域之间交换路由信息，也可承载 EVPN 地址族</td>
+<td style="text-align:left">控制面</td>
+</tr>
+<tr>
+<td style="text-align:left">EVPN</td>
+<td style="text-align:left">分发二层/三层 VPN 的 MAC、IP、VTEP 等信息</td>
+<td style="text-align:left">Overlay 控制面</td>
+</tr>
+<tr>
+<td style="text-align:left">VXLAN</td>
+<td style="text-align:left">将内层以太网帧封装到 UDP/IP 中</td>
+<td style="text-align:left">Overlay 数据面</td>
+</tr>
+<tr>
+<td style="text-align:left">Underlay IGP/BGP</td>
+<td style="text-align:left">保证 VTEP IP 之间可达</td>
+<td style="text-align:left">Underlay 控制面</td>
+</tr>
+<tr>
+<td style="text-align:left">FIB</td>
+<td style="text-align:left">根据报文目的地址等信息查找转发结果</td>
+<td style="text-align:left">数据面</td>
+</tr>
+<tr>
+<td style="text-align:left">VTEP</td>
+<td style="text-align:left">执行 VXLAN 封装和解封装</td>
+<td style="text-align:left">数据面端点</td>
+</tr>
+</tbody>
+</table>
+<p>可以记成：</p>
+<blockquote>
+<p>EVPN 告诉设备&quot;远端 MAC/IP 在哪里&quot;；VXLAN 负责把帧封装到远端 VTEP；Underlay 把外层 IP 包送过去；接收端解封装后再进行本地转发。</p>
+</blockquote>
+<hr>
+<h2 id="10-排障时应该看什么？">10. 排障时应该看什么？</h2>
+<p>网络问题不要只盯着 ping。可以按层次定位。</p>
+<h3 id="10-1-先确认虚拟机本身">10.1 先确认虚拟机本身</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">ip addr</span><br><span class="line">ip route</span><br><span class="line">ip neigh</span><br><span class="line">ping &lt;同网段目标&gt;</span><br></pre></td></tr></table></figure>
+<p>确认：</p>
+<ul>
+<li>IP、掩码和网关是否正确；</li>
+<li>路由是否符合预期；</li>
+<li>ARP/NDP 是否解析成功；</li>
+<li>本机防火墙是否阻断。</li>
+</ul>
+<h3 id="10-2-检查-Linux-路由">10.2 检查 Linux 路由</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ip route show</span><br><span class="line">ip rule show</span><br><span class="line">ip route get &lt;destination-ip&gt;</span><br></pre></td></tr></table></figure>
+<p>如果使用 VRF：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">ip -d <span class="built_in">link</span> show <span class="built_in">type</span> vrf</span><br><span class="line">ip route show table &lt;table-id&gt;</span><br></pre></td></tr></table></figure>
+<h3 id="10-3-检查-Netfilter-与-Conntrack">10.3 检查 Netfilter 与 Conntrack</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">iptables -S</span><br><span class="line">iptables -t nat -S</span><br><span class="line">nft list ruleset</span><br><span class="line">conntrack -L</span><br></pre></td></tr></table></figure>
+<p>注意系统可能使用 nftables 后端兼容 iptables 命令，排障时应确认实际规则来源和后端。</p>
+<h3 id="10-4-检查-VXLAN">10.4 检查 VXLAN</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">ip -d <span class="built_in">link</span> show <span class="built_in">type</span> vxlan</span><br><span class="line">ip <span class="built_in">link</span> show</span><br><span class="line">ip addr show</span><br></pre></td></tr></table></figure>
+<p>抓包时分别观察内层与外层：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Underlay：看 UDP VXLAN 封装流量</span></span><br><span class="line">tcpdump -ni &lt;underlay-interface&gt; udp port 4789</span><br><span class="line"></span><br><span class="line"><span class="comment"># Overlay：在 VXLAN 接口或虚拟接口观察内层流量</span></span><br><span class="line">tcpdump -ni &lt;vxlan-interface&gt;</span><br></pre></td></tr></table></figure>
+<p>检查：</p>
+<ul>
+<li>本地和远端 VTEP IP 是否可达；</li>
+<li>VNI 是否一致；</li>
+<li>UDP 4789 是否被中间网络允许；</li>
+<li>MTU 是否足够；</li>
+<li>远端 MAC/IP 到 VTEP 的映射是否正确；</li>
+<li>是否存在防火墙或 ACL 丢包。</li>
+</ul>
+<h3 id="10-5-检查-OVS">10.5 检查 OVS</h3>
+<p>常用命令：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">ovs-vsctl show</span><br><span class="line">ovs-ofctl show &lt;bridge&gt;</span><br><span class="line">ovs-ofctl dump-flows &lt;bridge&gt;</span><br><span class="line">ovs-appctl dpif/show</span><br><span class="line">ovs-appctl dpctl/dump-flows</span><br></pre></td></tr></table></figure>
+<p>不同 OVS 版本、datapath 和部署方式下，命令输出和可用能力会有所不同。</p>
+<h3 id="10-6-逐层抓包">10.6 逐层抓包</h3>
+<p>一个实用方法是选择同一条流量，在不同位置同时抓包：</p>
+<ol>
+<li>VM 内部 vNIC；</li>
+<li>宿主机虚拟交换机端口；</li>
+<li>VXLAN 隧道接口或 Underlay 物理口；</li>
+<li>对端宿主机物理口；</li>
+<li>对端虚拟交换机端口；</li>
+<li>目标 VM。</li>
+</ol>
+<p>这样可以定位报文在哪一跳消失，是路由、策略、封装、物理网络还是解封装问题。</p>
+<hr>
+<h2 id="11-常见误区">11. 常见误区</h2>
+<h3 id="误区一：VRouter-就是-iptables">误区一：VRouter 就是 iptables</h3>
+<p>不对。路由核心是路由表、策略路由和 FIB。iptables/nftables 主要用于过滤、NAT、标记等。</p>
+<h3 id="误区二：VXLAN-就是路由协议">误区二：VXLAN 就是路由协议</h3>
+<p>不对。VXLAN 是隧道封装协议。它需要 Underlay IP 网络承载，也通常需要控制面维护远端 VTEP 和 MAC/IP 映射。</p>
+<h3 id="误区三：有了-VXLAN-就不需要-VRouter">误区三：有了 VXLAN 就不需要 VRouter</h3>
+<p>不对。VXLAN 主要提供 Overlay 二层承载。跨子网通信仍需要三层路由功能，可以由集中式或分布式 VRouter 实现。</p>
+<h3 id="误区四：VFW-一定由-iptables-实现">误区四：VFW 一定由 iptables 实现</h3>
+<p>不对。iptables/nftables 是常见实现路径，但也可能由 OVS 流表、DPDK、eBPF、SmartNIC 或专用硬件执行。</p>
+<h3 id="误区五：控制面组件参与每一个数据包的转发">误区五：控制面组件参与每一个数据包的转发</h3>
+<p>通常不对。控制面负责计算和下发，数据面本地查表执行。异常情况下控制面可能参与重编程、故障收敛或慢路径处理。</p>
+<h3 id="误区六：BGP-EVPN-就是数据转发">误区六：BGP/EVPN 就是数据转发</h3>
+<p>不对。BGP/EVPN 交换和分发控制信息；具体报文转发由 FIB、流表或硬件转发表完成。</p>
+<h3 id="误区七：逻辑上的-VRouter-必然是一台虚拟机">误区七：逻辑上的 VRouter 必然是一台虚拟机</h3>
+<p>不对。它可能分布在宿主机数据面，也可能集中在网关节点，或由硬件卸载实现。</p>
+<hr>
+<h2 id="12-总结：建立一张完整的心智模型">12. 总结：建立一张完整的心智模型</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align:left">层次</th>
+<th style="text-align:left">关键问题</th>
+<th style="text-align:left">典型技术</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left">资源与控制面</td>
+<td style="text-align:left">用户创建了什么网络意图？</td>
+<td style="text-align:left">VPC Controller、Route Controller、Policy Controller</td>
+</tr>
+<tr>
+<td style="text-align:left">路由控制</td>
+<td style="text-align:left">路由信息从哪里来、如何分发？</td>
+<td style="text-align:left">静态路由、BGP、EVPN</td>
+</tr>
+<tr>
+<td style="text-align:left">三层转发</td>
+<td style="text-align:left">目的 IP 应该发往哪里？</td>
+<td style="text-align:left">Routing Table、RPDB、FIB、VRF</td>
+</tr>
+<tr>
+<td style="text-align:left">安全策略</td>
+<td style="text-align:left">报文是否允许通过？</td>
+<td style="text-align:left">Security Group、ACL、Netfilter、Conntrack、OVS CT</td>
+</tr>
+<tr>
+<td style="text-align:left">Overlay 承载</td>
+<td style="text-align:left">跨宿主机如何承载虚拟网络？</td>
+<td style="text-align:left">VXLAN、VTEP、VNI</td>
+</tr>
+<tr>
+<td style="text-align:left">虚拟交换</td>
+<td style="text-align:left">VM、容器、隧道和物理网卡如何连接？</td>
+<td style="text-align:left">Linux Bridge、OVS</td>
+</tr>
+<tr>
+<td style="text-align:left">高性能数据面</td>
+<td style="text-align:left">如何提升吞吐、降低延迟和 CPU 开销？</td>
+<td style="text-align:left">DPDK、XDP/eBPF、SmartNIC/DPU</td>
+</tr>
+<tr>
+<td style="text-align:left">物理网络</td>
+<td style="text-align:left">外层报文如何在机房网络中传输？</td>
+<td style="text-align:left">NIC、ToR、Spine-Leaf、Underlay IP</td>
+</tr>
+</tbody>
+</table>
+<p>最后记住这四句话：</p>
+<ol>
+<li><strong>VRouter 看路由表/FIB，决定下一跳。</strong></li>
+<li><strong>VFW 看安全策略和连接状态，决定放行还是丢弃。</strong></li>
+<li><strong>VXLAN 负责 Overlay 封装，让虚拟网络跨宿主机承载。</strong></li>
+<li><strong>控制面负责计算和下发，数据面负责高速执行。</strong></li>
+</ol>
+<p>把这四个概念建立起来，再学习 Linux 网络栈、OVS、EVPN、DPDK 和 eBPF，就能逐步从&quot;理解 VPC 产品概念&quot;深入到&quot;理解云网络数据包究竟如何在物理服务器之间流动&quot;。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/">https://roger-lv.github.io/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E6%95%B0%E6%8D%AE%E9%9D%A2/">数据面</a><a class="post-meta__tags" href="/tags/VPC/">VPC</a><a class="post-meta__tags" href="/tags/VXLAN/">VXLAN</a><a class="post-meta__tags" href="/tags/OVS/">OVS</a><a class="post-meta__tags" href="/tags/Netfilter/">Netfilter</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/" title="用 JuiceFS 保存训练 Checkpoint 时的容器权限边界"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</div></div><div class="info-2"><div class="info-item-1">训练一个机器人策略模型时，通常希望任务中断后能换一批机器，从上一次完整的 checkpoint（CKPT）接着跑。用 JuiceFS 做共享存储时，训练代码可以直接写 /mnt/jfs/ckpt。但在一次托管 CPU 资源的对接中，平台支持方表示，企业版 JuiceFS 的挂载方式没有通过安全评估。为什么存一个模型文件会碰到容器特权？因为写文件之前，平台得先让另一个进程把远端文件系统挂进容器。  一次 CKPT 写入经过哪些组件 假设一个多卡任务每 5,000 步保存一次。它在第 23,000 步中断，下一个任务就从第 20,000 步那份完整的 CKPT 恢复。用于续训的 CKPT 通常包含模型权重、优化器状态和训练步数。使用 PyTorch Distributed Checkpoint 等分布式保存方式时，一份 CKPT 还可能包含多个数据分片和全局元数据。只做仿真评测的任务，则可能只需要单独导出的权重。 PyTorch 保存与恢复指南 · PyTorch Distributed Checkpoint 采用 JuiceFS CSI 的 sidecar 模式时，JuiceFS ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/09/03/2026-09-03-%E4%BA%91%E5%A4%9A%E7%A7%9F%E6%88%B7%E7%BD%91%E7%BB%9C%E9%9A%94%E7%A6%BB%E5%85%A8%E6%99%AF/" title="云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-03</div><div class="info-item-2">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的</div></div><div class="info-2"><div class="info-item-1">云多租户网络隔离全景:从 Hypervisor 到 VNI,一层层看懂租户是怎么被隔开的 多租户是云计算的立身之本——成千上万个互不信任的租户共享同一批物理机、同一批交换机、同一批存储盘,却要求彼此&quot;看不见、摸不着&quot;。这篇文章从计算、网络、数据、管理面四个维度拆解隔离体系,然后聚焦最核心也最容易被误解的一环:VPC 逻辑隔离为什么真的能隔离。我们会用一个&quot;故意撞 IP、故意共宿主机&quot;的例子逐跳追踪报文,再回答两个高频疑问:subnet 能不能做租户隔离?subnet 在路由表和交换机里的真实拓扑长什么样?  一、多租户隔离体系总览 隔离的本质命题是:在共享物理资源的前提下,为每个租户构建一个&quot;逻辑上独立、必要时可物理隔离&quot;的运行环境,同时兼顾安全性与资源利用率。 不同云服务模型的隔离锚点不同:IaaS 靠 Hypervisor 和网络虚拟化,PaaS 靠容器沙箱与命名空间,SaaS 靠应用层的 Tenant-ID 与数据权限策略。    隔离维度 共享程度 核心实现机制 典型技术/产品     计算隔离 共享硬件,独立内...</div></div></div></a><a class="pagination-related" href="/2026/08/27/2026-08-27-Agent-Sandbox%E6%8E%A7%E5%88%B6%E9%9D%A2%E6%95%B0%E6%8D%AE%E9%9D%A2%E4%B8%8E%E5%8F%A5%E6%9F%84%E6%9C%BA%E5%88%B6%E8%AF%A6%E8%A7%A3/" title="一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-27</div><div class="info-item-2">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解</div></div><div class="info-2"><div class="info-item-1">一次 create_sandbox 调用背后:Agent Sandbox 的控制面、数据面与句柄机制详解 当 LLM Agent 需要执行一段自己生成的代码时,它会向隔离沙箱平台发起一个请求:“给我一个沙箱”。这个请求背后发生了什么?沙箱是怎么被分配的?后续的命令又是如何找到正确的沙箱的? 这是 Agent 基础设施中最容易被一笔带过、却最值得拆解的一环。本文以 Kubernetes SIG 的 Agent Sandbox 项目(kubernetes-sigs/agent-sandbox)为样本,把一次完整的沙箱生命周期——从 create_sandbox 到 terminate——拆到协议层面。 核心结论先行:领养沙箱和操作沙箱走的是两条完全不同的通道。 create_sandbox 触发的是控制面流程(K8s API 上的 Claim/adopt,一次性的);后续 commands.run()、files.write() 走的是数据面流程(HTTP 请求经网关/Router 打到具体的沙箱 Pod,每次操作都走一遍)。而把这两条通道缝在一起的,是 SDK 返回的那个&quot...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/" title="K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：控制面决定「能不能跑」，数据面决定「跑多快」。K8s 的功夫全在控制面——把 Pod 调度起来、把副本数维持住；而大模型训练真正的痛点，是 GPU 之间、机器之间的数据流动快不快、堵不堵。kubectl get pods 全绿但 MFU 上不去，是典型的控制面看不见的数据面问题。  本文基于 B 站视频《K8s 很熟，为什么月薪卡在三万？大模型 AI Infra 第一讲：从控制面走到数据面》的内容框架整理，其中的技术细节我对照 NVIDIA 官方文档（nvidia-smi 拓扑定义、NCCL 环境变量文档）与相关论文做了核实与补全。核对过程中发现原稿有四处需要更正的地方，已在文中标注。  一、为什么 K8s 玩得溜，月薪却卡在三万 很多云原生工程师 K8s 炉火纯青：写 YAML、调 Deployment、写 Operator、排 Pod 故障、扩缩集群，整套控制面技术一气呵成，但薪资天花板死死卡在三万上下。而那些看起来「只是会跑 nccl-tests」的 AI Infra 同事，年薪轻松翻倍。 差距不在于会不会写 YAML，而在于是否看懂了 K8s 之下的数据面。...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-VPC%E4%B8%8ECiliumClusterMesh%E5%A4%9A%E9%9B%86%E7%BE%A4%E7%BB%84%E7%BD%91%E7%9A%84%E5%9C%B0%E5%9F%BA%E4%B8%8E%E4%B8%8A%E5%B1%82%E5%BB%BA%E7%AD%91/" title="VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑</div></div><div class="info-2"><div class="info-item-1">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑 VPC 是公有云上通过逻辑隔离为你划出的一块&quot;私有网段+自管路由&quot;的虚拟网络,而 Cilium ClusterMesh 解决的是多个 Kubernetes 集群之间的 Pod IP 直连、跨集群服务发现、跨集群 NetworkPolicy 与负载均衡问题;跨集群通信通常通过 VPC Peering/专线打通底层网络后,由 Cilium ClusterMesh、Submariner 等方案组网;集群与机房并非一一对应,常见是&quot;单机房多集群(隔离/灰度)&quot;&quot;多机房单集群(同城双活)&quot;和&quot;多机房多集群(异地容灾)&quot;三种模式按容灾等级选择;混合云场景下则建议用&quot;专线 + VPN 主备链路 + 路由器统一打通 CIDR&quot;的思路,把公有云 VPC 与私有化机房做成一张可路由的大内网。 先看两个概念在定位上的差异:    维度 VPC Cilium ClusterMesh     层级 IaaS 层的逻辑网络 Kube...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">325</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">526</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E6%A0%B8%E5%BF%83%E7%BB%93%E8%AE%BA%E5%85%88%E8%A1%8C"><span class="toc-text">1. 核心结论先行</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E4%BB%8E%E5%AD%98%E5%82%A8%E3%80%81%E8%AE%A1%E7%AE%97%E5%88%B0%E7%BD%91%E7%BB%9C%EF%BC%9A%E5%85%88%E5%BB%BA%E7%AB%8B-VPC-%E7%9A%84%E6%8A%BD%E8%B1%A1"><span class="toc-text">2. 从存储、计算到网络：先建立 VPC 的抽象</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E6%8E%A7%E5%88%B6%E9%9D%A2%E4%B8%8E%E6%95%B0%E6%8D%AE%E9%9D%A2"><span class="toc-text">2.1 控制面与数据面</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-%E4%B8%80%E4%B8%AA%E9%80%BB%E8%BE%91%E7%BB%84%E4%BB%B6%E4%B8%8D%E7%AD%89%E4%BA%8E%E4%B8%80%E5%8F%B0%E7%8B%AC%E7%AB%8B%E8%AE%BE%E5%A4%87"><span class="toc-text">2.2 一个逻辑组件不等于一台独立设备</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-VRouter%EF%BC%9A%E8%B7%AF%E7%94%B1%E5%88%B0%E5%BA%95%E7%94%B1%E4%BB%80%E4%B9%88%E5%AE%8C%E6%88%90%EF%BC%9F"><span class="toc-text">3. VRouter：路由到底由什么完成？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E8%B7%AF%E7%94%B1%E7%9A%84%E6%9C%AC%E8%B4%A8"><span class="toc-text">3.1 路由的本质</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-Linux-%E4%B8%AD%E7%9A%84%E8%B7%AF%E7%94%B1%E7%9B%B8%E5%85%B3%E6%A6%82%E5%BF%B5"><span class="toc-text">3.2 Linux 中的路由相关概念</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-RPDB%E3%80%81%E7%AD%96%E7%95%A5%E8%B7%AF%E7%94%B1%E4%B8%8E%E5%A4%9A%E7%A7%9F%E6%88%B7"><span class="toc-text">3.3 RPDB、策略路由与多租户</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-4-VRF%EF%BC%9A%E8%AE%A9%E4%B8%8D%E5%90%8C%E7%A7%9F%E6%88%B7%E6%8B%A5%E6%9C%89%E7%8B%AC%E7%AB%8B%E8%B7%AF%E7%94%B1%E5%9F%9F"><span class="toc-text">3.4 VRF：让不同租户拥有独立路由域</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-5-FIB%EF%BC%9A%E7%9C%9F%E6%AD%A3%E7%94%A8%E4%BA%8E%E5%BF%AB%E9%80%9F%E8%BD%AC%E5%8F%91%E6%9F%A5%E6%89%BE"><span class="toc-text">3.5 FIB：真正用于快速转发查找</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-6-%E8%B7%AF%E7%94%B1%E6%9F%A5%E6%89%BE%E4%B9%8B%E5%90%8E%E8%BF%98%E9%9C%80%E8%A6%81-ARP-NDP"><span class="toc-text">3.6 路由查找之后还需要 ARP &#x2F; NDP</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-VFW%EF%BC%9A%E8%99%9A%E6%8B%9F%E9%98%B2%E7%81%AB%E5%A2%99%E5%A6%82%E4%BD%95%E5%B7%A5%E4%BD%9C%EF%BC%9F"><span class="toc-text">4. VFW：虚拟防火墙如何工作？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-VFW-%E7%9A%84%E8%81%8C%E8%B4%A3"><span class="toc-text">4.1 VFW 的职责</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-Linux-Netfilter%E3%80%81iptables%E3%80%81nftables"><span class="toc-text">4.2 Linux Netfilter、iptables、nftables</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-Conntrack%EF%BC%9A%E6%9C%89%E7%8A%B6%E6%80%81%E9%98%B2%E7%81%AB%E5%A2%99%E7%9A%84%E5%85%B3%E9%94%AE"><span class="toc-text">4.3 Conntrack：有状态防火墙的关键</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-NAT-%E4%B8%8E%E9%98%B2%E7%81%AB%E5%A2%99%E4%B8%8D%E6%98%AF%E4%B8%80%E5%9B%9E%E4%BA%8B"><span class="toc-text">4.4 NAT 与防火墙不是一回事</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-VXLAN%EF%BC%9AOverlay-%E7%BD%91%E7%BB%9C%E5%A6%82%E4%BD%95%E8%B7%A8%E7%89%A9%E7%90%86%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F"><span class="toc-text">5. VXLAN：Overlay 网络如何跨物理宿主机？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-Underlay-%E4%B8%8E-Overlay"><span class="toc-text">5.1 Underlay 与 Overlay</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-VXLAN-%E5%B0%81%E8%A3%85%E7%BB%93%E6%9E%84"><span class="toc-text">5.2 VXLAN 封装结构</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-VXLAN-%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%EF%BC%8C%E4%B8%8D%E8%A7%A3%E5%86%B3%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-text">5.3 VXLAN 解决什么，不解决什么？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-VTEP-%E5%A6%82%E4%BD%95%E7%9F%A5%E9%81%93%E5%B0%81%E8%A3%85%E7%BB%99%E8%B0%81%EF%BC%9F"><span class="toc-text">5.4 VTEP 如何知道封装给谁？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-MTU-%E9%97%AE%E9%A2%98"><span class="toc-text">5.5 MTU 问题</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-VRouter%E3%80%81VFW%E3%80%81VXLAN-%E5%A6%82%E4%BD%95%E5%8D%8F%E4%BD%9C%EF%BC%9F"><span class="toc-text">6. VRouter、VFW、VXLAN 如何协作？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#6-1-%E5%88%86%E5%B8%83%E5%BC%8F%E8%B7%AF%E7%94%B1%E4%B8%8E%E9%9B%86%E4%B8%AD%E5%BC%8F%E8%B7%AF%E7%94%B1"><span class="toc-text">6.1 分布式路由与集中式路由</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E6%95%B0%E6%8D%AE%E9%9D%A2%E5%AE%9E%E7%8E%B0%E6%8A%80%E6%9C%AF%EF%BC%9ALinux%E3%80%81OVS%E3%80%81DPDK%E3%80%81eBPF%E3%80%81SmartNIC"><span class="toc-text">7. 数据面实现技术：Linux、OVS、DPDK、eBPF、SmartNIC</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-Linux-Kernel-Netfilter"><span class="toc-text">7.1 Linux Kernel + Netfilter</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-Open-vSwitch%EF%BC%88OVS%EF%BC%89"><span class="toc-text">7.2 Open vSwitch（OVS）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-DPDK"><span class="toc-text">7.3 DPDK</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-eBPF-%E4%B8%8E-TC"><span class="toc-text">7.4 eBPF 与 TC</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-5-SmartNIC-DPU"><span class="toc-text">7.5 SmartNIC &#x2F; DPU</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E8%B7%AF%E7%94%B1%E3%80%81%E5%AE%89%E5%85%A8%E5%92%8C%E9%9A%A7%E9%81%93%E5%B9%B6%E4%B8%8D%E4%B8%80%E5%AE%9A%E7%94%B1%E4%B8%89%E4%B8%AA%E7%8B%AC%E7%AB%8B%E8%BF%9B%E7%A8%8B%E5%AE%9E%E7%8E%B0"><span class="toc-text">8. 路由、安全和隧道并不一定由三个独立进程实现</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-BGP%E3%80%81EVPN%E3%80%81VXLAN%E3%80%81FIB-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-text">9. BGP、EVPN、VXLAN、FIB 的关系</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#10-%E6%8E%92%E9%9A%9C%E6%97%B6%E5%BA%94%E8%AF%A5%E7%9C%8B%E4%BB%80%E4%B9%88%EF%BC%9F"><span class="toc-text">10. 排障时应该看什么？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#10-1-%E5%85%88%E7%A1%AE%E8%AE%A4%E8%99%9A%E6%8B%9F%E6%9C%BA%E6%9C%AC%E8%BA%AB"><span class="toc-text">10.1 先确认虚拟机本身</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-2-%E6%A3%80%E6%9F%A5-Linux-%E8%B7%AF%E7%94%B1"><span class="toc-text">10.2 检查 Linux 路由</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-3-%E6%A3%80%E6%9F%A5-Netfilter-%E4%B8%8E-Conntrack"><span class="toc-text">10.3 检查 Netfilter 与 Conntrack</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-4-%E6%A3%80%E6%9F%A5-VXLAN"><span class="toc-text">10.4 检查 VXLAN</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-5-%E6%A3%80%E6%9F%A5-OVS"><span class="toc-text">10.5 检查 OVS</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#10-6-%E9%80%90%E5%B1%82%E6%8A%93%E5%8C%85"><span class="toc-text">10.6 逐层抓包</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#11-%E5%B8%B8%E8%A7%81%E8%AF%AF%E5%8C%BA"><span class="toc-text">11. 常见误区</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%B8%80%EF%BC%9AVRouter-%E5%B0%B1%E6%98%AF-iptables"><span class="toc-text">误区一：VRouter 就是 iptables</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%BA%8C%EF%BC%9AVXLAN-%E5%B0%B1%E6%98%AF%E8%B7%AF%E7%94%B1%E5%8D%8F%E8%AE%AE"><span class="toc-text">误区二：VXLAN 就是路由协议</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%B8%89%EF%BC%9A%E6%9C%89%E4%BA%86-VXLAN-%E5%B0%B1%E4%B8%8D%E9%9C%80%E8%A6%81-VRouter"><span class="toc-text">误区三：有了 VXLAN 就不需要 VRouter</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E5%9B%9B%EF%BC%9AVFW-%E4%B8%80%E5%AE%9A%E7%94%B1-iptables-%E5%AE%9E%E7%8E%B0"><span class="toc-text">误区四：VFW 一定由 iptables 实现</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%BA%94%EF%BC%9A%E6%8E%A7%E5%88%B6%E9%9D%A2%E7%BB%84%E4%BB%B6%E5%8F%82%E4%B8%8E%E6%AF%8F%E4%B8%80%E4%B8%AA%E6%95%B0%E6%8D%AE%E5%8C%85%E7%9A%84%E8%BD%AC%E5%8F%91"><span class="toc-text">误区五：控制面组件参与每一个数据包的转发</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E5%85%AD%EF%BC%9ABGP-EVPN-%E5%B0%B1%E6%98%AF%E6%95%B0%E6%8D%AE%E8%BD%AC%E5%8F%91"><span class="toc-text">误区六：BGP&#x2F;EVPN 就是数据转发</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%B8%83%EF%BC%9A%E9%80%BB%E8%BE%91%E4%B8%8A%E7%9A%84-VRouter-%E5%BF%85%E7%84%B6%E6%98%AF%E4%B8%80%E5%8F%B0%E8%99%9A%E6%8B%9F%E6%9C%BA"><span class="toc-text">误区七：逻辑上的 VRouter 必然是一台虚拟机</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#12-%E6%80%BB%E7%BB%93%EF%BC%9A%E5%BB%BA%E7%AB%8B%E4%B8%80%E5%BC%A0%E5%AE%8C%E6%95%B4%E7%9A%84%E5%BF%83%E6%99%BA%E6%A8%A1%E5%9E%8B"><span class="toc-text">12. 总结：建立一张完整的心智模型</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/" title="VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发">VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发</a><time datetime="2026-11-20T02:25:00.000Z" title="发表于 2026-11-20 10:25:00">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/" title="用 JuiceFS 保存训练 Checkpoint 时的容器权限边界">用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</a><time datetime="2026-11-19T11:49:12.000Z" title="发表于 2026-11-19 19:49:12">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/" title="从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门">从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门</a><time datetime="2026-11-19T08:56:46.000Z" title="发表于 2026-11-19 16:56:46">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-volcano-action-plugin-lifecycle-v1-16/" title="Volcano Action 与 Plugin 如何协作：生命周期、扩展点与调用关系">Volcano Action 与 Plugin 如何协作：生命周期、扩展点与调用关系</a><time datetime="2026-11-19T04:54:51.000Z" title="发表于 2026-11-19 12:54:51">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-kueue-architecture-resource-governance/" title="理解 Kueue 的架构与训练推理资源治理">理解 Kueue 的架构与训练推理资源治理</a><time datetime="2026-11-19T03:28:09.000Z" title="发表于 2026-11-19 11:28:09">2026-11-19</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
