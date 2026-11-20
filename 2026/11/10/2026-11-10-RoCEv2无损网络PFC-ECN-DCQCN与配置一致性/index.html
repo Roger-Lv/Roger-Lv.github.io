@@ -1,0 +1,783 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="InfiniBand 把无损做进了链路层，RoCEv2 得你自己一层层补出来——PFC 管一瞬间、ECN 管一阵子、DCQCN 把拥塞信号翻译成速率曲线，外加一条从网卡到交换机必须处处对齐的优先级链。本文拆解三大基石各自的职责与边界，给出网卡侧与三家交换机侧的配置命令与回读方法，梳理四类高频故障与一套排障顺序，并附对 DCQCN 参数默认值的核实更正。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="InfiniBand 把无损做进了链路层，RoCEv2 得你自己一层层补出来——PFC 管一瞬间、ECN 管一阵子、DCQCN 把拥塞信号翻译成速率曲线，外加一条从网卡到交换机必须处处对齐的优先级链。本文拆解三大基石各自的职责与边界，给出网卡侧与三家交换机侧的配置命令与回读方法，梳理四类高频故障与一套排障顺序，并附对 DCQCN 参数默认值的核实更正。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-09T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-10T15:32:31.119Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="GPU集群">
+<meta property="article:tag" content="RoCEv2">
+<meta property="article:tag" content="PFC">
+<meta property="article:tag" content="ECN">
+<meta property="article:tag" content="DCQCN">
+<meta property="article:tag" content="无损网络">
+<meta property="article:tag" content="DCB">
+<meta property="article:tag" content="网络调优">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链",
+  "url": "https://roger-lv.github.io/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-09T16:00:00.000Z",
+  "dateModified": "2026-11-10T15:32:31.119Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">330</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">541</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-09T16:00:00.000Z" title="发表于 2026-11-10 00:00:00">2026-11-10</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-10T15:32:31.119Z" title="更新于 2026-11-10 23:32:31">2026-11-10</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/" data-flag-title="RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>InfiniBand 有个让人羡慕的特性：链路天生无损，credit-based 流控做在硬件里，不需要你教交换机怎么排队。代价是那是一整套得另起炉灶的网络——另一种交换机型号、另一批光模块、另一套运维技能。</p>
+<p>RoCEv2 讲的是它的另一半：同样把 RDMA 跑起来，但跑在你已经有的以太网上。所谓性价比就在这句话里——<strong>不必为了 RDMA 再建一张网</strong>。</p>
+<p>便宜不是白来的。以太网从来不保证不丢包，交换机缓存满了就丢；而 <strong>RDMA 的传输层没有 TCP 那套重传</strong>——丢一个包，队列对（QP）直接进错误态，上层看到的是<strong>卡死，不是变慢</strong>。IB 把无损做进了链路层，RoCEv2 得你自己一层一层补出来。</p>
+<p>入门时间本身就是这笔账的一部分：IB 大约一小时能讲明白，子网管理器把地址、路由、流控全包了；RoCEv2 得按一个月算——打标、映射、队列、门限、四处编号对齐，每一层都得自己盯着。</p>
+<p>一句话概括：<strong>IB 贵，贵出来的那部分钱买的是「运维简单」；RoCEv2 省下的设备钱，会在调优和配置一致性上还回去。</strong></p>
+<blockquote>
+<p>本文是 RDMA 系列的第四篇。前几篇分别拆了 <a href="/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/">RDMA 技术手册</a>、<a href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/">RDMA 技术栈全解</a> 和 <a href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/">RDMA 全链路拆解：从 verbs 到硬件再到训练平台落点</a>——那些讲的是 RDMA 本身怎么工作，这篇讲<strong>承载它的那张以太网要怎么改造成无损的</strong>。</p>
+</blockquote>
+<h2 id="一个-POC-的教训">一个 POC 的教训</h2>
+<p>有个案例我一直记得。两台机器打 <code>ib_write_bw</code>，单流贴着 200G 线速，漂亮得像验收报告。接上 NCCL 跑 all-reduce，吞吐掉到一半，而且掉得不规律：有时能跑满，有时卡十几秒。</p>
+<p>查了两天，是交换机端口少配了 <code>trust dscp</code>——<strong>DSCP 26 的报文没被映射进无损队列，PFC 根本没在管它</strong>。两端都开着 PFC，中间没人把包送进该进的队列。</p>
+<p>这个案例概括了 RoCEv2 的全部难点：<strong>不是某个组件不会配，而是它们之间没对齐。</strong></p>
+<hr>
+<h2 id="一、先把名字钉死：RDMA、IB、RoCE-与-v1-v2">一、先把名字钉死：RDMA、IB、RoCE 与 v1/v2</h2>
+<table>
+<thead>
+<tr>
+<th>名词</th>
+<th>是什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RDMA</strong></td>
+<td>一种<strong>访问方式</strong>：网卡直接读写对端内存，数据不进内核缓冲区，CPU 不负责搬运</td>
+</tr>
+<tr>
+<td><strong>IB</strong></td>
+<td>一整套<strong>专为此设计的网络</strong>：自己的链路层、网络层、传输层、子网管理器和线缆</td>
+</tr>
+<tr>
+<td><strong>RoCE</strong></td>
+<td>把 RDMA 的传输层报文<strong>装进以太网帧</strong>，让它跑在通用以太网上——名字本身就是答案</td>
+</tr>
+</tbody>
+</table>
+<h3 id="v1-与-v2-的分野">v1 与 v2 的分野</h3>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>RoCEv1</th>
+<th>RoCEv2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>封装</td>
+<td>IB 传输层直接进以太网帧</td>
+<td>IB 传输层 → UDP → IP → 以太网</td>
+</tr>
+<tr>
+<td>标识</td>
+<td>Ethertype <code>0x8915</code></td>
+<td>UDP 目的端口 <code>4791</code></td>
+</tr>
+<tr>
+<td>三层路由</td>
+<td><strong>不可路由</strong></td>
+<td>可路由，可走 ECMP</td>
+</tr>
+<tr>
+<td>广播域边界</td>
+<td>跨不过去</td>
+<td>不受限</td>
+</tr>
+</tbody>
+</table>
+<p>多套一层 UDP/IP 是有代价的——净荷比例被削掉一点。换来的是能路由、能规模化，这笔交换在几乎所有生产环境里都划算。</p>
+<h3 id="最值得盯的一行">最值得盯的一行</h3>
+<p><strong>网卡 GID 表里，同一个地址占两个相邻索引：前一个 v1，后一个 v2。</strong></p>
+<p>很多「配了 RoCEv2 却不跨三层」的问题，根因就是索引选错——你以为在用 v2，实际走的是 v1。判读方法：</p>
+<blockquote>
+<p><code>show_gids</code> 里同一列地址出现两次、VER 分别写 <code>v1</code> 和 <code>v2</code>、且 <strong>v2 那行带 IPv4 地址</strong>的，才是你要的索引。<br>
+索引 <code>0/1</code> 是链路本地默认 GID（<code>fe80::</code> 开头），一般不是业务地址。</p>
+</blockquote>
+<hr>
+<h2 id="二、无损三件套：PFC、ECN、DCQCN">二、无损三件套：PFC、ECN、DCQCN</h2>
+<p>带宽这一栏两条路线完全一样：200 Gbps 就是 200 Gbps。<strong>差别全在丢包。</strong></p>
+<p>以太网想跑 RDMA，必须先被改造成不丢包的网络，工具箱叫 DCB（Data Center Bridging）。真正干活的是三样东西：</p>
+<table>
+<thead>
+<tr>
+<th>基石</th>
+<th>管的尺度</th>
+<th>在哪工作、何时触发</th>
+<th>代价与边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PFC</strong></td>
+<td><strong>突发</strong></td>
+<td>逐跳链路层；队列越过 XOFF 就向上游发 PAUSE</td>
+<td>反压会顺着链路往外传，严重了成死锁</td>
+</tr>
+<tr>
+<td><strong>ECN</strong></td>
+<td><strong>持续拥塞</strong></td>
+<td>交换机打标 → 接收端回 CNP → 发送端降速</td>
+<td>依赖端到端都支持，门限挑设备</td>
+</tr>
+<tr>
+<td><strong>DCQCN</strong></td>
+<td><strong>把信号翻译成速率</strong></td>
+<td>发送端网卡；收到 CNP 立刻降速</td>
+<td>参数随固件版本变，必须自己回读</td>
+</tr>
+<tr>
+<td>优先级映射</td>
+<td>让报文先进对队列</td>
+<td>网卡与交换机入口</td>
+<td>严格说不属&quot;基石&quot;，但<strong>它错了一切白搭</strong></td>
+</tr>
+</tbody>
+</table>
+<p>一句话记住分工：<strong>PFC 管一瞬间，ECN 管一阵子，DCQCN 管怎么把速度降下来、再小心翼翼地升回去。</strong></p>
+<h3 id="2-1-PFC：逐优先级地向上游喊停">2.1 PFC：逐优先级地向上游喊停</h3>
+<p>PFC（Priority-based Flow Control，<strong>IEEE 802.1Qbb</strong>）做的是链路层反压，但比老式以太 PAUSE 聪明一点：<strong>暂停的单位是优先级，不是整条链路</strong>。</p>
+<p>运行顺序：</p>
+<ol>
+<li><strong>水位</strong>——接收侧每个端口按优先级各自排队，报文持续涌入，某个队列水位往上爬。</li>
+<li><strong>触发</strong>——水位越过 XOFF 门限那一刻，接收侧朝直接上游发 PAUSE 帧，帧里带优先级号和暂停配额。</li>
+<li><strong>生效</strong>——上游收到后，<strong>只停这一个优先级</strong>，其余七个照常走。</li>
+<li><strong>排空与恢复</strong>——下游继续转发，水位回落到 XON 之下再发配额为零的 PAUSE 解除；<strong>就算解除帧丢了，暂停配额耗尽也会自动恢复</strong>。</li>
+</ol>
+<p><strong>两个决定&quot;是保护还是灾难&quot;的参数：</strong></p>
+<p><strong>① headroom。</strong> 从「接收侧决定发 PAUSE」到「上游真正停下」，中间有一段时间：PAUSE 帧要在链路上走一趟，上游处理要时间，更重要的是<strong>线上还飞着已经在途的报文</strong>。这段时间的在途报文加 MTU，就是 headroom 必须预留的空间。</p>
+<blockquote>
+<p>留不够，刹车还没生效，包已经先丢了——<strong>那时 PFC 开着等于白开</strong>。headroom 按链路速率、线缆长度与 MTU 算出来，<strong>不是拍脑袋填的，也不能跨交换机型号抄</strong>。</p>
+</blockquote>
+<p><strong>② 给谁开。</strong> 把八个优先级全开 PFC 看起来最保险，实际最危险：任何一类流量的拥塞都会触发暂停帧，把毫不相干的流量一起堵住，还会显著抬高死锁概率。<strong>正确做法是只给承载 RoCE 的那一个优先级开。</strong></p>
+<p><strong>PFC 的两个老毛病</strong>：<strong>队头阻塞</strong>（一个优先级被暂停时，共享同一端口缓冲的其他流量也可能被打到）与<strong>反压传播</strong>（暂停是逐跳的，一条链路的拥塞能顺着路径一级级传出去）。</p>
+<blockquote>
+<p><strong>「无损」不等于「不丢包」。</strong> PFC 只保证链路这一段不丢。网卡接收缓冲区、PCIe 通道、驱动队列都可能丢。<strong>验收只盯 pause 计数会漏掉端侧。</strong></p>
+</blockquote>
+<h3 id="2-2-ECN：在队列被塞满之前先打声招呼">2.2 ECN：在队列被塞满之前先打声招呼</h3>
+<p>PFC 是「已经快满了，你停下」。ECN（<strong>RFC 3168</strong>）要解决的是：<strong>能不能别等到快满</strong>。</p>
+<p>它借用 IP 头里的两位做标记，流程绕一圈：</p>
+<ol>
+<li>发送端把报文标记为 <strong>ECT</strong>（支持 ECN 的意思），正常发出。</li>
+<li>交换机看队列，深度超过标记门限时，<strong>按概率把 ECT 改写成 CE</strong>——注意是<strong>改写，不是丢弃</strong>，报文照常转发。</li>
+<li>接收端网卡看到 CE，生成 <strong>CNP</strong> 回报发送端。</li>
+<li>发送端收到 CNP，据此降速。</li>
+</ol>
+<p><strong>四个决定它能不能用起来的细节：</strong></p>
+<ul>
+<li><strong>标记是概率性的。</strong> 交换机走 RED/WRED 那套：队列越深，被打标概率越高；超过上界就直接丢弃。所以**「有标记」是好事**，说明 ECN 这道闸在正常工作。</li>
+<li><strong>接收端不是每个 CE 都回 CNP</strong>——那会让自己变成一场新的风暴。实现里有最小间隔做节流。</li>
+<li><strong>CNP 自己不能被丢。</strong> 它是几十字节的小报文，通常给它单独一个 DSCP（<strong>常见 48</strong>）并走严格优先队列。它要是丢了，调速信号就断了。</li>
+<li><strong>要有发电厂。</strong> 如果队列深度还没到 ECN 门限、突发却已经把水抬起来了，ECN 来不及反应，<strong>那一刻还是靠 PFC 兜住</strong>。所以 PFC 不能拆。</li>
+</ul>
+<h3 id="2-3-DCQCN：把-CE-信号翻译成一条速率曲线">2.3 DCQCN：把 CE 信号翻译成一条速率曲线</h3>
+<p>ECN 只告诉你「堵了」，没说该降到多少、什么时候能回升。这件事由 DCQCN 做——出自 <strong>2015 年 SIGCOMM</strong>，Microsoft 与 Mellanox 联合发表，如今是多数 RoCE 网络的默认拥塞控制。</p>
+<p>它把三方分了角色：</p>
+<table>
+<thead>
+<tr>
+<th>角色</th>
+<th>是谁</th>
+<th>干什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>CP</strong>（Congestion Point）</td>
+<td>交换机</td>
+<td>概率打标</td>
+</tr>
+<tr>
+<td><strong>NP</strong>（Notification Point）</td>
+<td>接收端</td>
+<td>生成 CNP</td>
+</tr>
+<tr>
+<td><strong>RP</strong>（Reaction Point）</td>
+<td>发送端</td>
+<td>调速率</td>
+</tr>
+</tbody>
+</table>
+<p>前两节讲的就是 CP 和 NP；<strong>DCQCN 真正定义的是 RP 的行为</strong>。</p>
+<p>发送端的速率调整只有两个方向，但<strong>完全不对称</strong>：</p>
+<p><strong>往下降，一步到位。</strong> 收到一个 CNP 就更新 α（拥塞程度的 EWMA 平滑，不是瞬时判断），然后按 <code>速率 = 速率 × (1 − α/2)</code> 降一档。α 接近 1 时几乎直接砍半。<strong>这个「降得快」是刻意的</strong>——拥塞发生时，反应慢半拍比降过头更危险。</p>
+<p><strong>往上升，小心翼翼。</strong> 一段时间没收到 CNP 才触发一次提速，且分阶段：先做若干次<strong>快恢复</strong>（向目标速率折半靠拢），如果还是没有 CNP，切成<strong>加性增</strong>（每个周期只抬一小截）；恢复初期还有一种更激进的上抬模式。</p>
+<blockquote>
+<p>为什么这么磨蹭？因为<strong>发送端判断「没事了」的唯一依据就是「没收到 CNP」，而这个信息本身就是滞后的</strong>——冲太猛，下一轮 CNP 立刻就到，吞吐震荡。</p>
+</blockquote>
+<h4 id="⚠️-参数这件事：论文值与固件默认值不是一回事">⚠️ 参数这件事：论文值与固件默认值不是一回事</h4>
+<p>流传的说法常引用论文推荐量级（α 更新周期约 55 µs、字节计数阈值约 150 KB）。但<strong>落到实际网卡上，固件默认值是另一套数</strong>。</p>
+<p>已核实的 NVIDIA DOCA 官方 DCQCN 参数页（ConnectX-4 及以后）给出的<strong>实际默认值</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>官方默认值</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DcQcnDceAlphaUpdatePeriod</code>（DCE_TCP_RTT）</td>
+<td><strong>1 µs</strong></td>
+<td>α 更新周期</td>
+</tr>
+<tr>
+<td><code>DcQcnDceAlphaG</code>（DCE_TCP_G）</td>
+<td>1019</td>
+<td>α 的 EWMA 系数（定点，10 位小数）</td>
+</tr>
+<tr>
+<td><code>DcQcnInitialAlphaValue</code></td>
+<td>1023</td>
+<td>首个 CNP 的初始 α</td>
+</tr>
+<tr>
+<td><code>DcQcnRateReduceMonitorPeriod</code></td>
+<td><strong>4 µs</strong></td>
+<td>两次降速之间的最小间隔</td>
+</tr>
+<tr>
+<td><code>DcQcnMinDecFac</code></td>
+<td>50（%）</td>
+<td>最大降速比例</td>
+</tr>
+<tr>
+<td><code>DcQcnTimeReset</code></td>
+<td><strong>300 µs</strong></td>
+<td>两次提速事件之间的时间</td>
+</tr>
+<tr>
+<td><code>DcQcnByteReset</code></td>
+<td><strong>32767 × 64 B</strong> ≈ 2 MB</td>
+<td>两次提速事件之间的字节计数</td>
+</tr>
+<tr>
+<td><code>DcQcnAiRate</code> / <code>DcQcnHaiRate</code></td>
+<td>5 / 50 Mb/s</td>
+<td>加性增 / 快增速率</td>
+</tr>
+<tr>
+<td><code>DcQcnCnpDscp</code></td>
+<td><strong>48</strong></td>
+<td>CNP 报文的 DSCP（文中&quot;常见 48&quot;得到确认）</td>
+</tr>
+<tr>
+<td><code>DcQcnMinTimeBetweenCnps</code></td>
+<td><strong>4 µs</strong></td>
+<td>两个 CNP 之间的最小间隔</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>注意 α 更新周期：论文量级 55 µs，而 NVIDIA 固件默认是 1 µs——差了 55 倍。</strong> 字节计数阈值同样对不上（论文量级 150 KB，固件默认约 2 MB）。</p>
+<p>这不是谁写错了，而是<strong>论文的推荐值、厂商的固件默认值、你现场该设的值，是三个不同的东西</strong>。照抄任何一张现成的参数表都是这个领域最常见的踩坑方式——因为那张表很可能来自不同固件、不同网卡型号、不同收发距离。</p>
+<p><strong>上线前的动作</strong>：拿 <code>mlnx_qos</code>、<code>mlxconfig</code> 或对应厂家的参数查询命令，把这几个值<strong>在自己的机器上回读一遍</strong>再决定改不改。</p>
+</blockquote>
+<h4 id="三者的协作顺序">三者的协作顺序</h4>
+<p><strong>ECN 必须在 PFC 之前动作。</strong> ECN 的标记门限要<strong>低于</strong> PFC 的 XOFF 门限，让发送端在缓存还没见底时先减速。</p>
+<p>顺序反了的现场特别好认：<strong>ECN 标记数几乎为零，PFC 的 pause 计数一路疯涨。</strong></p>
+<hr>
+<h2 id="三、优先级必须处处对齐：打标、映射、队列">三、优先级必须处处对齐：打标、映射、队列</h2>
+<p>三大基石要生效有个前提：<strong>报文得先被分进那个开了 PFC、配了 ECN 的队列</strong>。这件事跨越三台设备、两个协议层，是全篇最容易出事的一段。</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>常见配错</th>
+<th>现场表现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>打标</strong></td>
+<td>应用或驱动用默认 DSCP 0</td>
+<td>单流正常，并发时抖动剧烈</td>
+</tr>
+<tr>
+<td><strong>映射</strong></td>
+<td>端口没 <code>trust dscp</code></td>
+<td><strong>PFC 计数器长时间为 0，丢包照旧</strong></td>
+</tr>
+<tr>
+<td><strong>队列</strong></td>
+<td>ECN 门限高于 PFC XOFF</td>
+<td>ECN 标记数极低，pause 计数疯涨</td>
+</tr>
+<tr>
+<td><strong>队列</strong></td>
+<td>ECN 门限设得过低</td>
+<td>标记数暴涨，流量震荡、吞吐塌陷</td>
+</tr>
+</tbody>
+</table>
+<p><strong>打标层</strong>决定报文头上写什么。麻烦在默认值：不少驱动和应用的默认 DSCP 是 0，<strong>NCCL 的 <code>NCCL_IB_TC</code> 默认也是 0</strong>。指望默认值刚好落进无损队列，不现实。</p>
+<p><strong>映射层</strong>决定标记被翻译成哪个内部优先级：<strong>二层设备看 PCP（8 个优先级），三层设备看 DSCP（64 个值）</strong>。走三层就得让交换机信任 DSCP——<strong>不 trust dscp，报文按默认优先级进去，后面的 PFC 和 ECN 全落空</strong>。这正是开头那个 POC 卡了两天的原因。</p>
+<p><strong>队列层</strong>才是 PFC 和 ECN 生效的地方，ECN 门限必须低于 PFC XOFF 门限。</p>
+<blockquote>
+<p><strong>一句话验收法</strong>：看 PFC 的 TX 计数。<strong>长期为 0 或极低，说明链路靠 ECN 就稳住了，这是健康状态</strong>；如果它一路疯涨，别急着加缓存，先回头查 ECN 门限。</p>
+</blockquote>
+<hr>
+<h2 id="四、网卡侧：命令与回读">四、网卡侧：命令与回读</h2>
+<h3 id="4-1-先读对-GID-表">4.1 先读对 GID 表</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 查当前 RoCE 模式</span></span><br><span class="line">cma_roce_mode -d mlx5_0 -p 1</span><br><span class="line"><span class="comment"># 按需切换：-m 1 是 v1，-m 2 是 v2</span></span><br><span class="line">cma_roce_mode -d mlx5_0 -p 1 -m 2</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p><strong>一处「两说」</strong>：NVIDIA 官方论坛回复写过 mlx5 驱动配合 RDMA_CM 默认用 RoCEv2；也有技术文档描述为「默认可能运行在 RoCEv1，需要切到 v2」。两者不矛盾，<strong>取决于驱动版本与发行版</strong>，但对你的含义一样：<strong>别信默认值，跑一次查看命令确认。</strong></p>
+</blockquote>
+<h3 id="4-2-QoS-与-PFC">4.2 QoS 与 PFC</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ① 按三层 DSCP 分类，而不是二层的 PCP</span></span><br><span class="line">mlnx_qos -i ens1f0 --trust dscp</span><br><span class="line"></span><br><span class="line"><span class="comment"># ② 只在优先级 3 上开 PFC</span></span><br><span class="line"><span class="comment">#    8 个逗号分隔的值，从优先级 0 到 7，1 表示开启</span></span><br><span class="line">mlnx_qos -i ens1f0 --pfc 0,0,0,1,0,0,0,0</span><br><span class="line"></span><br><span class="line"><span class="comment"># ③ 不带参数就是回读，必须跑一次</span></span><br><span class="line"><span class="comment">#    看 trust 状态、PFC 位图、UP 到 TC 的映射</span></span><br><span class="line">mlnx_qos -i ens1f0</span><br></pre></td></tr></table></figure>
+<p><strong>第三步不能省。</strong> 现场见过两边都「配了」PFC、优先级号却差一个的，报文根本没进同一个队列。</p>
+<h3 id="4-3-发端打标与拥塞控制开关">4.3 发端打标与拥塞控制开关</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 参数是 IP 头 ToS 字节而不是 DSCP 本身，换算是 DSCP 左移 2 位</span></span><br><span class="line"><span class="comment"># 104 &gt;&gt; 2 = DSCP 26</span></span><br><span class="line">cma_roce_tos -d mlx5_0 -t 104</span><br><span class="line"></span><br><span class="line"><span class="comment"># 看当前哪些 TC 开了 DCQCN</span></span><br><span class="line">mlxconfig -d mlx5_0 q | grep ROCE_CC</span><br><span class="line"><span class="comment"># ROCE_CC_PRIO_MASK_P1  255   ← 掩码 255 表示所有 TC 都开了</span></span><br></pre></td></tr></table></figure>
+<p>掩码可以收窄到只给数据优先级。<strong>CNP 报文的 DSCP 在 DCQCN 参数表里对应 <code>DcQcnCnpDscp</code>，官方默认 48</strong>，建议设成与数据不同的值并让它走严格优先队列。</p>
+<h3 id="4-4-三行验收">4.4 三行验收</h3>
+<ol>
+<li><code>mlnx_qos -i &lt;dev&gt;</code> 回读里，<strong>trust 状态应是 <code>dscp</code>、目标优先级的 PFC 位应是 1</strong></li>
+<li><code>show_gids</code> 里给 NCCL 的那个索引，<strong>VER 必须是 v2</strong></li>
+<li><code>ibdev2netdev</code> 里 rdma 设备要对上业务网卡，<strong>不能对到管理口</strong></li>
+</ol>
+<hr>
+<h2 id="五、交换机侧：三家对照">五、交换机侧：三家对照</h2>
+<p>三家写法差别很大，目标完全一致。以下为<strong>配置示意</strong>，省略了 VLAN、路由、STP 等前置配置。</p>
+<h3 id="5-1-华为-CloudEngine：先定义模板，再挂到接口">5.1 华为 CloudEngine：先定义模板，再挂到接口</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">system-view</span><br><span class="line"># ① 定义 PFC 模板：指定在优先级 3 上做反压</span><br><span class="line">dcb pfc mypfc</span><br><span class="line">  priority 3</span><br><span class="line">quit</span><br><span class="line"># ② 把模板挂到接口上</span><br><span class="line">#    mode manual 的含义是不走 DCBX 协商，两端手工对齐</span><br><span class="line">interface 100ge 1/0/1</span><br><span class="line">  dcb pfc enable mypfc mode manual</span><br><span class="line">quit</span><br><span class="line"># ③ 提交并回读：预期回显里出现 default 3</span><br><span class="line">commit</span><br><span class="line">display dcb pfc-profile default</span><br></pre></td></tr></table></figure>
+<p>配套还有 ECN 门限、PFC 死锁检测、动态 ECN 门限、快速 CNP 标记等功能，官方《配置指南-智能无损网络》逐项列出。<strong>ECN 命令各版本写法有差异，以对应版本为准。</strong></p>
+<h3 id="5-2-Cisco-Nexus-9000：MQC-的三段式">5.2 Cisco Nexus 9000：MQC 的三段式</h3>
+<p>官方验证设计用的是 MQC 三段式：<strong>分类归 <code>type qos</code>、排队与 ECN 归 <code>type queuing</code>、PFC 归 <code>type network-qos</code></strong>。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"># ① 分类：把 DSCP 24 的报文归进 qos-group 3</span><br><span class="line">class-map type qos match-all class-q3</span><br><span class="line">  match dscp 24</span><br><span class="line">policy-map type qos QOS_classification_policy</span><br><span class="line">  class class-q3</span><br><span class="line">    set qos-group 3</span><br><span class="line"></span><br><span class="line"># ② 排队与 ECN：给队列 3 分带宽，并把标记打开</span><br><span class="line">policy-map type queuing custom-8q-out-policy</span><br><span class="line">  class type queuing c-out-8q-q3</span><br><span class="line">    bandwidth remaining percent 60</span><br><span class="line">    # 这个区间必须落在 PFC 的 XOFF 门限之前</span><br><span class="line">    random-detect minimum-threshold 150 kbytes maximum-threshold 3000 kbytes drop-probability 7 weight 0</span><br><span class="line">    # 这一行才是真正把「标记」打开，漏了就只是普通丢包</span><br><span class="line">    ecn</span><br><span class="line"></span><br><span class="line"># ③ PFC：指定针对 cos 3 做暂停</span><br><span class="line">policy-map type network-qos custom-8q-nq-policy</span><br><span class="line">  class type network-qos c-8q-nq3</span><br><span class="line">    mtu 9216              # 无损网络跑巨帧</span><br><span class="line">    pause pfc-cos 3       # 只针对这一个优先级做反压</span><br></pre></td></tr></table></figure>
+<p>排队与 network-qos 策略用 <code>system qos</code> 全局挂，分类策略在接口 input 方向挂。</p>
+<h3 id="5-3-SONiC：命令短，靠-profile-说话">5.3 SONiC：命令短，靠 profile 说话</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"># ① 在接口上打开优先级 3 的 PFC</span><br><span class="line">config interface pfc priority Ethernet0 3 on</span><br><span class="line"></span><br><span class="line"># ② 给无损队列套一个 ECN profile</span><br><span class="line">#    gmin / gmax 是起标的队列深度下限与上限，单位是字节</span><br><span class="line">ecnconfig -p AZURE_LOSSLESS -gmin 1048576 -gmax 2097152</span><br><span class="line"></span><br><span class="line"># ③ 回读确认</span><br><span class="line">show pfc counters</span><br><span class="line">show ecn</span><br></pre></td></tr></table></figure>
+<p><code>AZURE_LOSSLESS</code> 只是常见的一组内置 profile，换成你自己发行版的名字即可。</p>
+<h3 id="5-4-优先级取值：三个都对，关键是一致">5.4 优先级取值：三个都对，关键是一致</h3>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>常用优先级值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>思科验证设计</td>
+<td>DSCP <strong>24</strong></td>
+</tr>
+<tr>
+<td>很多华为侧部署</td>
+<td>DSCP <strong>26</strong></td>
+</tr>
+<tr>
+<td>另有</td>
+<td>DSCP <strong>48</strong>（通常留给 CNP）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>三个值都对，关键是端到端一致</strong>——网卡打的标记、交换机信任的字段、进哪个队列、队列上开的是哪个优先级的 PFC，<strong>四处必须指向同一个编号</strong>。</p>
+<h3 id="5-5-PFC-死锁：三家都在用看门狗">5.5 PFC 死锁：三家都在用看门狗</h3>
+<p>死锁靠看门狗规避：监测某队列是否长期暂停又不排空，超过检测时间就人为干预，<strong>把该队列流量丢弃一段时间打断它</strong>，之后再恢复。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"># NVIDIA Cumulus Linux</span><br><span class="line">nv set interface swp1 qos pfc-watchdog ...</span><br><span class="line"></span><br><span class="line"># SONiC</span><br><span class="line">#   --action drop          丢弃该队列流量，用来打断环路</span><br><span class="line">#   200                    检测时间，单位毫秒</span><br><span class="line">#   --restoration-time 200 干预之后等多久恢复</span><br><span class="line">pfcwd start --action drop Ethernet0 200 --restoration-time 200</span><br><span class="line"></span><br><span class="line"># Arista EOS</span><br><span class="line">priority-flow-control pause watchdog default timeout 10</span><br><span class="line">priority-flow-control pause watchdog default recovery-time 10</span><br><span class="line">forced</span><br></pre></td></tr></table></figure>
+<p><strong>三个参数</strong>：检测时间（卡多久算死锁）、恢复时间（干预后等多久放行）、动作（<code>drop</code> 丢弃以打断，<code>forward</code> 只用于调试）。华为侧对应的能力叫 <strong>PFC 死锁检测</strong>，命令以官方配置指南为准，<strong>生产环境建议默认开</strong>。</p>
+<h3 id="5-6-一条更基础的要求：把广播与组播挡在无损类之外">5.6 一条更基础的要求：把广播与组播挡在无损类之外</h3>
+<p>这条来自一个公开经典案例的修复动作——<strong>微软早年跑大规模 RoCE 时遇到过跨交换机 PFC 死锁</strong>：一台服务器的 ARP/MAC 映射不完整，上游交换机把无损流量泛洪到所有端口，PAUSE 帧顺上游传播，在各交换机之间形成互相暂停的闭环，<strong>重启服务器也解不开</strong>。</p>
+<p>修复两步：<strong>禁止广播组播进无损类</strong>；<strong>ARP 表项不完整时直接丢弃无损报文而非退回泛洪</strong>。</p>
+<hr>
+<h2 id="六、NCCL-侧变量：按四组读才不会乱">六、NCCL 侧变量：按四组读才不会乱</h2>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ── GID 与版本：决定实际跑的是 v2 还是 v1 ──</span></span><br><span class="line">NCCL_IB_GID_INDEX           <span class="comment"># RoCE 模式下用哪个 GID，默认 -1（由 NCCL 自动选）</span></span><br><span class="line">NCCL_IB_ROCE_VERSION_NUM    <span class="comment"># 自动选 GID 时的 RoCE 版本，默认 2</span></span><br><span class="line">NCCL_IB_ADDR_FAMILY         <span class="comment"># 自动选 GID 时的地址族，默认 AF_INET</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ── 打标：决定报文被分进哪个队列 ──</span></span><br><span class="line">NCCL_IB_TC                  <span class="comment"># 流量类别字节，默认 0，不是裸 DSCP 值</span></span><br><span class="line">NCCL_IB_SL                  <span class="comment"># 服务等级，默认 0</span></span><br><span class="line">NCCL_IB_FIFO_TC             <span class="comment"># 控制消息的流量类别</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ── 链路行为：超时、重试、每对连接的 QP 数 ──</span></span><br><span class="line">NCCL_IB_QPS_PER_CONNECTION  <span class="comment"># 每对 rank 的 QP 数，默认 1</span></span><br><span class="line">NCCL_IB_ADAPTIVE_ROUTING    <span class="comment"># IB 默认开，RoCE 默认关</span></span><br><span class="line">NCCL_IB_TIMEOUT             <span class="comment"># 4.096 µs × 2^v，新版本默认 20</span></span><br><span class="line">NCCL_IB_RETRY_CNT           <span class="comment"># 重试次数，默认 7</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># ── GPU 直连 ──</span></span><br><span class="line">NCCL_NET_GDR_LEVEL          <span class="comment"># GPUDirect RDMA 的 NIC–GPU 距离门槛</span></span><br></pre></td></tr></table></figure>
+<p><strong>两处需要留意的地方：</strong></p>
+<p><code>NCCL_IB_GID_INDEX</code> 有一处「两说」：现行官方文档写的默认值是 <strong>-1</strong>（由 NCCL 依据地址族与版本号自动选），<strong>较早版本的手册写默认 0</strong>。差别不小——<strong>写 0 会落到链路本地的默认 GID，-1 则可能选到带 IP 的那条</strong>。倾向留空不设，只在确认 fabric 稳定、并用 <code>show_gids</code> 核对过索引之后才显式 pin。</p>
+<blockquote>
+<p>补充一条本系列早前已核实的时间线：该变量的默认值<strong>自 NCCL 2.21 起由 <code>0</code> 改为 <code>-1</code></strong>（2.21 release notes: “Added support for dynamic GID detection on RoCE”）；官方文档当前表述为 <strong>AUTO（since 2.32u1）</strong>，并注明 “-1 is a legacy alias for AUTO”。所以「默认 0」不是错，是<strong>过时</strong>。</p>
+</blockquote>
+<p><code>NCCL_NET_GDR_LEVEL</code> 也有两种写法：现行文档用 <code>LOC / PIX / PXB / PHB / SYS</code> 字符串，早期用 0–4 的数字，<strong>含义一一对应</strong>（<code>&gt;4</code> 一律按 <code>SYS</code> 解释；整数形式官方已不推荐）。</p>
+<hr>
+<h2 id="七、组网三档">七、组网三档</h2>
+<h3 id="7-1-一台盒式交换机：只求先跑通">7.1 一台盒式交换机：只求先跑通</h3>
+<p>几台服务器接一台盒式交换机，甚至两台机器背靠背直连。规模上限一眼能算出来：<strong>端口数 ÷ 每台上联口数</strong>。</p>
+<p>这一档的价值不在性能，<strong>在于验证</strong>：GID 索引对不对、DSCP 有没有被信任、PFC 和 ECN 有没有真的在同一个队列上生效。<strong>把这里跑出来的单流数字当作基线</strong>，后面所有「性能不行」的判断都要回到这条基线上比。</p>
+<h3 id="7-2-两层-Fat-Tree：绝大多数集群的默认答案">7.2 两层 Fat-Tree：绝大多数集群的默认答案</h3>
+<p>Leaf（TOR）接服务器，Spine 只负责 Leaf 间转发，<strong>每台 Leaf 上连每一台 Spine</strong>。</p>
+<p>优点是<strong>确定性</strong>：任意两台服务器之间都是同样的跳数、同样的可用带宽。代价是链路数量随规模一起涨——这也是「先问收敛比」的原因：<strong>Leaf 上行带宽总额与下行接入带宽总额之比，1:1 是不阻塞，3:1 是省钱，训练集群尽量别在这里省。</strong></p>
+<p>再往上就在 Spine 之上加 Core，变成三层 Clos。</p>
+<h3 id="7-3-轨道优化：把连线照着通信模式安排">7.3 轨道优化：把连线照着通信模式安排</h3>
+<p>把服务器的<strong>第 i 张网卡固定接到第 i 台 Leaf</strong>，于是「服务器 A 的 GPU 0」和「服务器 B 的 GPU 0」之间只隔一台交换机。</p>
+<p>而集合通信里大量的邻居通信恰好发生在同编号节点之间——数据并行的 ring、梯度的某段拆分，都是这个形状。<strong>把连线照着通信模式安排，通信就少跨好几个来回。</strong></p>
+<p>代价是<strong>容错变窄</strong>：一条轨道挂了，对应那组通信整段受影响，所以轨道方案通常配双上联或冗余平面。<strong>取舍一句话：用一点灵活性，换通信路径的确定性。</strong></p>
+<h3 id="7-4-规模上去后的两个敌人">7.4 规模上去后的两个敌人</h3>
+<p><strong>敌人一：ECMP 哈希不均。</strong> AI 流量的特征是<strong>流少、流大、可复现、突发强</strong>，单流能瞬间拉到线速，标准 ECMP 按五元组哈希在这么少的流面前分布得很不均匀。</p>
+<p>有公开部署数据讲过：早期按目的下联口做路径绑定、一个机柜只分配一部分节点给单个任务时，<strong>训练退化超过 30%</strong>；后来改成交换机 ASIC 用 UDF 按目的 QP 哈希的增强 ECMP，再加集合通信库侧的 QP 扩展，<strong>AllReduce 最多提升 40%</strong>。（数据来自公开论文；「单流满速、多流暴跌」这个现象在现场见过不止一次。）</p>
+<p>三种缓解手段可以同时上：</p>
+<ol>
+<li><strong>交换机侧按自定义字段（UDF）哈希</strong>，把目的 QP 纳入哈希因子</li>
+<li><strong>集合通信库侧提高每对 rank 的 QP 数</strong>（NCCL 里就是 <code>NCCL_IB_QPS_PER_CONNECTION</code>），让哈希样本变多</li>
+<li><strong>整机方案用支持逐包自适应路由的交换机加网卡</strong>，由网卡侧重排恢复有序</li>
+</ol>
+<p><strong>敌人二：反压半径。</strong> PFC 的暂停是逐跳的，一个小环路上的拥塞能顺着链路一级级传出去。<strong>无损域越大，出问题时被波及的范围越大。</strong></p>
+<p>工程判断：<strong>能不用无损队列承载的流量，一律别放进来</strong>——尤其是广播与组播；大的无损域要配好看门狗。</p>
+<hr>
+<h2 id="八、四类高频故障与一套排障顺序">八、四类高频故障与一套排障顺序</h2>
+<p><strong>按现场出现频率排：</strong></p>
+<p><strong>① PFC 死锁（最凶）。</strong> A 等 B 释放缓存，B 等 C，C 又等 A，每个交换机都在等别人的暂停解除，流量彻底卡死，<strong>不人工干预不会自愈</strong>。现象好认——节点间通信突然中断，网卡 <code>rx_pause</code>/<code>tx_pause</code> 计数爆表，NCCL 卡住不动。<strong>日志里一条 ERROR 都没有。</strong></p>
+<p><strong>② ECN 门限拍脑袋。</strong> 有个集群迁到新机房后，同样的模型、同样的卡数，<strong>训练吞吐掉了七成</strong>；单流 <code>ib_write_bw</code> 满速正常，一上多流并发就掉到个位数。根因是新机房的交换机沿用了旧的 ECN 阈值模板，而设备缓存结构完全不同。<strong>阈值要按设备实际缓存深度重算，不能跨型号抄。</strong></p>
+<p><strong>③ GID index 选错、实际跑成 v1。</strong> 这个坑的特点是**「一半通一半不通」**——同一广播域内通畅，一跨三层就完蛋，而两端各自测单流是好的，不会暴露。判据就是核 <code>show_gids</code> 的 VER 列。</p>
+<p><strong>④ ECMP 哈希不均加队头阻塞。</strong> 现象是「单流满速、多流暴跌」。验收建议：<strong>把多流与单流的比值写进验收标准</strong>，这个数比单纯的带宽更能反映网络真实健康度。</p>
+<h3 id="排障顺序：顺序比工具重要">排障顺序：顺序比工具重要</h3>
+<ol>
+<li><strong>核两端优先级是否对齐</strong></li>
+<li><strong>看 PFC 的 pause 计数</strong>是稳定在低位还是一路疯涨</li>
+<li><strong>看 ECN 标记计数</strong>是否失控</li>
+<li>比单流与多流的带宽差距</li>
+<li>核 RoCE 版本与 GID 索引</li>
+<li>看无损队列深度是否长期贴着 XOFF 门限</li>
+<li><strong>最后才轮到怀疑硬件</strong>——速率协商、光模块、线缆</li>
+</ol>
+<blockquote>
+<p><strong>前两步不需要改任何配置。</strong> 顺序反了，你会在物理层浪费一天，然后发现问题在一个 <code>trust dscp</code> 上。</p>
+</blockquote>
+<p><strong>一个提速诊断技巧</strong>：怀疑 ECN 门限设低了，最快的验证是在交换机上临时把 ECN 起始门限调高，再重跑同一轮压测。<strong>带宽明显回升说明之前阈值过于保守；没变化就是方向错了</strong>，去查 PFC 与队列映射。</p>
+<hr>
+<h2 id="九、上线前验收：六项指标">九、上线前验收：六项指标</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>怎么量</th>
+<th>合格线怎么看</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>优先级端到端一致性</strong></td>
+<td>两端逐处回读优先级号与 trust</td>
+<td>四处编号一致，无默认值兜底</td>
+</tr>
+<tr>
+<td><strong>PFC pause 计数</strong></td>
+<td>压测期间连续采集，看趋势</td>
+<td>稳定低位；只增不减即为异常</td>
+</tr>
+<tr>
+<td><strong>ECN 标记速率</strong></td>
+<td>交换机标记计数 + 网卡 CNP 计数</td>
+<td>有标记但不成片爆发</td>
+</tr>
+<tr>
+<td>单流与多流带宽比</td>
+<td>同一对节点各打一轮</td>
+<td>多流不低于单流的八成</td>
+</tr>
+<tr>
+<td>incast 场景</td>
+<td>多对一同时打</td>
+<td>不出现吞吐归零，延时无长尾</td>
+</tr>
+<tr>
+<td>故障注入</td>
+<td>压测中拔线或端口 down</td>
+<td>收敛时间内恢复，计数器无连锁异常</td>
+</tr>
+</tbody>
+</table>
+<p><strong>POC 按这个顺序往上垫</strong>：先单流打到线速 → 多流并发暴露 ECMP 分布问题 → incast 把 ECN 与 PFC 的门限关系逼出来 → 混入存储或管理流量验证队列隔离 → 故障注入看收敛 → 长稳十二小时以上，盯 pause 与 ECN 计数的趋势。</p>
+<blockquote>
+<p><strong>一条最容易漏的验收项</strong>：不要只压带宽。要专门跑一轮**「两端配置故意错位」的对照**——比如只把交换机侧优先级改一个号，看监控能不能在几分钟内把异常指出来。</p>
+<p><strong>指不出来，说明你交付的是一套无法运维的网络，不是一套跑得快的网络。</strong></p>
+</blockquote>
+<h3 id="该自己核的六个点">该自己核的六个点</h3>
+<ol>
+<li><strong>ECN 门限是按哪一款交换机的缓存深度算的？</strong> 拿设备实际缓存深度自己重算，别跨型号抄模板。</li>
+<li><strong>无损优先级规划的是几号？</strong> 用 <code>mlnx_qos -i &lt;dev&gt;</code> 回读网卡侧 trust 状态与 PFC 位图，核对四处编号。</li>
+<li><strong>PFC 死锁检测开没开？</strong> 检测时间、恢复时间、动作各是什么值？交换机与网卡两侧都回读。</li>
+<li><strong>广播组播是否被挡在无损类之外？</strong> ARP 表项不完整时是丢弃还是泛洪？压测里造一次 ARP 不完整看 pause 计数。</li>
+<li><strong>多流带宽相对单流能保持几成？</strong> 多流不低于单流的八成。</li>
+<li><strong>网卡侧与交换机侧参数有没有一份对齐表？</strong> 自己拉一张两列对照表。</li>
+</ol>
+<hr>
+<h2 id="十、一个月路线图">十、一个月路线图</h2>
+<p>前提摆在桌面上：<strong>两台装了 RDMA 网卡的机器、一台能配 DCB 的交换机、每天大概半天完整时间</strong>。缺硬件的话头两周还能跟着走，第三周起只剩纸上推演。</p>
+<p><strong>第 1 周（1–7 天）：把名词和家底盘清楚</strong><br>
+读通 RDMA/RoCE/IB 三者关系、v1 与 v2 差在哪层、GID/QP/DSCP/PCP/队列各指什么。同时把<strong>网卡型号、驱动与固件版本、交换机型号与 NOS 版本</strong>抄进同一张表——这周记下的版本号，后面每次参数回读都要对得上。<br>
+<strong>产出</strong>：自己写的名词对照表 + 设备与版本清单。</p>
+<p><strong>第 2 周（8–14 天）：两台机器打通，先拿到单流基线</strong><br>
+先别碰交换机的 QoS。两台机器背靠背或接一台什么都不配的交换机：装驱动、确认端口状态、<code>rping</code> 通、<code>ib_write_bw</code> 把单流打到线速。<br>
+<strong>这一步的全部价值在那条可信的单流基线上。</strong> 没有基线，你没法区分「这次慢了」和「它本来就这个速度」。<strong>没落到线速就别往下走。</strong></p>
+<p><strong>第 3 周（15–21 天）：接交换机做无损，配一处回读一处</strong><br>
+最容易翻车的一周。顺序：<code>trust dscp</code> 打开 → PFC 只给一个优先级 → ECN 门限排在 PFC 之前 → GID 索引显式钉住。<br>
+<strong>两条纪律</strong>：① 每配一处、回读一处，不要攒到最后一起验；② ECN 门限按这台交换机实际缓存深度重算，不许跨型号抄模板。<br>
+<strong>产出</strong>：配置备份 + 逐项回读记录（网卡标记、交换机信任字段、队列归属、PFC 优先级四处编号必须一致）。<strong>这张表日后是唯一的救命稻草</strong>——半年后没人能凭记忆说出那台交换机的优先级配的是几号。</p>
+<p><strong>第 4 周（22–30 天）：压测、验收，交出能长期活下去的东西</strong><br>
+按顺序往上垫（见第九节），全程看 pause 与 ECN 计数的<strong>趋势</strong>，不看峰值。<br>
+最后几天留给纸面：六项验收指标按项打勾，并在每项旁注明<strong>这组 ECN/PFC 数字是按哪款交换机、多大缓存深度算出来的</strong>——半年后换设备时，这句注释值一次加班。然后写运维手册和回滚方案。</p>
+<hr>
+<h2 id="收尾">收尾</h2>
+<p><strong>这条路按周设目标，不按天。</strong> 等硬件、等机房窗口、等业务侧给停机时间，中间卡两周是常态。</p>
+<p><strong>真正的分水岭在第三周</strong>——绝大多数出问题的 RoCE 网络，不是死在不懂原理上，而是<strong>死在某一台设备的参数跟别人不一样，并且很长时间里没人发现</strong>。</p>
+<p>回到开头那个 POC：两端都开着 PFC，中间没人把包送进该进的队列。<strong>RoCEv2 的难点从来不在单个组件，而在那条必须处处对齐的链。</strong></p>
+<hr>
+<h2 id="参考资料">参考资料</h2>
+<ol>
+<li>IEEE 802.1Qbb（Priority-based Flow Control）</li>
+<li>RFC 3168（The Addition of Explicit Congestion Notification to IP）</li>
+<li>Zhu et al., <em>Congestion Control for Large-Scale RDMA Deployments</em>, SIGCOMM 2015（DCQCN 原始论文）</li>
+<li>NVIDIA DOCA, <em>DCQCN CC Parameters</em>（固件参数默认值）</li>
+<li>NVIDIA NCCL Environment Variables（官方文档）</li>
+<li>NVIDIA Ethernet SuperNICs / ConnectX 系列产品页</li>
+<li>SONiC 官方文档（<code>pfcwd</code>、<code>ecnconfig</code>）</li>
+<li>Cisco Nexus 9000 验证设计指南（MQC 三段式）</li>
+<li>华为 CloudEngine《配置指南-智能无损网络》</li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/">https://roger-lv.github.io/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/GPU%E9%9B%86%E7%BE%A4/">GPU集群</a><a class="post-meta__tags" href="/tags/RoCEv2/">RoCEv2</a><a class="post-meta__tags" href="/tags/PFC/">PFC</a><a class="post-meta__tags" href="/tags/ECN/">ECN</a><a class="post-meta__tags" href="/tags/DCQCN/">DCQCN</a><a class="post-meta__tags" href="/tags/%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9C/">无损网络</a><a class="post-meta__tags" href="/tags/DCB/">DCB</a><a class="post-meta__tags" href="/tags/%E7%BD%91%E7%BB%9C%E8%B0%83%E4%BC%98/">网络调优</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related" href="/2026/11/18/2026-11-18-sky-scheduler-rdma-topology/" title="Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info"><div class="info-1"><div class="info-item-1">上一篇</div><div class="info-item-2">Sky-Scheduler 拓扑感知调度：如何选最少的 RDMA 域，再给 Quota 选节点</div></div><div class="info-2"><div class="info-item-1">假设一个训练作业需要三个 worker，每个 worker 都占用一台带 RDMA 的 GPU 节点。机房里有一个域还剩两台，另外两个域各剩一台。逐个给 Pod 选节点，三个 worker 可能正好分散到三个域。先看整个作业，只要从两个域各取一部分资源就能放下。 Sky-Scheduler 用的是第二种思路。它把网卡到交换机的信息压成节点的 RDMA 域键，先为 Job 找一个能覆盖总需求的最小域组合，再用 Quota 和节点的谓词、评分及序号完成落位。这里的“最小”指域的数量最少。域键相等是网络局部性的代理指标，调度过程中没有按交换机跳数、链路带宽或实时拥塞计算通信代价。  文中用 Sky-Scheduler 指代所分析的调度器。下文的节点、域名和资源数字都用于算法推演。 从训练通信看调度的三个阶段 当 NCCL 执行 AllReduce 时，各 rank 都参与归约，并各自拿到归约结果。假设六台 GPU 服务器分接到两台 Leaf 交换机，每台 Leaf 下有三台服务器。一个需要三台服务器的 Job 如果选了 A 下的一台和 B 下的两台，跨这两组 Worker 的通信就要经...</div></div></div></a><a class="pagination-related" href="/2026/11/09/2026-11-09-%E4%B8%AD%E9%97%B4%E6%BF%80%E6%B4%BB%E5%BC%A0%E9%87%8F%E7%9A%84%E4%B8%80%E7%94%9F/" title="中间激活张量的一生：显存曲线为什么是锯齿状的，以及 token 与 d 到底是什么"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">中间激活张量的一生：显存曲线为什么是锯齿状的，以及 token 与 d 到底是什么</div></div><div class="info-2"><div class="info-item-1">前一篇 为什么一条 32k 请求能瞬间打爆显存 把显存拆成了三类：常驻水位（权重）、线性累积（KV Cache）、瞬时峰值（中间激活）。 这篇往下再挖两层。两个问题分别直击推理内存管理和 Transformer 数据流的本质，分开讲。  第一部分：为什么「峰」会随着小批次结束降下去 结论先行：中间激活张量是「算完即弃」的一次性工作区。它们的生命周期不是「整条 prompt 处理完」，而是「当前这个算子算完」——张量一旦不再被任何变量引用，PyTorch 的缓存分配器就会立刻把它的显存归还回池子，供下一个算子或下一个 chunk 复用。 1.1 一个 QKᵀ 分数矩阵的一生 用时序图直观看注意力块内一个分数矩阵的完整生命周期： 123456789时间 →───────────────────────────────────────────────────────────计算 Q    : Q 分配    ██████████████计算 K    : K 分配    ██████████████   (随后写入 KV Cache，可释放副本)计算 QKᵀ  : Score 分配 █...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</div></div><div class="info-2"><div class="info-item-1">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区 2026 年 8 月 17 日,SIGCOMM 2026 在丹佛开会的第一天,第三届 Networks for AI Computing workshop(NAIC '26)上出现了一篇只有 6 页的论文:《RDMATracer: A scalable eBPF-based framework for tracing RDMA syscalls》。作者名单几乎全是 Meta 的生产工程师与网络研究员——Prankur Gupta、Miao Xu、Maxim Samoylov、Prashanth Kannan、Rajiv Krishnamurthy,加上 CMU 的 Theophilus A. Benson。 论文标题很平实,讲的是一个已经在线上连续运行多年的 eBPF 工具。但它要回答的问题一点都不平实:当十万卡规模的 AI 训练集群任务崩溃时,为什么有一类故障在所有现成的监控系统里都看不到? 这篇文章是我读完论文和配套的 LPC 2025、FOSDEM 2026 演讲材料之后的拆解笔记。我最感兴...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/" title="Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</div></div><div class="info-2"><div class="info-item-1">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道 在大模型分布式训练的 Kubernetes 集群里,macvlan 会被用到,但角色非常特定:它作为辅助网络为 Pod 提供访问高性能 RDMA 网络的&quot;共享&quot;通道,而不是承担集群默认网络的职责。 默认网络(控制面通信、Service 访问)通常由 Calico/Cilium/OVN 等标准 CNI 负责,macvlan 网卡通过 Multus 附加,专门承载 GPU 之间的训练数据流。  一、为什么大模型训练需要独立的 RDMA 网络 理解 macvlan 的定位,先要理解训练流量对网络的压力。在 PyTorch FSDP 或 DeepSpeed ZeRO 的分片训练中,每一层前向/反向传播前都要在全量 GPU 间 gather 分片权重,mini-batch 结束后要 all-reduce 梯度——这些集合通信在集群规模上可达数十 Gbit/s 的峰值流量。 如果这些流量走默认的 Overlay 网络(如 OVN-Kubernetes),内核协议栈的封解包、netfilter 处理...</div></div></div></a><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</div></div><div class="info-2"><div class="info-item-1">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点 RDMA 这套东西之所以让人望而生畏,不是因为哪个概念特别难,而是因为它把三个本来独立的知识域压进了同一条调用链:Linux 内核系统调用机制、内存管理、网络硬件。单独看每个术语都不复杂,叠在一起才显得信息量爆炸。 这篇文章分三大块:  调用链——从 ibv_reg_mr 一路走到 HCA 硬件,每一层在做什么; 术语地图——把所有黑话按类别拆开,每个只给一句人话; 实战落点——AI 训练云平台上,这条链路到底体现在哪些日常工作里。   先正一个名。 中文社区里偶尔能看到 “ubverbs” 这个写法,它不是标准名称。内核里承接用户态 verbs 请求的模块叫 ib_uverbs(Userspace Verbs),源码在 drivers/infiniband/core/uverbs*.c。本文统一用 ib_uverbs。   关联阅读: 这条链路上的故障怎么观测,我在 《RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区》 里写过。那篇讲的是&quot;怎么看见...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/" title="K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：控制面决定「能不能跑」，数据面决定「跑多快」。K8s 的功夫全在控制面——把 Pod 调度起来、把副本数维持住；而大模型训练真正的痛点，是 GPU 之间、机器之间的数据流动快不快、堵不堵。kubectl get pods 全绿但 MFU 上不去，是典型的控制面看不见的数据面问题。  本文基于 B 站视频《K8s 很熟，为什么月薪卡在三万？大模型 AI Infra 第一讲：从控制面走到数据面》的内容框架整理，其中的技术细节我对照 NVIDIA 官方文档（nvidia-smi 拓扑定义、NCCL 环境变量文档）与相关论文做了核实与补全。核对过程中发现原稿有四处需要更正的地方，已在文中标注。  一、为什么 K8s 玩得溜，月薪却卡在三万 很多云原生工程师 K8s 炉火纯青：写 YAML、调 Deployment、写 Operator、排 Pod 故障、扩缩集群，整套控制面技术一气呵成，但薪资天花板死死卡在三万上下。而那些看起来「只是会跑 nccl-tests」的 AI Infra 同事，年薪轻松翻倍。 差距不在于会不会写 YAML，而在于是否看懂了 K8s 之下的数据面。...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%B8%87%E5%8D%A1GPU%E9%9B%86%E7%BE%A4%E8%BF%90%E7%BB%B4%E7%9B%91%E6%8E%A7%E5%9B%9B%E5%B9%B3%E9%9D%A2%E6%95%85%E9%9A%9C%E4%BA%94%E5%88%86%E7%B1%BB%E4%B8%8E%E8%B0%83%E4%BC%98%E4%B8%89%E6%9D%BF%E6%96%A7/" title="万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">万卡 GPU 集群运维：监控四平面、故障五分类与调优三板斧</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：把 RoCEv2 网络配成无损只是让集群「能跑起来」，真正吃掉算力的在后面——几万张卡在几个月里不停地出故障、掉速、Hang 住，而你要在没有用户配合、看不到业务代码的情况下，判断这一次的锅是硬件、是网络还是调度。 这篇给一套可执行的方法：四个监控平面分工排查、五类故障定性定位、RoCE 三种典型病的判据、三板斧的调优顺序，最后落一份巡检清单。  开场先看一个真实场景。 某集群上一个 2048 卡预训练任务，MFU 长期在 38% 上下波动。团队查了两周网络：PFC 计数正常、ECN 标记率正常、交换机上零丢包、ib_write_bw 端到端带宽也达标。 最后在 DCGM 的 SM Clock 指标上发现问题——256 台机器里有一台的 8 张卡，SM 时钟长期跑在 1.1GHz，其他机器都是 1.9GHz。这台机器是慢节点，它在每一个 AllReduce 里拖后腿，整条 ring 都要等它。换掉之后 MFU 回到 45%，而且不再波动。 这类问题在交换机上永远查不到，因为网络侧所有计数都是干净的。  边界说明：文中命令以 NVIDIA DCGM 与 nvidia-...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 K8s 到 AI Infra：跨越五道技术鸿沟</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：K8s 把 GPU 当作 nvidia.com/gpu: 8 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「只分配、不感知」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。  上一讲（K8s 很熟，为什么月薪卡在三万）讲的是怎么看——nvidia-smi topo -m 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲怎么修：五道鸿沟各自的工程解法。 本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败，已在文中以 ⚠️ 标注。  五道鸿沟总览    维度 K8s 原生方案 AI 训练瓶颈 生产级方案 核心工具链     调度 kube-scheduler 逐 Pod 打分 部分 Pod 无法调度导致整组死锁 Gang 整组调度 + 多维配比 Volcano PodGroup   网络 TCP ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">330</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">541</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA-POC-%E7%9A%84%E6%95%99%E8%AE%AD"><span class="toc-number">1.</span> <span class="toc-text">一个 POC 的教训</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E6%8A%8A%E5%90%8D%E5%AD%97%E9%92%89%E6%AD%BB%EF%BC%9ARDMA%E3%80%81IB%E3%80%81RoCE-%E4%B8%8E-v1-v2"><span class="toc-number">2.</span> <span class="toc-text">一、先把名字钉死：RDMA、IB、RoCE 与 v1&#x2F;v2</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#v1-%E4%B8%8E-v2-%E7%9A%84%E5%88%86%E9%87%8E"><span class="toc-number">2.1.</span> <span class="toc-text">v1 与 v2 的分野</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%80%E5%80%BC%E5%BE%97%E7%9B%AF%E7%9A%84%E4%B8%80%E8%A1%8C"><span class="toc-number">2.2.</span> <span class="toc-text">最值得盯的一行</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E6%97%A0%E6%8D%9F%E4%B8%89%E4%BB%B6%E5%A5%97%EF%BC%9APFC%E3%80%81ECN%E3%80%81DCQCN"><span class="toc-number">3.</span> <span class="toc-text">二、无损三件套：PFC、ECN、DCQCN</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-PFC%EF%BC%9A%E9%80%90%E4%BC%98%E5%85%88%E7%BA%A7%E5%9C%B0%E5%90%91%E4%B8%8A%E6%B8%B8%E5%96%8A%E5%81%9C"><span class="toc-number">3.1.</span> <span class="toc-text">2.1 PFC：逐优先级地向上游喊停</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-ECN%EF%BC%9A%E5%9C%A8%E9%98%9F%E5%88%97%E8%A2%AB%E5%A1%9E%E6%BB%A1%E4%B9%8B%E5%89%8D%E5%85%88%E6%89%93%E5%A3%B0%E6%8B%9B%E5%91%BC"><span class="toc-number">3.2.</span> <span class="toc-text">2.2 ECN：在队列被塞满之前先打声招呼</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-3-DCQCN%EF%BC%9A%E6%8A%8A-CE-%E4%BF%A1%E5%8F%B7%E7%BF%BB%E8%AF%91%E6%88%90%E4%B8%80%E6%9D%A1%E9%80%9F%E7%8E%87%E6%9B%B2%E7%BA%BF"><span class="toc-number">3.3.</span> <span class="toc-text">2.3 DCQCN：把 CE 信号翻译成一条速率曲线</span></a><ol class="toc-child"><li class="toc-item toc-level-4"><a class="toc-link" href="#%E2%9A%A0%EF%B8%8F-%E5%8F%82%E6%95%B0%E8%BF%99%E4%BB%B6%E4%BA%8B%EF%BC%9A%E8%AE%BA%E6%96%87%E5%80%BC%E4%B8%8E%E5%9B%BA%E4%BB%B6%E9%BB%98%E8%AE%A4%E5%80%BC%E4%B8%8D%E6%98%AF%E4%B8%80%E5%9B%9E%E4%BA%8B"><span class="toc-number">3.3.1.</span> <span class="toc-text">⚠️ 参数这件事：论文值与固件默认值不是一回事</span></a></li><li class="toc-item toc-level-4"><a class="toc-link" href="#%E4%B8%89%E8%80%85%E7%9A%84%E5%8D%8F%E4%BD%9C%E9%A1%BA%E5%BA%8F"><span class="toc-number">3.3.2.</span> <span class="toc-text">三者的协作顺序</span></a></li></ol></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E4%BC%98%E5%85%88%E7%BA%A7%E5%BF%85%E9%A1%BB%E5%A4%84%E5%A4%84%E5%AF%B9%E9%BD%90%EF%BC%9A%E6%89%93%E6%A0%87%E3%80%81%E6%98%A0%E5%B0%84%E3%80%81%E9%98%9F%E5%88%97"><span class="toc-number">4.</span> <span class="toc-text">三、优先级必须处处对齐：打标、映射、队列</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E7%BD%91%E5%8D%A1%E4%BE%A7%EF%BC%9A%E5%91%BD%E4%BB%A4%E4%B8%8E%E5%9B%9E%E8%AF%BB"><span class="toc-number">5.</span> <span class="toc-text">四、网卡侧：命令与回读</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#4-1-%E5%85%88%E8%AF%BB%E5%AF%B9-GID-%E8%A1%A8"><span class="toc-number">5.1.</span> <span class="toc-text">4.1 先读对 GID 表</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-2-QoS-%E4%B8%8E-PFC"><span class="toc-number">5.2.</span> <span class="toc-text">4.2 QoS 与 PFC</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-3-%E5%8F%91%E7%AB%AF%E6%89%93%E6%A0%87%E4%B8%8E%E6%8B%A5%E5%A1%9E%E6%8E%A7%E5%88%B6%E5%BC%80%E5%85%B3"><span class="toc-number">5.3.</span> <span class="toc-text">4.3 发端打标与拥塞控制开关</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-4-%E4%B8%89%E8%A1%8C%E9%AA%8C%E6%94%B6"><span class="toc-number">5.4.</span> <span class="toc-text">4.4 三行验收</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E4%BA%A4%E6%8D%A2%E6%9C%BA%E4%BE%A7%EF%BC%9A%E4%B8%89%E5%AE%B6%E5%AF%B9%E7%85%A7"><span class="toc-number">6.</span> <span class="toc-text">五、交换机侧：三家对照</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E5%8D%8E%E4%B8%BA-CloudEngine%EF%BC%9A%E5%85%88%E5%AE%9A%E4%B9%89%E6%A8%A1%E6%9D%BF%EF%BC%8C%E5%86%8D%E6%8C%82%E5%88%B0%E6%8E%A5%E5%8F%A3"><span class="toc-number">6.1.</span> <span class="toc-text">5.1 华为 CloudEngine：先定义模板，再挂到接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-Cisco-Nexus-9000%EF%BC%9AMQC-%E7%9A%84%E4%B8%89%E6%AE%B5%E5%BC%8F"><span class="toc-number">6.2.</span> <span class="toc-text">5.2 Cisco Nexus 9000：MQC 的三段式</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-SONiC%EF%BC%9A%E5%91%BD%E4%BB%A4%E7%9F%AD%EF%BC%8C%E9%9D%A0-profile-%E8%AF%B4%E8%AF%9D"><span class="toc-number">6.3.</span> <span class="toc-text">5.3 SONiC：命令短，靠 profile 说话</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-4-%E4%BC%98%E5%85%88%E7%BA%A7%E5%8F%96%E5%80%BC%EF%BC%9A%E4%B8%89%E4%B8%AA%E9%83%BD%E5%AF%B9%EF%BC%8C%E5%85%B3%E9%94%AE%E6%98%AF%E4%B8%80%E8%87%B4"><span class="toc-number">6.4.</span> <span class="toc-text">5.4 优先级取值：三个都对，关键是一致</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-5-PFC-%E6%AD%BB%E9%94%81%EF%BC%9A%E4%B8%89%E5%AE%B6%E9%83%BD%E5%9C%A8%E7%94%A8%E7%9C%8B%E9%97%A8%E7%8B%97"><span class="toc-number">6.5.</span> <span class="toc-text">5.5 PFC 死锁：三家都在用看门狗</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-6-%E4%B8%80%E6%9D%A1%E6%9B%B4%E5%9F%BA%E7%A1%80%E7%9A%84%E8%A6%81%E6%B1%82%EF%BC%9A%E6%8A%8A%E5%B9%BF%E6%92%AD%E4%B8%8E%E7%BB%84%E6%92%AD%E6%8C%A1%E5%9C%A8%E6%97%A0%E6%8D%9F%E7%B1%BB%E4%B9%8B%E5%A4%96"><span class="toc-number">6.6.</span> <span class="toc-text">5.6 一条更基础的要求：把广播与组播挡在无损类之外</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81NCCL-%E4%BE%A7%E5%8F%98%E9%87%8F%EF%BC%9A%E6%8C%89%E5%9B%9B%E7%BB%84%E8%AF%BB%E6%89%8D%E4%B8%8D%E4%BC%9A%E4%B9%B1"><span class="toc-number">7.</span> <span class="toc-text">六、NCCL 侧变量：按四组读才不会乱</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E7%BB%84%E7%BD%91%E4%B8%89%E6%A1%A3"><span class="toc-number">8.</span> <span class="toc-text">七、组网三档</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E4%B8%80%E5%8F%B0%E7%9B%92%E5%BC%8F%E4%BA%A4%E6%8D%A2%E6%9C%BA%EF%BC%9A%E5%8F%AA%E6%B1%82%E5%85%88%E8%B7%91%E9%80%9A"><span class="toc-number">8.1.</span> <span class="toc-text">7.1 一台盒式交换机：只求先跑通</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-%E4%B8%A4%E5%B1%82-Fat-Tree%EF%BC%9A%E7%BB%9D%E5%A4%A7%E5%A4%9A%E6%95%B0%E9%9B%86%E7%BE%A4%E7%9A%84%E9%BB%98%E8%AE%A4%E7%AD%94%E6%A1%88"><span class="toc-number">8.2.</span> <span class="toc-text">7.2 两层 Fat-Tree：绝大多数集群的默认答案</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-%E8%BD%A8%E9%81%93%E4%BC%98%E5%8C%96%EF%BC%9A%E6%8A%8A%E8%BF%9E%E7%BA%BF%E7%85%A7%E7%9D%80%E9%80%9A%E4%BF%A1%E6%A8%A1%E5%BC%8F%E5%AE%89%E6%8E%92"><span class="toc-number">8.3.</span> <span class="toc-text">7.3 轨道优化：把连线照着通信模式安排</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-%E8%A7%84%E6%A8%A1%E4%B8%8A%E5%8E%BB%E5%90%8E%E7%9A%84%E4%B8%A4%E4%B8%AA%E6%95%8C%E4%BA%BA"><span class="toc-number">8.4.</span> <span class="toc-text">7.4 规模上去后的两个敌人</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E5%9B%9B%E7%B1%BB%E9%AB%98%E9%A2%91%E6%95%85%E9%9A%9C%E4%B8%8E%E4%B8%80%E5%A5%97%E6%8E%92%E9%9A%9C%E9%A1%BA%E5%BA%8F"><span class="toc-number">9.</span> <span class="toc-text">八、四类高频故障与一套排障顺序</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8E%92%E9%9A%9C%E9%A1%BA%E5%BA%8F%EF%BC%9A%E9%A1%BA%E5%BA%8F%E6%AF%94%E5%B7%A5%E5%85%B7%E9%87%8D%E8%A6%81"><span class="toc-number">9.1.</span> <span class="toc-text">排障顺序：顺序比工具重要</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81%E4%B8%8A%E7%BA%BF%E5%89%8D%E9%AA%8C%E6%94%B6%EF%BC%9A%E5%85%AD%E9%A1%B9%E6%8C%87%E6%A0%87"><span class="toc-number">10.</span> <span class="toc-text">九、上线前验收：六项指标</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%A5%E8%87%AA%E5%B7%B1%E6%A0%B8%E7%9A%84%E5%85%AD%E4%B8%AA%E7%82%B9"><span class="toc-number">10.1.</span> <span class="toc-text">该自己核的六个点</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E4%B8%80%E4%B8%AA%E6%9C%88%E8%B7%AF%E7%BA%BF%E5%9B%BE"><span class="toc-number">11.</span> <span class="toc-text">十、一个月路线图</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%94%B6%E5%B0%BE"><span class="toc-number">12.</span> <span class="toc-text">收尾</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">13.</span> <span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-training-fabric-storage-io-tail-latency/" title="分布式训练为什么怕存储 I/O 长尾？从 SC26 实测看 GPU 集群网络隔离">分布式训练为什么怕存储 I/O 长尾？从 SC26 实测看 GPU 集群网络隔离</a><time datetime="2026-11-20T06:16:00.000Z" title="发表于 2026-11-20 14:16:00">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/" title="AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）">AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）</a><time datetime="2026-11-20T04:03:03.000Z" title="发表于 2026-11-20 12:03:03">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vxlan-udp-ecmp/" title="为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流">为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流</a><time datetime="2026-11-20T03:40:11.000Z" title="发表于 2026-11-20 11:40:11">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/" title="VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发">VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发</a><time datetime="2026-11-20T02:25:00.000Z" title="发表于 2026-11-20 10:25:00">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/" title="用 JuiceFS 保存训练 Checkpoint 时的容器权限边界">用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</a><time datetime="2026-11-19T11:49:12.000Z" title="发表于 2026-11-19 19:49:12">2026-11-19</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
