@@ -1,0 +1,661 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA） | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="以各站点独立训练为前提，给出企业 WAN、云 Transit、Kubernetes 多集群、GPU RDMA 和数据同步的分工，以及 CIDR 规划、路由矩阵与分层验收方法。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="以各站点独立训练为前提，给出企业 WAN、云 Transit、Kubernetes 多集群、GPU RDMA 和数据同步的分工，以及 CIDR 规划、路由矩阵与分层验收方法。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-20T04:03:03.000Z">
+<meta property="article:modified_time" content="2026-11-20T04:08:11.108Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="VPC">
+<meta property="article:tag" content="多集群">
+<meta property="article:tag" content="混合云">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）",
+  "url": "https://roger-lv.github.io/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-20T04:03:03.000Z",
+  "dateModified": "2026-11-20T04:08:11.108Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">327</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">528</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-20T04:03:03.000Z" title="发表于 2026-11-20 12:03:03">2026-11-20</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-20T04:08:11.108Z" title="更新于 2026-11-20 12:08:11">2026-11-20</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/" data-flag-title="AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>假设一家训练平台同时运营两个自建 IDC 和两家公有云，每个站点都有独立的 Kubernetes 集群。平台要统一下发训练任务，分发镜像、数据集和模型，并收集监控、日志与 Checkpoint。单个训练作业的所有 Worker 放在同一个计算域，成组 GPU 通信留在域内。这个前提决定了广域网主要承载管理、服务访问和数据同步，站点内的计算 Fabric 则按集合通信的负载单独设计与验收。</p>
+<span id="more"></span>
+<h2 id="1-按业务流量划分网络">1. 按业务流量划分网络</h2>
+<p>先为每类流量指定端点、路径和故障影响，再决定是否接入 WAN。不同云的 VPC 和自建 IDC 的 VRF 可以接入同一套路由治理。每个集群仍保有自己的 API、CNI、服务和本地计算域。</p>
+<table>
+<thead>
+<tr>
+<th>流量</th>
+<th>常用路径</th>
+<th>站点之间的边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>集群管理、任务下发、监控日志</td>
+<td>站点管理网到平台 API 或代理</td>
+<td>发布管理入口与必要回程，集群继续运行本地控制循环</td>
+</tr>
+<tr>
+<td>镜像、模型和平台服务</td>
+<td>私有服务入口、内部 DNS、镜像代理或区域副本</td>
+<td>只开放实际使用的服务和调用身份</td>
+</tr>
+<tr>
+<td>数据预热、Checkpoint 复制</td>
+<td>区域存储到中心存储的传输链路</td>
+<td>按版本、容量和优先级治理，给控制流量保留容量</td>
+</tr>
+<tr>
+<td>Pod 与 Service</td>
+<td>站点内 CNI，跨站点按需求经 Gateway 或 Mesh</td>
+<td>区分服务可访问和 Pod IP 可达</td>
+</tr>
+<tr>
+<td>NCCL 集合通信</td>
+<td>同一计算域内的 IB、RoCEv2 或云高性能网络</td>
+<td>完整 Worker 组落在同一可通信域，域间传输数据和模型产物</td>
+</tr>
+<tr>
+<td>设备带外管理</td>
+<td>OOB 网络、受控跳板或专用接入</td>
+<td>单独划分访问路径与权限</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TD
+    P[&quot;平台管理服务与数据目录&quot;] --&gt; H[&quot;企业 WAN Hub&quot;]
+    H --&gt; A[&quot;IDC-A &#x2F; IDC-B&quot;]
+    H --&gt; B[&quot;Cloud-A &#x2F; Cloud-B&quot;]
+    A --&gt; EA[&quot;各站点边界与管理网&quot;]
+    B --&gt; EB[&quot;各云 Transit 与 VPC&quot;]
+    EA --&gt; KA[&quot;站点集群与区域存储&quot;]
+    EB --&gt; KB[&quot;云集群与区域存储&quot;]
+  </pre></div>
+<p>图中每个 IDC 或云站点都有独立的 WAN 接入。站点按类型归并显示。站点内可为普通 Pod 使用 VPC 路由或 VXLAN，而 GPU Worker 的计算口另有本地路径。配置中要明确 WAN 中断时的行为，例如已启动且已预热数据的本地作业能否继续，新任务派发是否暂停，未完成的 Checkpoint 复制是否留在本地队列。跨站点恢复意味着在目标计算域重新启动完整 Worker 组，再从已复制的 Checkpoint 恢复。 <a href="/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/">VPC 虚拟网络架构与数据面实现</a></p>
+<h2 id="2-先做-IPAM，再决定哪些前缀可发布">2. 先做 IPAM，再决定哪些前缀可发布</h2>
+<p>地址规划要区分<strong>分配范围</strong>和<strong>可达范围</strong>。IPAM 里可以为各集群预留地址，却只向 WAN 发布必要的网络前缀。下表是一套示例，实际分配前应与现有 IDC、云网段、VPN 地址池、合作方接入和故障恢复站点交叉校验。</p>
+<table>
+<thead>
+<tr>
+<th>地址池</th>
+<th>示意前缀</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IDC</td>
+<td><code>10.0.0.0/10</code></td>
+<td>按站点预留管理、存储、Node 和 OOB 子地址池</td>
+</tr>
+<tr>
+<td>云上 VPC</td>
+<td><code>10.64.0.0/10</code></td>
+<td>按云、地域和业务用途分配 VPC</td>
+</tr>
+<tr>
+<td>独立的 Pod 地址池</td>
+<td><code>10.128.0.0/10</code></td>
+<td>用于需要单独 Pod CIDR 的网络模式</td>
+</tr>
+<tr>
+<td>Service 地址池</td>
+<td><code>10.240.0.0/16</code></td>
+<td>从 <code>10.192.0.0/10</code> 中划出，进一步按集群切分</td>
+</tr>
+<tr>
+<td>预留</td>
+<td><code>10.192.0.0/10</code> 中尚未分配的部分</td>
+<td>城市、区域、专线或新业务网络扩容</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>集群</th>
+<th>示例 Node 网段</th>
+<th>独立 Pod CIDR 示例</th>
+<th>Service CIDR 示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IDC-A</td>
+<td><code>10.2.0.0/24</code></td>
+<td><code>10.128.0.0/16</code></td>
+<td><code>10.240.0.0/20</code></td>
+</tr>
+<tr>
+<td>IDC-B</td>
+<td><code>10.6.0.0/24</code></td>
+<td><code>10.130.0.0/16</code></td>
+<td><code>10.240.32.0/20</code></td>
+</tr>
+<tr>
+<td>Cloud-A</td>
+<td><code>10.64.16.0/20</code></td>
+<td><code>10.131.0.0/16</code></td>
+<td><code>10.240.48.0/20</code></td>
+</tr>
+<tr>
+<td>Cloud-B</td>
+<td><code>10.80.16.0/20</code></td>
+<td><code>10.132.0.0/16</code></td>
+<td><code>10.240.64.0/20</code></td>
+</tr>
+</tbody>
+</table>
+<p>示例 Cloud-A Training VPC 可取 <code>10.64.0.0/16</code>，再将 <code>10.64.0.0/20</code> 用作管理、<code>10.64.16.0/20</code> 用作 GPU 节点、<code>10.64.32.0/20</code> 用作存储访问。云端表里的独立 Pod CIDR 适用于相应的独立地址池模式。以 Amazon VPC CNI 为例，Pod 地址来自 VPC。此时须按实际 ENI 分配方式和峰值 Pod 密度给 VPC 子网留容量，IPAM 账本也应登记实际使用的子网。 <a target="_blank" rel="noopener" href="https://docs.aws.amazon.com/eks/latest/userguide/managing-vpc-cni.html">Amazon VPC CNI 的 Pod 地址分配</a></p>
+<p>独立集群的 Service CIDR 可以按治理要求规划为不重叠，尤其是考虑未来跨集群扩展时。常规互联通过可路由的负载均衡器或 Gateway，ClusterIP 仍由各集群处理。RoCEv2 另给计算接口分配地址，例如 IDC-B 使用 <code>172.21.0.0/16</code>，只在该计算域内路由。对于原生 InfiniBand，要单独管理 Fabric 和分区，只有启用 IPoIB 时才为其 IP 流量另做地址规划。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/cluster-administration/networking/">Kubernetes 集群网络</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html">NVIDIA NCCL 网络排障文档</a></p>
+<p>已经存在重叠网段时，可以先在各自的路由域维护它们，用 Gateway 或受控 NAT 暴露必要服务。真正做源地址保留的双向直连时，需要先解决前缀冲突和回程问题。IPAM 除前缀外可记录站点、VRF、所有者、分配状态及允许发布的范围，并在变更合并前检查重叠和异常汇总。</p>
+<h2 id="3-企业-Hub、云-Transit-和-BGP-如何配合">3. 企业 Hub、云 Transit 和 BGP 如何配合</h2>
+<p>企业 Hub 是一个逻辑转发与策略入口。它可以由成对边界路由器、企业专网、SD-WAN 或云交换接入共同实现，各 IDC 与云网络作为独立 Spoke 接入。云内的 Transit 负责连接本云 VPC 和边界接入，跨云转发需验证各侧附件是否允许所需流向、前缀与地域。对于跨云的大批量数据同步，可单独规划路径或区域副本，避免挤占 Hub 上的控制和业务流量。</p>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>阿里云</th>
+<th>AWS</th>
+<th>Azure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>私有网络</td>
+<td>VPC</td>
+<td>VPC</td>
+<td>VNet</td>
+</tr>
+<tr>
+<td>云端中转</td>
+<td>CEN Transit Router</td>
+<td>Transit Gateway</td>
+<td>Virtual WAN 虚拟 Hub</td>
+</tr>
+<tr>
+<td>IDC 专线接入</td>
+<td>Express Connect 与 VBR 等边界组件</td>
+<td>Direct Connect，按架构经 DX Gateway 接入</td>
+<td>ExpressRoute 与相应云侧网关</td>
+</tr>
+<tr>
+<td>加密备份</td>
+<td>IPsec VPN 接入</td>
+<td>Site-to-Site VPN</td>
+<td>Site-to-Site VPN</td>
+</tr>
+</tbody>
+</table>
+<p>这张表用来定位组件。具体设计要逐项核对附件类型、路由表关联、路由传播、可用地域和限额。例如 AWS Transit Gateway 中，附件关联到的路由表影响该附件进入后的查路由，传播关系决定哪些附件前缀进入指定路由表。阿里云同地域场景可把 VBR 和 VPC 连接到企业版 Transit Router，并配置需要的学习与传播关系。Azure 的跨云接入可经 Cloud Exchange 对接双方专线服务。 <a target="_blank" rel="noopener" href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html">AWS Transit Gateway 路由表</a> · <a target="_blank" rel="noopener" href="https://www.alibabacloud.com/help/en/cen/getting-started/connect-network-instances-in-the-same-region">阿里云 CEN 云下互联</a> · <a target="_blank" rel="noopener" href="https://learn.microsoft.com/en-us/azure/networking/design-guide/cross-region">Azure 跨区域与多云连接</a></p>
+<h3 id="3-1-用一条访问链路核对双向路由">3.1 用一条访问链路核对双向路由</h3>
+<p>假设 IDC-A 中的代理从 Node 网段 <code>10.2.0.0/24</code> 去访问 Cloud-A Platform VPC（<code>10.66.0.0/16</code>）内的私有服务。</p>
+<ol>
+<li>IDC 边界从云侧或企业 Hub 学到 <code>10.66.0.0/16</code>，下一跳指向计划中的专线接入。</li>
+<li>云 Transit 对来自 IDC 的流量查适用的路由表，定位 Platform VPC 附件。</li>
+<li>Platform VPC 的回程需要能把 <code>10.2.0.0/24</code> 送到 Transit。Transit 的反方向路由要指向正确的 IDC 附件。</li>
+<li>请求和响应还要通过沿途 ACL、防火墙和云安全策略。应用侧接着验证 DNS、TLS 和调用权限。</li>
+</ol>
+<p>只在邻居表看到 BGP 已建立，无法确认这条访问链已打通。核对范围应包括路由安装、实际转发、回程路径和应用探测。如果经过有状态设备，还需要核对双向路径与状态保持方式。</p>
+<h3 id="3-2-把路由传播写成矩阵">3.2 把路由传播写成矩阵</h3>
+<table>
+<thead>
+<tr>
+<th>前缀</th>
+<th>企业 WAN</th>
+<th>云 Transit</th>
+<th>计算 Fabric</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>平台管理服务或受控 Node 范围</td>
+<td>按需发布</td>
+<td>仅需要的附件</td>
+<td>独立</td>
+</tr>
+<tr>
+<td>区域数据服务端点</td>
+<td>按需发布并限制访问</td>
+<td>仅访问方</td>
+<td>独立</td>
+</tr>
+<tr>
+<td>Pod CIDR</td>
+<td>只有直连需求时按范围发布</td>
+<td>仅接入的集群或路由域</td>
+<td>独立</td>
+</tr>
+<tr>
+<td>ClusterIP 地址池</td>
+<td>保留集群内处理</td>
+<td>保留集群内处理</td>
+<td>独立</td>
+</tr>
+<tr>
+<td>RoCE 计算地址及 OOB 地址</td>
+<td>分别留在计算域和专用管理域</td>
+<td>分别留在计算域和专用管理域</td>
+<td>只承载本域计算地址</td>
+</tr>
+</tbody>
+</table>
+<p>生产接入可以使用 BGP 入站和出站前缀清单、最大前缀数和路由表分段。聚合路由要对应真实的归属和可达性，否则会把未分配的地址或失效站点吸到错误出口。两条专线要核对实际故障域，例如接入口、运营商段、边界路由器与供电。备用 VPN 要按较小带宽和不同 MTU 验收，测量真正的服务恢复时间。切换测试还应覆盖专线链路看起来在线、业务流量却中断的情形。</p>
+<h2 id="4-Kubernetes-多集群互联按需求升级">4. Kubernetes 多集群互联按需求升级</h2>
+<table>
+<thead>
+<tr>
+<th>需求</th>
+<th>建设方式</th>
+<th>核对项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>访问镜像、对象存储、模型服务或平台 API</td>
+<td>私有负载均衡器或 Gateway，加内部 DNS</td>
+<td>保留最小发布范围，核对双向路由、域名、TLS、鉴权和健康检查</td>
+</tr>
+<tr>
+<td>跨集群服务发现和负载分发</td>
+<td>在受控信任域内接入 Cilium Cluster Mesh 等机制</td>
+<td>核对接入集群的模式、版本、地址、证书、服务暴露和网络策略</td>
+</tr>
+<tr>
+<td>保留 Pod 源 IP 的直接互通</td>
+<td>在确认路径可承载 Pod 前缀后做选择性路由</td>
+<td>核对双向可达、地址冲突、源地址转换、策略和路径 MTU</td>
+</tr>
+</tbody>
+</table>
+<p>Cilium 封装模式把跨节点 Pod 流量承载在节点之间的 VXLAN 或 Geneve 隧道上。底层要能到达节点，还要允许隧道流量并给封装留出 MTU。Native Routing 则要求底层能够路由非本地 Pod 地址，可以借助 BGP、静态路由或由网络环境提供的路由能力。Cilium BGP Control Plane 负责宣告路由，节点和网络设备的数据面仍需具备相应转发能力。每个集群在其环境中选择并验证 CNI，既有 Calico 或云原生 CNI 可以与 Gateway 方式共存。 <a target="_blank" rel="noopener" href="https://docs.cilium.io/en/stable/network/concepts/routing/">Cilium 路由模式</a> · <a target="_blank" rel="noopener" href="https://docs.cilium.io/en/stable/network/bgp-control-plane/bgp-control-plane/">Cilium BGP Control Plane</a></p>
+<p>Cluster Mesh 本身有额外前提。按 Cilium 的安装文档，参与集群要使用相同数据面模式，Pod CIDR 无冲突，节点按配置的 InternalIP 互通，集群名和 ID 唯一，并满足相关版本及防火墙要求。原生路由模式下还要验证集群间 Pod 可达和相关原生路由 CIDR 配置。普通 BGP 互通可以让 Pod IP 到达对端，跨集群服务发现与身份传播仍需明确的控制机制。 <a target="_blank" rel="noopener" href="https://docs.cilium.io/en/stable/network/clustermesh/setup/index.html">Cilium Cluster Mesh 接入条件</a></p>
+<h2 id="5-每个-GPU-计算域独立设计和验收">5. 每个 GPU 计算域独立设计和验收</h2>
+<p>计算域是一个作业可以共同使用的节点与网络范围。一个 Kubernetes 集群可以容纳多个计算域，平台应先选定域，再把一组 Worker 提交到域内；仅统计全平台有多少张空闲卡，无法判断一次成组训练能否落位。</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>计算网络</th>
+<th>主要设计项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IDC-A，示例 32 台八卡服务器</td>
+<td>InfiniBand</td>
+<td>Subnet Manager、端口与路径状态、分区、节点与 rail 的对应关系</td>
+</tr>
+<tr>
+<td>IDC-B，示例 64 台八卡服务器</td>
+<td>RoCEv2</td>
+<td>IP 可达性、端到端 MTU、优先级映射、拥塞反馈、队列和缓冲</td>
+</tr>
+<tr>
+<td>云上 GPU 计算域</td>
+<td>云厂商支持的高性能网络</td>
+<td>支持的实例和部署范围、驱动及通信插件、实际扩展性能</td>
+</tr>
+</tbody>
+</table>
+<p>对于原生 IB，Subnet Manager 负责 Fabric 初始化与管理，可按平台能力使用 P_Key 分区。对于 RoCEv2，要在这条以太网路径上核对拥塞处理策略。若部署采用 PFC、ECN 和 DCQCN，要分别核对 PFC 的优先级与逐跳暂停、交换机的 ECN 标记、网卡发出的 CNP 和发送方的速率反应。VRF 可以划分路由域，缓冲队列和链路容量仍需单独规划。云上也可能提供另一套传输机制，例如 AWS EFA 通过 Libfabric 支持 NCCL 等工作负载。 <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html">NVIDIA NCCL 网络排障</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking/display/NVIDIAMLNXOSUserManualv3122002/subnet-manager.pdf">NVIDIA IB Subnet Manager 与分区</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking-ethernet-software/cumulus-linux-512/Layer-1-and-Switch-Ports/Quality-of-Service/RDMA-over-Converged-Ethernet-RoCE/">NVIDIA RoCE</a> · <a target="_blank" rel="noopener" href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa.html">AWS EFA</a></p>
+<h3 id="5-1-容量和双-rail-需要用拓扑与流量验证">5.1 容量和双 rail 需要用拓扑与流量验证</h3>
+<p>计算 Leaf 的容量时要按同一方向分别加总端口。假设一台 Leaf 下联 32 个 200 Gbit/s 端口、上联 8 个 400 Gbit/s 端口，下联总容量为 6.4 Tbit/s，上联为 3.2 Tbit/s。从下联到上联的名义收敛比为 <strong>2:1</strong>。这描述跨 Leaf 流量共享上行的约束，同一 Leaf 内的流量以及实际 AllReduce 性能要结合拓扑和测量分析。</p>
+<p>双 rail 的设计要核对每台服务器的 HCA、端口、PCIe/NUMA 位置和 GPU 亲和性，并标出它们所连的 Leaf、Spine 与故障域。两张卡如果共享同一条上行瓶颈，能否聚合带宽仍由真实路径决定。NCCL 的跨 NIC 策略也与 rail 布线相关，应按目标配置比较单 rail、双 rail 及故障时的行为。 <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-cross-nic">NVIDIA NCCL 的跨 NIC 选择</a></p>
+<h3 id="5-2-普通-Pod-网和-RDMA-设备分别接入">5.2 普通 Pod 网和 RDMA 设备分别接入</h3>
+<p>以 IDC-B 的以太网 SR-IOV VF 接入为例，一个训练 Pod 可以同时拥有两条面向不同流量的路径。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TD
+    P[&quot;训练 Pod&quot;] --&gt; E[&quot;eth0 · 主 CNI&quot;]
+    P --&gt; R[&quot;net1 · Multus 次级网络&quot;]
+    E --&gt; S[&quot;API、镜像与区域存储服务&quot;]
+    R --&gt; V[&quot;SR-IOV VF 与对应 RDMA 设备&quot;]
+    V --&gt; F[&quot;IDC-B RoCE 计算 Fabric&quot;]
+    F --&gt; W[&quot;同一计算域内的其他 Worker&quot;]
+  </pre></div>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>在链路中的职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>主 CNI</td>
+<td>提供默认 Pod 网络和由该 CNI 实现的网络策略</td>
+</tr>
+<tr>
+<td>Multus 与 NetworkAttachmentDefinition（NAD）</td>
+<td>选择附加网络，调用相应的次级 CNI</td>
+</tr>
+<tr>
+<td>SR-IOV Device Plugin</td>
+<td>发现并声明可分配的 VF 资源，供 kubelet 分配</td>
+</tr>
+<tr>
+<td>SR-IOV CNI</td>
+<td>根据已分配的设备配置 VF 的网络接口及相应参数</td>
+</tr>
+<tr>
+<td>RDMA 设备接入与运行时配置</td>
+<td>让容器实际可见对应的 RDMA 设备，并满足驱动、权限和命名空间要求</td>
+</tr>
+<tr>
+<td>NCCL</td>
+<td>选择受支持的通信传输并执行 GPU 集合操作</td>
+</tr>
+</tbody>
+</table>
+<p>获得一个独占 VF，通常意味着可独占使用这个功能实例。底层物理链路和部分硬件资源仍可能共享，带宽保证需要结合 NIC 队列或限速策略、交换机 QoS 以及容量验收。RDMA Shared Device Plugin 可以让多个 Pod 使用同一设备资源池，适用场景要根据隔离与争用要求评估。IB 与以太网 VF 的 CNI、设备暴露方式也应分别验证。 <a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/sriov-cni">SR-IOV CNI 文档</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking/display/kubernetes2671/quick-start/sriov-network-rdma.html">NVIDIA SR-IOV RDMA 部署</a> · <a target="_blank" rel="noopener" href="https://github.com/Mellanox/k8s-rdma-shared-dev-plugin">RDMA Shared Device Plugin</a> · <a href="/2026/11/18/2026-11-18-sr-iov-vfio-gpu-network-virtualization/">SR-IOV 与 VFIO 的设备边界</a></p>
+<h3 id="5-3-一个从资源分配到-NCCL-选路的示例">5.3 一个从资源分配到 NCCL 选路的示例</h3>
+<p>假设 <code>training</code> 命名空间已创建 <code>rdma-net</code>，NAD 通过 <code>k8s.v1.cni.cncf.io/resourceName</code> 关联 <code>example.com/rdma_vf</code>。节点已部署相应设备插件和次级 CNI。下面是单个 Worker 的 Pod 说明，域标签、镜像、资源名和网卡名均需按实际环境填写。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">v1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Pod</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">training-worker-01</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">training</span></span><br><span class="line">  <span class="attr">annotations:</span></span><br><span class="line">    <span class="attr">k8s.v1.cni.cncf.io/networks:</span> <span class="string">rdma-net</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">nodeSelector:</span></span><br><span class="line">    <span class="attr">ai.example.com/fabric-domain:</span> <span class="string">idc-b-roce-01</span></span><br><span class="line">  <span class="attr">containers:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">trainer</span></span><br><span class="line">      <span class="attr">image:</span> <span class="string">registry.example.com/ai/trainer:v1</span></span><br><span class="line">      <span class="attr">resources:</span></span><br><span class="line">        <span class="attr">requests:</span></span><br><span class="line">          <span class="attr">nvidia.com/gpu:</span> <span class="number">8</span></span><br><span class="line">          <span class="attr">example.com/rdma_vf:</span> <span class="number">1</span></span><br><span class="line">        <span class="attr">limits:</span></span><br><span class="line">          <span class="attr">nvidia.com/gpu:</span> <span class="number">8</span></span><br><span class="line">          <span class="attr">example.com/rdma_vf:</span> <span class="number">1</span></span><br></pre></td></tr></table></figure>
+<p>同一作业的各个 Worker 应使用一致的目标计算域约束。这个 Pod 只示范设备和网络申请，训练作业的成员数、启动顺序和进程协作要由上层训练控制器组织。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/tasks/configure-pod-container/extended-resource/">Kubernetes 扩展资源</a> · <a target="_blank" rel="noopener" href="https://github.com/k8snetworkplumbingwg/multus-cni/blob/master/docs/how-to-use.md">Multus 配置文档</a></p>
+<p>在采用 NCCL 内置 IB Verbs 传输的场景，可先在容器内用 <code>rdma link show</code> 和 <code>ibv_devinfo</code> 核对 Verbs 设备与端口。某个示例 Pod 中，若 <code>eth0</code> 是预期的 IP Socket 接口、<code>mlx5_0</code> 的端口 1 对应已分配的计算网络，可临时使用如下设置观察选路。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">export</span> NCCL_SOCKET_IFNAME=<span class="string">&#x27;=eth0&#x27;</span></span><br><span class="line"><span class="built_in">export</span> NCCL_IB_HCA=<span class="string">&#x27;=mlx5_0:1&#x27;</span></span><br><span class="line"><span class="built_in">export</span> NCCL_DEBUG=INFO</span><br><span class="line"><span class="built_in">export</span> NCCL_DEBUG_SUBSYS=INIT,NET</span><br></pre></td></tr></table></figure>
+<p><code>NCCL_SOCKET_IFNAME</code> 约束 NCCL 使用的 IP 接口，<code>NCCL_IB_HCA</code> 约束内置 Verbs 路径可用的 HCA 和端口。确认通信走了预期路径，还要看各 rank 的网络插件或传输选择日志，并结合网卡、交换机计数和跨节点实测。云平台自带插件的参数按其文档配置。 <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html">NVIDIA NCCL 环境变量</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/networking_troubleshooting.html">NVIDIA NCCL 网络排障</a></p>
+<h2 id="6-让训练读本地副本，把跨站点传输安排在同步链路">6. 让训练读本地副本，把跨站点传输安排在同步链路</h2>
+<p>可把中心对象存储作为发布入口，在站点内准备区域副本、缓存或并行文件系统。训练前按数据版本预热，运行时从站点内读取。数据同步按业务优先级限速，度量批量传输和缓存未命中时对 WAN 的影响。模型和镜像也可以按类似思路在站点侧做版本化缓存或副本。</p>
+<p>用一个粗算例评估是否需要预热。如果目标站点可持续获得 <strong>12 Gbit/s</strong> 的有效传输带宽，复制 <strong>20 TiB</strong> 数据约需 <strong>4.1 小时</strong>，还要留出排队、校验和重试时间。若四个作业各需每 15 分钟复制 1 TiB Checkpoint，持续平均需求约为 <strong>39.1 Gbit/s</strong>。在同一条 12 Gbit/s 链路上，异步上传可以暂存峰值，却会在长期平均速率超出容量时形成积压。应按 Checkpoint 的真实增量、复制节奏和可接受的恢复点重新预算。</p>
+<p>Checkpoint 先在本地按训练框架的保存协议完成，并确认各 rank 的必要分片写入成功。然后以同一版本标识复制全部对象及元数据。远端校验完整后再登记为可恢复版本，可以通过独立的完成标记或索引记录实现。验收时在另一个计算域从这份副本真正恢复一次，测量最后可用版本落后多久，以及恢复到继续训练要多久。 <a target="_blank" rel="noopener" href="https://docs.pytorch.org/docs/stable/distributed.checkpoint.html">PyTorch Distributed Checkpoint</a></p>
+<h2 id="7-把隔离规则和验收口径写进方案">7. 把隔离规则和验收口径写进方案</h2>
+<p>管理域和业务域用 VRF、云路由表、ACL、安全组或防火墙分隔。集群内按租户设置最小必要的 Pod 访问策略，并由支持相应策略的 CNI 执行。对 SR-IOV 次级网络，应单独核对其策略执行路径；主 CNI 的 NetworkPolicy 是否覆盖次级接口取决于实现。计算域按实际技术使用 IB 分区、VLAN/VRF、ACL 或独立 Fabric，并测试跨租户访问被拦截。OOB 管理入口通过独立跳板与审计接入，跨站点数据则按业务分类定义加密和访问权限。 <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/services-networking/network-policies/">Kubernetes NetworkPolicy</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking/display/NVIDIAMLNXOSUserManualv3122002/subnet-manager.pdf">NVIDIA IB 分区文档</a></p>
+<table>
+<thead>
+<tr>
+<th>验收层</th>
+<th>测试方法</th>
+<th>记录什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>物理与 WAN</td>
+<td>查光口和链路计数，分别模拟专线、边界设备或接入点失效</td>
+<td>双向中断时间、切换后的可用带宽与 MTU、回切稳定性</td>
+</tr>
+<tr>
+<td>路由与权限</td>
+<td>从许可和禁用的源各发起访问，核对云 Transit、VPC 和 IDC 回程表</td>
+<td>正确发布的前缀、应隔离的前缀、应用探测及拦截证据</td>
+</tr>
+<tr>
+<td>Kubernetes</td>
+<td>跨节点和跨集群验证 Pod 或 Gateway 路径，检查 DNS、证书和 NetworkPolicy</td>
+<td>业务访问、策略生效和站点失联后的降级行为</td>
+</tr>
+<tr>
+<td>RDMA 与集合通信</td>
+<td>先测点对点 Verbs 带宽/延迟，再用多节点 <code>nccl-tests</code> 和真实训练测同机架、跨 Leaf 与跨 rail</td>
+<td>RDMA 路径日志、计数器、AllReduce 正确性、<code>algbw</code> 和 <code>busbw</code>、实际 Step Time</td>
+</tr>
+<tr>
+<td>数据与恢复</td>
+<td>做数据预热、缓存故障、复制积压与异站点恢复测试</td>
+<td>吞吐、缓存命中率、恢复点落后量和恢复耗时</td>
+</tr>
+</tbody>
+</table>
+<p><code>nccl-tests</code> 的 <code>algbw</code> 是按操作数据量和耗时计算的算法带宽。 <code>busbw</code> 还按集合通信类型做了归一化，具体某条链路的流量要结合端口计数看。不同测试应保存节点数、消息大小、NCCL 版本、rail 和拓扑信息。阈值用本环境基线和业务 SLO 定义。 <a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">NVIDIA nccl-tests 性能口径</a></p>
+<h2 id="8-从最小可用网络开始建设">8. 从最小可用网络开始建设</h2>
+<ol>
+<li><strong>盘点与规划。</strong> 记录地址、站点、云地域、物理链路、NIC/GPU 拓扑、CNI 和数据流。交付站点拓扑图、IPAM 表、前缀传播矩阵、责任人和故障回滚条件。</li>
+<li><strong>打通最小互联。</strong> 先让集群可管理，镜像和平台服务可访问，监控日志可上报。上线前测专线、VPN、双向路由和负向访问。</li>
+<li><strong>本地验收训练。</strong> 各站点分别完成 Fabric、RDMA 设备接入和成组训练验证。将可通过验证的节点标记为相应计算域，再向平台开放。</li>
+<li><strong>补齐数据分发和站点恢复。</strong> 用真实数据集与 Checkpoint 校验有效带宽、本地缓存策略、恢复点和恢复时间。</li>
+<li><strong>按业务扩展跨集群互通。</strong> 用 Gateway 先暴露必要服务，对确实需要共享服务发现或 Pod 直连的范围再建设 Mesh 或路由，并重复安全与故障测试。</li>
+</ol>
+<p>可用 NetBox 等工具保存地址与网络资产，云资源和设备变更再分别通过 Terraform/OpenTofu、Ansible 或 GitOps 管理。每次新增站点、前缀或计算域时，用同一份准入与验收表检查地址冲突、路由传播、访问权限、数据路径和训练回退行为。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/">https://roger-lv.github.io/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/VPC/">VPC</a><a class="post-meta__tags" href="/tags/%E5%A4%9A%E9%9B%86%E7%BE%A4/">多集群</a><a class="post-meta__tags" href="/tags/%E6%B7%B7%E5%90%88%E4%BA%91/">混合云</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/20/2026-11-20-vxlan-udp-ecmp/" title="为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流</div></div><div class="info-2"><div class="info-item-1">两个虚拟机之间有多条业务流，到了物理交换机眼里，它们可能都来自同一个 VTEP、去往同一个 VTEP。如果交换机只根据这对外层 IP 选路，即使机房里铺了两条等价路径，这批流量也可能全走同一条。VXLAN 用一个很小的字段把部分内层流量差异带到外层，这个字段就是 UDP 源端口。 VXLAN 的外层 IP 负责把报文送到远端 VTEP。外层 UDP 目的端口让接收端找到对应的隧道处理入口，源端口为底层网络的哈希提供输入。进入 VXLAN 处理逻辑以后，VNI 才用于确定报文所属的 Overlay 网络。上一篇从整体上梳理了这些组件在 VPC 中的分工。 VPC 虚拟网络架构与数据面实现  1. 沿着一帧报文看封装 假设 VM A（10.42.0.11）和 VM B（10.42.0.22）位于同一个二层虚拟网络，VNI 为 100。它们分别接入 VTEP A（192.0.2.11）和 VTEP B（192.0.2.22）。示例中，A 侧 VTEP 已经知道 B 的内层目的 MAC 对应远端 VTEP B。这条映射可以通过学习、静态配置或 EVPN 控制面获得。 RFC 7348 §...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/10/12/2026-10-12-VPC%E4%B8%8ECiliumClusterMesh%E5%A4%9A%E9%9B%86%E7%BE%A4%E7%BB%84%E7%BD%91%E7%9A%84%E5%9C%B0%E5%9F%BA%E4%B8%8E%E4%B8%8A%E5%B1%82%E5%BB%BA%E7%AD%91/" title="VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑</div></div><div class="info-2"><div class="info-item-1">VPC 与 Cilium ClusterMesh:多集群组网的地基与上层建筑 VPC 是公有云上通过逻辑隔离为你划出的一块&quot;私有网段+自管路由&quot;的虚拟网络,而 Cilium ClusterMesh 解决的是多个 Kubernetes 集群之间的 Pod IP 直连、跨集群服务发现、跨集群 NetworkPolicy 与负载均衡问题;跨集群通信通常通过 VPC Peering/专线打通底层网络后,由 Cilium ClusterMesh、Submariner 等方案组网;集群与机房并非一一对应,常见是&quot;单机房多集群(隔离/灰度)&quot;&quot;多机房单集群(同城双活)&quot;和&quot;多机房多集群(异地容灾)&quot;三种模式按容灾等级选择;混合云场景下则建议用&quot;专线 + VPN 主备链路 + 路由器统一打通 CIDR&quot;的思路,把公有云 VPC 与私有化机房做成一张可路由的大内网。 先看两个概念在定位上的差异:    维度 VPC Cilium ClusterMesh     层级 IaaS 层的逻辑网络 Kube...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-IPoIB%E4%B8%8Epkey%E5%AD%90%E6%8E%A5%E5%8F%A3InfiniBand%E4%B8%96%E7%95%8C%E9%87%8C%E7%9A%84IP%E7%BD%91%E5%8D%A1%E4%B8%8EVLAN/" title="IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;</div></div><div class="info-2"><div class="info-item-1">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot; IPoIB(IP over InfiniBand)接口是运行在 InfiniBand 物理网络之上的&quot;IP 网卡&quot;,pkey 子接口则是在这张 IP 网卡上按&quot;分区键&quot;虚拟出的子接口——两者的组合,就是 InfiniBand 世界里对&quot;IP 网卡 + VLAN 子接口&quot;的对应物。 之所以需要它们,根源在于 InfiniBand 与以太网是两套截然不同的 L2 体系。  一、前提:InfiniBand 不是以太网 理解 IPoIB + pkey,必须先放下以太网的思维惯性。InfiniBand 是一套独立的链路层协议,从硬件寻址开始就和以太网不同:    维度 以太网 InfiniBand     硬件地址 48 位 MAC 地址,烧录在网卡里 无 MAC;由 GUID(端口全局唯一 ID)+ LID(子网内本地 ID,由子网管理器动态分配)标识   单播地址概念 MAC GID(128 位,基于 GUID 生...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/" title="Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</div></div><div class="info-2"><div class="info-item-1">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道 在大模型分布式训练的 Kubernetes 集群里,macvlan 会被用到,但角色非常特定:它作为辅助网络为 Pod 提供访问高性能 RDMA 网络的&quot;共享&quot;通道,而不是承担集群默认网络的职责。 默认网络(控制面通信、Service 访问)通常由 Calico/Cilium/OVN 等标准 CNI 负责,macvlan 网卡通过 Multus 附加,专门承载 GPU 之间的训练数据流。  一、为什么大模型训练需要独立的 RDMA 网络 理解 macvlan 的定位,先要理解训练流量对网络的压力。在 PyTorch FSDP 或 DeepSpeed ZeRO 的分片训练中,每一层前向/反向传播前都要在全量 GPU 间 gather 分片权重,mini-batch 结束后要 all-reduce 梯度——这些集合通信在集群规模上可达数十 Gbit/s 的峰值流量。 如果这些流量走默认的 Overlay 网络(如 OVN-Kubernetes),内核协议栈的封解包、netfilter 处理...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-%E6%B5%85%E8%B0%88%E5%A4%A7%E8%A7%84%E6%A8%A1%E9%9B%86%E7%BE%A4%E7%9A%84%E9%AB%98%E6%80%A7%E8%83%BD%E7%BD%91%E7%BB%9C%E5%AE%B9%E5%99%A8%E5%8C%96%E5%BB%BA%E8%AE%BE/" title="浅谈大规模集群的高性能网络容器化建设:从机器内通信到容器化 RDMA"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">浅谈大规模集群的高性能网络容器化建设:从机器内通信到容器化 RDMA</div></div><div class="info-2"><div class="info-item-1">浅谈大规模集群的高性能网络容器化建设:从机器内通信到容器化 RDMA 计算机硬件的通信方式大体分为两种类型:机器内通信和机器间通信。大模型训练把这两条路径都压到了极限——GPU 之间在机器内要全速交换分片权重,跨机器要跑 all-reduce 梯度洪流。这篇文章沿着这两条路径往下走:先看机器内 NVLink/GPUDirect 那套硬件互联,再看机器间 RDMA 的三种网络与无损组网,最后落到平台侧真正要回答的问题——如何把这些高性能网络以容器的方式交付给用户。  一、机器内通信技术 1.1 共享内存 狭义上的共享内存通信,指的是在 CPU 的内存上开辟一段空间,让不同进程都能访问到。具体形式可以是某种&quot;句柄&quot;,让数据的存在可以借助此句柄跨进程引用这片内存。在容器里我们通常说的是 /dev/shm 这个目录,不同进程直接访问,做到 zero copy。 广义上的节点内 GPU 通信走共享内存,是指支持 GPU 与第三方 PCIe 设备(网卡、存储等)通过共享 pin 住的 host memory 实现共享内存访问,从而加速通信——这就是 GPUDirect S...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Spiderpool%E5%A4%9A%E7%BD%91%E5%8D%A1IPAM%E6%96%B9%E6%A1%88%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图</div></div><div class="info-2"><div class="info-item-1">Spiderpool 多网卡 IPAM 深度解析:Underlay 网络缺的那块拼图 Macvlan、ipvlan、SR-IOV 这几个 CNI 有个共同特点:数据面很漂亮,管理面近乎空白。它们能把 Pod 直接挂到物理网络上,省掉隧道封装的开销,但你问它&quot;这个 IP 能不能跟着 Pod 漂移到别的节点&quot;、“Pod 崩了 IP 怎么收回来”、“两张网卡的回包怎么别走错路由”,它们基本答不上来。 Spiderpool 要补的就是这块。它不是又一个新 CNI——它不碰数据面,而是给这些原生 Underlay CNI 配一套企业级的 IPAM、路由协调和连通性增强,让它们从&quot;能跑&quot;变成&quot;能生产&quot;。 这篇文章分四块:  为什么 Underlay 需要专门的 IPAM——Overlay 和 Underlay 对 IPAM 的需求差在哪; 架构与 CRD 体系——controller-agent 怎么分工,六个 CRD 各管什么; 多网卡 IPAM 全流程——从网卡划分、池选择到策略路由协调、垃圾回收; 实战与坑——部署示例,以及几...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/" title="K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：控制面决定「能不能跑」，数据面决定「跑多快」。K8s 的功夫全在控制面——把 Pod 调度起来、把副本数维持住；而大模型训练真正的痛点，是 GPU 之间、机器之间的数据流动快不快、堵不堵。kubectl get pods 全绿但 MFU 上不去，是典型的控制面看不见的数据面问题。  本文基于 B 站视频《K8s 很熟，为什么月薪卡在三万？大模型 AI Infra 第一讲：从控制面走到数据面》的内容框架整理，其中的技术细节我对照 NVIDIA 官方文档（nvidia-smi 拓扑定义、NCCL 环境变量文档）与相关论文做了核实与补全。核对过程中发现原稿有四处需要更正的地方，已在文中标注。  一、为什么 K8s 玩得溜，月薪却卡在三万 很多云原生工程师 K8s 炉火纯青：写 YAML、调 Deployment、写 Operator、排 Pod 故障、扩缩集群，整套控制面技术一气呵成，但薪资天花板死死卡在三万上下。而那些看起来「只是会跑 nccl-tests」的 AI Infra 同事，年薪轻松翻倍。 差距不在于会不会写 YAML，而在于是否看懂了 K8s 之下的数据面。...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">327</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">528</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E6%8C%89%E4%B8%9A%E5%8A%A1%E6%B5%81%E9%87%8F%E5%88%92%E5%88%86%E7%BD%91%E7%BB%9C"><span class="toc-text">1. 按业务流量划分网络</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E5%85%88%E5%81%9A-IPAM%EF%BC%8C%E5%86%8D%E5%86%B3%E5%AE%9A%E5%93%AA%E4%BA%9B%E5%89%8D%E7%BC%80%E5%8F%AF%E5%8F%91%E5%B8%83"><span class="toc-text">2. 先做 IPAM，再决定哪些前缀可发布</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E4%BC%81%E4%B8%9A-Hub%E3%80%81%E4%BA%91-Transit-%E5%92%8C-BGP-%E5%A6%82%E4%BD%95%E9%85%8D%E5%90%88"><span class="toc-text">3. 企业 Hub、云 Transit 和 BGP 如何配合</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-%E7%94%A8%E4%B8%80%E6%9D%A1%E8%AE%BF%E9%97%AE%E9%93%BE%E8%B7%AF%E6%A0%B8%E5%AF%B9%E5%8F%8C%E5%90%91%E8%B7%AF%E7%94%B1"><span class="toc-text">3.1 用一条访问链路核对双向路由</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E6%8A%8A%E8%B7%AF%E7%94%B1%E4%BC%A0%E6%92%AD%E5%86%99%E6%88%90%E7%9F%A9%E9%98%B5"><span class="toc-text">3.2 把路由传播写成矩阵</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-Kubernetes-%E5%A4%9A%E9%9B%86%E7%BE%A4%E4%BA%92%E8%81%94%E6%8C%89%E9%9C%80%E6%B1%82%E5%8D%87%E7%BA%A7"><span class="toc-text">4. Kubernetes 多集群互联按需求升级</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E6%AF%8F%E4%B8%AA-GPU-%E8%AE%A1%E7%AE%97%E5%9F%9F%E7%8B%AC%E7%AB%8B%E8%AE%BE%E8%AE%A1%E5%92%8C%E9%AA%8C%E6%94%B6"><span class="toc-text">5. 每个 GPU 计算域独立设计和验收</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#5-1-%E5%AE%B9%E9%87%8F%E5%92%8C%E5%8F%8C-rail-%E9%9C%80%E8%A6%81%E7%94%A8%E6%8B%93%E6%89%91%E4%B8%8E%E6%B5%81%E9%87%8F%E9%AA%8C%E8%AF%81"><span class="toc-text">5.1 容量和双 rail 需要用拓扑与流量验证</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-2-%E6%99%AE%E9%80%9A-Pod-%E7%BD%91%E5%92%8C-RDMA-%E8%AE%BE%E5%A4%87%E5%88%86%E5%88%AB%E6%8E%A5%E5%85%A5"><span class="toc-text">5.2 普通 Pod 网和 RDMA 设备分别接入</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-3-%E4%B8%80%E4%B8%AA%E4%BB%8E%E8%B5%84%E6%BA%90%E5%88%86%E9%85%8D%E5%88%B0-NCCL-%E9%80%89%E8%B7%AF%E7%9A%84%E7%A4%BA%E4%BE%8B"><span class="toc-text">5.3 一个从资源分配到 NCCL 选路的示例</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-%E8%AE%A9%E8%AE%AD%E7%BB%83%E8%AF%BB%E6%9C%AC%E5%9C%B0%E5%89%AF%E6%9C%AC%EF%BC%8C%E6%8A%8A%E8%B7%A8%E7%AB%99%E7%82%B9%E4%BC%A0%E8%BE%93%E5%AE%89%E6%8E%92%E5%9C%A8%E5%90%8C%E6%AD%A5%E9%93%BE%E8%B7%AF"><span class="toc-text">6. 让训练读本地副本，把跨站点传输安排在同步链路</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E6%8A%8A%E9%9A%94%E7%A6%BB%E8%A7%84%E5%88%99%E5%92%8C%E9%AA%8C%E6%94%B6%E5%8F%A3%E5%BE%84%E5%86%99%E8%BF%9B%E6%96%B9%E6%A1%88"><span class="toc-text">7. 把隔离规则和验收口径写进方案</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-%E4%BB%8E%E6%9C%80%E5%B0%8F%E5%8F%AF%E7%94%A8%E7%BD%91%E7%BB%9C%E5%BC%80%E5%A7%8B%E5%BB%BA%E8%AE%BE"><span class="toc-text">8. 从最小可用网络开始建设</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/" title="AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）">AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）</a><time datetime="2026-11-20T04:03:03.000Z" title="发表于 2026-11-20 12:03:03">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vxlan-udp-ecmp/" title="为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流">为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流</a><time datetime="2026-11-20T03:40:11.000Z" title="发表于 2026-11-20 11:40:11">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/" title="VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发">VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发</a><time datetime="2026-11-20T02:25:00.000Z" title="发表于 2026-11-20 10:25:00">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-juicefs-checkpoint-privileged-sidecar/" title="用 JuiceFS 保存训练 Checkpoint 时的容器权限边界">用 JuiceFS 保存训练 Checkpoint 时的容器权限边界</a><time datetime="2026-11-19T11:49:12.000Z" title="发表于 2026-11-19 19:49:12">2026-11-19</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/" title="从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门">从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门</a><time datetime="2026-11-19T08:56:46.000Z" title="发表于 2026-11-19 16:56:46">2026-11-19</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
