@@ -1,0 +1,521 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="拆解 GPU 显存到 RDMA 网卡的数据路径、显存注册和 NUMA 亲和性，并给出跨节点验证 GDR 的对照方法。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="拆解 GPU 显存到 RDMA 网卡的数据路径、显存注册和 NUMA 亲和性，并给出跨节点验证 GDR 的对照方法。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-20T08:01:12.000Z">
+<meta property="article:modified_time" content="2026-11-20T08:02:00.163Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="NUMA">
+<meta property="article:tag" content="GPU 网络">
+<meta property="article:tag" content="PCIe">
+<meta property="article:tag" content="GPUDirect RDMA">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践",
+  "url": "https://roger-lv.github.io/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-20T08:01:12.000Z",
+  "dateModified": "2026-11-20T08:02:00.163Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">331</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">542</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/space.png);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-20T08:01:12.000Z" title="发表于 2026-11-20 16:01:12">2026-11-20</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-20T08:02:00.163Z" title="更新于 2026-11-20 16:02:00">2026-11-20</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/" data-flag-title="GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p><strong>GPUDirect RDMA 让网卡直接读写已注册的 GPU 显存，NUMA 帮助定位进程和内存的局部性，最终要用 PCIe 拓扑、网络插件日志和跨节点 GPU 缓冲区测试确认实际数据路径。</strong></p>
+<p>多机训练做 AllReduce、AllGather、ReduceScatter 或点对点收发时，数据通常在 GPU 显存中产生和消费。即使 InfiniBand 或 RoCE 链路已经跑通，每端仍可能把数据先复制到主机内存。要解释吞吐或延迟差异，先确认数据从哪块显存出发、经过哪张网卡，以及在哪一段使用了主机内存。</p>
+<span id="more"></span>
+<h2 id="1-从一段梯度看-GDR-的数据路径">1. 从一段梯度看 GDR 的数据路径</h2>
+<p>考虑两个训练节点交换梯度。若 RDMA 注册的是 Host Memory，就需要在发送端执行 GPU 到主机的复制，在接收端把主机缓冲区再复制到 GPU。网卡仍用 DMA 收发，但两端都要为中转付出复制时间与主机内存带宽。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">主机内存中转</span><br><span class="line">发送 GPU</span><br><span class="line">  ↓ D2H 复制</span><br><span class="line">发送端 Host Buffer</span><br><span class="line">  ↓ NIC DMA 读取</span><br><span class="line">发送 NIC</span><br><span class="line">  ↓ IB / RoCE</span><br><span class="line">接收 NIC</span><br><span class="line">  ↓ NIC DMA 写入</span><br><span class="line">接收端 Host Buffer</span><br><span class="line">  ↓ H2D 复制</span><br><span class="line">接收 GPU</span><br><span class="line"></span><br><span class="line">双端使用 GDR 的示意</span><br><span class="line">发送 GPU 显存</span><br><span class="line">  ↓ 发送 NIC 直接 DMA 读取</span><br><span class="line">发送 NIC</span><br><span class="line">  ↓ IB / RoCE</span><br><span class="line">接收 NIC</span><br><span class="line">  ↓ 接收 NIC 直接 DMA 写入</span><br><span class="line">接收 GPU 显存</span><br></pre></td></tr></table></figure>
+<p>发送端网卡可以直接读取本地 GPU 缓冲区，接收端网卡可以直接写入本地 GPU 缓冲区。两个方向能否使用直达路径，要分别看平台能力和通信库选路。CPU 仍负责通信初始化、内存注册、队列管理、同步和错误处理。GDR 减少的是数据面上的主机内存中转。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/cuda/gpudirect-rdma/">NVIDIA GPUDirect RDMA 文档</a></p>
+<h2 id="2-网卡怎么拿到可用的显存地址？">2. 网卡怎么拿到可用的显存地址？</h2>
+<h3 id="DMA、PCIe-P2P-与-BAR1">DMA、PCIe P2P 与 BAR1</h3>
+<p>DMA 让设备在获得有效地址和访问权限后自行搬运数据。以普通主机内存 RDMA 为例，应用向 RDMA 子系统注册缓冲区，驱动为网卡建立 DMA 映射和访问权限，网卡随后按注册信息读取或写入。GPU 显存需要 GPU 驱动与 RDMA 驱动协作完成注册和映射，CUDA 指针本身无法作为 NIC 的 DMA 地址。</p>
+<p>PCIe P2P 允许设备向另一个设备暴露的地址窗口发出读写请求。例如 GPU 和 NIC 接在同一个 PCIe Switch 下，交换机可能直接转发 NIC 发往 GPU 的请求。网卡按映射后的地址访问字节，路径由设备、PCIe 层级、平台固件和驱动共同决定。</p>
+<p>PCIe 的 BAR（Base Address Register）用于描述设备的地址窗口，系统枚举时为其分配地址范围。NVIDIA GPU 的 BAR1 可以把部分显存映射到 PCIe 可访问的窗口。映射建立的是地址对应关系，数据仍留在显存芯片上。窗口的容量和映射方式取决于 GPU、驱动及平台配置。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/cuda/gpudirect-rdma/">NVIDIA GPUDirect RDMA 文档</a></p>
+<h3 id="IOMMU-与地址一致性">IOMMU 与地址一致性</h3>
+<p>普通 DMA 中，设备发出的 DMA 地址可以由 IOMMU 转换并检查权限。它与 CPU 的虚拟地址转换是两条路径。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">CPU 访问内存   CPU 虚拟地址 → CPU MMU → 物理内存</span><br><span class="line">设备访问内存  NIC DMA 地址 → IOMMU 转换与权限检查 → 目标内存</span><br></pre></td></tr></table></figure>
+<p>对 CUDA GDR 文档所述路径，参与的 PCIe 设备须看到一致的物理地址，因此通常需要 1:1 地址转换，或采用该平台明确支持的直通策略。地址一致性只是其中一项条件，实际还要核对 P2P 转发、固件、GPU/NIC 驱动和平台兼容性。生产环境按厂商对具体平台与版本的支持矩阵部署。验证应在保有既定隔离策略的测试环境进行，禁止为试验临时关闭隔离或修改生产节点的系统设置。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/cuda/gpudirect-rdma/">CUDA GDR 对 IOMMU 的说明</a></p>
+<h3 id="两条显存注册路径">两条显存注册路径</h3>
+<p>内存注册回答的是「这个 NIC 能否在给定权限和生命周期内访问这块 GPU Buffer」。下面两条路径都服务于这个问题。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">DMA-BUF       GPU 驱动导出 GPU Buffer → DMA-BUF FD → RDMA 驱动导入和映射 → NIC DMA</span><br><span class="line">Peer Memory   RDMA 注册请求 → Peer Memory 接口 → nvidia-peermem 协调显存映射 → NIC DMA</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>DMA-BUF</th>
+<th><code>nvidia-peermem</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>接口</td>
+<td>Linux 跨设备缓冲区共享框架</td>
+<td>NVIDIA 显存管理与 RDMA Peer Memory 接口</td>
+</tr>
+<tr>
+<td>角色</td>
+<td>GPU 驱动是 exporter，RDMA 侧是 importer</td>
+<td>RDMA 子系统通过 peer-memory 回调请求 GPU 显存的映射</td>
+</tr>
+<tr>
+<td>设备访问</td>
+<td>importer 对共享缓冲区建立适用于 NIC 的 DMA 映射，再完成 RDMA 注册</td>
+<td>模块协调 GPU 驱动提供映射及生命周期管理，NIC 执行 DMA</td>
+</tr>
+<tr>
+<td>部署核对</td>
+<td>核对内核、GPU 驱动、NIC 驱动及平台是否支持这条路径</td>
+<td>核对 Peer Memory 接口、模块加载情况和驱动版本匹配</td>
+</tr>
+</tbody>
+</table>
+<p>DMA-BUF FD 是可传递的缓冲区引用。导入侧需要附着缓冲区并为自身设备建立映射。DMA-BUF 框架提供 fence 等同步机制，实际 GPU 与 NIC 的访问顺序、完成通知和缓冲区释放仍应遵循具体 API 和驱动约定。DMA-BUF 路径可以在未加载 <code>nvidia-peermem</code> 的情况下工作。NVIDIA GPU Operator 文档列出了两条路径及各自的前提。<a target="_blank" rel="noopener" href="https://docs.kernel.org/driver-api/dma-buf.html">Linux DMA-BUF 文档</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-operator-rdma.html">NVIDIA GPU Operator 的 GDR 部署说明</a></p>
+<h2 id="3-先读-PCIe-路径，再看-CPU-和内存的-NUMA-距离">3. 先读 PCIe 路径，再看 CPU 和内存的 NUMA 距离</h2>
+<h3 id="GPU-到网卡经过哪些桥？">GPU 到网卡经过哪些桥？</h3>
+<p>同一 PCIe Switch 下通常是较短的设备间路径。GPU 和 NIC 也可能分别接在同一个 Root Complex 的不同 Root Port 下，或接在不同 Socket 的 Root Complex 下。后一种布线若允许设备间访问，路径还可能占用 Socket 间带宽。用实际 PCIe 树确认桥接关系，再用平台兼容性和测试确认可用性与性能。</p>
+<p>下面是一台假想双路服务器。每侧的 GPU 和 NIC 是同一交换机的两个下游设备，内存挂在本侧 CPU 的内存控制器上。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">Node 0 / Socket 0                             Node 1 / Socket 1</span><br><span class="line">  Local RAM 0                                   Local RAM 1</span><br><span class="line">       │                                             │</span><br><span class="line">     CPU 0 ───────────── Socket Interconnect ────── CPU 1</span><br><span class="line">       │                                             │</span><br><span class="line">   Root Complex                                  Root Complex</span><br><span class="line">       │                                             │</span><br><span class="line">   PCIe Switch 0                                 PCIe Switch 1</span><br><span class="line">     ├── GPU 0                                     ├── GPU 1</span><br><span class="line">     └── NIC 0                                     └── NIC 1</span><br></pre></td></tr></table></figure>
+<p><code>nvidia-smi topo -m</code> 给出 GPU、网卡之间的路径类别以及 GPU 的 CPU/内存亲和性。读图时以工具实际输出的图例为准。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/nvidia-smi/#topology">NVIDIA SMI 拓扑说明</a></p>
+<table>
+<thead>
+<tr>
+<th>标记</th>
+<th><code>nvidia-smi topo -m</code> 中的含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>X</code></td>
+<td>设备自身</td>
+</tr>
+<tr>
+<td><code>PIX</code></td>
+<td>经过一个 PCIe Switch</td>
+</tr>
+<tr>
+<td><code>PXB</code></td>
+<td>经过多个 PCIe Switch，未经过 PCIe Host Bridge</td>
+</tr>
+<tr>
+<td><code>PHB</code></td>
+<td>经过 PCIe Host Bridge</td>
+</tr>
+<tr>
+<td><code>NODE</code></td>
+<td>经过同一 NUMA 节点内不同 PCIe Host Bridge 之间的互联</td>
+</tr>
+<tr>
+<td><code>SYS</code></td>
+<td>经过 PCIe 以及跨 NUMA 节点的系统互联</td>
+</tr>
+<tr>
+<td><code>NV#</code></td>
+<td>GPU 间由指定数量的 NVLink 组成的连接</td>
+</tr>
+</tbody>
+</table>
+<h3 id="NUMA-从哪段路径影响性能？">NUMA 从哪段路径影响性能？</h3>
+<p>在近似 UMA 的机器上，CPU 访问共享内存的成本相近。在典型的双路 NUMA 机器上，CPU 访问本地内存控制器的路径较短，访问另一侧的内存通常要经过 Socket 间互联。Linux 的 NUMA 节点是资源局部性域，可能包括 CPU、内存和 I/O 资源。一个 Socket 可以划分为多个 NUMA 节点，也可能出现仅含内存的节点。</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>查看时关注什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Socket</td>
+<td>物理 CPU 封装或插槽</td>
+</tr>
+<tr>
+<td>Core</td>
+<td>物理核心数量</td>
+</tr>
+<tr>
+<td>逻辑 CPU</td>
+<td>操作系统调度单位。启用 SMT 时，一个 Core 可以有多个逻辑 CPU</td>
+</tr>
+<tr>
+<td>NUMA Node</td>
+<td>CPU、内存及 I/O 资源的局部性域</td>
+</tr>
+<tr>
+<td>NUMA distance</td>
+<td>Linux 给出的节点间相对距离。用实际测试度量延迟与带宽</td>
+</tr>
+</tbody>
+</table>
+<p>GPU 和 NIC 同属一个 NUMA 节点时，仍需用 PCIe 树判断是否共享交换机。跨 NUMA 的 GPU–NIC 组合则要根据具体平台确认 P2P 能力。前者是设备间路径，CPU 线程到内存的距离是另一段路径。两段路径分别影响 NIC 读写显存，以及 CPU 管理通信、准备数据和访问主机缓冲区的成本。<a target="_blank" rel="noopener" href="https://docs.kernel.org/mm/numa.html">Linux NUMA 文档</a></p>
+<p>DataLoader 通常让 CPU worker 读取并预处理数据，再通过主机缓冲区传给 GPU。检查 worker 所在 CPU、Host Memory 和页锁定内存的实际放置，以及目标 GPU 的 PCIe 归属。下面是单 NUMA 域任务的进程级示例。绑核和绑内存前，先确认作业配额、容器 cpuset 和本地内存容量。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">numactl --cpunodebind=0 --membind=0 python train.py</span><br></pre></td></tr></table></figure>
+<p>多 GPU、多 NIC 的节点可以先试同侧 GPU 与 NIC 的配对，再与跨侧配对比较。多条网络通道的选择还受 NVLink、网卡及轨道分布、PCIe 带宽、集合通信图和网络插件影响。</p>
+<h2 id="4-Linux-上如何核对整条路径？">4. Linux 上如何核对整条路径？</h2>
+<p>下面的命令用于检查已授权环境中的拓扑和驱动信息。PCI 地址和网卡接口要替换为现场设备。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># CPU、内存和 NUMA 节点</span></span><br><span class="line">lscpu</span><br><span class="line">numactl --hardware</span><br><span class="line"></span><br><span class="line"><span class="comment"># GPU、NIC、PCIe 桥接关系</span></span><br><span class="line">nvidia-smi topo -m</span><br><span class="line">nvidia-smi --query-gpu=index,pci.bus_id --format=csv</span><br><span class="line">lspci -tv</span><br><span class="line"></span><br><span class="line"><span class="comment"># RDMA 设备、端口和网络接口对应关系</span></span><br><span class="line">ibdev2netdev</span><br><span class="line">ibv_devinfo</span><br><span class="line"></span><br><span class="line"><span class="comment"># 用实际 GPU PCI 地址和 NIC 接口名替换示例</span></span><br><span class="line"><span class="built_in">cat</span> /sys/bus/pci/devices/0000:af:00.0/numa_node</span><br><span class="line"><span class="built_in">cat</span> /sys/class/net/eth0/device/numa_node</span><br><span class="line"></span><br><span class="line"><span class="comment"># 仅用于查看传统 peer-memory 模块</span></span><br><span class="line">lsmod | grep -E <span class="string">&#x27;nvidia_peermem|nv_peer_mem&#x27;</span></span><br></pre></td></tr></table></figure>
+<p>先把训练 rank 看到的 GPU、RDMA 端口和 PCI 设备对应起来。sysfs 的 <code>numa_node</code> 返回 <code>0</code> 时表示节点 0，返回 <code>-1</code> 时应按 NUMA 归属未知处理，再结合 PCIe 树和亲和性信息判断。需要确认链路速率与宽度时，可对相应 BDF 用 <code>lspci -vv -s</code> 查看当前链路状态并与设备能力对照。</p>
+<p><code>nvidia-smi topo -p2p</code> 查询的是 GPU 对 GPU 的 P2P 能力。GPU 对 NIC 的 GDR 要结合具体驱动路径、注册和网络收发验证。模块列表只能帮助识别 legacy 路径，采用 DMA-BUF 时要看导入方支持和实际注册结果。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/nvidia-smi/#topology">NVIDIA SMI 拓扑说明</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-operator-rdma.html">NVIDIA GPU Operator GDR 文档</a></p>
+<h2 id="5-NCCL-如何决定是否走-GDR？">5. NCCL 如何决定是否走 GDR？</h2>
+<p>NCCL 在机内可以选择 NVLink 或 PCIe P2P，在跨节点连接上通过网络传输实现收发。它要组织集合通信图，并根据拓扑、硬件和消息大小选择算法与协议。Ring 或 Tree 决定各 rank 如何交换数据，GDR 注册和网络插件的选路决定 NIC 能从哪块缓冲区直接收发。相同的集合算法可以采用不同的数据传输路径。</p>
+<h3 id="环境变量与拓扑图例要分开读">环境变量与拓扑图例要分开读</h3>
+<p><code>NCCL_NET_GDR_LEVEL</code> 控制 <strong>GPU 到 NIC</strong> 的常规 GDR 距离阈值；<code>NCCL_P2P_LEVEL</code> 控制 <strong>GPU 到 GPU</strong> 的 P2P 距离阈值。下表使用官方文档列出的字符串取值。</p>
+<table>
+<thead>
+<tr>
+<th><code>NCCL_NET_GDR_LEVEL</code></th>
+<th>对常规 GPU–NIC 距离策略的影响</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOC</code></td>
+<td>常规阈值策略下不使用 GDR</td>
+</tr>
+<tr>
+<td><code>PIX</code></td>
+<td>允许同一 PCIe Switch 下的 GPU 和 NIC 使用 GDR</td>
+</tr>
+<tr>
+<td><code>PXB</code></td>
+<td>将允许范围扩到经过多个 PCIe Switch 的路径</td>
+</tr>
+<tr>
+<td><code>PHB</code></td>
+<td>将允许范围扩到经过 PCIe Host Bridge 的档位</td>
+</tr>
+<tr>
+<td><code>SYS</code></td>
+<td>距离阈值放宽到跨 NUMA 互联，仍需硬件、驱动、内存注册和插件支持</td>
+</tr>
+</tbody>
+</table>
+<p><code>NODE</code> 可以出现在拓扑图例里，但不在 <code>NCCL_NET_GDR_LEVEL</code> 的文档取值表中。<code>NVL</code> 是 <code>NCCL_P2P_LEVEL</code> 的 GPU–GPU 取值，也不在 GDR 距离变量的文档取值表中。拓扑图描述实际连接类型，环境变量定义软件策略。使用字符串值并核对运行版本，避免把旧版整数映射套到当前版本。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-net-gdr-level">NCCL GDR 距离变量</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-p2p-level">NCCL GPU–GPU P2P 变量</a></p>
+<p>两项设置会影响发送侧的解读：</p>
+<ul>
+<li><code>NCCL_NET_GDR_READ</code> 管的是发送侧 NIC 是否直接 DMA 读取<strong>本地 GPU 显存</strong>。这里的读发生在本地设备之间，和远端是否发起 verbs RDMA READ 是两个层面的操作。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-net-gdr-read">NCCL GDR Read 说明</a></li>
+<li>在支持 <code>NCCL_NET_GDR_C2C</code> 的 NCCL 版本上，若 CPU 通过 C2C 与 GPU 相连，NIC 在 CPU 一侧且路径符合 <code>PHB</code> 条件，启用该选项可对该 NIC 覆盖常规 GDR 阈值。因此用 <code>LOC</code> 做对照时，要记录 NCCL 与插件版本、C2C 设置和实际传输日志。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-net-gdr-c2c">NCCL C2C 覆盖说明</a></li>
+</ul>
+<h3 id="用两台节点做对照">用两台节点做对照</h3>
+<p>单节点运行 <code>all_reduce_perf -g 8</code> 可以观察机内八张卡的集合通信。要验证 InfiniBand 或 RoCE 上的 GDR，选至少两台真实测试节点，用 MPI 版 NCCL Tests 在两端各启动一个进程，先为每个进程分配一张 GPU 和一个明确的 RDMA 端口。用每个 rank 的日志确认主机与设备分布。<a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl-tests">NVIDIA NCCL Tests</a></p>
+<table>
+<thead>
+<tr>
+<th>检查</th>
+<th>怎么做</th>
+<th>记录什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>网络和 GPU 缓冲区基线</td>
+<td>先用主机缓冲区确认 RDMA 通路，再用支持 CUDA GPU Buffer 的工具测相同端口上的直接读写。按版本选择 DMA-BUF 或 legacy 注册方式</td>
+<td>实际注册类型、方向、正确性、时延和带宽</td>
+</tr>
+<tr>
+<td>NCCL 默认选路</td>
+<td>两端固定节点、GPU、网卡、端口、插件、消息大小、迭代数与预热参数</td>
+<td>版本、拓扑、各 rank 的传输和 GDR 日志、AllReduce 时延与带宽</td>
+</tr>
+<tr>
+<td>NCCL 对照</td>
+<td>只对测试进程设置 <code>NCCL_NET_GDR_LEVEL=LOC</code>，确认 C2C 覆盖是否适用，并从日志确认对照确实使用主机中转</td>
+<td>相同消息范围下的性能差、收发两侧路径，以及是否仍使用同一 RDMA 网络</td>
+</tr>
+</tbody>
+</table>
+<p><code>NCCL_DEBUG=INFO</code> 配合 <code>NCCL_DEBUG_SUBSYS=INIT,NET,GRAPH</code> 可用于查看初始化、网络传输和拓扑选择。结合插件日志确认选中的 NIC、使用的缓冲区与发送/接收方向。若对照连网络传输都变了，带宽差包含了额外变量，应先把网络路径对齐。专门的 GPU 缓冲区直测用于确认能力，NCCL 日志用于确认作业是否选用这条路径，端到端训练指标用于评估收益。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-debug-subsys">NCCL 日志参数</a> · <a target="_blank" rel="noopener" href="https://github.com/linux-rdma/perftest#readme">Linux RDMA perftest</a></p>
+<h2 id="6-把术语放回训练通信栈">6. 把术语放回训练通信栈</h2>
+<table>
+<thead>
+<tr>
+<th>技术</th>
+<th>主要作用</th>
+<th>典型通信对象</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PCIe P2P</td>
+<td>让两个 PCIe 设备直接访问彼此可见的地址空间</td>
+<td>PCIe 设备 ↔ PCIe 设备</td>
+</tr>
+<tr>
+<td>GPUDirect P2P</td>
+<td>GPU 直接访问对端 GPU 缓冲区，可走 NVLink 或 PCIe</td>
+<td>GPU ↔ GPU</td>
+</tr>
+<tr>
+<td>RDMA</td>
+<td>通过网络访问已注册的远端内存，普通路径可用主机缓冲区</td>
+<td>NIC ↔ 远端已注册内存</td>
+</tr>
+<tr>
+<td>GPUDirect RDMA</td>
+<td>让 RDMA NIC 直接读写本地 GPU 显存</td>
+<td>NIC ↔ GPU</td>
+</tr>
+<tr>
+<td>GPUDirect Storage</td>
+<td>在受支持的存储和 GPU 显存之间建立直接数据路径</td>
+<td>存储 ↔ GPU</td>
+</tr>
+</tbody>
+</table>
+<p>从训练框架向下看，PyTorch 或 Megatron-LM 组织张量计算和并行策略，NCCL 组织集合通信，InfiniBand 或 RoCE 负责节点间传输。服务器内部，CUDA 和 GPU 显存提供缓冲区，NVLink/NVSwitch 或 PCIe P2P 承载机内 GPU 通信，DMA-BUF 或 peer-memory 提供 GPU–NIC 注册协作，PCIe 和 IOMMU 决定访问路径及映射条件。NUMA 则帮助放置 CPU 工作线程、主机内存和 I/O 任务。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-operator-rdma.html">GPU Operator 的 GDR 与 GDS 说明</a></p>
+<h2 id="7-排查顺序">7. 排查顺序</h2>
+<ol>
+<li><strong>先定位硬件路径。</strong> 核对 GPU/NIC 的 PCI Bus ID、RDMA 端口、NUMA 归属和进程绑核，再查交换机、Root Complex、链路宽度与速率。</li>
+<li><strong>再确认内存能否注册。</strong> 核对内核、GPU 驱动、RDMA Core、NIC 驱动、固件和 IOMMU 策略，确认实际使用 DMA-BUF 还是 legacy peer-memory。使用对应版本的兼容性说明解释失败原因。</li>
+<li><strong>最后验证作业走了哪条路。</strong> 在独立测试节点检查主机与 GPU 缓冲区的 RDMA 收发，再看多节点 NCCL 日志和对照结果。若作业仍慢，继续查 NIC 利用率、CPU 使用率、远端内存访问和端到端 step 时间。</li>
+</ol>
+<p>这样能把「显存能否被网卡访问」「某次通信选了哪条路径」「这条路径是否改善了训练」分别落实到可观察的证据上。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/">https://roger-lv.github.io/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/NUMA/">NUMA</a><a class="post-meta__tags" href="/tags/GPU-%E7%BD%91%E7%BB%9C/">GPU 网络</a><a class="post-meta__tags" href="/tags/PCIe/">PCIe</a><a class="post-meta__tags" href="/tags/GPUDirect-RDMA/">GPUDirect RDMA</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/20/2026-11-20-training-fabric-storage-io-tail-latency/" title="分布式训练为什么怕存储 I/O 长尾？从 SC26 实测看 GPU 集群网络隔离"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">分布式训练为什么怕存储 I/O 长尾？从 SC26 实测看 GPU 集群网络隔离</div></div><div class="info-2"><div class="info-item-1">给 GPU 集群做网络验收时，最容易测的是空载 NCCL/RCCL 带宽，最容易漏掉的是训练和读数据同时跑时的长尾。SC26 PDSW 的一项实测给了一个很好的反例：在同一套 Slingshot 11 集群里，隔离存储和梯度通信的流量类别有帮助，但分到独立类别的存储路径，仍有 11.5% 的迭代等数据超过 1 秒。要定位瓶颈，需要分别测两个量：GPU 在等下一批数据多久，集体通信本身又变慢了多少。  上一篇混合云网络建设方案把计算通信留在站点内；这篇进一步看站点内训练和存储如何互相影响。 1. 一次训练迭代，会在哪里等？ 12数据面：共享存储 → 存储网络 → DataLoader worker → 预取队列 → 训练 rank通信面：训练 rank → 反向传播产生梯度 → all-reduce → 各 rank 继续推进 DataLoader 通常提前读下一批数据。只要预取在当前计算结束前完成，I/O 就不一定出现在迭代的关键路径上。真正该记录的是训练循环拿下一批数据时还要等多久，也就是 DataLoader 的暴露等待。一个 rank 遇到慢读，可能晚进入 collecti...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/" title="RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</div></div><div class="info-2"><div class="info-item-1">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区 2026 年 8 月 17 日,SIGCOMM 2026 在丹佛开会的第一天,第三届 Networks for AI Computing workshop(NAIC '26)上出现了一篇只有 6 页的论文:《RDMATracer: A scalable eBPF-based framework for tracing RDMA syscalls》。作者名单几乎全是 Meta 的生产工程师与网络研究员——Prankur Gupta、Miao Xu、Maxim Samoylov、Prashanth Kannan、Rajiv Krishnamurthy,加上 CMU 的 Theophilus A. Benson。 论文标题很平实,讲的是一个已经在线上连续运行多年的 eBPF 工具。但它要回答的问题一点都不平实:当十万卡规模的 AI 训练集群任务崩溃时,为什么有一类故障在所有现成的监控系统里都看不到? 这篇文章是我读完论文和配套的 LPC 2025、FOSDEM 2026 演讲材料之后的拆解笔记。我最感兴...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/" title="Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</div></div><div class="info-2"><div class="info-item-1">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道 在大模型分布式训练的 Kubernetes 集群里,macvlan 会被用到,但角色非常特定:它作为辅助网络为 Pod 提供访问高性能 RDMA 网络的&quot;共享&quot;通道,而不是承担集群默认网络的职责。 默认网络(控制面通信、Service 访问)通常由 Calico/Cilium/OVN 等标准 CNI 负责,macvlan 网卡通过 Multus 附加,专门承载 GPU 之间的训练数据流。  一、为什么大模型训练需要独立的 RDMA 网络 理解 macvlan 的定位,先要理解训练流量对网络的压力。在 PyTorch FSDP 或 DeepSpeed ZeRO 的分片训练中,每一层前向/反向传播前都要在全量 GPU 间 gather 分片权重,mini-batch 结束后要 all-reduce 梯度——这些集合通信在集群规模上可达数十 Gbit/s 的峰值流量。 如果这些流量走默认的 Overlay 网络(如 OVN-Kubernetes),内核协议栈的封解包、netfilter 处理...</div></div></div></a><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</div></div><div class="info-2"><div class="info-item-1">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点 RDMA 这套东西之所以让人望而生畏,不是因为哪个概念特别难,而是因为它把三个本来独立的知识域压进了同一条调用链:Linux 内核系统调用机制、内存管理、网络硬件。单独看每个术语都不复杂,叠在一起才显得信息量爆炸。 这篇文章分三大块:  调用链——从 ibv_reg_mr 一路走到 HCA 硬件,每一层在做什么; 术语地图——把所有黑话按类别拆开,每个只给一句人话; 实战落点——AI 训练云平台上,这条链路到底体现在哪些日常工作里。   先正一个名。 中文社区里偶尔能看到 “ubverbs” 这个写法,它不是标准名称。内核里承接用户态 verbs 请求的模块叫 ib_uverbs(Userspace Verbs),源码在 drivers/infiniband/core/uverbs*.c。本文统一用 ib_uverbs。   关联阅读: 这条链路上的故障怎么观测,我在 《RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区》 里写过。那篇讲的是&quot;怎么看见...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/" title="K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：控制面决定「能不能跑」，数据面决定「跑多快」。K8s 的功夫全在控制面——把 Pod 调度起来、把副本数维持住；而大模型训练真正的痛点，是 GPU 之间、机器之间的数据流动快不快、堵不堵。kubectl get pods 全绿但 MFU 上不去，是典型的控制面看不见的数据面问题。  本文基于 B 站视频《K8s 很熟，为什么月薪卡在三万？大模型 AI Infra 第一讲：从控制面走到数据面》的内容框架整理，其中的技术细节我对照 NVIDIA 官方文档（nvidia-smi 拓扑定义、NCCL 环境变量文档）与相关论文做了核实与补全。核对过程中发现原稿有四处需要更正的地方，已在文中标注。  一、为什么 K8s 玩得溜，月薪却卡在三万 很多云原生工程师 K8s 炉火纯青：写 YAML、调 Deployment、写 Operator、排 Pod 故障、扩缩集群，整套控制面技术一气呵成，但薪资天花板死死卡在三万上下。而那些看起来「只是会跑 nccl-tests」的 AI Infra 同事，年薪轻松翻倍。 差距不在于会不会写 YAML，而在于是否看懂了 K8s 之下的数据面。...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 K8s 到 AI Infra：跨越五道技术鸿沟</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：K8s 把 GPU 当作 nvidia.com/gpu: 8 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「只分配、不感知」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。  上一讲（K8s 很熟，为什么月薪卡在三万）讲的是怎么看——nvidia-smi topo -m 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲怎么修：五道鸿沟各自的工程解法。 本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败，已在文中以 ⚠️ 标注。  五道鸿沟总览    维度 K8s 原生方案 AI 训练瓶颈 生产级方案 核心工具链     调度 kube-scheduler 逐 Pod 打分 部分 Pod 无法调度导致整组死锁 Gang 整组调度 + 多维配比 Volcano PodGroup   网络 TCP ...</div></div></div></a><a class="pagination-related" href="/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/" title="RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-10</div><div class="info-item-2">RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链</div></div><div class="info-2"><div class="info-item-1">InfiniBand 有个让人羡慕的特性：链路天生无损，credit-based 流控做在硬件里，不需要你教交换机怎么排队。代价是那是一整套得另起炉灶的网络——另一种交换机型号、另一批光模块、另一套运维技能。 RoCEv2 讲的是它的另一半：同样把 RDMA 跑起来，但跑在你已经有的以太网上。所谓性价比就在这句话里——不必为了 RDMA 再建一张网。 便宜不是白来的。以太网从来不保证不丢包，交换机缓存满了就丢；而 RDMA 的传输层没有 TCP 那套重传——丢一个包，队列对（QP）直接进错误态，上层看到的是卡死，不是变慢。IB 把无损做进了链路层，RoCEv2 得你自己一层一层补出来。 入门时间本身就是这笔账的一部分：IB 大约一小时能讲明白，子网管理器把地址、路由、流控全包了；RoCEv2 得按一个月算——打标、映射、队列、门限、四处编号对齐，每一层都得自己盯着。 一句话概括：IB 贵，贵出来的那部分钱买的是「运维简单」；RoCEv2 省下的设备钱，会在调优和配置一致性上还回去。  本文是 RDMA 系列的第四篇。前几篇分别拆了 RDMA 技术手册、RDMA 技术栈全解 和 R...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">331</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">542</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E4%BB%8E%E4%B8%80%E6%AE%B5%E6%A2%AF%E5%BA%A6%E7%9C%8B-GDR-%E7%9A%84%E6%95%B0%E6%8D%AE%E8%B7%AF%E5%BE%84"><span class="toc-number">1.</span> <span class="toc-text">1. 从一段梯度看 GDR 的数据路径</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E7%BD%91%E5%8D%A1%E6%80%8E%E4%B9%88%E6%8B%BF%E5%88%B0%E5%8F%AF%E7%94%A8%E7%9A%84%E6%98%BE%E5%AD%98%E5%9C%B0%E5%9D%80%EF%BC%9F"><span class="toc-number">2.</span> <span class="toc-text">2. 网卡怎么拿到可用的显存地址？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#DMA%E3%80%81PCIe-P2P-%E4%B8%8E-BAR1"><span class="toc-number">2.1.</span> <span class="toc-text">DMA、PCIe P2P 与 BAR1</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#IOMMU-%E4%B8%8E%E5%9C%B0%E5%9D%80%E4%B8%80%E8%87%B4%E6%80%A7"><span class="toc-number">2.2.</span> <span class="toc-text">IOMMU 与地址一致性</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%A4%E6%9D%A1%E6%98%BE%E5%AD%98%E6%B3%A8%E5%86%8C%E8%B7%AF%E5%BE%84"><span class="toc-number">2.3.</span> <span class="toc-text">两条显存注册路径</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-%E5%85%88%E8%AF%BB-PCIe-%E8%B7%AF%E5%BE%84%EF%BC%8C%E5%86%8D%E7%9C%8B-CPU-%E5%92%8C%E5%86%85%E5%AD%98%E7%9A%84-NUMA-%E8%B7%9D%E7%A6%BB"><span class="toc-number">3.</span> <span class="toc-text">3. 先读 PCIe 路径，再看 CPU 和内存的 NUMA 距离</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#GPU-%E5%88%B0%E7%BD%91%E5%8D%A1%E7%BB%8F%E8%BF%87%E5%93%AA%E4%BA%9B%E6%A1%A5%EF%BC%9F"><span class="toc-number">3.1.</span> <span class="toc-text">GPU 到网卡经过哪些桥？</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#NUMA-%E4%BB%8E%E5%93%AA%E6%AE%B5%E8%B7%AF%E5%BE%84%E5%BD%B1%E5%93%8D%E6%80%A7%E8%83%BD%EF%BC%9F"><span class="toc-number">3.2.</span> <span class="toc-text">NUMA 从哪段路径影响性能？</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-Linux-%E4%B8%8A%E5%A6%82%E4%BD%95%E6%A0%B8%E5%AF%B9%E6%95%B4%E6%9D%A1%E8%B7%AF%E5%BE%84%EF%BC%9F"><span class="toc-number">4.</span> <span class="toc-text">4. Linux 上如何核对整条路径？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-NCCL-%E5%A6%82%E4%BD%95%E5%86%B3%E5%AE%9A%E6%98%AF%E5%90%A6%E8%B5%B0-GDR%EF%BC%9F"><span class="toc-number">5.</span> <span class="toc-text">5. NCCL 如何决定是否走 GDR？</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E4%B8%8E%E6%8B%93%E6%89%91%E5%9B%BE%E4%BE%8B%E8%A6%81%E5%88%86%E5%BC%80%E8%AF%BB"><span class="toc-number">5.1.</span> <span class="toc-text">环境变量与拓扑图例要分开读</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%94%A8%E4%B8%A4%E5%8F%B0%E8%8A%82%E7%82%B9%E5%81%9A%E5%AF%B9%E7%85%A7"><span class="toc-number">5.2.</span> <span class="toc-text">用两台节点做对照</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-%E6%8A%8A%E6%9C%AF%E8%AF%AD%E6%94%BE%E5%9B%9E%E8%AE%AD%E7%BB%83%E9%80%9A%E4%BF%A1%E6%A0%88"><span class="toc-number">6.</span> <span class="toc-text">6. 把术语放回训练通信栈</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E6%8E%92%E6%9F%A5%E9%A1%BA%E5%BA%8F"><span class="toc-number">7.</span> <span class="toc-text">7. 排查顺序</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/" title="GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践">GPUDirect RDMA（GDR）与 NUMA：GPU 服务器高速通信的底层原理与拓扑实践</a><time datetime="2026-11-20T08:01:12.000Z" title="发表于 2026-11-20 16:01:12">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-training-fabric-storage-io-tail-latency/" title="分布式训练为什么怕存储 I/O 长尾？从 SC26 实测看 GPU 集群网络隔离">分布式训练为什么怕存储 I/O 长尾？从 SC26 实测看 GPU 集群网络隔离</a><time datetime="2026-11-20T06:16:00.000Z" title="发表于 2026-11-20 14:16:00">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/" title="AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）">AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）</a><time datetime="2026-11-20T04:03:03.000Z" title="发表于 2026-11-20 12:03:03">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vxlan-udp-ecmp/" title="为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流">为什么 VXLAN 使用 UDP？从 4789 端口到 ECMP 分流</a><time datetime="2026-11-20T03:40:11.000Z" title="发表于 2026-11-20 11:40:11">2026-11-20</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vpc-virtual-network-data-plane/" title="VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发">VPC 虚拟网络架构与数据面实现：VRouter、VFW、VXLAN、OVS、Netfilter 与高性能转发</a><time datetime="2026-11-20T02:25:00.000Z" title="发表于 2026-11-20 10:25:00">2026-11-20</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
