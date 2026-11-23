@@ -1,0 +1,445 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输） | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="以一次 HTTPS 首次连接为例，说明 TLS 1.3 如何协商密钥、验证服务器身份、保护 HTTP 记录，并用本地 OpenSSL 实验复现。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/23/2026-11-23-tls13-handshake-to-https/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="以一次 HTTPS 首次连接为例，说明 TLS 1.3 如何协商密钥、验证服务器身份、保护 HTTP 记录，并用本地 OpenSSL 实验复现。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-23T15:11:13.000Z">
+<meta property="article:modified_time" content="2026-11-23T15:11:13.025Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="计算机网络">
+<meta property="article:tag" content="TLS">
+<meta property="article:tag" content="HTTPS">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）",
+  "url": "https://roger-lv.github.io/2026/11/23/2026-11-23-tls13-handshake-to-https/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-23T15:11:13.000Z",
+  "dateModified": "2026-11-23T15:11:13.025Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/23/2026-11-23-tls13-handshake-to-https/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">337</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">549</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-23T15:11:13.000Z" title="发表于 2026-11-23 23:11:13">2026-11-23</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-23T15:11:13.025Z" title="更新于 2026-11-23 23:11:13">2026-11-23</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E7%BD%91%E7%BB%9C/">计算机网络</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/23/2026-11-23-tls13-handshake-to-https/" data-flag-title="TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>一次新的 HTTPS 连接里，TCP 先建立可靠的字节流，TLS 再协商密钥并验证服务器身份，最后才沿这条连接传输 HTTP 请求和响应。TLS 1.3 在收到 <code>ServerHello</code> 后已经能加密后续握手消息，客户端还要验证证书、<code>CertificateVerify</code> 和 <code>Finished</code>，才会发送普通的 HTTP 请求。</p>
+<p>本文以 <strong>HTTP/1.1 over TCP、首次连接、X25519 密钥交换、服务器证书认证</strong> 为例。正文末尾用本地 OpenSSL 实验观察握手、加密记录和连接关闭。</p>
+<span id="more"></span>
+<h2 id="1-从-DNS-和-TCP-建连看完整时序">1. 从 DNS 和 TCP 建连看完整时序</h2>
+<p>访问 <code>https://example.com/api/users</code> 时，客户端先通过缓存或 DNS 获得地址，再向目标地址的 TCP 443 端口建连。TCP 的 SYN、SYN-ACK 和 ACK 建立连接并同步初始序号。此时双方有了可靠的字节流，TLS 的加密和身份认证从下一阶段开始。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    sequenceDiagram
+    participant C as 客户端
+    participant S as 服务器
+    C-&gt;&gt;S: SYN
+    S-&gt;&gt;C: SYN-ACK
+    C-&gt;&gt;S: ACK
+    C-&gt;&gt;S: ClientHello
+    S-&gt;&gt;C: ServerHello
+    Note over C,S: 双方派生握手密钥
+    S-&gt;&gt;C: EncryptedExtensions
+    S-&gt;&gt;C: Certificate
+    S-&gt;&gt;C: CertificateVerify
+    S-&gt;&gt;C: Finished
+    Note over C,S: 客户端验证服务端身份和握手
+    C-&gt;&gt;S: Finished
+    C-&gt;&gt;S: HTTP 请求
+    S-&gt;&gt;C: HTTP 响应
+  </pre></div>
+<p>图中的箭头表示逻辑消息。TLS 握手消息、TLS Record 和 TCP 段各有边界。服务器可以在一次发送中写出多条握手消息，TCP 也可以把一条 Record 拆成多个段。读抓包时，需要先按 TCP 字节流重组，再按 TLS 记录层识别消息。图中两个 Hello 使用明文记录，<code>EncryptedExtensions</code> 到双方 <code>Finished</code> 使用握手密钥，HTTP 请求和响应使用应用流量密钥。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc9293.html">RFC 9293 TCP 规范</a> · <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-2">RFC 8446 §2 握手时序</a></p>
+<h2 id="2-两个-Hello-协商了什么">2. 两个 Hello 协商了什么</h2>
+<p>客户端在 <code>ClientHello</code> 中给出可以接受的参数，并为一个或多个支持的组提前生成密钥份额。以下是一组可以完成本文握手的组合。</p>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>ClientHello 中的示例</th>
+<th>协商结果或用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>legacy_version</code> 与 <code>supported_versions</code></td>
+<td><code>0x0303</code> 和 <code>0x0304</code></td>
+<td>旧字段保留兼容值，TLS 1.3 由扩展中的 <code>0x0304</code> 标识</td>
+</tr>
+<tr>
+<td><code>cipher_suites</code></td>
+<td><code>TLS_AES_128_GCM_SHA256</code> 等</td>
+<td>服务器选一个套件，此处为 AES-128-GCM 和 SHA-256</td>
+</tr>
+<tr>
+<td><code>supported_groups</code></td>
+<td><code>x25519</code>、<code>secp256r1</code></td>
+<td>列出支持的密钥交换组</td>
+</tr>
+<tr>
+<td><code>key_share</code></td>
+<td><code>x25519: A</code></td>
+<td>提供客户端已经生成的临时公钥</td>
+</tr>
+<tr>
+<td><code>signature_algorithms</code></td>
+<td><code>rsa_pss_rsae_sha256</code>、<code>ecdsa_secp256r1_sha256</code> 等</td>
+<td>声明客户端可验证哪些握手签名</td>
+</tr>
+<tr>
+<td><code>server_name</code>（SNI）</td>
+<td><code>example.com</code></td>
+<td>供共享 IP 和端口的网关选择虚拟主机及证书</td>
+</tr>
+<tr>
+<td>ALPN</td>
+<td><code>http/1.1</code></td>
+<td>提议应用层协议，服务器在 <code>EncryptedExtensions</code> 返回选定项</td>
+</tr>
+</tbody>
+</table>
+<p><code>ServerHello</code> 选定 TLS 1.3、密码套件和密钥交换组，并在 <code>key_share</code> 返回服务器的 X25519 临时公钥 <code>B</code>。TLS 1.3 套件名里的 SHA-256 用于 HKDF 和握手摘要，AES-GCM 用于记录层认证加密。密钥交换组和数字签名方案各自协商，所以同一个套件可以搭配 X25519 和 RSA-PSS 握手签名，也可以搭配 X25519 和 ECDSA 握手签名。</p>
+<p>如果服务器需要的组在客户端的 <code>supported_groups</code> 里，但客户端还没为该组提供 <code>key_share</code>，服务器可以发送 <code>HelloRetryRequest</code>，要求客户端补发第二个 <code>ClientHello</code>。这多一次 TLS 往返，首个 Hello 仍参与握手摘要，协议用它的哈希构造一条合成的 <code>message_hash</code> 消息。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-4">RFC 8446 §4 握手消息与扩展</a></p>
+<p>通常能从明文 <code>ClientHello</code> 读出 SNI。采用 ECH（Encrypted ClientHello）且协商成功时，实际服务名可以放在加密的内层 ClientHello 中。外层 Hello、目的 IP 和连接时序依然可见，普通 DNS 查询也可能单独暴露域名。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc9849.html">RFC 9849 TLS Encrypted Client Hello</a></p>
+<h2 id="3-ECDHE-如何得到相同的共享秘密">3. ECDHE 如何得到相同的共享秘密</h2>
+<p>以 <code>a</code>、<code>b</code> 表示两端临时私钥，用圆括号里的参数写出各自调用 X25519 的方式。X25519 在公钥和共享结果里使用曲线点的编码，下面的 <code>aG</code> 只是标量乘法的直觉记法。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">客户端生成 A = X25519(a, 基点)       服务器生成 B = X25519(b, 基点)</span><br><span class="line"></span><br><span class="line">客户端收到 B 后算 X25519(a, B)      服务器收到 A 后算 X25519(b, A)</span><br><span class="line">                       两边的计算对应同一个曲线结果 abG</span><br></pre></td></tr></table></figure>
+<p>网络中交换的是 <code>A</code> 和 <code>B</code>。在安全实现下，只观察这些公钥无法高效算出共享秘密。TLS 对 X25519 的全零共享结果要求中止握手。短期私钥按握手生成并妥善销毁时，即使服务器证书私钥日后泄露，仅凭它和此前被动录下的流量也无法还原这次 ECDHE 的共享秘密，这就是此场景中的前向保密。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc7748.html#section-6.1">RFC 7748 §6.1 X25519 密钥交换</a> · <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-7.4.2">RFC 8446 §7.4.2 ECDHE</a></p>
+<h2 id="4-HKDF-按方向和阶段派生密钥">4. HKDF 按方向和阶段派生密钥</h2>
+<p>ECDHE 输出作为密钥调度的输入。TLS 1.3 用 HKDF-Extract 提取秘密，再借助带标签的 HKDF-Expand 派生不同用途的材料。<code>Transcript-Hash</code> 对规定范围内的已编码握手消息计算摘要，包含握手消息类型和长度，记录层头部、TCP 头部以及兼容性的 <code>ChangeCipherSpec</code> 均在这个计算范围之外。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>
+    flowchart TD
+    E[&quot;Early Secret（无 PSK 时用零串）&quot;] --&gt; H[&quot;Handshake Secret（混入 ECDHE）&quot;]
+    H --&gt; HS[&quot;握手流量秘密（两个方向）&quot;]
+    H --&gt; M[&quot;Master Secret&quot;]
+    M --&gt; AS[&quot;应用流量秘密（两个方向）&quot;]
+    M --&gt; R[&quot;Resumption Master Secret&quot;]
+  </pre></div>
+<table>
+<thead>
+<tr>
+<th>派生分支</th>
+<th>Transcript 截至</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client_handshake_traffic_secret</code> / <code>server_handshake_traffic_secret</code></td>
+<td><code>ServerHello</code></td>
+<td>各自派生握手记录的 key、IV 和 Finished key</td>
+</tr>
+<tr>
+<td><code>client_application_traffic_secret_0</code> / <code>server_application_traffic_secret_0</code></td>
+<td>服务器 <code>Finished</code></td>
+<td>各自派生初始应用记录的 key 和 IV</td>
+</tr>
+<tr>
+<td><code>resumption_master_secret</code></td>
+<td>客户端 <code>Finished</code></td>
+<td>搭配 ticket nonce 派生恢复用 PSK</td>
+</tr>
+</tbody>
+</table>
+<p>无 PSK 的首次连接仍有 Early Secret，输入里的 PSK 用定长零串代替。<code>Handshake Secret</code> 从 Early Secret 的 <code>derived</code> 分支与 ECDHE 输出提取，<code>Master Secret</code> 从 Handshake Secret 的 <code>derived</code> 分支与定长零串提取。图中省略了 <code>derived</code> 标签和 exporter 分支。Record 层再从一个方向的流量秘密分别以 <code>key</code>、<code>iv</code> 标签扩展出实际使用的密钥和 IV。客户端写入用的密钥对应服务器读取用的密钥，反方向用另一组材料。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-4.4.1">RFC 8446 §4.4.1 握手摘要</a> · <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-7.1">RFC 8446 §7.1–7.3 密钥调度</a></p>
+<h2 id="5-服务器用证书和握手签名证明身份">5. 服务器用证书和握手签名证明身份</h2>
+<p>服务器先发送 <code>EncryptedExtensions</code>，再用同一方向的握手密钥保护 <code>Certificate</code>、<code>CertificateVerify</code> 和 <code>Finished</code>。接收端通过三项检查确认服务端身份和握手状态。</p>
+<table>
+<thead>
+<tr>
+<th>检查对象</th>
+<th>客户端如何验证</th>
+<th>通过后确认什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Certificate</code></td>
+<td>用本地信任锚验证证书路径，检查 URL 主机名是否匹配证书 SAN，以及有效期、用途和路径约束</td>
+<td>服务器证书公钥可以用于认证这个服务身份</td>
+</tr>
+<tr>
+<td><code>CertificateVerify</code></td>
+<td>用叶证书公钥验证当前握手的签名</td>
+<td>对端持有证书对应的签名私钥，并对本次握手内容作了签名</td>
+</tr>
+<tr>
+<td><code>Finished</code></td>
+<td>用服务器方向的握手流量秘密派生 Finished key，重算握手摘要的 HMAC</td>
+<td>对端掌握正确的握手秘密，双方的握手记录一致</td>
+</tr>
+</tbody>
+</table>
+<h3 id="证书链与主机名">证书链与主机名</h3>
+<p>叶证书携带公钥、签发者、有效期和 <code>subjectAltName</code>（SAN）等字段。服务器通常发送叶证书和需要的中间证书，根信任来自客户端本地配置的信任锚。证书上的签名用于验证签发关系，客户端还根据本地策略检查证书撤销状态、算法强度等条件。</p>
+<p>访问 <code>https://example.com</code> 时，参考身份是 URL 里的 <code>example.com</code>，匹配 SAN 中的 <code>dNSName</code>。若直接以 IP 地址访问，则检查 SAN 中相应的 <code>iPAddress</code>。RFC 9525 将服务身份放在 SAN 中，Common Name 不参与这套匹配。SNI 帮服务器挑证书，客户端仍要单独校验目标身份。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc5280.html#section-6">RFC 5280 §6 证书路径验证</a> · <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc9525.html">RFC 9525 TLS 服务身份</a></p>
+<h3 id="CertificateVerify-与-Finished-的覆盖范围">CertificateVerify 与 Finished 的覆盖范围</h3>
+<p>在本文的全握手里，服务端用证书私钥对下面的数据签名，摘要覆盖到服务端 <code>Certificate</code>。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">64 个 0x20 字节</span><br><span class="line">|| &quot;TLS 1.3, server CertificateVerify&quot;</span><br><span class="line">|| 0x00</span><br><span class="line">|| Transcript-Hash(ClientHello ... server Certificate)</span><br></pre></td></tr></table></figure>
+<p>这把证书身份和两个 Hello 中的协商参数、临时公钥绑定在一起。主动中间人即使分别为两侧建立共享秘密，也得为被改动的握手生成可用的证书签名。验证所依赖的是正确的参考身份、信任锚和受保护的签名私钥。</p>
+<p>随后双方各用自己方向的握手流量秘密派生 <code>finished_key</code>，计算 <code>verify_data = HMAC(finished_key, transcript_hash)</code>。服务器的摘要覆盖到它的 <code>CertificateVerify</code>。本文没有客户端证书认证，客户端的摘要覆盖到服务器的 <code>Finished</code>。如果开启 mTLS，服务器还会发送 <code>CertificateRequest</code>，客户端的 <code>Certificate</code> 和有证书时的 <code>CertificateVerify</code> 插在客户端 <code>Finished</code> 前，并进入相应的摘要。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-4.4">RFC 8446 §4.4 认证消息</a></p>
+<h2 id="6-HTTP-字节怎样变成加密的-TLS-Record">6. HTTP 字节怎样变成加密的 TLS Record</h2>
+<p>客户端发出自己的 <code>Finished</code> 后，可以紧接着发送 HTTP 请求。前一条消息仍用握手密钥，后面的请求用客户端应用流量密钥。TLS 也允许服务器发出自己的 <code>Finished</code> 后先写应用数据，此时服务器还没收到客户端的握手确认。典型的 HTTP 请求响应仍由客户端先发请求。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-4.4.4">RFC 8446 §4.4.4 Finished</a></p>
+<p>以 AES-128-GCM 为例，TLS 记录层做三件事。</p>
+<ol>
+<li><strong>组装待加密内容。</strong> 把一段 HTTP 字节加上内层内容类型（应用数据为 <code>0x17</code>）和可选的零填充。内层类型也能表示握手消息或警报，接收端解密后据此分发。</li>
+<li><strong>计算 nonce。</strong> 将该方向当前密钥的 64 位记录序号按网络字节序编码，左侧补零至 IV 长度，再与 write IV 异或。序号从 0 开始，每条加密记录递增，换密钥时重新计数。记录序号由两端维护，TCP 序号另属传输层。</li>
+<li><strong>认证头部并加密。</strong> AEAD 以 5 字节外层记录头为关联数据，对内层明文加密并带上认证标签。接收端从头部取长度，按当前方向的 key、IV 和序号重建 nonce，通过认证后才交付明文。</li>
+</ol>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">外层记录头（5 字节）</span><br><span class="line">  opaque_type = 0x17 | legacy_record_version = 0x0303 | length</span><br><span class="line">加密记录（length 字节）</span><br><span class="line">  AEAD(content || inner_type || zero_padding, nonce, 外层记录头)</span><br></pre></td></tr></table></figure>
+<p>例如在一条记录里放 100 字节 HTTP 数据、1 字节内层类型、无填充，AES-GCM 再加 16 字节认证标签，外层 <code>length</code> 是 117，包含头部总共 122 字节。抓包看到外层类型为 Application Data 时，里面可能是加密的握手、HTTP 或 Alert。未解密时仍可观察 IP、端口、记录长度和流量时序。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-5.2">RFC 8446 §5.2–5.3 记录保护与 nonce</a></p>
+<p>如果链路是客户端到网关再到后端，客户端 TLS 会话在执行解密的网关处终止。网关到后端的转发方式另行配置，启用 TLS 时会建立独立会话。常见服务用 OpenSSL 等用户态库处理握手和 Record，Linux kTLS 可以把已建立连接的部分记录层收发交给内核。工程上可以分别看新建连接速率、握手 CPU、连接复用率和稳定连接吞吐，定位成本来自建连还是数据传输。 <a target="_blank" rel="noopener" href="https://docs.kernel.org/networking/tls.html">Linux 内核 kTLS 文档</a></p>
+<h2 id="7-一次往返、会话恢复与-0-RTT">7. 一次往返、会话恢复与 0-RTT</h2>
+<p><strong>1-RTT 全握手</strong>指客户端从发出 <code>ClientHello</code> 到收到并验证服务端首轮握手消息，典型情况下等待一个网络往返，然后发出 <code>Finished</code> 和 HTTP 数据。新建 TCP 连接还要计入 TCP 建连，DNS 也可能另外消耗时间。如果触发 <code>HelloRetryRequest</code>，TLS 再多一次往返。</p>
+<p>握手完成后，服务器可以发出加密的 <code>NewSessionTicket</code>。客户端将票据与派生出的恢复 PSK 关联，下次建立连接时提供票据身份，并用 PSK binder 将其绑定到新的握手。服务器接受 PSK 后可以继续用 PSK 完成 1-RTT 恢复，也可以在 PSK 基础上重新做 ECDHE，让协商完成后的流量获得新的前向保密材料。每个新会话都派生自己的应用流量密钥。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-2.2">RFC 8446 §2.2 和 §4.6.1 会话恢复</a></p>
+<p><strong>0-RTT Early Data</strong> 允许启用该能力的客户端在发出恢复用 <code>ClientHello</code> 的同一轮先发应用数据。早期数据的密钥来自 PSK 和 ClientHello 的摘要，此时尚未混入本次 ECDHE。服务端可以拒绝早期数据并继续握手。接受时，应用还要处理跨连接重放的可能性。有扣款或提交任务等副作用的操作需要按应用语义决定能否重放，单看 HTTP 方法不足以判断。HTTP 服务可返回 <code>425 Too Early</code>，让客户端在完成握手后重新发送。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-2.3">RFC 8446 §2.3 早期数据</a> · <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-8">RFC 8446 §8 0-RTT 重放</a> · <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8470.html">RFC 8470 HTTP Early Data</a></p>
+<h2 id="8-TLS-如何更新密钥和关闭连接">8. TLS 如何更新密钥和关闭连接</h2>
+<p>长连接可以用握手后的 <code>KeyUpdate</code> 更新某个发送方向的应用流量秘密，随后重新派生该方向的 key 和 IV。发送方用旧密钥保护 <code>KeyUpdate</code> 自身，从下一条记录开始切换。接收方处理消息后同步更新读密钥，另一方向可以单独更新。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-4.6.3">RFC 8446 §4.6.3 KeyUpdate</a> · <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-7.2">RFC 8446 §7.2 流量秘密更新</a></p>
+<p>双方各自在关闭自己的写方向前发送 <code>close_notify</code>，已经发出错误警报的情况除外。收到 <code>close_notify</code> 表示对端结束了这个方向的 TLS 数据，TLS 1.3 允许两个方向分别关闭。若只看到 TCP FIN 或 EOF，TLS 层无法确认对端是否完整发完，HTTP 层还要按自己的消息定界判断响应是否完整。连接结束后，该连接的流量密钥退出使用，恢复票据所需的状态可以按策略继续保存。 <a target="_blank" rel="noopener" href="https://www.rfc-editor.org/rfc/rfc8446.html#section-6.1">RFC 8446 §6.1 关闭警报</a></p>
+<h2 id="9-用本地-OpenSSL-验证一次完整握手">9. 用本地 OpenSSL 验证一次完整握手</h2>
+<p>在第一个终端用 OpenSSL 3 或更新版本创建临时实验目录和本地证书。记下 <code>pwd</code> 打印的路径，服务器只绑定回环地址。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">lab_dir=$(<span class="built_in">mktemp</span> -d)</span><br><span class="line"><span class="built_in">cd</span> <span class="string">&quot;<span class="variable">$lab_dir</span>&quot;</span></span><br><span class="line"><span class="built_in">pwd</span></span><br><span class="line"><span class="built_in">umask</span> 077</span><br><span class="line">openssl req -x509 -newkey rsa:2048 -noenc -days 1 \</span><br><span class="line">  -subj <span class="string">&#x27;/CN=localhost&#x27;</span> -addext <span class="string">&#x27;subjectAltName=DNS:localhost&#x27;</span> \</span><br><span class="line">  -keyout localhost.key -out localhost.crt</span><br><span class="line"></span><br><span class="line">openssl s_server -accept 127.0.0.1:8443 \</span><br><span class="line">  -cert localhost.crt -key localhost.key -tls1_3 \</span><br><span class="line">  -<span class="built_in">groups</span> X25519 -alpn http/1.1 -www</span><br></pre></td></tr></table></figure>
+<p>在第二个终端进入同一目录，用 <code>localhost.crt</code> 作为这条实验连接的信任锚，并明确校验 <code>localhost</code>。这里通过标准输入送入一个带 CRLF 和终止空行的 HTTP 请求。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">printf</span> <span class="string">&#x27;GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n&#x27;</span> |</span><br><span class="line">  openssl s_client -connect 127.0.0.1:8443 -servername localhost \</span><br><span class="line">    -tls1_3 -<span class="built_in">groups</span> X25519 -alpn http/1.1 \</span><br><span class="line">    -CAfile localhost.crt -verify_hostname localhost -verify_return_error \</span><br><span class="line">    -msg -ign_eof</span><br></pre></td></tr></table></figure>
+<p>本地实测协商出 TLS 1.3 和 ALPN <code>http/1.1</code>，证书验证返回 <code>0 (ok)</code>。测试服务器的响应状态行为 <code>HTTP/1.0 200 ok</code>，随后可看到 <code>close_notify</code>。服务端 <code>Certificate</code> 与 <code>CertificateVerify</code> 可在 <code>-msg</code> 输出中辨认，因为这是 TLS 端点解密后的消息日志。只看网络上的记录头时，这些消息位于外层类型为 Application Data 的密文中。OpenSSL 的兼容模式也可能在日志中出现 <code>ChangeCipherSpec</code>，TLS 1.3 密钥切换由握手状态和密钥调度决定。实验结束后可在第一个终端按 Ctrl-C 停止服务器。 <a target="_blank" rel="noopener" href="https://docs.openssl.org/3.0/man1/openssl-s_client/">OpenSSL s_client 文档</a> · <a target="_blank" rel="noopener" href="https://docs.openssl.org/3.0/man1/openssl-s_server/">OpenSSL s_server 文档</a></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/23/2026-11-23-tls13-handshake-to-https/">https://roger-lv.github.io/2026/11/23/2026-11-23-tls13-handshake-to-https/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/%E8%AE%A1%E7%AE%97%E6%9C%BA%E7%BD%91%E7%BB%9C/">计算机网络</a><a class="post-meta__tags" href="/tags/TLS/">TLS</a><a class="post-meta__tags" href="/tags/HTTPS/">HTTPS</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/23/2026-11-23-ai-infra-tracking/" title="AI Infra 技术追踪｜2026-11-23"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">AI Infra 技术追踪｜2026-11-23</div></div><div class="info-2"><div class="info-item-1">一句话结论： SGLang 把部分 KV 写回的等待从调度线程移到 GPU stream；TorchTitan 把激活重计算覆盖到 MTP；NIXL 让可直达的 NVLink 操作绕过 CPU proxy，打断一类 EP barrier 死锁。 追踪自 11 月 22 日约 01:13 UTC 的上次扫描截止点。以下区分正式发布、主线合并和作者实验；本文未独立运行 GPU 或集群实验。 1. 推理｜SGLang HiCache 写回不再阻塞满足条件的调度循环 原来的瓶颈。 L2 write-back 淘汰 GPU KV 页时，要先完成 GPU→CPU（D2H）复制，才能安全重用 GPU 页。旧路径会让调度线程等复制，哪怕 CPU 本来可以准备下一批。新路径没有省掉复制，也没有放松内存生命周期约束。 1234上一轮 forward → D2H 读取旧 KV 页 → 记录完成事件                                          ↓                         下一轮 forward / 后续 H2D load-back 等事件CP...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2025/09/18/2025-09-18-MTU%E6%8E%A2%E6%B5%8B/" title="MTU探测"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/mtu.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-18</div><div class="info-item-2">MTU探测</div></div><div class="info-2"><div class="info-item-1">MTU探测 https://zhuanlan.zhihu.com/p/1939977507236450569 PMTUD 是一种用于确定从源主机到目标主机的整个网络路径上 MTU（Maximum Transmission Unit，最大传输单元）大小的机制。它的主要目的是避免 IP 分片，因为分片会消耗额外的计算资源并可能增加丢包的风险。 核心思想： PMTUD 利用 ICMP（Internet Control Message Protocol）的“Fragmentation Needed and DF set”（需要分片但 DF 位已设置）消息来工作。源主机发送一个设置了“Don’t Fragment”（DF）标志位的数据包，如果路径上的某个路由器发现这个数据包太大而无法转发，并且 DF 位被设置，它就不能进行分片，而是丢弃该数据包并向源主机发送一个 ICMP 错误消息，告知源主机路径 MTU 的信息。 详细过程：   初始化：  源主机（Host A）想要向目标主机（Host B）发送一个较大的 IP 数据包。 Host A 会维护一个“路径 MTU 缓存”，记录它所知道的到...</div></div></div></a><a class="pagination-related" href="/2025/09/18/2025-09-18-Vxlan-&&-%E5%9B%9B%E8%A1%A8%E4%BA%94%E9%93%BE/" title="Vxlan &amp;&amp; 四表五链"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/vxlan.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-18</div><div class="info-item-2">Vxlan &amp;&amp; 四表五链</div></div><div class="info-2"><div class="info-item-1">Vxlan &amp;&amp; 四表五链 我来为您详细介绍VXLAN和四表五链这两个重要的网络技术概念。 VXLAN (Virtual eXtensible Local Area Network) 基本概念 VXLAN是一种网络虚拟化技术，用于解决传统VLAN的4094个网络标识限制，并实现跨三层网络的二层网络扩展。 核心特点  扩展性强：支持1600万个虚拟网络（24位VNI） 跨三层传输：可以在IP网络上传输二层帧 隧道技术：使用UDP封装实现Overlay网络  报文封装结构 1原始以太网帧 + VXLAN头部 + UDP头部 + IP头部 + 外层以太网帧 主要组件  VTEP (VXLAN Tunnel End Point)：隧道端点 VNI (VXLAN Network Identifier)：网络标识符 Underlay网络：底层IP网络 Overlay网络：虚拟网络  应用场景  数据中心网络虚拟化 云计算环境租户隔离 跨数据中心的二层网络互联  四表五链 四表  raw表：用于数据包的早期处理，连接跟踪前的处理 mangle表：用于修改数据包的特定部分（TTL...</div></div></div></a><a class="pagination-related" href="/2025/08/03/TCP%E8%BF%9E%E6%8E%A5%E4%B8%ADACK,SEQ%E5%8F%98%E5%8C%96/" title="TCP连接中ACK,SEQ变化"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/tcp.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-08-03</div><div class="info-item-2">TCP连接中ACK,SEQ变化</div></div><div class="info-2"><div class="info-item-1">TCP连接中ACK,SEQ变化 以下是 TCP 连接中 ACK 和 SEQ 交互变化的详细示例（包含完整的三次握手、数据传输和四次挥手过程）： 📡 连接建立阶段（三次握手）  客户端 → 服务器 SYN=1, SEQ=X（随机初始序列号） 客户端声明自己的初始序列号 X 服务器 → 客户端 SYN=1, ACK=1, SEQ=Y, ACK=X+1 服务器确认收到 X（ACK=X+1）并声明自己的初始序列号 Y 客户端 → 服务器 ACK=1, SEQ=X+1, ACK=Y+1 客户端确认收到 Y（ACK=Y+1），准备开始数据传输   📦 数据传输阶段 sequenceDiagram     participant Client     participant Server      Client-&gt;&gt;Server: SEQ&#x3D;100, Data&#x3D;&quot;ABC&quot;（3字节）     Server-&gt;&gt;Client: ACK&#x3D;103（SEQ&#x3D;500，ACK号&#x3D;100+3）          C...</div></div></div></a><a class="pagination-related" href="/2024/06/24/%E4%BF%9D%E7%A0%94/" title="保研复习准备"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/BJ.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-06-24</div><div class="info-item-2">保研复习准备</div></div><div class="info-2"><div class="info-item-1">保研 (453条消息) 2021年计算机保研面试题_一个主机将两个端口接到网络上是否会提升吞吐量_Challow的博客-CSDN博客 (453条消息) 吐血整理，20个计算机保研常见问题及回答模板_计算机专业20个面试常见问题_Baoyan_cs的博客-CSDN博客 [(453条消息) 2021计算机保研经历(清软, 北深, 浙大, 南大, 中科大, 北航, 哈深, 南开, 华科, 武大, 中大)_inicho的博客-CSDN博客](https://blog.csdn.net/qq_43280818/article/details/123450451?ops_request_misc=&amp;request_id=&amp;biz_id=102&amp;utm_term=计算机网络 保研&amp;utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduweb~default-9-123450451.142^v87^insert_down28,239^v2^insert_chatgpt&amp;spm=...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">337</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">549</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">79</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E4%BB%8E-DNS-%E5%92%8C-TCP-%E5%BB%BA%E8%BF%9E%E7%9C%8B%E5%AE%8C%E6%95%B4%E6%97%B6%E5%BA%8F"><span class="toc-text">1. 从 DNS 和 TCP 建连看完整时序</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-%E4%B8%A4%E4%B8%AA-Hello-%E5%8D%8F%E5%95%86%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-text">2. 两个 Hello 协商了什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-ECDHE-%E5%A6%82%E4%BD%95%E5%BE%97%E5%88%B0%E7%9B%B8%E5%90%8C%E7%9A%84%E5%85%B1%E4%BA%AB%E7%A7%98%E5%AF%86"><span class="toc-text">3. ECDHE 如何得到相同的共享秘密</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-HKDF-%E6%8C%89%E6%96%B9%E5%90%91%E5%92%8C%E9%98%B6%E6%AE%B5%E6%B4%BE%E7%94%9F%E5%AF%86%E9%92%A5"><span class="toc-text">4. HKDF 按方向和阶段派生密钥</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-%E6%9C%8D%E5%8A%A1%E5%99%A8%E7%94%A8%E8%AF%81%E4%B9%A6%E5%92%8C%E6%8F%A1%E6%89%8B%E7%AD%BE%E5%90%8D%E8%AF%81%E6%98%8E%E8%BA%AB%E4%BB%BD"><span class="toc-text">5. 服务器用证书和握手签名证明身份</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%81%E4%B9%A6%E9%93%BE%E4%B8%8E%E4%B8%BB%E6%9C%BA%E5%90%8D"><span class="toc-text">证书链与主机名</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#CertificateVerify-%E4%B8%8E-Finished-%E7%9A%84%E8%A6%86%E7%9B%96%E8%8C%83%E5%9B%B4"><span class="toc-text">CertificateVerify 与 Finished 的覆盖范围</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-HTTP-%E5%AD%97%E8%8A%82%E6%80%8E%E6%A0%B7%E5%8F%98%E6%88%90%E5%8A%A0%E5%AF%86%E7%9A%84-TLS-Record"><span class="toc-text">6. HTTP 字节怎样变成加密的 TLS Record</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E4%B8%80%E6%AC%A1%E5%BE%80%E8%BF%94%E3%80%81%E4%BC%9A%E8%AF%9D%E6%81%A2%E5%A4%8D%E4%B8%8E-0-RTT"><span class="toc-text">7. 一次往返、会话恢复与 0-RTT</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#8-TLS-%E5%A6%82%E4%BD%95%E6%9B%B4%E6%96%B0%E5%AF%86%E9%92%A5%E5%92%8C%E5%85%B3%E9%97%AD%E8%BF%9E%E6%8E%A5"><span class="toc-text">8. TLS 如何更新密钥和关闭连接</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#9-%E7%94%A8%E6%9C%AC%E5%9C%B0-OpenSSL-%E9%AA%8C%E8%AF%81%E4%B8%80%E6%AC%A1%E5%AE%8C%E6%95%B4%E6%8F%A1%E6%89%8B"><span class="toc-text">9. 用本地 OpenSSL 验证一次完整握手</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-tls13-handshake-to-https/" title="TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）">TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）</a><time datetime="2026-11-23T15:11:13.000Z" title="发表于 2026-11-23 23:11:13">2026-11-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-ai-infra-tracking/" title="AI Infra 技术追踪｜2026-11-23">AI Infra 技术追踪｜2026-11-23</a><time datetime="2026-11-23T01:00:00.000Z" title="发表于 2026-11-23 09:00:00">2026-11-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/22/2026-11-22-ai-infra-tracking/" title="AI Infra 技术追踪｜2026-11-22">AI Infra 技术追踪｜2026-11-22</a><time datetime="2026-11-22T01:00:00.000Z" title="发表于 2026-11-22 09:00:00">2026-11-22</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/21/2026-11-21-ai-infra-tracking/" title="AI Infra 技术追踪｜2026-11-21">AI Infra 技术追踪｜2026-11-21</a><time datetime="2026-11-21T01:00:00.000Z" title="发表于 2026-11-21 09:00:00">2026-11-21</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/20/2026-11-20-vrf-and-cilium-cluster-mesh/" title="从 IDC 到云上 Pod：VRF 和 Cilium Cluster Mesh 如何协作">从 IDC 到云上 Pod：VRF 和 Cilium Cluster Mesh 如何协作</a><time datetime="2026-11-20T08:39:54.000Z" title="发表于 2026-11-20 16:39:54">2026-11-20</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
