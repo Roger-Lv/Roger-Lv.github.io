@@ -4,6 +4,93 @@
   
     
     <entry>
+      <title>AI Infra 技术追踪｜2026-11-23</title>
+      <link href="/2026/11/23/2026-11-23-ai-infra-tracking/"/>
+      <url>/2026/11/23/2026-11-23-ai-infra-tracking/</url>
+      
+        <content type="html"><![CDATA[<p><strong>一句话结论：</strong> SGLang 把部分 KV 写回的等待从调度线程移到 GPU stream；TorchTitan 把激活重计算覆盖到 MTP；NIXL 让可直达的 NVLink 操作绕过 CPU proxy，打断一类 EP barrier 死锁。</p><p>追踪自 11 月 22 日约 01:13 UTC 的上次扫描截止点。以下区分正式发布、主线合并和作者实验；本文未独立运行 GPU 或集群实验。</p><h2 id="1-推理｜SGLang-HiCache-写回不再阻塞满足条件的调度循环">1. 推理｜SGLang HiCache 写回不再阻塞满足条件的调度循环</h2><p><strong>原来的瓶颈。</strong> L2 write-back 淘汰 GPU KV 页时，要先完成 GPU→CPU（D2H）复制，才能安全重用 GPU 页。旧路径会让调度线程等复制，哪怕 CPU 本来可以准备下一批。新路径没有省掉复制，也没有放松内存生命周期约束。</p><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">上一轮 forward → D2H 读取旧 KV 页 → 记录完成事件</span><br><span class="line">                                          ↓</span><br><span class="line">                         下一轮 forward / 后续 H2D load-back 等事件</span><br><span class="line">CPU 调度线程：开启 overlap 时可以先准备下一批</span><br></pre></td></tr></table></figure><p><strong>这次改动。</strong> <a href="https://github.com/sgl-project/sglang/pull/50469">SGLang #50469</a> 于 11 月 22 日 16:46 UTC 合入主线。匹配 write/load fence stream 才走新路径；不开 overlap 时当前 stream 也要等待。排除 L3 存储、buffer pipeline、linker、统一内存及 P/D 的 decode 侧。不能据此推断 Redis、Mooncake Store 或 RDMA 变快。<a href="https://github.com/sgl-project/sglang/commit/de41ccfae097c629a3928150b1f7139e33dfd183">合入代码</a></p><p><strong>收益与代价。</strong> 作者在 GB300 上使用 DeepSeek V4.1 Flash，14 台 prefill server + DEP16 decode，开启 overlap，两组均含 #47650。相同镜像、单一中等并发的多轮请求回放，每组 2 次、每次 1,200 秒。端到端 tokens/s/GPU <strong>+4.2%</strong>，TTFT p90 <strong>12.0→9.6 s</strong>，TPOT p90 <strong>7.25→7.32 ms</strong>（略慢）。它是特定负载下以更快 prefill 换来更满 decode 的结果，不是所有吞吐、尾延迟指标同时改善。GSM8K 是冒烟测试，不是匹配基线的逐输出一致性验证。<a href="https://github.com/sgl-project/sglang/pull/50469#speed-tests-and-profiling">作者数据与条件</a></p><p><strong>值得怎么试。</strong> 先在同模型、同请求轨迹、同缓存状态下 A/B，分别收集 prefill/decode 的吞吐、TTFT/TPOT 和 CPU 调度线程等待。另做一个独立生命周期试验：让复制完成事件延后，区分 KV 页能否安全重用，与 drain/flush/挂载存储前能否判为 idle。合入的 mock 回归覆盖 stream wait 和没有 host synchronize，但事件立即就绪；代码评审提示 idle 检查需要留意尚未结束的 fenced acknowledgments，这不是已证实的生产故障。<a href="https://github.com/sgl-project/sglang/pull/50469#discussion_r4656649341">评审讨论</a></p><h2 id="2-训练｜TorchTitan-把激活重计算扩展到-MTP-层">2. 训练｜TorchTitan 把激活重计算扩展到 MTP 层</h2><p><strong>原来的缺口。</strong> 激活重计算在反向阶段重做一部分前向，以减少保留的激活。开启 activation remat 过去不等于每条模型分支都被覆盖：MTP（多 token 预测）有单独的 <code>mtp_layers</code>，之前只遍历常规 layers 的路径会漏掉它。</p><p><strong>这次改动。</strong> <a href="https://github.com/pytorch/torchtitan/commit/69e31a2d0e921c393a3d7c7f71343e17e050f063">TorchTitan #6246 合入提交</a> 于 11 月 22 日 15:05 UTC 落地。每个 model part 一次遍历其声明的 block 容器，使 decoder、MTP、视觉 encoder 的组合能复用策略。encoder 区域用完整名称避免和 decoder 同名；启用激活卸载时仍是每个 part 共用一个 offloader。这里的 checkpointing 指<strong>激活重计算</strong>，不是用于宕机恢复的持久化 checkpoint。</p><p><strong>证据与边界。</strong> 作者在 <strong>4×GH200、FSDP 4</strong> 的 DeepSeek-V3 debug 配置中做了 10 步确定性对照：Default 策略和 16,384 序列长度的 Full 策略分别对照此前 main，loss 和梯度范数逐位一致。独立的 CUDA 回归检查实际包装了两层 MTP，并以不做 remat 为基线校验输出和参数梯度。没有公开实测说明能省多少显存、增加多少重算时间或避免生产 OOM，也不是 DeepSeek-V4 端到端训练修复。</p><p><strong>值得怎么试。</strong> 固定模型、MTP 层数、数据、精度、FSDP 与序列长度，仅切换是否覆盖 MTP，再拉一条序列长度曲线。先看 loss/梯度，再分别记每 rank 峰值 allocated/reserved、step time 与 tokens/s。不要把“更长序列能跑”和“同样负载更快”混成一个指标。</p><h2 id="3-GPU-互连｜NIXL-用-NVLink-直访打断一类-EP-barrier-死锁">3. GPU 互连｜NIXL 用 NVLink 直访打断一类 EP barrier 死锁</h2><p><strong>原来的等待环。</strong> 一些 GPU 设备侧操作走 CPU proxy。EP（专家并行）kernel 等 proxy 做 put 或计数器更新时，如果 proxy 进入同步 CUDA 调用、反过来等这个 kernel 退出，就会互相等待。这是传输路径的进展问题，不是节点故障或网络丢包。</p><p><strong>这次改动。</strong> <a href="https://github.com/ai-dynamo/nixl/pull/2701">NIXL #2701</a> 于 11 月 22 日 22:06 UTC 合入主线。源和目的都有直达指针时，设备侧直接执行 put；计数器有直达指针时，直接执行具有 system scope 的原子加。不满足条件的操作继续走 proxy。新路径针对具备直接访问条件的显存，不代表远端 RDMA 路径也能绕开 proxy，更不是 RoCE 或 InfiniBand 故障切换。<a href="https://github.com/ai-dynamo/nixl/blob/cb66ce836f82fef05d0e907141667ebf6debeb0c/src/api/device/gpu/impl/proxy/device_proxy.cuh">合入代码</a></p><p><strong>证据与边界。</strong> 作者在 NIXL EP CPU-proxy 模式下用 2×4 GB200、16 channels、128 tokens、每 rank 32 experts，各跑一次：78.2→76.7 GB/s、281.8→287.4 μs。不能用单次结果判断性能回归或收益。这个变更的价值是解决特定等待环；PR 没有增加专门的死锁回归测试，不能声称覆盖了所有 GPU 拓扑和 proxy 路径。</p><p><strong>值得怎么试。</strong> 在隔离测试环境固定 NIXL/CUDA 版本、拓扑与 EP 负载，用看门狗记录 barrier 完成率、耗时和是否超时，而不是只测链路带宽。分别确认直访条件成立的 peer 与必须经 proxy 的 peer，验证写入内容和 counter 计数，再对比多轮吞吐与尾延迟。优先用它排查确实使用 NIXL 设备侧 proxy 的任务，不需要据此改 NCCL 或集群网络配置。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> AI Infra </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> AI Infra </tag>
+            
+            <tag> 技术追踪 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>AI Infra 技术追踪｜2026-11-22</title>
+      <link href="/2026/11/22/2026-11-22-ai-infra-tracking/"/>
+      <url>/2026/11/22/2026-11-22-ai-infra-tracking/</url>
+      
+        <content type="html"><![CDATA[<p><strong>一句话结论：</strong> Kueue 改掉了 DRA 准入预检中一种“有卡却判缺卡”的误拒；SGLang 修复了一种 P/D 请求挂起但健康检查仍为 200 的组合故障。TorchTitan 的 SGLang rollout 则用 64-token 状态快照换取前缀复用，是否合算取决于并发和显存预算。</p><p>扫描窗口：2026-11-21 00:38 UTC 至本次 2026-11-22 检查。以下三项均为 11 月 21 日合并到上游主线的变更，不当作稳定版上线公告。未运行集群或 GPU 实验。</p><h2 id="1-Kueue：DRA-设备预检支持有限回溯，避免选择顺序造成假缺口">1. Kueue：DRA 设备预检支持有限回溯，避免选择顺序造成假缺口</h2><p><strong>之前难在哪里。</strong> 一个 ResourceClaim 里有多个设备请求时，旧 CEL 预检按顺序取第一个可用设备，后面的请求失败后不会回头。假设同一节点上有 A、B 两张设备，宽松请求可用 A/B，严格请求只能用 A：</p><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">旧预检：宽松 → A；严格 → 无设备 → 报不足</span><br><span class="line">新预检：宽松 → A；严格失败 → 撤销试选 A</span><br><span class="line">        宽松 → B；严格 → A → 预检找到完整候选解</span><br></pre></td></tr></table></figure><p><strong>变化与代价。</strong> <a href="https://github.com/kubernetes-sigs/kueue/pull/19172">#19172</a> 于 11 月 21 日 20:34 UTC 合并到 main。保留初轮贪心路径；遇到短缺再搜索其他设备组合，避免同一候选解重复选用设备，并在候选数量不足时剪枝。追加搜索上限为 100 万次设备访问，不含首次贪心；碰到上限就不再用这项预检查阻塞，而不是宣告已经拿到设备。搜索里的 CEL 求值错误可保留短缺和重试。真实短缺仍由原有机制处理。覆盖范围是该检查原先纳入的 CEL 请求，例如带 CEL 的 Exactly，以及各分支均带 CEL 的 FirstAvailable；不混同于对整个 claim 的完整求解。</p><p><strong>和调度的边界。</strong> Kueue 的检查能看跨节点公布的 ResourceSlice，不意味着这些设备能被同一个 Pod 同时使用；它不替 kube-scheduler 选节点，也不写最终设备分配。设备预检查放行、Workload 额度保留/准入、ResourceClaim 实际分配、Pod 绑定是四个不同的观测点。此项与上一期 MultiKueue 移除 worker 的修复不重复；也不是 Kubernetes 的 DRA 抢占。</p><p><strong>证据。</strong> 上游作者报告 23 个新增单测场景中，15 个在旧主线上失败；还有 3 个用于检验旧/新差异的集成场景，涵盖预算用尽仍可走额度保留等行为。不是生产吞吐或排队延迟数据。核对时 <a href="https://github.com/kubernetes-sigs/kueue/pull/19281">v0.20 回移</a> 和 <a href="https://github.com/kubernetes-sigs/kueue/pull/19282">v0.19 回移</a> 仍是 PR，不能把上一期的稳定补丁当作已含此修复。</p><p><strong>怎么验。</strong> 用固定 ResourceSlice 和双请求做三个对照：同节点 A/B 都有且可完整匹配；真实只剩 A；集群全局有 A/B 但分属不允许组合的节点。对照新旧镜像，分别查 Workload 条件、claim 分配结果和实际节点。再用较大且高度重叠的选择条件观察控制器 CPU、准入延迟和搜索上限日志，不外推单测耗时。对仍用传统 GPU 扩展资源而没有走 Kueue DRA 的池，不需要为这个修复切换架构。</p><h2 id="2-SGLang：Mooncake-的-KV-传输要按接收端布局切分">2. SGLang：Mooncake 的 KV 传输要按接收端布局切分</h2><p><strong>故障。</strong> 在 Mooncake prefill/decode 分离中，叠加 HiSparse、推测解码和多级 PP prefill 时，除最后一级外，prefill stage 没有 draft runner，本地的 draft-entry 数等于 0。旧发送端却用这个本地值推断接收端注册指针中 host-backed 与 device-only draft KV 的分界，首个请求即可触发异常；作者报告此时请求可挂起，而 /health 仍返回 200。</p><p><strong>变化。</strong> <a href="https://github.com/sgl-project/sglang/pull/47840">SGLang #47840</a> 于 11 月 21 日 01:40 UTC 合入主分支。Mooncake 的注册消息追加接收端 draft-entry 数，发送端优先用这个值确定目标段；旧接收端不带字段则回退原逻辑。因此“消息还能解析”不等于“新旧实例混跑时这个故障已修复”。</p><p><strong>证据与边界。</strong> 上游单测覆盖注册字段往返、非末级 stage 按目标布局传输和旧 peer 的回退。作者在基于 v0.5.22 且应用同补丁的构建上，用 GLM-5.3 FP8、H100、两级 prefill PP、HiSparse 和 EAGLE，报告旧路径首请求挂起、补丁后 128K needle 检索 5/5 通过。这不是最终合并版本的独立复现，不是吞吐、尾延迟或可用性基准；报告中的物理卡数与列出的并行拓扑口径不够清楚，不据此推断最小部署规模。</p><p><strong>怎么验。</strong> 只有用到这个组合才值得优先做回归。测试用例保留 prefill PP=2、实际 Mooncake KV 路径、HiSparse 和 decode 端推测解码；用通过真实 P/D 路径的合成请求，而不是仅看探活。对照两端均升级、decode 仍旧以及 PP=1，记录请求是否结束、各 stage 传输错误和超时、生成质量及 TTFT。先在隔离环境验证，别把兼容旧注册帧当成滚动升级已验证。</p><h2 id="3-TorchTitan：SGLang-rollout-改成保存可复用的-GDN-KDA-前缀状态">3. TorchTitan：SGLang rollout 改成保存可复用的 GDN/KDA 前缀状态</h2><p><strong>变化。</strong> <a href="https://github.com/pytorch/torchtitan/pull/6172">TorchTitan #6172</a> 于 11 月 21 日 07:53 UTC 合入 main。旧 no_buffer 路径关闭 overlap scheduling，重复 prompt 在作者测试的路径里不能复用先前状态。新 extra_buffer 路径让 Attention Gym 把 64-token 对齐位置的递归状态写进专用 slot，后续组内样本可从该位置重放尾部；同时重新开启引擎的 overlap scheduling。比如 150-token 的重复 prompt 可从 128 恢复，只补 22 token。这里的状态快照是推理前缀用的，不是可跨故障恢复的训练 checkpoint。</p><p><strong>量化与代价。</strong> 作者用 1×GB300、TP=1、Qwen3.5-9B/0.8B、1,000 输入 / 512 输出、六次中位数，测量所有请求完成时间。GRPO 32 prompts × 8 samples：9B 15.22→11.50 s（1.32×）；0.8B 9.91→7.89 s（1.25×）。9B 的 128 条不重复 prompt 也从 9.27→8.22 s，这组和 GRPO 结果可帮助区分 overlap 与前缀复用，但不是独立开关的消融。每个运行请求需要 5 个状态槽而不是 3 个，作者给出的 9B 默认配置并发上限示例从 512 降到 428。没有整轮 GRPO、KDA 性能或生产吞吐结论。</p><p><strong>工程判断。</strong> 有多样本共用长 prompt 的 rollout 最值得先测。固定模型和 GPU 预算，分别压独立 prompt、分组重复 prompt，记录 prefill 重算、批完成时间、最高并发、峰值显存和整轮 rollout→训练周转，检查 trainer/rollout logprob 一致性。固定 TorchTitan、SGLang、Attention Gym 的实际组合。另一个独立合并的<a href="https://github.com/pytorch/torchtitan/pull/6261">统一显存池改动 #6261</a>在长/短 prompt 上分别约快 6% / 慢 6%（对默认静态切分）；不要与上面 1.32× 相乘或假定两组实验用了相同缓存布局。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> AI Infra </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> AI Infra </tag>
+            
+            <tag> 技术追踪 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>AI Infra 技术追踪｜2026-11-21</title>
+      <link href="/2026/11/21/2026-11-21-ai-infra-tracking/"/>
+      <url>/2026/11/21/2026-11-21-ai-infra-tracking/</url>
+      
+        <content type="html"><![CDATA[<p>首期回看：截至 11 月 21 日 09:00（UTC+8）的过去七天。本文核对了发布说明、论文及项目代码；下文的实验数字来自作者，验证建议尚未实跑。</p><p><strong>一句话结论：优先用 MultiKueue 的稳定版补丁验证集群下线是否会重复运行作业；SPICE 和 BidKV 值得做对照实验，但前者不能证明跨站容灾，后者不能把显存压力下的首 token 收益外推到所有流量。</strong></p><table><thead><tr><th>进展</th><th>解决的是哪一层</th><th>建议</th></tr></thead><tbody><tr><td>MultiKueue v0.20.7</td><td>调度控制面：从派发名单移除集群时，已准入的作业会不会被重复派发</td><td>已使用 MultiKueue 时优先验收</td></tr><tr><td>SPICE</td><td>训练通信：允许改变同步协议时，低带宽会怎样影响达到目标 loss 的时间</td><td>研究验证，不改生产拓扑</td></tr><tr><td>BidKV</td><td>推理引擎：KV 空间不够时，先抢占哪个请求</td><td>先重放流量，再决定是否试点</td></tr></tbody></table><h2 id="1-MultiKueue：停止向旧集群派新活，不应重跑已经接下的活">1. MultiKueue：停止向旧集群派新活，不应重跑已经接下的活</h2><p><strong>11 月 19 日，稳定补丁。</strong> 以前从 <code>MultiKueueConfig</code> 移除 worker A，已经在 A 准入的 Workload 可能被重新派发到 B，而 A 上的远端对象没有被删除，同一训练任务便可能跑两份。v0.20.7 与 v0.19.14 修正了这一配置变更路径：已准入的作业继续在 A 跑到结束；A 不再是该配置下新作业的派发候选。<a href="https://github.com/kubernetes-sigs/kueue/releases/tag/v0.20.7">v0.20.7</a> · <a href="https://github.com/kubernetes-sigs/kueue/releases/tag/v0.19.14">v0.19.14</a> · <a href="https://github.com/kubernetes-sigs/kueue/pull/18984">实现 PR</a></p><figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">移除配置中的 worker A</span><br><span class="line">  ├─ 已在 A 准入 → 继续跟踪 A 上现有作业，等待完成</span><br><span class="line">  └─ 新 Workload → 只从剩余合格的 worker 中派发</span><br></pre></td></tr></table></figure><p>关键是区分<strong>停止新派发</strong>与<strong>断开管理连接</strong>。保留 A 的 <code>MultiKueueCluster</code> 对象和可用连接，以便管理集群继续跟踪状态。这不是 A 失联、删除对象或实际节点丢失时的恢复保证，也不提供任意故障下的 exactly-once。这里的收益是避免双跑和重复写结果；代价是旧集群必须继续可达，直到已有作业排空。发布材料没有给出生产规模或耗时基准。</p><p><strong>怎么验：</strong> 用管理集群和两个隔离 worker，先让短训练在 A 准入并写带唯一 run ID 的 heartbeat，再仅修改配置移除 A，提交第二个作业。验收：第一份作业只在 A 启动、跑完且管理端记录完成，第二份走 B；同时看两侧 Job UID 和训练进程日志，不只看 Workload 状态。把撤销凭据、网络失联、销毁 worker 留给另一组测试，不与配置移除混为一谈。</p><h2 id="2-SPICE：低带宽下少发参数，多联系几个副本">2. SPICE：低带宽下少发参数，多联系几个副本</h2><p><strong>11 月 17 日预印本，训练协议研究。</strong> 同步 DDP 需要按训练步完成全局梯度聚合。SPICE 让副本先做本地优化，再与每轮轮换的少量 peer 交换选中的参数坐标及其修正后数值；未发送的位移保留在误差反馈中，以后还能参与选择。它用更小的消息覆盖更多邻居；带截止时间的变体在截止时只聚合已完整到达的贡献。相对 DDP，这改了<strong>优化及同步语义</strong>，不是把同一个 AllReduce 换条网线。代价是坐标筛选与编码、误差缓存，以及不同步时对收敛的额外验证。<a href="https://arxiv.org/html/2611.23053v1">论文 §3、§4.4 与附录 B</a> · <a href="https://arxiv.org/abs/2611.23053">提交日期</a></p><ul><li><strong>等时间，图 5：</strong> 134M 模型，单机 8 张 RTX A6000，Linux 在每副本的总发送、总接收方向分别限速至 1 Gbps，DDP 走 NCCL sockets。SPICE 每条消息选 3.125% 的坐标、联系 4 个 peer，在同样时间里多处理了 token，验证 loss 比 DDP 低 6%（相对值）。不是“等 token 低 6%”，也不是“快 6%”。论文另一组等 token 实验中，8 副本、2.70B token 的验证 loss 约为 DDP 3.17、SPICE 3.19；它和计时实验的设置不同，不能当成图 5 的严格消融。</li><li><strong>临时链路变慢，图 6：</strong> 同机模拟三个逻辑网络域，将其中两个域之间受影响的每个有向 worker 对限到 100 Mbps，持续五分钟。常规 SPICE 保留自身健康阶段约三分之二的吞吐，带截止时间时约 86%。归一化分母是各方法各自的健康阶段吞吐，不是跨方法的绝对比值。进程和控制连接仍在线，未验证真 WAN、硬分区、掉节点或 checkpoint 恢复。</li></ul><p><strong>怎么验：</strong> 在同一负载上比较 DDP、稠密 gossip（GASLoC）和 SPICE，同时报告等 token 的 loss、等时长的 loss、到指定 loss 的时间和 GPU 小时数。额外记线上的字节数、CPU staging、通信等待 p95；把带宽、RTT、抖动分开改。对同步训练，仍优先把 worker 组放在单站内；真正的跨站重启要单独验证完整训练状态和数据游标恢复。</p><h2 id="3-BidKV：KV-不够时，按回收收益和恢复代价选请求">3. BidKV：KV 不够时，按回收收益和恢复代价选请求</h2><p><strong>11 月 18 日 SC26 报告，作者实验与可读代码；不是 vLLM 稳定版功能上线。</strong> KV cache 不足时，驱逐一个正在运行的请求会腾出块，但它回到调度队列后可能需要重算。BidKV 给候选请求估算能释放的容量和中断代价，用「可释放容量 ÷ 估计代价」排序，再复用引擎原生的回收路径。它改变的是选谁，不新建显存层，也不压缩 KV。估计误差、打分开销和长请求反复被抢占是值得测的代价。<a href="https://sc26.conference-program.com/presentation/?id=pap1108&amp;sess=sess210">SC26 作者报告</a> · <a href="https://github.com/CGCL-codes/BidKV">作者代码</a></p><p><strong>数据边界：</strong> 作者用 RTX A6000、Llama-3.1-8B-Instruct、ShareGPT 负载；对比原生 vLLM 策略，报告 p95 TTFT 降低超过 90%，300 ms 首 token SLO 达标率在所报告负载点提高 14.8 个百分点。作者的公开实现将该 SLO 结果标在 3.8 请求/秒。另一个 SGLang 结果对照其原生 LRU，不能和 vLLM 数字相加。数字来自显存压力测试，不代表正常流量、其他 KV 容量或生产规模的收益；较早发表的配套文章已有数据，这周的新动向是 SC26 报告。<a href="https://github.com/vLLM-HUST/vllm-ascend-hust-bidkv">作者实现与实验说明</a> · <a href="https://www.zte.com.cn/china/about/magazine/zte-communications/2026/cn202604/specialtopic/cn202604002.html">配套公开论文</a></p><p><strong>怎么验：</strong> 固定引擎版本、模型、KV block 上限、请求长度分布和到达时间，仅替换抢占选择器。先做低压力控制组，再做中高压力与突发组；同时记录 TTFT p95、inter-token latency p95、每秒满足 SLO 的请求数、重算 token 和按请求长度分桶的重复抢占率。若 TTFT 变好但长请求反复被踢、decode 尾延迟恶化，不能只按单项指标上线。引擎抢占可用实际 exporter 上的 <code>vllm:num_preemptions_total</code> 验证，避免拿等待队列当事件计数。<a href="https://docs.vllm.ai/en/v0.11.2/design/metrics/">vLLM V1 指标</a></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> AI Infra </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> KV Cache </tag>
+            
+            <tag> 分布式训练 </tag>
+            
+            <tag> Kubernetes </tag>
+            
+            <tag> Kueue </tag>
+            
+            <tag> 推理调度 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
       <title>从 IDC 到云上 Pod：VRF 和 Cilium Cluster Mesh 如何协作</title>
       <link href="/2026/11/20/2026-11-20-vrf-and-cilium-cluster-mesh/"/>
       <url>/2026/11/20/2026-11-20-vrf-and-cilium-cluster-mesh/</url>
