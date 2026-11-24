@@ -1,0 +1,1796 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="多个训练任务共享同一张物理 RDMA 网卡，网卡凭什么不串包？IP 只解决到达哪台机器，QP&#x2F;QPN 解决属于哪条连接，PD&#x2F;MR&#x2F;rkey 解决能访问哪块内存——三层各管一段，缺一层都不成立。本文从这六个核心对象讲起，走一遍 QP 从创建到进 RTS 的完整代码路径，再看 NCCL 如何用 Communicator、拓扑探测与 Rail 约束把逻辑 Rank 映射到物理网卡，最后落到云平台该管什">
+<meta property="og:type" content="article">
+<meta property="og:title" content="一张 RDMA 网卡怎么区分不同的训练任务：从 QP&#x2F;PD&#x2F;MR 到 Rail 感知调度">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="多个训练任务共享同一张物理 RDMA 网卡，网卡凭什么不串包？IP 只解决到达哪台机器，QP&#x2F;QPN 解决属于哪条连接，PD&#x2F;MR&#x2F;rkey 解决能访问哪块内存——三层各管一段，缺一层都不成立。本文从这六个核心对象讲起，走一遍 QP 从创建到进 RTS 的完整代码路径，再看 NCCL 如何用 Communicator、拓扑探测与 Rail 约束把逻辑 Rank 映射到物理网卡，最后落到云平台该管什">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-23T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-24T04:11:04.845Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="InfiniBand">
+<meta property="article:tag" content="SR-IOV">
+<meta property="article:tag" content="GPU集群">
+<meta property="article:tag" content="RoCEv2">
+<meta property="article:tag" content="QP">
+<meta property="article:tag" content="Rail">
+<meta property="article:tag" content="AI平台">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度",
+  "url": "https://roger-lv.github.io/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-23T16:00:00.000Z",
+  "dateModified": "2026-11-24T04:11:04.845Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">339</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">554</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">80</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-23T16:00:00.000Z" title="发表于 2026-11-24 00:00:00">2026-11-24</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-24T04:11:04.845Z" title="更新于 2026-11-24 12:11:04">2026-11-24</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/" data-flag-title="一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>多个训练任务共享同一张物理 RDMA 网卡，网卡凭什么不串包？</p>
+<p>这是理解 RDMA 资源模型最好的入口。先把结论摆出来，四组概念各管一段，缺一层都不成立：</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>解决什么问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>IP / GID / LID</strong></td>
+<td>数据发送到哪台机器、哪个网络端点</td>
+</tr>
+<tr>
+<td><strong>QP / QPN</strong></td>
+<td>数据属于哪个通信连接</td>
+</tr>
+<tr>
+<td><strong>CQ</strong></td>
+<td>通信操作完成后如何通知应用</td>
+</tr>
+<tr>
+<td><strong>PD / MR / lkey / rkey</strong></td>
+<td>哪些内存允许被访问、哪些不允许</td>
+</tr>
+</tbody>
+</table>
+<p>RoCEv2 和 InfiniBand 在 QP、CQ、PD、MR 这些核心机制上基本一致，差别在底层网络寻址、报文封装、网络管理与隔离方式。</p>
+<blockquote>
+<p>本文是 RDMA 系列的第五篇。前三篇讲承载 RDMA 的网络本身（<a href="/2026/04/20/2026-04-20-RDMA%E6%8A%80%E6%9C%AF%E6%89%8B%E5%86%8C%EF%BC%9A%E9%9D%A2%E5%90%91AI%E5%9C%BA%E6%99%AF%E7%9A%84%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/">技术手册</a>、<a href="/2026/07/17/2026-07-17-RDMA%E6%8A%80%E6%9C%AF%E6%A0%88%E5%85%A8%E8%A7%A3/">技术栈全解</a>、<a href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/">全链路拆解</a>），第四篇讲 <a href="/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/">RoCEv2 无损网络的三件套</a>。这一篇往上一层：<strong>网卡内部有哪些资源、它们怎么隔离不同任务、NCCL 又是怎么用它们的。</strong></p>
+</blockquote>
+<hr>
+<h2 id="一、六个核心对象">一、六个核心对象</h2>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>全称</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QP</td>
+<td>Queue Pair</td>
+<td>通信队列对</td>
+</tr>
+<tr>
+<td>SQ</td>
+<td>Send Queue</td>
+<td>存放发送操作</td>
+</tr>
+<tr>
+<td>RQ</td>
+<td>Receive Queue</td>
+<td>存放接收操作</td>
+</tr>
+<tr>
+<td>CQ</td>
+<td>Completion Queue</td>
+<td>存放操作完成结果</td>
+</tr>
+<tr>
+<td>PD</td>
+<td>Protection Domain</td>
+<td>内存访问保护域</td>
+</tr>
+<tr>
+<td>MR</td>
+<td>Memory Region</td>
+<td>注册给 RDMA 网卡使用的内存区域</td>
+</tr>
+</tbody>
+</table>
+<p>围绕它们还有几个名词：</p>
+<ul>
+<li><strong>WR</strong>（Work Request）：应用提交给网卡的操作请求</li>
+<li><strong>WQE</strong>（Work Queue Element）：网卡工作队列中的请求描述符</li>
+<li><strong>CQE</strong>（Completion Queue Entry）：网卡产生的完成记录</li>
+<li><strong>CM</strong>（Connection Manager）：辅助建立 RDMA 连接的组件</li>
+</ul>
+<h3 id="与传统-TCP-网络的类比">与传统 TCP 网络的类比</h3>
+<table>
+<thead>
+<tr>
+<th>普通 TCP 网络</th>
+<th>RDMA 网络（以 RC 为例）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Socket</td>
+<td>QP</td>
+</tr>
+<tr>
+<td>Socket 连接标识</td>
+<td>端点地址 + QPN</td>
+</tr>
+<tr>
+<td>TCP Sequence Number</td>
+<td>PSN</td>
+</tr>
+<tr>
+<td>send / recv</td>
+<td>RDMA Work Request</td>
+</tr>
+<tr>
+<td>I/O 完成通知</td>
+<td>CQ / CQE</td>
+</tr>
+<tr>
+<td>操作系统进程内存保护</td>
+<td>PD + MR + 内存访问权限</td>
+</tr>
+</tbody>
+</table>
+<p>两者不是完全一一对应，但这个类比有助于理解。</p>
+<h3 id="QP-与-CQ-的关系">QP 与 CQ 的关系</h3>
+<p>QP 负责提交通信工作，CQ 负责接收完成结果。队列通常位于网卡可访问的内存中，网卡维护对应的硬件上下文。</p>
+<p>假设 NCCL 想发送一段 4 MB 的梯度数据，大致流程是：</p>
+<ol>
+<li>NCCL 向 QP 的 SQ 提交一个 WR</li>
+<li>用户态驱动将请求转换为 WQE，并通知网卡</li>
+<li>网卡读取请求及对应数据，执行 RDMA 操作</li>
+<li>对于需要完成通知的操作，网卡向 CQ 写入 CQE</li>
+<li>NCCL 轮询 CQ，判断操作是否成功</li>
+</ol>
+<blockquote>
+<p><strong>CQ 不是网络连接，也不是用来存放收到的梯度数据的</strong>——它只记录工作完成状态。</p>
+<p>而且 <strong>QP 和 CQ 不是一对一</strong>。多个 QP 可以共用一个 CQ，应用通过 CQE 中的 <code>qp_num</code> 和 <code>wr_id</code> 区分完成的是哪个请求。</p>
+</blockquote>
+<hr>
+<h2 id="二、QPN-如何区分连接">二、QPN 如何区分连接</h2>
+<p>假设 Node 1 上的 RDMA 网卡已经有四个 QP：</p>
+<table>
+<thead>
+<tr>
+<th>QPN</th>
+<th>所属任务</th>
+<th>对端 QPN</th>
+<th>对端 IP</th>
+<th>本地保护域</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>101</td>
+<td>Job A</td>
+<td>201</td>
+<td>10.0.0.2</td>
+<td>PD 10</td>
+</tr>
+<tr>
+<td>102</td>
+<td>Job B</td>
+<td>202</td>
+<td>10.0.0.2</td>
+<td>PD 20</td>
+</tr>
+<tr>
+<td>103</td>
+<td>Job A</td>
+<td>203</td>
+<td>10.0.0.3</td>
+<td>PD 10</td>
+</tr>
+<tr>
+<td>104</td>
+<td>Job C</td>
+<td>301</td>
+<td>10.0.0.4</td>
+<td>PD 30</td>
+</tr>
+</tbody>
+</table>
+<p>这是一张用于理解的<strong>逻辑表</strong>，并非网卡真实的硬件数据结构。实际上网卡并不知道 Job A、Job B 这些 Kubernetes 概念，它知道的是 QP、PD、地址和传输状态。</p>
+<p>每个普通 RC QP 都会维护自己的通信上下文：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">// 示意结构，不是实际驱动定义</span><br><span class="line">struct QPContext &#123;</span><br><span class="line">    uint32_t local_qpn;</span><br><span class="line">    uint32_t remote_qpn;</span><br><span class="line"></span><br><span class="line">    Address remote_address;</span><br><span class="line"></span><br><span class="line">    uint32_t send_psn;</span><br><span class="line">    uint32_t recv_psn;</span><br><span class="line"></span><br><span class="line">    uint32_t pd_id;</span><br><span class="line">    uint32_t send_cq_id;</span><br><span class="line">    uint32_t recv_cq_id;</span><br><span class="line"></span><br><span class="line">    Queue send_queue;</span><br><span class="line">    Queue recv_queue;</span><br><span class="line"></span><br><span class="line">    AccessFlags permissions;</span><br><span class="line">    QPState state;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<p>所以，<strong>即使两个任务使用同一个源 IP、目的 IP 和物理网卡，QP 上下文仍然不同。</strong></p>
+<h3 id="RoCEv2-报文中直接携带目的-QPN">RoCEv2 报文中直接携带目的 QPN</h3>
+<p>一个简化的 RoCEv2 RDMA Write 报文结构：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">Eth | IP | UDP | BTH | RETH | Data | CRC</span><br><span class="line">                    │      └── 远端内存地址、R_Key、DMA Length</span><br><span class="line">                    └── Opcode、Dest QP、PSN、P_Key 等</span><br></pre></td></tr></table></figure>
+<p><strong>BTH 包含 24 位目的 QPN 和 24 位 PSN</strong>；RoCEv2 使用 UDP 目的端口 <strong>4791</strong>。RDMA Write 的首包或单包还会携带 RETH 等必要信息。</p>
+<p>于是两条 RDMA 连接的报文可以长这样：</p>
+<table>
+<thead>
+<tr>
+<th>报文字段</th>
+<th>Job A</th>
+<th>Job B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>源 IP</td>
+<td>10.0.0.1</td>
+<td>10.0.0.1</td>
+</tr>
+<tr>
+<td>目的 IP</td>
+<td>10.0.0.2</td>
+<td>10.0.0.2</td>
+</tr>
+<tr>
+<td>UDP 目的端口</td>
+<td>4791</td>
+<td>4791</td>
+</tr>
+<tr>
+<td><strong>BTH Dest QP</strong></td>
+<td><strong>201</strong></td>
+<td><strong>202</strong></td>
+</tr>
+<tr>
+<td>PSN</td>
+<td>10001</td>
+<td>80001</td>
+</tr>
+<tr>
+<td>Payload</td>
+<td>A 的梯度</td>
+<td>B 的梯度</td>
+</tr>
+</tbody>
+</table>
+<p>数据到达 Node 2 的网卡后，<strong>网卡根据目标 QPN 找到相应的 QP 上下文</strong>。此外 RC QP 有自己的 PSN、ACK、重传及其他传输状态，不同 QP 的报文顺序状态也是独立的。</p>
+<blockquote>
+<p><strong>一个容易误解的地方</strong>：RoCEv2 虽然使用 UDP 封装，但 <strong>RC 模式的 RDMA 通信仍然是可靠传输</strong>。可靠性由 RDMA 传输协议实现，而不是由外层 UDP 实现。</p>
+</blockquote>
+<hr>
+<h2 id="三、PD-与-MR-如何隔离内存">三、PD 与 MR 如何隔离内存</h2>
+<p>QPN 只解决了数据属于哪个连接，还不足以解决内存访问安全——还需要 PD 和 MR。</p>
+<h3 id="PD：Protection-Domain">PD：Protection Domain</h3>
+<p>PD 可以理解为 RDMA 网卡中的<strong>本地内存访问权限分组</strong>。创建 QP 时把 QP 绑定到 PD，注册内存时也把 MR 绑定到 PD——接收方处理 RDMA Read/Write 时，<strong>必须检查目标内存区域与接收 QP 的 PD 是否匹配</strong>。</p>
+<blockquote>
+<p><strong>PD 是本地的保护域</strong>，两个通信节点上的 PD 编号不需要相同。它也不是 Kubernetes 给每个 Job 分配的全局租户 ID。</p>
+</blockquote>
+<h3 id="MR：Memory-Region">MR：Memory Region</h3>
+<p>假设 Job B 有一块 1 MB 内存，需要允许其他 Worker 对它做 RDMA Write：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_mr</span> *<span class="title">mr</span> =</span> ibv_reg_mr(</span><br><span class="line">    pd,</span><br><span class="line">    buffer,</span><br><span class="line">    <span class="number">1024</span> * <span class="number">1024</span>,</span><br><span class="line">    IBV_ACCESS_LOCAL_WRITE |</span><br><span class="line">    IBV_ACCESS_REMOTE_WRITE</span><br><span class="line">);</span><br></pre></td></tr></table></figure>
+<p>注册成功后应用得到两个 key：</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lkey</code></td>
+<td>本地 RDMA 操作访问注册内存时使用</td>
+</tr>
+<tr>
+<td><code>rkey</code></td>
+<td>远端 RDMA Read/Write 等操作访问该内存时使用</td>
+</tr>
+</tbody>
+</table>
+<p>网卡会维护对应内存的地址映射、长度、权限以及所属 PD。<strong>远端进程并不能随便提供一个物理地址就要求网卡写入对应内存。</strong></p>
+<h3 id="网卡到底检查什么">网卡到底检查什么</h3>
+<p>假设 Job A 发出一条 RDMA Write：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">Destination QP: 201</span><br><span class="line">Remote Address: 0x10000000</span><br><span class="line">Remote Key:     0xA001</span><br><span class="line">Length:         4096</span><br></pre></td></tr></table></figure>
+<p>接收方网卡的处理逻辑可以简化为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line">// 原理伪代码，不是实际网卡固件源码</span><br><span class="line"></span><br><span class="line">qp = lookup_qp(packet.dest_qpn);</span><br><span class="line"></span><br><span class="line">if (!qp || !qp.can_receive)</span><br><span class="line">    reject();</span><br><span class="line"></span><br><span class="line">check_transport_state(qp, packet);</span><br><span class="line"></span><br><span class="line">mr = lookup_mr(packet.rkey);</span><br><span class="line"></span><br><span class="line">if (!mr || !mr.valid)</span><br><span class="line">    reject();</span><br><span class="line"></span><br><span class="line">if (mr.pd != qp.pd)</span><br><span class="line">    reject();</span><br><span class="line"></span><br><span class="line">if (!qp.allow_remote_write || !mr.allow_remote_write)</span><br><span class="line">    reject();</span><br><span class="line"></span><br><span class="line">if (!address_in_range(mr, packet.addr, packet.len))</span><br><span class="line">    reject();</span><br><span class="line"></span><br><span class="line">dma_write(mr, packet.addr, packet.payload);</span><br></pre></td></tr></table></figure>
+<h3 id="真实实现长什么样：看-Soft-RoCE">真实实现长什么样：看 Soft-RoCE</h3>
+<p>Linux 内核的 Soft-RoCE（RXE）在软件中实现 RoCE 协议，因此可以看到很多在物理网卡中由硬件和固件完成的操作。</p>
+<p>内核源码 <a target="_blank" rel="noopener" href="https://github.com/torvalds/linux/blob/master/drivers/infiniband/sw/rxe/rxe_mr.c"><code>drivers/infiniband/sw/rxe/rxe_mr.c</code></a> 中的 <code>lookup_mr()</code> 函数会检查：</p>
+<ul>
+<li>本地或远端 key 是否匹配</li>
+<li>MR 与请求所使用的 PD 是否匹配</li>
+<li>MR 的访问权限是否满足操作要求</li>
+<li>MR 是否处于有效状态</li>
+</ul>
+<p>而 <code>rxe_resp.c</code> 中，接收方处理远端操作时会使用当前 QP 的 PD 和报文中的 rkey 查找 MR，再检查内存地址范围。<strong>这就是真实的底层隔离逻辑。</strong></p>
+<p>当然，ConnectX 等物理网卡并不是在 CPU 上执行这段代码，而是由自己的硬件和固件实现相应语义。</p>
+<h3 id="两条路径：Slow-Path-与-Fast-Path">两条路径：Slow Path 与 Fast Path</h3>
+<p>你可能还有另一个疑问：Job A 和 Job B 都打开了 <code>/dev/infiniband/uverbs0</code>，为什么 Job A 不能直接操作 Job B 创建的 QP？</p>
+<p>因为这里还有一层 Linux 内核资源管理。<code>ib_uverbs</code> 根据文件描述符和用户态上下文跟踪资源对象，通过内核维护的对象句柄限制进程能够操作的资源。这也解释了为什么进程退出时，即使没有主动调用所有资源销毁函数，<strong>内核通常也能回收该上下文拥有的 RDMA 资源</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>操作</th>
+<th>执行方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Slow Path</strong></td>
+<td>创建 QP、CQ、PD，注册 MR</td>
+<td>用户态与内核驱动交互</td>
+</tr>
+<tr>
+<td><strong>Fast Path</strong></td>
+<td>提交 WQE、收发数据、轮询 CQ</td>
+<td>通常直接操作映射的队列及网卡寄存器</td>
+</tr>
+</tbody>
+</table>
+<p>这个设计既实现资源管理和权限检查，又避免每次收发数据都经过内核协议栈。</p>
+<hr>
+<h2 id="四、一条-RC-连接是怎么建起来的">四、一条 RC 连接是怎么建起来的</h2>
+<p>下面的代码使用 libibverbs API。为了突出关键机制，<strong>省略了错误处理、完整状态参数、资源释放等代码</strong>——不是可以直接编译运行的完整程序。</p>
+<h3 id="Step-1：打开-RDMA-设备">Step 1：打开 RDMA 设备</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_device</span> **<span class="title">devices</span> =</span> ibv_get_device_list(<span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_context</span> *<span class="title">ctx</span> =</span> ibv_open_device(devices[<span class="number">0</span>]);</span><br></pre></td></tr></table></figure>
+<p>假设打开的设备是 <code>mlx5_0</code>。这一步相当于进程获得了访问 RDMA 网卡的上下文。<strong>Job A 和 Job B 都可以打开 <code>mlx5_0</code>，但各自拥有自己的用户态设备上下文。</strong></p>
+<h3 id="Step-2：创建-PD、CQ、MR">Step 2：创建 PD、CQ、MR</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_pd</span> *<span class="title">pd</span> =</span> ibv_alloc_pd(ctx);</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_cq</span> *<span class="title">cq</span> =</span> ibv_create_cq(ctx, <span class="number">128</span>, <span class="literal">NULL</span>, <span class="literal">NULL</span>, <span class="number">0</span>);</span><br><span class="line"></span><br><span class="line"><span class="type">char</span> *buffer = <span class="built_in">malloc</span>(<span class="number">4096</span>);</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_mr</span> *<span class="title">mr</span> =</span> ibv_reg_mr(</span><br><span class="line">    pd, buffer, <span class="number">4096</span>,</span><br><span class="line">    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE</span><br><span class="line">);</span><br></pre></td></tr></table></figure>
+<p>此时进程已经拥有自己的内存保护域、完成队列和注册内存。</p>
+<h3 id="Step-3：创建-QP">Step 3：创建 QP</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_qp_init_attr</span> <span class="title">attr</span> =</span> &#123;</span><br><span class="line">    .send_cq = cq,</span><br><span class="line">    .recv_cq = cq,</span><br><span class="line">    .qp_type  = IBV_QPT_RC,</span><br><span class="line">    .cap = &#123;</span><br><span class="line">        .max_send_wr  = <span class="number">128</span>,</span><br><span class="line">        .max_recv_wr  = <span class="number">128</span>,</span><br><span class="line">        .max_send_sge = <span class="number">1</span>,</span><br><span class="line">        .max_recv_sge = <span class="number">1</span></span><br><span class="line">    &#125;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_qp</span> *<span class="title">qp</span> =</span> ibv_create_qp(pd, &amp;attr);</span><br><span class="line"></span><br><span class="line"><span class="built_in">printf</span>(<span class="string">&quot;QPN: %u\n&quot;</span>, qp-&gt;qp_num);</span><br></pre></td></tr></table></figure>
+<p>调用成功后，驱动和网卡为应用创建 QP 并返回分配好的 QPN。</p>
+<blockquote>
+<p><strong>QPN 不是由 AI 平台或 Job Controller 分配的</strong>，而是底层 RDMA 实现分配的。在相关 RDMA 设备的 QP 编号空间内，同时有效的普通 QP 不会使用相同 QPN。<strong>QPN 在不同设备之间可以重复，销毁后也可能被重新使用。</strong></p>
+</blockquote>
+<h3 id="Step-4：交换连接信息">Step 4：交换连接信息</h3>
+<p>QP 创建完成时还不知道要和哪个远端 QP 通信，所以两端需要交换信息：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ConnectionInfo</span> &#123;</span></span><br><span class="line">    <span class="type">uint32_t</span> qpn;</span><br><span class="line">    <span class="type">uint32_t</span> psn;</span><br><span class="line"></span><br><span class="line">    <span class="type">uint16_t</span> lid;</span><br><span class="line">    <span class="class"><span class="keyword">union</span> <span class="title">ibv_gid</span> <span class="title">gid</span>;</span></span><br><span class="line"></span><br><span class="line">    <span class="type">uint64_t</span> addr;</span><br><span class="line">    <span class="type">uint32_t</span> rkey;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<p>例如：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>Worker 0</th>
+<th>Worker 1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QPN</td>
+<td>101</td>
+<td>201</td>
+</tr>
+<tr>
+<td>初始 PSN</td>
+<td>10000</td>
+<td>20000</td>
+</tr>
+<tr>
+<td>IP 对应 GID</td>
+<td><code>::ffff:10.0.0.1</code></td>
+<td><code>::ffff:10.0.0.2</code></td>
+</tr>
+<tr>
+<td>MR 地址</td>
+<td>0x10000000</td>
+<td>0x20000000</td>
+</tr>
+<tr>
+<td>rkey</td>
+<td>0xA001</td>
+<td>0xB001</td>
+</tr>
+</tbody>
+</table>
+<p>通常可以通过普通 TCP Socket 交换这些元数据。其中 QPN、PSN、地址信息用于配置连接；MR 地址和 rkey 用于后续的单边 RDMA 内存操作——<strong>后两者不一定在连接建立时交换，也可以按需在后续交换。</strong></p>
+<blockquote>
+<p>也就是说，<strong>RDMA 的控制面完全可以走 TCP，真正的大规模训练数据走 RDMA。</strong> 两者不冲突。</p>
+</blockquote>
+<h3 id="Step-5：修改-QP-状态">Step 5：修改 QP 状态</h3>
+<p>创建后的 QP 不能立即通信，需要经过状态转换：</p>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RESET</strong></td>
+<td>QP 刚刚创建，尚未配置</td>
+</tr>
+<tr>
+<td><strong>INIT</strong></td>
+<td>设置端口、P_Key 索引和访问权限</td>
+</tr>
+<tr>
+<td><strong>RTR</strong>（Ready To Receive）</td>
+<td>配置远端 QPN、路径地址、接收 PSN</td>
+</tr>
+<tr>
+<td><strong>RTS</strong>（Ready To Send）</td>
+<td>配置发送 PSN、重传、超时等参数</td>
+</tr>
+</tbody>
+</table>
+<p>最核心的连接配置代码类似：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_qp_attr</span> <span class="title">attr</span> =</span> &#123;</span><br><span class="line">    .qp_state    = IBV_QPS_RTR,</span><br><span class="line">    .dest_qp_num = remote.qpn,</span><br><span class="line">    .rq_psn      = remote.psn,</span><br><span class="line">    .path_mtu    = IBV_MTU_1024</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 还需设置 ah_attr 等必需参数</span></span><br><span class="line">ibv_modify_qp(qp, &amp;attr, mask);</span><br></pre></td></tr></table></figure>
+<p>其中 <code>attr.dest_qp_num = remote.qpn;</code> 就是<strong>将本地 QP 和远端 QP 关联起来</strong>的重要步骤。两端分别完成各自的 QP 状态配置、进入 RTS 后，就能进行正常的 RC 通信。</p>
+<h3 id="Step-6：真正发起-RDMA-Write">Step 6：真正发起 RDMA Write</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_sge</span> <span class="title">sge</span> =</span> &#123;</span><br><span class="line">    .addr   = (<span class="type">uintptr_t</span>)buffer,</span><br><span class="line">    .length = <span class="number">4096</span>,</span><br><span class="line">    .lkey   = mr-&gt;lkey</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_send_wr</span> <span class="title">wr</span> =</span> &#123;</span><br><span class="line">    .wr_id      = <span class="number">1001</span>,</span><br><span class="line">    .sg_list    = &amp;sge,</span><br><span class="line">    .num_sge    = <span class="number">1</span>,</span><br><span class="line">    .opcode     = IBV_WR_RDMA_WRITE,</span><br><span class="line">    .send_flags = IBV_SEND_SIGNALED</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line">wr.wr.rdma.remote_addr = remote.addr;</span><br><span class="line">wr.wr.rdma.rkey        = remote.rkey;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_send_wr</span> *<span class="title">bad_wr</span>;</span></span><br><span class="line">ibv_post_send(qp, &amp;wr, &amp;bad_wr);</span><br></pre></td></tr></table></figure>
+<p><strong>注意这里没有传入目的 IP，也没有传入远端 QPN。</strong> 因为这些信息在建立 RC QP 时就已经配置到 QP 上下文里了。现在应用只需要告诉网卡：</p>
+<ul>
+<li>使用哪个本地 QP</li>
+<li>读取本地哪块内存</li>
+<li>写到远端哪块内存</li>
+<li>远端内存访问 key 是什么</li>
+</ul>
+<p>网卡就能根据 QP 上下文构造报文并执行传输。</p>
+<h3 id="Step-7：轮询-CQ">Step 7：轮询 CQ</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">ibv_wc</span> <span class="title">wc</span>;</span></span><br><span class="line"><span class="type">int</span> n;</span><br><span class="line"></span><br><span class="line"><span class="keyword">do</span> &#123;</span><br><span class="line">    n = ibv_poll_cq(cq, <span class="number">1</span>, &amp;wc);</span><br><span class="line">&#125; <span class="keyword">while</span> (n == <span class="number">0</span>);</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (n &gt; <span class="number">0</span> &amp;&amp; wc.status == IBV_WC_SUCCESS) &#123;</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">&quot;QP %u, WR %lu completed\n&quot;</span>,</span><br><span class="line">           wc.qp_num, (<span class="type">unsigned</span> <span class="type">long</span>)wc.wr_id);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>这样就完成了一次基本的 RDMA 操作。</p>
+<blockquote>
+<p><strong>一个容易忽略的点</strong>：普通 RDMA Write <strong>不需要接收端预先提交 Receive WR，也不会天然给接收端产生一条 CQE</strong>。如果接收端应用需要得到数据到达通知，通信库还需要设计同步机制，例如 Write with Immediate 或额外的控制消息。</p>
+</blockquote>
+<hr>
+<h2 id="五、RoCEv2-与-InfiniBand：传输层同源，寻址分道">五、RoCEv2 与 InfiniBand：传输层同源，寻址分道</h2>
+<h3 id="报文格式不同，核心机制相同">报文格式不同，核心机制相同</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">RoCEv2:      MAC | IP | UDP | BTH | 扩展头 | 数据 | CRC</span><br><span class="line">InfiniBand:  LRH | GRH* | BTH | 扩展头 | 数据 | CRC</span><br><span class="line">                              └── 共用的 RDMA 传输头及语义</span><br></pre></td></tr></table></figure>
+<p>（GRH 在适用的全局寻址场景下使用。）</p>
+<p>从应用层看，两者都可以调用 <code>ibv_create_qp()</code>、<code>ibv_reg_mr()</code>、<code>ibv_post_send()</code> 等 Verbs API，<strong>但不同网络需要提供不同的路径寻址信息</strong>。</p>
+<h3 id="连接建立时的寻址方式不同">连接建立时的寻址方式不同</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>RoCEv2</th>
+<th>InfiniBand</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>物理网络</td>
+<td>Ethernet</td>
+<td>InfiniBand</td>
+</tr>
+<tr>
+<td>网络寻址</td>
+<td>IP 对应的 GID</td>
+<td>LID / GID</td>
+</tr>
+<tr>
+<td>路由机制</td>
+<td>IP 路由、以太网转发</td>
+<td>IB Fabric 路由</td>
+</tr>
+<tr>
+<td>子网管理器 SM</td>
+<td>不需要 IB SM</td>
+<td><strong>需要</strong></td>
+</tr>
+<tr>
+<td>UDP 4791</td>
+<td>使用</td>
+<td>不使用</td>
+</tr>
+<tr>
+<td>目标 QPN</td>
+<td>有</td>
+<td>有</td>
+</tr>
+<tr>
+<td>PSN、ACK</td>
+<td>RC 支持</td>
+<td>RC 支持</td>
+</tr>
+<tr>
+<td>PD、MR、CQ</td>
+<td>支持</td>
+<td>支持</td>
+</tr>
+<tr>
+<td>网络分区</td>
+<td>VLAN、VRF 等</td>
+<td><strong>P_Key</strong></td>
+</tr>
+<tr>
+<td>拥塞控制</td>
+<td>通常 ECN、CNP，可配合 PFC</td>
+<td>IB 流控及拥塞管理</td>
+</tr>
+</tbody>
+</table>
+<p>RoCEv2 的 GID 通常与网络接口配置的 IP 关联，IPv4 地址可以表示为 IPv4-mapped IPv6 GID，驱动会维护对应的 GID 表。</p>
+<p><strong>RoCEv2 的路径配置</strong>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">attr.ah_attr.is_global        = <span class="number">1</span>;</span><br><span class="line">attr.ah_attr.grh.dgid         = remote.gid;</span><br><span class="line">attr.ah_attr.grh.sgid_index   = local_gid_index;</span><br><span class="line">attr.ah_attr.grh.hop_limit    = <span class="number">64</span>;</span><br></pre></td></tr></table></figure>
+<p><strong>同一 IB 子网中的典型 LID 寻址</strong>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">attr.ah_attr.is_global = <span class="number">0</span>;</span><br><span class="line">attr.ah_attr.dlid      = remote.lid;</span><br><span class="line">attr.ah_attr.sl        = <span class="number">0</span>;</span><br><span class="line">attr.ah_attr.port_num  = <span class="number">1</span>;</span><br></pre></td></tr></table></figure>
+<p>（均为简化示例，两种方案都需要其他必要的 QP 参数。IB 也可以使用全局 GID 寻址。）</p>
+<p>除了路径配置不同，<strong>QP 状态转换和基本 RDMA 操作非常相似</strong>。</p>
+<h3 id="IB-不需要-IP-就能通信吗">IB 不需要 IP 就能通信吗</h3>
+<p><strong>可以。</strong> InfiniBand 原生 RDMA 可以通过 LID、GID、QPN 等信息完成通信，不依赖 IP 协议栈。</p>
+<p>但训练框架仍然经常需要 IP 网络，用于 rendezvous、连接信息交换、管理通信等。因此 IB 集群通常会使用普通以太网管理网络，或者 IPoIB。<strong>IPoIB 和原生 IB RDMA 是不同的通信方式，不要混在一起。</strong></p>
+<h3 id="多租户隔离的四个层次">多租户隔离的四个层次</h3>
+<p>如果你要提供一个允许不互信租户使用的 AI 云平台，光靠 QP、PD、MR 还不够：</p>
+<table>
+<thead>
+<tr>
+<th>层次</th>
+<th>解决的问题</th>
+<th>实现机制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>连接隔离</strong></td>
+<td>正常通信不会串包</td>
+<td>QP、QPN、PSN</td>
+</tr>
+<tr>
+<td><strong>内存隔离</strong></td>
+<td>不能任意访问其他进程内存</td>
+<td>PD、MR、rkey</td>
+</tr>
+<tr>
+<td><strong>租户网络隔离</strong></td>
+<td>未授权租户之间不能通信</td>
+<td>VF、VLAN、VRF、P_Key 等</td>
+</tr>
+<tr>
+<td><strong>性能隔离</strong></td>
+<td>不能抢光别人的资源</td>
+<td>QoS、带宽限制、RDMA cgroup</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>RoCEv2 走以太网隔离</strong>：通常需要结合 SR-IOV VF、VLAN、VRF、交换机 ACL、硬件防伪造策略等能力。</li>
+<li><strong>InfiniBand 走 P_Key 分区</strong>：Subnet Manager 管理 P_Key 分区成员关系，报文携带对应的 P_Key，网络设备根据分区成员关系检查。</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>两个必须警惕的点</strong>：</p>
+<ol>
+<li><strong>RDMA 数据可能绕过宿主机普通网络协议栈</strong>，因此不能默认 Kubernetes NetworkPolicy 或 iptables 就能拦截所有 RDMA 流量。必须确认实际的数据路径和策略执行位置。</li>
+<li><strong>rkey 不是密码学意义上的身份认证密钥，QPN 和 PSN 也不是安全凭证。</strong> 正常通信不串包，与抵御恶意租户攻击，是两个不同的问题。</li>
+</ol>
+<p>另外，如果两个 Pod 共享一个允许访问多个 P_Key 的物理 HCA，仍需确保每个租户只能使用授权给它的分区——<strong>不能简单地在 Job 中指定一个 P_Key 就认为实现了完整隔离。</strong></p>
+</blockquote>
+<hr>
+<h2 id="六、NCCL-是怎么用这套东西的">六、NCCL 是怎么用这套东西的</h2>
+<p>实际运行时，Worker 里不会有人自己写上面那些 C 代码。调用链大致是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">PyTorch                     torch.distributed / AllReduce</span><br><span class="line">  ↓</span><br><span class="line">NCCL                        通信拓扑、Channel、Rank、集合通信</span><br><span class="line">  ↓</span><br><span class="line">NCCL NET/IB Transport       创建 QP、CQ、PD、注册 MR</span><br><span class="line">  ↓</span><br><span class="line">libibverbs / mlx5 Provider  提交 Verbs 操作、构建 WQE</span><br><span class="line">  ↓</span><br><span class="line">Linux RDMA Driver           资源管理、设备上下文</span><br><span class="line">  ↓</span><br><span class="line">RDMA NIC                    DMA、数据收发、ACK、传输状态</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>NCCL 的 <code>NET/IB</code> 通信后端<strong>同样支持 RoCE</strong>，并不是只有 InfiniBand 才用这个模块。</p>
+</blockquote>
+<p>NCCL 源码 <a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl/blob/master/src/transport/net_ib/connect.cc"><code>src/transport/net_ib/connect.cc</code></a> 中包含这些函数：</p>
+<table>
+<thead>
+<tr>
+<th>函数</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ncclIbSenderQpsCreate</code></td>
+<td>创建发送侧 QP</td>
+</tr>
+<tr>
+<td><code>ncclIbReceiverQpsCreateToRts</code></td>
+<td>创建接收侧 QP 并配置连接状态</td>
+</tr>
+<tr>
+<td><code>ncclIbQpCreate</code></td>
+<td>封装底层 QP 创建操作</td>
+</tr>
+<tr>
+<td><code>ncclIbQpInit</code></td>
+<td>初始化 QP</td>
+</tr>
+</tbody>
+</table>
+<p>可以看到它确实在创建 RC QP、指定 PD 和 CQ，并将 QPN 放入连接元数据与远端交换。</p>
+<h3 id="一个-Worker-会创建多少-QP">一个 Worker 会创建多少 QP</h3>
+<p><strong>不一定是一个。</strong> 假设一个 Job 有两个 Worker、每个 Worker 有 8 张 GPU、每个 Worker 启动 8 个训练进程、每个 GPU 对应一个 Rank——那么整个任务有 16 个 Rank。</p>
+<p>NCCL 可能根据通信拓扑、Channel 数量、网卡数量、通信算法及每个连接的 QP 配置，创建<strong>多个</strong> RDMA QP。所以以下资源之间<strong>没有固定的一对一关系</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">TrainingJob</span><br><span class="line">    └── Worker Pod</span><br><span class="line">          └── 训练进程 / Rank</span><br><span class="line">                └── NCCL Communicator</span><br><span class="line">                      └── 通信连接</span><br><span class="line">                            └── 一个或多个 QP</span><br></pre></td></tr></table></figure>
+<p><strong>你不能简单地认为一个 Pod 申请了一个 RDMA 资源，就只能创建一个 QP。</strong></p>
+<hr>
+<h2 id="七、从训练启动到-QP-建立：四步走">七、从训练启动到 QP 建立：四步走</h2>
+<h3 id="7-1-成员发现（PyTorch-torchrun）">7.1 成员发现（PyTorch / torchrun）</h3>
+<p>NCCL <strong>不会主动扫描 Kubernetes 集群寻找 Worker</strong>，也不会扫描 RDMA 网络判断哪些网卡属于同一个训练任务。<strong>它是由上层训练框架告知参与者身份</strong>，然后在这些参与者之间建立通信拓扑。</p>
+<p>整个过程有三个层次：</p>
+<table>
+<thead>
+<tr>
+<th>层次</th>
+<th>负责者</th>
+<th>确定什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练任务成员发现</td>
+<td>PyTorch / torchrun</td>
+<td>哪些进程属于同一个 Job、Rank 是多少、总共有多少 Rank</td>
+</tr>
+<tr>
+<td>通信拓扑构建</td>
+<td>NCCL</td>
+<td>哪些 GPU 应该互相通信、用 Ring 还是 Tree、选哪些网卡和路径</td>
+</tr>
+<tr>
+<td>RDMA 连接建立</td>
+<td>Verbs</td>
+<td>创建 QP、CQ，交换 LID/GID/QPN，建立实际数据传输连接</td>
+</tr>
+</tbody>
+</table>
+<p>用一个具体例子走一遍：<strong>4 个 Worker、每个 Worker 2 张 GPU 和 2 张 RDMA 网卡</strong>，即 4 个 Pod、8 张 GPU、8 个训练 Rank（<code>WORLD_SIZE = 8</code>）。</p>
+<blockquote>
+<p>注意 <strong>Worker Pod 和 Rank 不是同一个概念</strong>。在常见的一进程一卡模式下，一个 Worker Pod 里可能有 8 个 Python 训练进程，每个进程有一个全局 Rank。<strong>NCCL 主要在 Rank 粒度上组织集合通信，而不是 Kubernetes Pod 粒度。</strong></p>
+</blockquote>
+<p>平台为每个 Pod 注入：</p>
+<table>
+<thead>
+<tr>
+<th>环境变量</th>
+<th>Worker 0</th>
+<th>Worker 1</th>
+<th>Worker 2</th>
+<th>Worker 3</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NNODES</code></td>
+<td>4</td>
+<td>4</td>
+<td>4</td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>NODE_RANK</code></td>
+<td>0</td>
+<td>1</td>
+<td>2</td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>NPROC_PER_NODE</code></td>
+<td>2</td>
+<td>2</td>
+<td>2</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>MASTER_ADDR</code></td>
+<td>worker-0</td>
+<td>worker-0</td>
+<td>worker-0</td>
+<td>worker-0</td>
+</tr>
+<tr>
+<td><code>MASTER_PORT</code></td>
+<td>29500</td>
+<td>29500</td>
+<td>29500</td>
+<td>29500</td>
+</tr>
+</tbody>
+</table>
+<p>然后每个 Pod 执行：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">torchrun \</span><br><span class="line">  --nnodes=4 \</span><br><span class="line">  --nproc-per-node=2 \</span><br><span class="line">  --node-rank=<span class="variable">$&#123;NODE_RANK&#125;</span> \</span><br><span class="line">  --master-addr=<span class="variable">$&#123;MASTER_ADDR&#125;</span> \</span><br><span class="line">  --master-port=29500 \</span><br><span class="line">  train.py</span><br></pre></td></tr></table></figure>
+<p>torchrun 会为每个训练进程设置 <code>RANK</code>、<code>LOCAL_RANK</code>、<code>WORLD_SIZE</code> 等环境变量。此时上层框架就知道这是一个由 8 个 Rank 组成的训练任务了——<strong>但还没有必然建立 RDMA 连接。</strong></p>
+<h3 id="7-2-Rendezvous-汇合">7.2 Rendezvous 汇合</h3>
+<p>所有训练进程使用共同的初始化 Store 汇合，<strong>但训练数据不需要经过 TCPStore</strong>。</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">import</span> os</span><br><span class="line"><span class="keyword">import</span> torch</span><br><span class="line"><span class="keyword">import</span> torch.distributed <span class="keyword">as</span> dist</span><br><span class="line"></span><br><span class="line">local_rank = <span class="built_in">int</span>(os.environ[<span class="string">&quot;LOCAL_RANK&quot;</span>])</span><br><span class="line">torch.cuda.set_device(local_rank)</span><br><span class="line"></span><br><span class="line">dist.init_process_group(</span><br><span class="line">    backend=<span class="string">&quot;nccl&quot;</span>,</span><br><span class="line">    init_method=<span class="string">&quot;env://&quot;</span></span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+<p>这里就进入了 PyTorch 的分布式通信初始化流程。</p>
+<blockquote>
+<p><strong><code>MASTER_ADDR</code> 是初始化集合点的地址，不是所有梯度数据的转发地址。</strong></p>
+</blockquote>
+<h3 id="7-3-Communicator-如何区分两个训练-Job">7.3 Communicator 如何区分两个训练 Job</h3>
+<p>NCCL 有一个重要概念叫 <strong>Communicator（通信域）</strong>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ncclCommInitRank(&amp;comm, world_size, unique_id, rank);</span><br></pre></td></tr></table></figure>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>comm</code></td>
+<td>当前进程的通信域对象</td>
+</tr>
+<tr>
+<td><code>world_size</code></td>
+<td>通信域包含多少 Rank</td>
+</tr>
+<tr>
+<td><code>unique_id</code></td>
+<td>通信域初始化标识</td>
+</tr>
+<tr>
+<td><code>rank</code></td>
+<td>当前进程在通信域中的编号</td>
+</tr>
+</tbody>
+</table>
+<p>典型情况下，Rank 0 调用 <code>ncclGetUniqueId(&amp;id)</code> 生成 ID，然后 PyTorch 通过 Store 把这个 ID 分发给其他参与训练的 Rank。<strong>所有 Rank 使用相同的 Unique ID 初始化 NCCL Communicator。</strong></p>
+<p><strong>即使 Job A 和 Job B 都存在 Rank 0、Rank 1、Rank 2、Rank 3，它们也是不同通信域中的 Rank。</strong> 它们不会因为共用一张网卡就自动加入彼此的训练任务。</p>
+<blockquote>
+<p>当然，<strong>这种通信域区分不是密码学意义上的租户安全隔离</strong>，平台仍需要提供网络访问控制。</p>
+</blockquote>
+<h3 id="7-4-NCCL-怎么知道该和谁通信、该选哪张网卡">7.4 NCCL 怎么知道该和谁通信、该选哪张网卡</h3>
+<p><strong>和谁通信</strong>由集合通信算法决定。以 AllReduce 为例，4 个 Rank 可以选择 Ring、Tree、Full Mesh 等不同算法。Ring 的通信顺序可以是：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Rank 0 → Rank 1 → Rank 2 → Rank 3 → Rank 0</span><br></pre></td></tr></table></figure>
+<p>NCCL 需要建立能够支持这些通信边的传输连接。实际 NCCL 可以建立多个 <strong>Channel</strong>，每个 Channel 有自己的通信拓扑，并行处理不同的数据块。</p>
+<blockquote>
+<p><strong>并不是 8 个 Rank 就一定需要让所有 8 个 Rank 两两建立 RDMA QP。</strong> 更关键的是，<strong>如果两个 Rank 位于同一台物理机器，它们可能根本不需要 RDMA。</strong></p>
+</blockquote>
+<p><strong>选哪张网卡</strong>由 NCCL 的 <strong>Topology Detection 与 Graph Search</strong> 模块负责。NCCL 初始化时会收集本地硬件信息（GPU、PCIe、NVLink、NUMA 节点、RDMA 设备及端口），在各 Rank 之间交换，再构造通信拓扑。</p>
+<p>在物理机上执行 <code>nvidia-smi topo -m</code> 可能看到：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">        GPU0  GPU1  NIC0  NIC1</span><br><span class="line">GPU0     X    SYS   PIX   SYS</span><br><span class="line">GPU1    SYS    X    SYS   PIX</span><br><span class="line"></span><br><span class="line">NIC0    PIX   SYS    X    SYS</span><br><span class="line">NIC1    SYS   PIX   SYS    X</span><br><span class="line"></span><br><span class="line">NIC Legend:</span><br><span class="line">NIC0: mlx5_0</span><br><span class="line">NIC1: mlx5_1</span><br></pre></td></tr></table></figure>
+<p>其中 <code>PIX</code>、<code>PXB</code>、<code>PHB</code>、<code>SYS</code> 描述不同设备之间的硬件路径。NCCL 综合硬件拓扑、带宽、通信算法和网卡使用情况做选择，<strong>不只是简单地按网卡编号分配</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>通信范围</th>
+<th>可能采用的传输方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>同一台机器、支持 GPU P2P</td>
+<td>NVLink / PCIe</td>
+</tr>
+<tr>
+<td>同一台机器、不支持直接 P2P</td>
+<td>Shared Memory 等</td>
+</tr>
+<tr>
+<td>不同机器、有 RDMA</td>
+<td>NCCL NET/IB</td>
+</tr>
+<tr>
+<td>不同机器、使用普通网络</td>
+<td>NCCL NET/Socket</td>
+</tr>
+</tbody>
+</table>
+<p>所以 <strong>NCCL 做的其实是一个从逻辑通信拓扑到物理硬件传输路径的映射</strong>。</p>
+<h3 id="7-5-真正的-QP-连接">7.5 真正的 QP 连接</h3>
+<p>假设 NCCL 已决定 Rank 1 需要通过 Worker 0 的 NIC 1 向 Worker 1 的 Rank 2 发送数据：</p>
+<table>
+<thead>
+<tr>
+<th>信息</th>
+<th>Rank 1（发送端）</th>
+<th>Rank 2（接收端）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>普通 Pod IP</td>
+<td>10.244.0.5</td>
+<td>10.244.1.5</td>
+</tr>
+<tr>
+<td>RDMA Device</td>
+<td><code>mlx5_1</code></td>
+<td><code>mlx5_0</code></td>
+</tr>
+<tr>
+<td>RDMA IP</td>
+<td>172.16.0.11</td>
+<td>172.16.0.21</td>
+</tr>
+<tr>
+<td>GID</td>
+<td><code>::ffff:172.16.0.11</code></td>
+<td><code>::ffff:172.16.0.21</code></td>
+</tr>
+<tr>
+<td>QPN</td>
+<td>101</td>
+<td>201</td>
+</tr>
+</tbody>
+</table>
+<p>NCCL 源码中的逻辑简化后大致如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">qpAttr.qp_state    = IBV_QPS_RTR;</span><br><span class="line">qpAttr.dest_qp_num = remoteQpNum;</span><br><span class="line"></span><br><span class="line"><span class="keyword">if</span> (linkLayer == IBV_LINK_LAYER_ETHERNET) &#123;</span><br><span class="line">    <span class="comment">// RoCE</span></span><br><span class="line">    qpAttr.ah_attr.is_global      = <span class="number">1</span>;</span><br><span class="line">    qpAttr.ah_attr.grh.dgid       = remoteGid;</span><br><span class="line">    qpAttr.ah_attr.grh.sgid_index = localGidIndex;</span><br><span class="line">&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    <span class="comment">// InfiniBand 子网内寻址示例</span></span><br><span class="line">    qpAttr.ah_attr.dlid = remoteLid;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">ibv_modify_qp(qp, &amp;qpAttr, attrMask);</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p><strong>一个容易忽略的细节</strong>：<code>localGidIndex</code> 是本地 RDMA Port 的 GID 表索引，<strong>不同机器上的 GID Index 不必相同。</strong></p>
+</blockquote>
+<p>到这里就能理解为什么：</p>
+<ul>
+<li>NCCL 不需要平台告诉它远端 QPN</li>
+<li>NCCL 不需要平台提前建立网卡之间的连接</li>
+<li>NCCL 不需要平台维护 Worker RDMA IP 到 QPN 的映射关系</li>
+</ul>
+<p><strong>这些信息都是通信库根据设备发现和连接协商自行获得的。</strong> 而且 QP 通常可以被后续训练迭代反复使用，<strong>并不是每执行一次 AllReduce 就重新建立一遍</strong>；部分连接也可能在首次使用时按需创建。</p>
+<hr>
+<h2 id="八、平台需要干预-NCCL-选网卡吗">八、平台需要干预 NCCL 选网卡吗</h2>
+<p>会遇到选错的情况，尤其是在有多张 RDMA 网卡、多网段、多租户、多个 Rail 的集群中。这时平台可以根据集群网络实际情况，给 NCCL 注入约束配置：</p>
+<table>
+<thead>
+<tr>
+<th>环境变量</th>
+<th>平台控制的内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NCCL_SOCKET_IFNAME</code></td>
+<td>Socket 通信用哪个网络接口</td>
+</tr>
+<tr>
+<td><code>NCCL_IB_HCA</code></td>
+<td>允许 NCCL 使用哪些 RDMA 设备及端口</td>
+</tr>
+<tr>
+<td><code>NCCL_IB_GID_INDEX</code></td>
+<td>特定场景下选择本地 GID</td>
+</tr>
+<tr>
+<td><code>NCCL_IB_ADDR_FAMILY</code></td>
+<td>RoCE 动态 GID 选择的地址族</td>
+</tr>
+<tr>
+<td><code>NCCL_IB_ADDR_RANGE</code></td>
+<td>限定动态 GID 选择的地址范围</td>
+</tr>
+<tr>
+<td><code>NCCL_CROSS_NIC</code></td>
+<td>是否尽量避免跨 Rail 通信</td>
+</tr>
+<tr>
+<td><code>NCCL_IB_QPS_PER_CONNECTION</code></td>
+<td>每个网络连接使用的 QP 数量配置</td>
+</tr>
+</tbody>
+</table>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 普通控制面通信</span></span><br><span class="line"><span class="built_in">export</span> NCCL_SOCKET_IFNAME=<span class="string">&#x27;=eth0&#x27;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 允许使用的 RDMA 设备</span></span><br><span class="line"><span class="built_in">export</span> NCCL_IB_HCA=<span class="string">&#x27;=mlx5_0:1,mlx5_1:1&#x27;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 允许 RDMA 传输</span></span><br><span class="line"><span class="built_in">export</span> NCCL_IB_DISABLE=0</span><br><span class="line"></span><br><span class="line"><span class="comment"># 适用于特定 Rail-optimized 网络</span></span><br><span class="line"><span class="built_in">export</span> NCCL_CROSS_NIC=0</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p><strong>注意</strong>：<code>mlx5_0</code> 只是本地设备名称，<strong>并不意味着两台机器上的 <code>mlx5_0</code> 一定连接同一个 Rail</strong>。</p>
+<p>这正是云平台的价值所在：<strong>你比 NCCL 更清楚整个集群的网络建设方式</strong>，能够给 NCCL 提供合理的设备范围和网络约束。</p>
+</blockquote>
+<hr>
+<h2 id="九、LID-GID-标识的到底是什么">九、LID / GID 标识的到底是什么</h2>
+<p>准确来说，<strong>LID 和 GID 标识的是 RDMA 网络端点，通常与 RDMA Port 相关联</strong>——而不是简单地标识一张物理网卡，也不是标识一个 Pod。</p>
+<p>物理网卡、物理端口、虚拟设备、网络地址、通信连接，其实是五个不同的层次：</p>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>标识粒度</th>
+<th>示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PCI Device</td>
+<td>PCIe 设备或功能</td>
+<td><code>0000:81:00.0</code></td>
+</tr>
+<tr>
+<td>RDMA Device / HCA</td>
+<td>RDMA 设备实例</td>
+<td><code>mlx5_0</code></td>
+</tr>
+<tr>
+<td>RDMA Port</td>
+<td>RDMA 设备的端口</td>
+<td><code>mlx5_0/1</code></td>
+</tr>
+<tr>
+<td>LID / GID</td>
+<td>网络端点地址</td>
+<td><code>0x0011</code>、<code>::ffff:10.0.0.11</code></td>
+</tr>
+<tr>
+<td>QPN</td>
+<td>RDMA 通信队列</td>
+<td><code>101</code>、<code>102</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>它们并不是一一对应的。</strong> 一张物理网卡可以有多个物理 Port，可以虚拟出多个 VF，一个 RDMA Port 也可以有多个 GID。</p>
+<h3 id="RoCEv2：GID-与-IP-的关系">RoCEv2：GID 与 IP 的关系</h3>
+<p>假设物理机上有一张 ConnectX 网卡，通过 SR-IOV 创建两个 VF 分别交给两个训练 Pod：</p>
+<table>
+<thead>
+<tr>
+<th>设备</th>
+<th>IP</th>
+<th>GID</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PF / <code>mlx5_0</code></td>
+<td>10.0.0.10</td>
+<td><code>::ffff:10.0.0.10</code></td>
+</tr>
+<tr>
+<td>VF 0 / <code>mlx5_1</code></td>
+<td>10.0.0.11</td>
+<td><code>::ffff:10.0.0.11</code></td>
+</tr>
+<tr>
+<td>VF 1 / <code>mlx5_2</code></td>
+<td>10.0.0.12</td>
+<td><code>::ffff:10.0.0.12</code></td>
+</tr>
+</tbody>
+</table>
+<p>在 RoCEv2 模式下，IPv4 地址通常以 IPv4-mapped IPv6 的形式表示为 GID。当 CNI 给 VF 对应的网络接口配置 IP 后，<strong>支持该接口的 RDMA 驱动通常会自动维护相应的 GID Table</strong>。</p>
+<p>每条 GID Table 记录主要包含 GID Value、GID Type（RoCEv1 或 RoCEv2）、关联的 Network Device。<strong>因此同一个 IP 甚至可能在 GID Table 中出现两次，分别对应 RoCEv1、RoCEv2。</strong></p>
+<blockquote>
+<p>✅ <strong>一个对平台设计的实用结论</strong>：在典型 SR-IOV RoCE 方案中，<strong>你的 AI 平台通常不需要额外实现 GID 分配器</strong>——配置好 VF 和 IP，驱动就会处理相应的 GID。</p>
+</blockquote>
+<h3 id="如果不是-SR-IOV，而是-Shared-RDMA">如果不是 SR-IOV，而是 Shared RDMA</h3>
+<p>情况就不一样了。假设两个 Pod 使用 hostNetwork 共享同一个 RDMA 设备，此时两个 Pod 可以拥有：</p>
+<ul>
+<li>相同的 HCA</li>
+<li>相同的 Port</li>
+<li>相同的 IP</li>
+<li><strong>相同的 GID</strong></li>
+<li>不同的 QP、CQ 和内存保护上下文</li>
+</ul>
+<p>所以 <strong>GID 不一定能够区分训练任务，QPN 才是区分普通 RC 通信连接的关键标识之一。</strong></p>
+<h3 id="InfiniBand-的-LID-GID">InfiniBand 的 LID / GID</h3>
+<p>IB 与 RoCE 最大的不同是它有自己的网络寻址体系：</p>
+<ul>
+<li><strong>GUID</strong>：通常是一个 64 位的设备或端口标识</li>
+<li><strong>LID</strong>：由 Subnet Manager 分配，用于 IB 子网内的报文转发</li>
+<li><strong>GID</strong>：128 位地址，通常由 64 位子网前缀和 64 位接口标识组成</li>
+</ul>
+<p>对于没有虚拟化的 IB 网卡，两个 Port 有各自的 LID 和 GID。此外 <strong>IB 的 LMC 机制允许一个 Port 拥有多个 LID</strong>。</p>
+<p>开启 SR-IOV 后要区分具体的 IB 虚拟化模式：</p>
+<table>
+<thead>
+<tr>
+<th>IB 虚拟化方式</th>
+<th>LID</th>
+<th>GID</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>物理 HCA</td>
+<td>端口拥有 LID</td>
+<td>端口拥有 GID 表</td>
+</tr>
+<tr>
+<td>Shared Port</td>
+<td>PF、VF 可以共享 LID</td>
+<td>VF 有自己的虚拟 GID 表</td>
+</tr>
+<tr>
+<td>支持独立 LID 的虚拟化模式</td>
+<td>VF / 虚拟端口可以拥有独立 LID</td>
+<td>可以拥有独立 GID</td>
+</tr>
+</tbody>
+</table>
+<p>传统 IB Shared Port 架构下，不同 VF 共享物理端口的 LID，但拥有自己的虚拟 GID 表、P_Key 表和设备上下文。</p>
+<h3 id="两种网络的资源管理差异">两种网络的资源管理差异</h3>
+<table>
+<thead>
+<tr>
+<th>配置项</th>
+<th>RoCEv2</th>
+<th>InfiniBand</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VF 创建</td>
+<td>SR-IOV</td>
+<td>SR-IOV</td>
+</tr>
+<tr>
+<td>网络地址管理</td>
+<td>IPAM</td>
+<td>SM、GUID 管理等</td>
+</tr>
+<tr>
+<td>GID 产生</td>
+<td>驱动根据关联接口 IP 等维护</td>
+<td>IB 端口标识与子网配置</td>
+</tr>
+<tr>
+<td>LID 分配</td>
+<td>不用于 RoCE 转发</td>
+<td>Subnet Manager</td>
+</tr>
+<tr>
+<td>Pod 必须有 RDMA 网卡 IP</td>
+<td>常见部署需要</td>
+<td>原生 IB 通信不依赖 IP</td>
+</tr>
+<tr>
+<td>QP 创建</td>
+<td>应用运行时</td>
+<td>应用运行时</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="十、平台到底该管什么">十、平台到底该管什么</h2>
+<h3 id="设备分配数量-≠-QP-数量">设备分配数量 ≠ QP 数量</h3>
+<p>例如配置 Shared RDMA Device Plugin：</p>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;resourceName&quot;</span><span class="punctuation">:</span> <span class="string">&quot;shared_rdma&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;rdmaHcaMax&quot;</span><span class="punctuation">:</span> <span class="number">32</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>节点上报 <code>rdma/shared_rdma: 32</code>。<strong>这里的 32 是插件暴露的逻辑资源额度，并不是网卡只能创建 32 个 QP。</strong></p>
+<p>如果某个 Worker 申请了 1 个共享 RDMA 额度，其中的训练进程仍然可能创建大量 QP、CQ、MR。所以需要区分三个资源维度：</p>
+<table>
+<thead>
+<tr>
+<th>资源维度</th>
+<th>示例</th>
+<th>管理者</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>设备分配</td>
+<td>PF、VF、共享 HCA 额度</td>
+<td>Kubernetes / Device Plugin</td>
+</tr>
+<tr>
+<td><strong>运行时对象</strong></td>
+<td>QP、CQ、MR、PD</td>
+<td>RDMA 驱动 / 通信库</td>
+</tr>
+<tr>
+<td>网络容量</td>
+<td>带宽、拥塞、QoS</td>
+<td>网卡和交换网络</td>
+</tr>
+</tbody>
+</table>
+<h3 id="一个训练任务会不会把网卡耗尽">一个训练任务会不会把网卡耗尽</h3>
+<p><strong>会。</strong> RDMA 网卡的 QP、CQ、MR 等资源容量不是无限的。如果 Job A 持续创建大量 RDMA 对象，可能导致 Job B 无法创建新 QP，<strong>即使 Kubernetes 显示它仍然有共享 RDMA 资源可以申请</strong>。</p>
+<p>Linux 提供了 <strong>RDMA cgroup controller</strong> 用于统计和限制 RDMA 资源使用，相关文件一般包括：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">rdma.max</span><br><span class="line">rdma.current</span><br></pre></td></tr></table></figure>
+<p>例如限制某个 cgroup 对 <code>mlx5_0</code> 的资源使用：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">mlx5_0 hca_handle=64 hca_object=4096</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p>这里的数值只是示例。<strong><code>hca_object</code> 是相关 RDMA 对象的聚合资源限制，并不等于精确的独立 QP 数量限制。</strong> 生产环境需要结合内核、驱动、容器运行时和实际训练任务的资源消耗来设计限制策略。</p>
+</blockquote>
+<h3 id="Job-Controller-应不应该管理-QP">Job Controller 应不应该管理 QP</h3>
+<p><strong>不应该由 Job Controller 直接创建或分配 QP。</strong> 平台应该管理的是<strong>网络能力和资源使用权限</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>AI 平台是否负责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>决定 Job 是否使用 RDMA</td>
+<td>✅ 是</td>
+</tr>
+<tr>
+<td>分配 RDMA 设备资源</td>
+<td>通过 Kubernetes</td>
+</tr>
+<tr>
+<td>分配租户网络</td>
+<td>✅ 是，或对接网络平台</td>
+</tr>
+<tr>
+<td>配置 RDMA IP / VF</td>
+<td>通过 CNI、IPAM 等</td>
+</tr>
+<tr>
+<td><strong>创建 QP</strong></td>
+<td>❌ 否，由 NCCL 等通信库负责</td>
+</tr>
+<tr>
+<td><strong>创建 CQ、PD、MR</strong></td>
+<td>❌ 否，由通信库负责</td>
+</tr>
+<tr>
+<td><strong>交换 QPN、PSN、rkey</strong></td>
+<td>❌ 否，由通信协议负责</td>
+</tr>
+<tr>
+<td>RDMA 资源配额及监控</td>
+<td>✅ 是</td>
+</tr>
+<tr>
+<td>租户安全隔离</td>
+<td>✅ 是</td>
+</tr>
+<tr>
+<td>回收运行时 QP</td>
+<td>由进程和驱动负责</td>
+</tr>
+</tbody>
+</table>
+<h3 id="平台-API-该描述什么">平台 API 该描述什么</h3>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">replicas:</span> <span class="number">4</span></span><br><span class="line"></span><br><span class="line">  <span class="attr">resources:</span></span><br><span class="line">    <span class="attr">gpuPerWorker:</span> <span class="number">8</span></span><br><span class="line">    <span class="attr">rdmaDevicesPerWorker:</span> <span class="number">8</span></span><br><span class="line"></span><br><span class="line">  <span class="attr">network:</span></span><br><span class="line">    <span class="attr">profile:</span> <span class="string">roce-sriov</span></span><br><span class="line">    <span class="attr">fabric:</span> <span class="string">fabric-01</span></span><br><span class="line">    <span class="attr">topology:</span> <span class="string">rail-optimized</span></span><br><span class="line"></span><br><span class="line">  <span class="attr">distributed:</span></span><br><span class="line">    <span class="attr">launcher:</span> <span class="string">torchrun</span></span><br><span class="line">    <span class="attr">backend:</span> <span class="string">nccl</span></span><br><span class="line">    <span class="attr">rendezvous:</span></span><br><span class="line">      <span class="attr">backend:</span> <span class="string">c10d</span></span><br></pre></td></tr></table></figure>
+<p>至于「Rank 1 到 Rank 9 应该使用哪个 QP、应该通过哪张网卡通信」，<strong>这些不应该作为 Job API 中的静态配置</strong>。</p>
+<hr>
+<h2 id="十一、Rail：把连线照着通信模式安排">十一、Rail：把连线照着通信模式安排</h2>
+<h3 id="为什么要设计-Rail">为什么要设计 Rail</h3>
+<p>假设有两台 GPU 服务器，每台 2 张 GPU、2 张 400 Gbps RDMA 网卡，网络采用 Rail-Optimized 架构。</p>
+<p><strong>同 Rail 通信</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Server A / NIC 0</span><br><span class="line">        ↓</span><br><span class="line">Rail 0 Switch</span><br><span class="line">        ↓</span><br><span class="line">Server B / NIC 0</span><br></pre></td></tr></table></figure>
+<p><strong>跨 Rail 通信</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Server A / NIC 0</span><br><span class="line">        ↓</span><br><span class="line">Rail 0 Switch</span><br><span class="line">        ↓</span><br><span class="line">Spine Switch</span><br><span class="line">        ↓</span><br><span class="line">Rail 1 Switch</span><br><span class="line">        ↓</span><br><span class="line">Server B / NIC 1</span><br></pre></td></tr></table></figure>
+<p>同 Rail 只经 1 台交换机、不占用 Spine 链路。<strong>Rail-Optimized 的核心设计目的，就是尽可能减少不必要的跨 Rail 流量</strong>，让不同 Rail 并行工作，降低流量之间的相互干扰。</p>
+<h3 id="跨-Rail-会发生什么">跨 Rail 会发生什么</h3>
+<table>
+<thead>
+<tr>
+<th>网络架构</th>
+<th>跨 Rail 的结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Rail-Only</strong>，Rail 完全独立</td>
+<td>无法直接通过网络通信</td>
+</tr>
+<tr>
+<td><strong>Rail-Optimized</strong>，Rail 之间有限带宽互联</td>
+<td>可以通信，但容易出现性能瓶颈</td>
+</tr>
+<tr>
+<td><strong>全互通、无阻塞网络</strong></td>
+<td>可以正常通信，性能影响可能较小</td>
+</tr>
+</tbody>
+</table>
+<p><strong>情况一：Rail 完全不互通。</strong> 两个 Rail 之间没有网络路径，NIC 0 无法直接向对端 NIC 1 发送 RDMA 数据。这时即使两个 Worker 的普通 Pod IP 能互通、NCCL 也可能通过 TCP 成功交换 QPN 和 GID，但<strong>实际 RDMA 数据无法到达对端</strong>。可能出现：</p>
+<ul>
+<li>路由或邻居解析失败</li>
+<li>QP 初始化失败</li>
+<li>RDMA 数据发送后收不到 ACK</li>
+<li>RC QP 不断重试，最终超过重试次数</li>
+<li>NCCL AllReduce 卡住或训练任务超时退出</li>
+</ul>
+<blockquote>
+<p><strong>甚至可能出现 QP 已经进入 RTS 状态，但实际上无法完成数据传输。</strong> 因为 <strong>QP 进入 RTS 不代表底层网络一定可达。</strong></p>
+</blockquote>
+<p><strong>情况二：Rail 之间互通但带宽有限。</strong> 这是更典型的<strong>性能</strong>问题。例如 4 条各自需要 400 Gbps 的通信流同时经过一条 400 Gbps 的跨 Rail 链路：总需求 1600 Gbps，瓶颈容量 400 Gbps，<strong>每条流量平均只能获得原先四分之一的带宽</strong>。</p>
+<p>更严重的是，<strong>AI 训练通常是同步通信</strong>——即使其他 Rank 的通信都很快，只要某条关键通信路径很慢，其他 Rank 就可能不得不等待。<strong>局部网络拥塞会扩大为整个训练任务的同步等待</strong>，这也是大模型训练对网络尾延迟特别敏感的原因。</p>
+<h3 id="跨-Rail-时-QP-会发生什么变化">跨 Rail 时 QP 会发生什么变化</h3>
+<p>你可能会认为跨 Rail 时交换机需要重新建立 QP。<strong>实际上不需要。</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">本地 QP:  QPN 101, HCA mlx5_0, Rail 0</span><br><span class="line">远端 QP:  QPN 201, HCA mlx5_1, Rail 1</span><br></pre></td></tr></table></figure>
+<p>NCCL 在创建连接时就已确定发送端和接收端的 RDMA 端点。<strong>只要底层网络可达，数据包可以经过多台交换机到达远端 QP。交换机只负责网络转发，不会为你的训练任务创建新的 QP。</strong></p>
+<table>
+<thead>
+<tr>
+<th>对象</th>
+<th>跨 Rail 时是否改变</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>源 QPN / 目的 QPN</td>
+<td><strong>不变</strong></td>
+</tr>
+<tr>
+<td>目标 GID / LID</td>
+<td><strong>不变</strong></td>
+</tr>
+<tr>
+<td>PD / MR / rkey</td>
+<td><strong>不变</strong></td>
+</tr>
+<tr>
+<td>网络转发路径</td>
+<td>可能更长</td>
+</tr>
+<tr>
+<td>通信带宽和延迟</td>
+<td>可能变差</td>
+</tr>
+</tbody>
+</table>
+<p>所以<strong>跨 Rail 本质上是网络路径与资源竞争问题，不是通信连接隔离问题</strong>——它不会因为经过不同 Rail 就让两个训练任务的数据串在一起。</p>
+<h3 id="PXN：用节点内带宽换外部跨-Rail">PXN：用节点内带宽换外部跨 Rail</h3>
+<p><strong>PXN = PCI × NVLink</strong>，✅ 已核实（来源：NVIDIA 官方技术博客 <em>Doubling all2all Performance with NCCL 2.12</em>）：<strong>NCCL 2.12 引入</strong>，用于优化包括 All-to-All 在内的通信场景。</p>
+<p>思路是：先在本机通过 NVLink 把数据转移到<strong>与目标端处于同一 Rail</strong> 的 GPU/网卡上，再发出。这样就能利用节点内的 NVLink/NVSwitch 带宽，<strong>减少外部网络的跨 Rail 流量</strong>。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">直接跨 Rail:   Server A / NIC 0 → Rail 0 SW → Spine → Rail 1 SW → Server B / NIC 1</span><br><span class="line">PXN 优化:      Server A / GPU 0 --NVLink--&gt; GPU 1 --NIC 1--&gt; Rail 1 SW --&gt; Server B / NIC 1</span><br></pre></td></tr></table></figure>
+<p>官方博客另外提到，PXN 还能让网络层把多个消息聚合（<code>multireceive</code>），减少穿过二级 Spine 交换机的流量。</p>
+<blockquote>
+<p>所以 <strong>GPU 0 的数据并不一定必须通过 NIC 0 发送</strong>。实际能否使用取决于硬件拓扑和通信库配置。</p>
+</blockquote>
+<h3 id="NCCL-CROSS-NIC-控制什么">NCCL_CROSS_NIC 控制什么</h3>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>含义</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NCCL_CROSS_NIC=0</code></td>
+<td>尽量要求同一 Ring/Tree 使用对应 NIC</td>
+<td>Rail-Optimized，跨 Rail 带宽有限</td>
+</tr>
+<tr>
+<td><code>NCCL_CROSS_NIC=1</code></td>
+<td>允许同一 Ring/Tree 使用不同 NIC</td>
+<td>网络充分互通</td>
+</tr>
+<tr>
+<td><code>NCCL_CROSS_NIC=2</code></td>
+<td>优先对应 NIC，但允许性能更好的其他选择</td>
+<td><strong>默认值</strong>，通用场景</td>
+</tr>
+</tbody>
+</table>
+<p>✅ 已核实（来源：NVIDIA 官方 <em>Performance and Tuning</em> 文档）：默认值确为 <strong>2</strong>，原文 <em>“The default value is 2”</em>。</p>
+<p>官方文档特别指出，<strong>即使设置为 <code>0</code>，当不同节点上的 Communicator 使用了不同位置的 GPU 时，也仍然可能需要跨 NIC 通信</strong>。因此：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">export</span> NCCL_CROSS_NIC=0</span><br></pre></td></tr></table></figure>
+<p><strong>不是一个强制网络隔离开关，也不能保证任意 GPU 分配组合都能正常通信。</strong></p>
+<h3 id="这对调度设计的影响">这对调度设计的影响</h3>
+<p>假设有两台 8 卡 GPU 服务器，每张 GPU 附近都有一张 RDMA 网卡，分别连接 Rail 0～7。现在用户申请两个 Worker、每个 Worker 使用 4 张 GPU：</p>
+<ul>
+<li><strong>Rail 对齐分配</strong>：Node 0 和 Node 1 都各分配 GPU 0～3（Rail 0～3）→ 两个 Worker 共同获得 <strong>4 个对齐的 Rail</strong>，具有良好的同 Rail 直接通信条件</li>
+<li><strong>随机分配</strong>：可能一方拿 GPU 0～3、另一方拿 GPU 4～7（Rail 4～7）→ 跨 Rail 流量激增</li>
+</ul>
+<p>从 Kubernetes 原生资源调度角度看，<strong>两种方案都满足</strong>：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">resources:</span></span><br><span class="line">  <span class="attr">limits:</span></span><br><span class="line">    <span class="attr">nvidia.com/gpu:</span> <span class="number">4</span></span><br><span class="line">    <span class="attr">example.com/rdma:</span> <span class="number">4</span></span><br></pre></td></tr></table></figure>
+<p>但从 AI 训练网络角度看，<strong>两种分配方式可能存在巨大的性能差异</strong>。这意味着<strong>你的平台不能永远只把 RDMA 当作一个数字资源</strong>。</p>
+<h3 id="增加-RDMA-拓扑资源模型">增加 RDMA 拓扑资源模型</h3>
+<p>Node Agent 可以上报：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">node:</span> <span class="string">gpu-node-01</span></span><br><span class="line"></span><br><span class="line"><span class="attr">devices:</span></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">gpu:</span> <span class="string">GPU-UUID-0</span></span><br><span class="line">    <span class="attr">pciAddress:</span> <span class="string">&quot;0000:17:00.0&quot;</span></span><br><span class="line">    <span class="attr">numaNode:</span> <span class="number">0</span></span><br><span class="line">    <span class="attr">preferredRDMA:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">device:</span> <span class="string">mlx5_0</span></span><br><span class="line">        <span class="attr">port:</span> <span class="number">1</span></span><br><span class="line">        <span class="attr">rail:</span> <span class="string">rail-0</span></span><br><span class="line">        <span class="attr">fabric:</span> <span class="string">fabric-01</span></span><br><span class="line">        <span class="attr">bandwidthGbps:</span> <span class="number">400</span></span><br><span class="line"></span><br><span class="line">  <span class="bullet">-</span> <span class="attr">gpu:</span> <span class="string">GPU-UUID-1</span></span><br><span class="line">    <span class="attr">pciAddress:</span> <span class="string">&quot;0000:31:00.0&quot;</span></span><br><span class="line">    <span class="attr">numaNode:</span> <span class="number">0</span></span><br><span class="line">    <span class="attr">preferredRDMA:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">device:</span> <span class="string">mlx5_1</span></span><br><span class="line">        <span class="attr">port:</span> <span class="number">1</span></span><br><span class="line">        <span class="attr">rail:</span> <span class="string">rail-1</span></span><br><span class="line">        <span class="attr">fabric:</span> <span class="string">fabric-01</span></span><br><span class="line">        <span class="attr">bandwidthGbps:</span> <span class="number">400</span></span><br></pre></td></tr></table></figure>
+<p>（这是自定义的平台资源模型，不是 Kubernetes 原生 API。）</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>数据来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU UUID</td>
+<td>NVML</td>
+</tr>
+<tr>
+<td>PCI Address</td>
+<td>sysfs / NVML</td>
+</tr>
+<tr>
+<td>NUMA Node</td>
+<td>sysfs</td>
+</tr>
+<tr>
+<td>GPU-NIC 亲和关系</td>
+<td>PCIe 拓扑 / NVML</td>
+</tr>
+<tr>
+<td>RDMA Device</td>
+<td>RDMA Netlink</td>
+</tr>
+<tr>
+<td><strong>Rail ID</strong></td>
+<td><strong>网络控制器 / 基础设施资产配置</strong></td>
+</tr>
+<tr>
+<td>Fabric ID</td>
+<td>网络平台</td>
+</tr>
+<tr>
+<td>网卡速率</td>
+<td>RDMA 驱动 / 网卡信息</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>特别注意：Rail ID 一般不能仅凭 GID、LID 或 mlx5 设备名称可靠推断出来。</strong> 你需要从网络基础设施获得实际的拓扑信息。</p>
+</blockquote>
+<h3 id="调度策略的三个层次">调度策略的三个层次</h3>
+<table>
+<thead>
+<tr>
+<th>层次</th>
+<th>解决什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>第一层：资源数量调度</strong></td>
+<td>GPU 和 RDMA 数量是否满足要求</td>
+</tr>
+<tr>
+<td><strong>第二层：节点内拓扑调度</strong></td>
+<td>GPU 和 RDMA NIC 是否处于较近的 PCIe / NUMA 路径</td>
+</tr>
+<tr>
+<td><strong>第三层：跨节点 Rail 感知调度</strong></td>
+<td>同一 TrainingJob 的不同 Worker 是否获得<strong>兼容的 Rail 资源</strong></td>
+</tr>
+</tbody>
+</table>
+<p>第三层就是 <strong>Rail-Aware Scheduling</strong>。</p>
+<p>对于整机 8 卡独占训练，这个问题通常比较简单，因为 Worker 可以获得整组训练网卡。<strong>但对于多租户、1 卡、2 卡、4 卡等非整机训练，这个问题就会变得非常重要。</strong></p>
+<h3 id="RoCEv2-与-IB-跨-Rail-的差别">RoCEv2 与 IB 跨 Rail 的差别</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>RoCEv2</th>
+<th>InfiniBand</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>跨 Rail 转发</td>
+<td>以太网转发或 IP 路由</td>
+<td>IB Fabric 转发</td>
+</tr>
+<tr>
+<td>互通条件</td>
+<td>路由、VLAN、VRF、ACL 等</td>
+<td>IB 路径、LID/GID、P_Key 等</td>
+</tr>
+<tr>
+<td>拥塞管理</td>
+<td>ECN、CNP、PFC 等</td>
+<td>Credit 流控及拥塞控制</td>
+</tr>
+<tr>
+<td>路径不可达</td>
+<td>QP 初始化或通信失败</td>
+<td>QP 初始化或通信失败</td>
+</tr>
+<tr>
+<td>QP 是否重新创建</td>
+<td>正常跨 Rail 转发<strong>不需要</strong></td>
+<td>正常跨 Rail 转发<strong>不需要</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>RoCEv2 支持 IP 路由并不意味着所有 Rail 天然互通；IB 有 Subnet Manager 也不意味着不同物理 Fabric 天然互通。</strong></p>
+</blockquote>
+<hr>
+<h2 id="十二、动手：观察、验证、读源码">十二、动手：观察、验证、读源码</h2>
+<h3 id="观察-RDMA-运行时资源">观察 RDMA 运行时资源</h3>
+<p>不需要自己开发 RDMA 程序，也可以观察一个实际训练任务从创建到退出的过程：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 查看 RDMA 设备</span></span><br><span class="line">ibv_devices</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看设备属性及硬件支持的资源上限</span></span><br><span class="line">ibv_devinfo -v</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看 RDMA 资源使用汇总</span></span><br><span class="line">rdma resource show</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看所有 QP / 指定网卡的 QP</span></span><br><span class="line">rdma resource show qp</span><br><span class="line">rdma resource show qp <span class="built_in">link</span> mlx5_0/1</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看 CQ / PD / MR / 设备上下文</span></span><br><span class="line">rdma resource show cq</span><br><span class="line">rdma resource show pd</span><br><span class="line">rdma resource show mr</span><br><span class="line">rdma resource show ctx</span><br></pre></td></tr></table></figure>
+<p>这些都是 Linux 提供的 RDMA 资源追踪接口，<strong>具体可见字段与权限、内核和驱动版本有关</strong>。</p>
+<p>QP 查询可能看到类似输出：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">link mlx5_0/1 lqpn 101 rqpn 201</span><br><span class="line">    type RC state RTS pid 18452 comm python</span><br></pre></td></tr></table></figure>
+<p>其中 <code>lqpn</code> 是本地 QPN、<code>rqpn</code> 是远端 QPN、<code>RTS</code> 表示 QP 处于 Ready To Send 状态，<code>pid</code> 是关联进程 ID。</p>
+<p><strong>建议做一次这样的实验</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>实验步骤</th>
+<th>观察内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>不启动训练任务</td>
+<td>查看 RDMA 资源基线</td>
+</tr>
+<tr>
+<td>启动 Job A</td>
+<td>观察 QP、CQ、MR 数量增长</td>
+</tr>
+<tr>
+<td>启动 Job B</td>
+<td>观察同一网卡上出现更多 QP</td>
+</tr>
+<tr>
+<td>停止 Job A</td>
+<td>观察 A 的运行时资源释放</td>
+</tr>
+<tr>
+<td>保持 Job B 运行</td>
+<td>验证 B 的通信不受正常资源回收影响</td>
+</tr>
+<tr>
+<td>停止 Job B</td>
+<td>确认资源恢复到基线附近</td>
+</tr>
+</tbody>
+</table>
+<p>甚至可以进一步开发 RDMA Exporter，通过 RDMA Netlink、sysfs 等接口采集数据，结合宿主机 PID、cgroup、Pod UID，<strong>把运行时资源归属关联到 TrainingJob</strong>。这样平台就不仅能看到某个 Job 分配了几张网卡，还能知道它<strong>实际消耗了多少 RDMA 运行时资源</strong>。</p>
+<h3 id="观察-NCCL-如何完成这一切">观察 NCCL 如何完成这一切</h3>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">export</span> NCCL_DEBUG=INFO</span><br><span class="line"><span class="built_in">export</span> NCCL_DEBUG_SUBSYS=INIT,NET,GRAPH,BOOTSTRAP</span><br><span class="line"><span class="built_in">export</span> NCCL_DEBUG_FILE=/tmp/nccl.%h.%p.log</span><br></pre></td></tr></table></figure>
+<p>关注类似以下的日志（示意，不同版本格式有差异）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">阶段 1 初始化网络   Bootstrap : Using eth0:10.244.0.5</span><br><span class="line">阶段 2 发现设备     NET/IB : Using [0]mlx5_0:1/RoCE</span><br><span class="line">阶段 3 建立拓扑     Channel 00 : 0 1 2 3</span><br><span class="line">阶段 4 选择路径     Channel 00 : 1 -&gt; 2 via NET/IB/0</span><br></pre></td></tr></table></figure>
+<p>同时在宿主机上观察：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 物理网卡和 RDMA 设备映射</span></span><br><span class="line">ibdev2netdev</span><br><span class="line">rdma <span class="built_in">link</span> show</span><br><span class="line"></span><br><span class="line"><span class="comment"># 查看 LID、GID、端口信息</span></span><br><span class="line">ibv_devinfo -v</span><br><span class="line">show_gids</span><br><span class="line"></span><br><span class="line"><span class="comment"># GPU 与 NIC 拓扑</span></span><br><span class="line">nvidia-smi topo -m</span><br><span class="line"></span><br><span class="line"><span class="comment"># 实际创建的 QP</span></span><br><span class="line">rdma resource show qp</span><br></pre></td></tr></table></figure>
+<p>（<code>show_gids</code>、<code>ibdev2netdev</code> 是否存在取决于安装的驱动及工具包。）</p>
+<p><strong>把 NCCL 日志中的 Rank、网卡名称和宿主机上查询到的 QP 关联起来</strong>，就能完整观察从训练任务初始化到 RDMA 连接创建的过程。</p>
+<h3 id="验证集群有没有跨-Rail-问题">验证集群有没有跨 Rail 问题</h3>
+<p>找两台 GPU 节点，用 <code>ib_write_bw</code> 指定不同 HCA 做两两测试：</p>
+<table>
+<thead>
+<tr>
+<th>Node A \ Node B</th>
+<th>NIC 0 / Rail 0</th>
+<th>NIC 1 / Rail 1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>NIC 0 / Rail 0</strong></td>
+<td>同 Rail 测试</td>
+<td>跨 Rail 测试</td>
+</tr>
+<tr>
+<td><strong>NIC 1 / Rail 1</strong></td>
+<td>跨 Rail 测试</td>
+<td>同 Rail 测试</td>
+</tr>
+</tbody>
+</table>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 服务端</span></span><br><span class="line">ib_write_bw -d mlx5_0 --report_gbits</span><br><span class="line"></span><br><span class="line"><span class="comment"># 客户端</span></span><br><span class="line">ib_write_bw -d mlx5_0 --report_gbits &lt;server-ip&gt;</span><br></pre></td></tr></table></figure>
+<p>（RoCE 环境还需要确保选择了正确的 GID 和端口。）</p>
+<p>除带宽外还观察：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">rdma statistic              <span class="comment"># RDMA 协议统计</span></span><br><span class="line">ethtool -S ens6f0           <span class="comment"># RoCE 网卡统计</span></span><br><span class="line">nvidia-smi topo -m          <span class="comment"># GPU 与网卡拓扑</span></span><br></pre></td></tr></table></figure>
+<p><strong>重点关注重传、ACK 超时、PFC Pause、ECN、CNP 等计数，以及交换机端口利用率。</strong> 最后用 nccl-tests 执行多节点 AllReduce 和 All-to-All 性能测试。</p>
+<h3 id="源码阅读顺序">源码阅读顺序</h3>
+<p>按调用顺序看，比直接读 RDMA 驱动更容易理解整条链路：</p>
+<table>
+<thead>
+<tr>
+<th>源码</th>
+<th>解决什么问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/linux-rdma/rdma-core/blob/master/libibverbs/examples/rc_pingpong.c"><code>rdma-core / rc_pingpong.c</code></a></td>
+<td>两端 QP 如何建立连接</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/torvalds/linux/blob/master/drivers/infiniband/sw/rxe/rxe_recv.c">Linux <code>rxe_recv.c</code></a></td>
+<td>接收报文、目标 QP 查找与状态检查</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/torvalds/linux/blob/master/drivers/infiniband/sw/rxe/rxe_resp.c">Linux <code>rxe_resp.c</code></a></td>
+<td>RDMA 接收处理逻辑</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/torvalds/linux/blob/master/drivers/infiniband/sw/rxe/rxe_mr.c">Linux <code>rxe_mr.c</code></a></td>
+<td>PD、MR、rkey 权限校验</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl/tree/master/src/transport/net_ib">NCCL <code>net_ib/</code></a></td>
+<td>AI 训练实际如何使用 RDMA</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/pytorch/pytorch/blob/main/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp">PyTorch <code>ProcessGroupNCCL.cpp</code></a></td>
+<td>如何分发 NCCL Unique ID</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl/blob/master/src/bootstrap.cc">NCCL <code>bootstrap.cc</code></a></td>
+<td>Rank 之间如何发现和交换信息</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl/blob/master/src/graph/topo.cc">NCCL <code>graph/topo.cc</code></a></td>
+<td>如何发现硬件拓扑</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl/blob/master/src/graph/search.cc">NCCL <code>graph/search.cc</code></a></td>
+<td>如何搜索通信拓扑</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl/blob/master/src/transport/net.cc">NCCL <code>transport/net.cc</code></a></td>
+<td>如何选择网络传输设备</td>
+</tr>
+<tr>
+<td><a target="_blank" rel="noopener" href="https://github.com/Mellanox/k8s-rdma-shared-dev-plugin">RDMA Shared Device Plugin</a></td>
+<td>Kubernetes 如何暴露共享 RDMA 资源</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="收尾">收尾</h2>
+<p>四句话把所有知识串起来：</p>
+<blockquote>
+<p><strong>Rank 决定我是谁、和谁一起训练。</strong><br>
+<strong>NCCL 通信拓扑决定我应该和谁交换数据。</strong><br>
+<strong>LID / GID 决定数据应该到达哪个 RDMA 网络端点。</strong><br>
+<strong>QPN 决定到达该端点后，由哪个通信队列处理数据。</strong></p>
+</blockquote>
+<p>而你的云平台要做的是<strong>保证这些训练进程能够发现彼此，并给它们提供正确、可达、隔离且性能合适的 RDMA 网络资源</strong>。剩下的连接创建工作，由 NCCL 在运行时完成。</p>
+<p><strong>网卡分配给 Pod，只是让 Pod 获得了使用 RDMA 的能力；真正的 RDMA 通信连接，是训练进程启动后，根据训练任务的通信拓扑动态创建出来的。</strong></p>
+<p>最后记住四个不同的调度维度：</p>
+<table>
+<thead>
+<tr>
+<th>感知能力</th>
+<th>解决的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RDMA-Aware</strong></td>
+<td>节点有没有 RDMA 资源</td>
+</tr>
+<tr>
+<td><strong>NUMA-Aware</strong></td>
+<td>GPU 和网卡距离是否足够近</td>
+</tr>
+<tr>
+<td><strong>Rail-Aware</strong></td>
+<td>不同 Worker 的网卡能否高效地相互通信</td>
+</tr>
+<tr>
+<td><strong>Fabric-Aware</strong></td>
+<td>整个训练任务是否处于合适的高速网络域</td>
+</tr>
+</tbody>
+</table>
+<p><strong>第一版可以先实现 RDMA-Aware。如果后续要支持 GPU 服务器上的多租户共享和非整机分配，Rail-Aware 很可能就是下一步的重点。</strong></p>
+<hr>
+<h2 id="参考资料">参考资料</h2>
+<ol>
+<li>Linux 内核 <code>drivers/infiniband/sw/rxe/</code>（Soft-RoCE 实现）</li>
+<li>Linux 内核 <code>drivers/infiniband/core/uverbs*</code>（uverbs 资源管理）</li>
+<li><a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl/blob/master/src/transport/net_ib/connect.cc">NCCL <code>src/transport/net_ib/connect.cc</code></a></li>
+<li><a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/performance_and_tuning.html">NCCL <em>Performance and Tuning</em>（<code>NCCL_CROSS_NIC</code> 默认值）</a></li>
+<li><a target="_blank" rel="noopener" href="https://developer.nvidia.com/blog/doubling-all2all-performance-with-nvidia-collective-communication-library-2-12/">NVIDIA Technical Blog: <em>Doubling all2all Performance with NCCL 2.12</em>（PXN）</a></li>
+<li><a target="_blank" rel="noopener" href="https://docs.pytorch.org/docs/stable/distributed.html">PyTorch distributed documentation（torchrun / rendezvous）</a></li>
+<li><a target="_blank" rel="noopener" href="https://github.com/Mellanox/k8s-rdma-shared-dev-plugin">Mellanox k8s-rdma-shared-dev-plugin</a></li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/">https://roger-lv.github.io/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/InfiniBand/">InfiniBand</a><a class="post-meta__tags" href="/tags/SR-IOV/">SR-IOV</a><a class="post-meta__tags" href="/tags/GPU%E9%9B%86%E7%BE%A4/">GPU集群</a><a class="post-meta__tags" href="/tags/RoCEv2/">RoCEv2</a><a class="post-meta__tags" href="/tags/QP/">QP</a><a class="post-meta__tags" href="/tags/Rail/">Rail</a><a class="post-meta__tags" href="/tags/AI%E5%B9%B3%E5%8F%B0/">AI平台</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/23/2026-11-23-cpp-extern-c-abi/" title="C++ 库为什么对外提供 C 接口（从 extern &quot;C&quot; 到 ABI）"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">C++ 库为什么对外提供 C 接口（从 extern "C" 到 ABI）</div></div><div class="info-2"><div class="info-item-1">一个库可以用 C++ 实现对象管理、模板和多态，同时在动态库里对外导出一组 C 函数。调用方只需要知道该找哪个函数、怎样传参数，以及如何释放库创建的对象。库的内部实现可以继续演进，已发布的调用约定则由团队按目标平台和版本维护。 本文从两个求最大值的函数出发，先用 nm 看编译器生成的符号，再用 Python 加载同一个 C++ 动态库。问题的核心是 ABI（Application Binary Interface，应用二进制接口）。  本文受夏曹俊老师关于 C++ 库为何对外提供 C 接口的技术分享启发。下面的代码与符号输出来自本文的独立实验。 1. API 让源码知道怎么写，ABI 让二进制知道怎么调用 假设你在程序里写下 c_max(3, 7)。编译器读到头文件里的 int c_max(int a, int b); 后，会检查参数，并生成调用指令。链接器或动态加载器还需要在库中找到这个符号。调用发生时，库和程序必须对参数放在哪些寄存器或栈位置、返回值放在哪里有一致的理解。    层次 它约定什么 调用 c_max 时的例子     API 源码怎么调用、函数做什么 接收两个整...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/" title="Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</div></div><div class="info-2"><div class="info-item-1">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道 在大模型分布式训练的 Kubernetes 集群里,macvlan 会被用到,但角色非常特定:它作为辅助网络为 Pod 提供访问高性能 RDMA 网络的&quot;共享&quot;通道,而不是承担集群默认网络的职责。 默认网络(控制面通信、Service 访问)通常由 Calico/Cilium/OVN 等标准 CNI 负责,macvlan 网卡通过 Multus 附加,专门承载 GPU 之间的训练数据流。  一、为什么大模型训练需要独立的 RDMA 网络 理解 macvlan 的定位,先要理解训练流量对网络的压力。在 PyTorch FSDP 或 DeepSpeed ZeRO 的分片训练中,每一层前向/反向传播前都要在全量 GPU 间 gather 分片权重,mini-batch 结束后要 all-reduce 梯度——这些集合通信在集群规模上可达数十 Gbit/s 的峰值流量。 如果这些流量走默认的 Overlay 网络(如 OVN-Kubernetes),内核协议栈的封解包、netfilter 处理...</div></div></div></a><a class="pagination-related" href="/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/" title="RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-10</div><div class="info-item-2">RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链</div></div><div class="info-2"><div class="info-item-1">InfiniBand 有个让人羡慕的特性：链路天生无损，credit-based 流控做在硬件里，不需要你教交换机怎么排队。代价是那是一整套得另起炉灶的网络——另一种交换机型号、另一批光模块、另一套运维技能。 RoCEv2 讲的是它的另一半：同样把 RDMA 跑起来，但跑在你已经有的以太网上。所谓性价比就在这句话里——不必为了 RDMA 再建一张网。 便宜不是白来的。以太网从来不保证不丢包，交换机缓存满了就丢；而 RDMA 的传输层没有 TCP 那套重传——丢一个包，队列对（QP）直接进错误态，上层看到的是卡死，不是变慢。IB 把无损做进了链路层，RoCEv2 得你自己一层一层补出来。 入门时间本身就是这笔账的一部分：IB 大约一小时能讲明白，子网管理器把地址、路由、流控全包了；RoCEv2 得按一个月算——打标、映射、队列、门限、四处编号对齐，每一层都得自己盯着。 一句话概括：IB 贵，贵出来的那部分钱买的是「运维简单」；RoCEv2 省下的设备钱，会在调优和配置一致性上还回去。  本文是 RDMA 系列的第四篇。前几篇分别拆了 RDMA 技术手册、RDMA 技术栈全解 和 R...</div></div></div></a><a class="pagination-related" href="/2026/10/09/2026-10-09-IPoIB%E4%B8%8Epkey%E5%AD%90%E6%8E%A5%E5%8F%A3InfiniBand%E4%B8%96%E7%95%8C%E9%87%8C%E7%9A%84IP%E7%BD%91%E5%8D%A1%E4%B8%8EVLAN/" title="IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-09</div><div class="info-item-2">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot;</div></div><div class="info-2"><div class="info-item-1">IPoIB 与 pkey 子接口:InfiniBand 世界里的&quot;IP 网卡 + VLAN&quot; IPoIB(IP over InfiniBand)接口是运行在 InfiniBand 物理网络之上的&quot;IP 网卡&quot;,pkey 子接口则是在这张 IP 网卡上按&quot;分区键&quot;虚拟出的子接口——两者的组合,就是 InfiniBand 世界里对&quot;IP 网卡 + VLAN 子接口&quot;的对应物。 之所以需要它们,根源在于 InfiniBand 与以太网是两套截然不同的 L2 体系。  一、前提:InfiniBand 不是以太网 理解 IPoIB + pkey,必须先放下以太网的思维惯性。InfiniBand 是一套独立的链路层协议,从硬件寻址开始就和以太网不同:    维度 以太网 InfiniBand     硬件地址 48 位 MAC 地址,烧录在网卡里 无 MAC;由 GUID(端口全局唯一 ID)+ LID(子网内本地 ID,由子网管理器动态分配)标识   单播地址概念 MAC GID(128 位,基于 GUID 生...</div></div></div></a><a class="pagination-related" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/" title="RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</div></div><div class="info-2"><div class="info-item-1">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点 RDMA 这套东西之所以让人望而生畏,不是因为哪个概念特别难,而是因为它把三个本来独立的知识域压进了同一条调用链:Linux 内核系统调用机制、内存管理、网络硬件。单独看每个术语都不复杂,叠在一起才显得信息量爆炸。 这篇文章分三大块:  调用链——从 ibv_reg_mr 一路走到 HCA 硬件,每一层在做什么; 术语地图——把所有黑话按类别拆开,每个只给一句人话; 实战落点——AI 训练云平台上,这条链路到底体现在哪些日常工作里。   先正一个名。 中文社区里偶尔能看到 “ubverbs” 这个写法,它不是标准名称。内核里承接用户态 verbs 请求的模块叫 ib_uverbs(Userspace Verbs),源码在 drivers/infiniband/core/uverbs*.c。本文统一用 ib_uverbs。   关联阅读: 这条链路上的故障怎么观测,我在 《RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区》 里写过。那篇讲的是&quot;怎么看见...</div></div></div></a><a class="pagination-related" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/" title="K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-04</div><div class="info-item-2">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：控制面决定「能不能跑」，数据面决定「跑多快」。K8s 的功夫全在控制面——把 Pod 调度起来、把副本数维持住；而大模型训练真正的痛点，是 GPU 之间、机器之间的数据流动快不快、堵不堵。kubectl get pods 全绿但 MFU 上不去，是典型的控制面看不见的数据面问题。  本文基于 B 站视频《K8s 很熟，为什么月薪卡在三万？大模型 AI Infra 第一讲：从控制面走到数据面》的内容框架整理，其中的技术细节我对照 NVIDIA 官方文档（nvidia-smi 拓扑定义、NCCL 环境变量文档）与相关论文做了核实与补全。核对过程中发现原稿有四处需要更正的地方，已在文中标注。  一、为什么 K8s 玩得溜，月薪却卡在三万 很多云原生工程师 K8s 炉火纯青：写 YAML、调 Deployment、写 Operator、排 Pod 故障、扩缩集群，整套控制面技术一气呵成，但薪资天花板死死卡在三万上下。而那些看起来「只是会跑 nccl-tests」的 AI Infra 同事，年薪轻松翻倍。 差距不在于会不会写 YAML，而在于是否看懂了 K8s 之下的数据面。...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-%E4%BB%8EK8s%E5%88%B0AI-Infra%E8%B7%A8%E8%B6%8A%E4%BA%94%E9%81%93%E6%8A%80%E6%9C%AF%E9%B8%BF%E6%B2%9F/" title="从 K8s 到 AI Infra：跨越五道技术鸿沟"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">从 K8s 到 AI Infra：跨越五道技术鸿沟</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：K8s 把 GPU 当作 nvidia.com/gpu: 8 的整数资源来分配，但对 GPU 实际的 SM 占用、NVLink 拓扑、跨机 HCA 带宽一无所知。这种「只分配、不感知」的鸿沟贯穿调度、网络、存储、虚拟化、可观测性五个维度，是 AI 训练吞吐上不去的真正根因。  上一讲（K8s 很熟，为什么月薪卡在三万）讲的是怎么看——nvidia-smi topo -m 的六个缩写、NCCL 日志怎么读、AllReduce 的木桶效应。这一讲讲怎么修：五道鸿沟各自的工程解法。 本文对照 Volcano 源码、NVIDIA MIG User Guide、NCCL 官方文档与源码、JuiceFS 官方文档逐条核对过。核对中发现原稿有十余处需要更正，其中三处会导致读者照着配置失败，已在文中以 ⚠️ 标注。  五道鸿沟总览    维度 K8s 原生方案 AI 训练瓶颈 生产级方案 核心工具链     调度 kube-scheduler 逐 Pod 打分 部分 Pod 无法调度导致整组死锁 Gang 整组调度 + 多维配比 Volcano PodGroup   网络 TCP ...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">339</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">554</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">80</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%AD%E4%B8%AA%E6%A0%B8%E5%BF%83%E5%AF%B9%E8%B1%A1"><span class="toc-number">1.</span> <span class="toc-text">一、六个核心对象</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%8E%E4%BC%A0%E7%BB%9F-TCP-%E7%BD%91%E7%BB%9C%E7%9A%84%E7%B1%BB%E6%AF%94"><span class="toc-number">1.1.</span> <span class="toc-text">与传统 TCP 网络的类比</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#QP-%E4%B8%8E-CQ-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">1.2.</span> <span class="toc-text">QP 与 CQ 的关系</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81QPN-%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E8%BF%9E%E6%8E%A5"><span class="toc-number">2.</span> <span class="toc-text">二、QPN 如何区分连接</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#RoCEv2-%E6%8A%A5%E6%96%87%E4%B8%AD%E7%9B%B4%E6%8E%A5%E6%90%BA%E5%B8%A6%E7%9B%AE%E7%9A%84-QPN"><span class="toc-number">2.1.</span> <span class="toc-text">RoCEv2 报文中直接携带目的 QPN</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81PD-%E4%B8%8E-MR-%E5%A6%82%E4%BD%95%E9%9A%94%E7%A6%BB%E5%86%85%E5%AD%98"><span class="toc-number">3.</span> <span class="toc-text">三、PD 与 MR 如何隔离内存</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#PD%EF%BC%9AProtection-Domain"><span class="toc-number">3.1.</span> <span class="toc-text">PD：Protection Domain</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#MR%EF%BC%9AMemory-Region"><span class="toc-number">3.2.</span> <span class="toc-text">MR：Memory Region</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%BD%91%E5%8D%A1%E5%88%B0%E5%BA%95%E6%A3%80%E6%9F%A5%E4%BB%80%E4%B9%88"><span class="toc-number">3.3.</span> <span class="toc-text">网卡到底检查什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9C%9F%E5%AE%9E%E5%AE%9E%E7%8E%B0%E9%95%BF%E4%BB%80%E4%B9%88%E6%A0%B7%EF%BC%9A%E7%9C%8B-Soft-RoCE"><span class="toc-number">3.4.</span> <span class="toc-text">真实实现长什么样：看 Soft-RoCE</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%A4%E6%9D%A1%E8%B7%AF%E5%BE%84%EF%BC%9ASlow-Path-%E4%B8%8E-Fast-Path"><span class="toc-number">3.5.</span> <span class="toc-text">两条路径：Slow Path 与 Fast Path</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%80%E6%9D%A1-RC-%E8%BF%9E%E6%8E%A5%E6%98%AF%E6%80%8E%E4%B9%88%E5%BB%BA%E8%B5%B7%E6%9D%A5%E7%9A%84"><span class="toc-number">4.</span> <span class="toc-text">四、一条 RC 连接是怎么建起来的</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Step-1%EF%BC%9A%E6%89%93%E5%BC%80-RDMA-%E8%AE%BE%E5%A4%87"><span class="toc-number">4.1.</span> <span class="toc-text">Step 1：打开 RDMA 设备</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Step-2%EF%BC%9A%E5%88%9B%E5%BB%BA-PD%E3%80%81CQ%E3%80%81MR"><span class="toc-number">4.2.</span> <span class="toc-text">Step 2：创建 PD、CQ、MR</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Step-3%EF%BC%9A%E5%88%9B%E5%BB%BA-QP"><span class="toc-number">4.3.</span> <span class="toc-text">Step 3：创建 QP</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Step-4%EF%BC%9A%E4%BA%A4%E6%8D%A2%E8%BF%9E%E6%8E%A5%E4%BF%A1%E6%81%AF"><span class="toc-number">4.4.</span> <span class="toc-text">Step 4：交换连接信息</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Step-5%EF%BC%9A%E4%BF%AE%E6%94%B9-QP-%E7%8A%B6%E6%80%81"><span class="toc-number">4.5.</span> <span class="toc-text">Step 5：修改 QP 状态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Step-6%EF%BC%9A%E7%9C%9F%E6%AD%A3%E5%8F%91%E8%B5%B7-RDMA-Write"><span class="toc-number">4.6.</span> <span class="toc-text">Step 6：真正发起 RDMA Write</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Step-7%EF%BC%9A%E8%BD%AE%E8%AF%A2-CQ"><span class="toc-number">4.7.</span> <span class="toc-text">Step 7：轮询 CQ</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81RoCEv2-%E4%B8%8E-InfiniBand%EF%BC%9A%E4%BC%A0%E8%BE%93%E5%B1%82%E5%90%8C%E6%BA%90%EF%BC%8C%E5%AF%BB%E5%9D%80%E5%88%86%E9%81%93"><span class="toc-number">5.</span> <span class="toc-text">五、RoCEv2 与 InfiniBand：传输层同源，寻址分道</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8A%A5%E6%96%87%E6%A0%BC%E5%BC%8F%E4%B8%8D%E5%90%8C%EF%BC%8C%E6%A0%B8%E5%BF%83%E6%9C%BA%E5%88%B6%E7%9B%B8%E5%90%8C"><span class="toc-number">5.1.</span> <span class="toc-text">报文格式不同，核心机制相同</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%9E%E6%8E%A5%E5%BB%BA%E7%AB%8B%E6%97%B6%E7%9A%84%E5%AF%BB%E5%9D%80%E6%96%B9%E5%BC%8F%E4%B8%8D%E5%90%8C"><span class="toc-number">5.2.</span> <span class="toc-text">连接建立时的寻址方式不同</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#IB-%E4%B8%8D%E9%9C%80%E8%A6%81-IP-%E5%B0%B1%E8%83%BD%E9%80%9A%E4%BF%A1%E5%90%97"><span class="toc-number">5.3.</span> <span class="toc-text">IB 不需要 IP 就能通信吗</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E7%A7%9F%E6%88%B7%E9%9A%94%E7%A6%BB%E7%9A%84%E5%9B%9B%E4%B8%AA%E5%B1%82%E6%AC%A1"><span class="toc-number">5.4.</span> <span class="toc-text">多租户隔离的四个层次</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81NCCL-%E6%98%AF%E6%80%8E%E4%B9%88%E7%94%A8%E8%BF%99%E5%A5%97%E4%B8%9C%E8%A5%BF%E7%9A%84"><span class="toc-number">6.</span> <span class="toc-text">六、NCCL 是怎么用这套东西的</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA-Worker-%E4%BC%9A%E5%88%9B%E5%BB%BA%E5%A4%9A%E5%B0%91-QP"><span class="toc-number">6.1.</span> <span class="toc-text">一个 Worker 会创建多少 QP</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E4%BB%8E%E8%AE%AD%E7%BB%83%E5%90%AF%E5%8A%A8%E5%88%B0-QP-%E5%BB%BA%E7%AB%8B%EF%BC%9A%E5%9B%9B%E6%AD%A5%E8%B5%B0"><span class="toc-number">7.</span> <span class="toc-text">七、从训练启动到 QP 建立：四步走</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#7-1-%E6%88%90%E5%91%98%E5%8F%91%E7%8E%B0%EF%BC%88PyTorch-torchrun%EF%BC%89"><span class="toc-number">7.1.</span> <span class="toc-text">7.1 成员发现（PyTorch &#x2F; torchrun）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-2-Rendezvous-%E6%B1%87%E5%90%88"><span class="toc-number">7.2.</span> <span class="toc-text">7.2 Rendezvous 汇合</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-3-Communicator-%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%A4%E4%B8%AA%E8%AE%AD%E7%BB%83-Job"><span class="toc-number">7.3.</span> <span class="toc-text">7.3 Communicator 如何区分两个训练 Job</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-4-NCCL-%E6%80%8E%E4%B9%88%E7%9F%A5%E9%81%93%E8%AF%A5%E5%92%8C%E8%B0%81%E9%80%9A%E4%BF%A1%E3%80%81%E8%AF%A5%E9%80%89%E5%93%AA%E5%BC%A0%E7%BD%91%E5%8D%A1"><span class="toc-number">7.4.</span> <span class="toc-text">7.4 NCCL 怎么知道该和谁通信、该选哪张网卡</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#7-5-%E7%9C%9F%E6%AD%A3%E7%9A%84-QP-%E8%BF%9E%E6%8E%A5"><span class="toc-number">7.5.</span> <span class="toc-text">7.5 真正的 QP 连接</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81%E5%B9%B3%E5%8F%B0%E9%9C%80%E8%A6%81%E5%B9%B2%E9%A2%84-NCCL-%E9%80%89%E7%BD%91%E5%8D%A1%E5%90%97"><span class="toc-number">8.</span> <span class="toc-text">八、平台需要干预 NCCL 选网卡吗</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81LID-GID-%E6%A0%87%E8%AF%86%E7%9A%84%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88"><span class="toc-number">9.</span> <span class="toc-text">九、LID &#x2F; GID 标识的到底是什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#RoCEv2%EF%BC%9AGID-%E4%B8%8E-IP-%E7%9A%84%E5%85%B3%E7%B3%BB"><span class="toc-number">9.1.</span> <span class="toc-text">RoCEv2：GID 与 IP 的关系</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A6%82%E6%9E%9C%E4%B8%8D%E6%98%AF-SR-IOV%EF%BC%8C%E8%80%8C%E6%98%AF-Shared-RDMA"><span class="toc-number">9.2.</span> <span class="toc-text">如果不是 SR-IOV，而是 Shared RDMA</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#InfiniBand-%E7%9A%84-LID-GID"><span class="toc-number">9.3.</span> <span class="toc-text">InfiniBand 的 LID &#x2F; GID</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%A4%E7%A7%8D%E7%BD%91%E7%BB%9C%E7%9A%84%E8%B5%84%E6%BA%90%E7%AE%A1%E7%90%86%E5%B7%AE%E5%BC%82"><span class="toc-number">9.4.</span> <span class="toc-text">两种网络的资源管理差异</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E5%B9%B3%E5%8F%B0%E5%88%B0%E5%BA%95%E8%AF%A5%E7%AE%A1%E4%BB%80%E4%B9%88"><span class="toc-number">10.</span> <span class="toc-text">十、平台到底该管什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AE%BE%E5%A4%87%E5%88%86%E9%85%8D%E6%95%B0%E9%87%8F-%E2%89%A0-QP-%E6%95%B0%E9%87%8F"><span class="toc-number">10.1.</span> <span class="toc-text">设备分配数量 ≠ QP 数量</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1%E4%BC%9A%E4%B8%8D%E4%BC%9A%E6%8A%8A%E7%BD%91%E5%8D%A1%E8%80%97%E5%B0%BD"><span class="toc-number">10.2.</span> <span class="toc-text">一个训练任务会不会把网卡耗尽</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Job-Controller-%E5%BA%94%E4%B8%8D%E5%BA%94%E8%AF%A5%E7%AE%A1%E7%90%86-QP"><span class="toc-number">10.3.</span> <span class="toc-text">Job Controller 应不应该管理 QP</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%B9%B3%E5%8F%B0-API-%E8%AF%A5%E6%8F%8F%E8%BF%B0%E4%BB%80%E4%B9%88"><span class="toc-number">10.4.</span> <span class="toc-text">平台 API 该描述什么</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81Rail%EF%BC%9A%E6%8A%8A%E8%BF%9E%E7%BA%BF%E7%85%A7%E7%9D%80%E9%80%9A%E4%BF%A1%E6%A8%A1%E5%BC%8F%E5%AE%89%E6%8E%92"><span class="toc-number">11.</span> <span class="toc-text">十一、Rail：把连线照着通信模式安排</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81%E8%AE%BE%E8%AE%A1-Rail"><span class="toc-number">11.1.</span> <span class="toc-text">为什么要设计 Rail</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B7%A8-Rail-%E4%BC%9A%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88"><span class="toc-number">11.2.</span> <span class="toc-text">跨 Rail 会发生什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B7%A8-Rail-%E6%97%B6-QP-%E4%BC%9A%E5%8F%91%E7%94%9F%E4%BB%80%E4%B9%88%E5%8F%98%E5%8C%96"><span class="toc-number">11.3.</span> <span class="toc-text">跨 Rail 时 QP 会发生什么变化</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#PXN%EF%BC%9A%E7%94%A8%E8%8A%82%E7%82%B9%E5%86%85%E5%B8%A6%E5%AE%BD%E6%8D%A2%E5%A4%96%E9%83%A8%E8%B7%A8-Rail"><span class="toc-number">11.4.</span> <span class="toc-text">PXN：用节点内带宽换外部跨 Rail</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#NCCL-CROSS-NIC-%E6%8E%A7%E5%88%B6%E4%BB%80%E4%B9%88"><span class="toc-number">11.5.</span> <span class="toc-text">NCCL_CROSS_NIC 控制什么</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%99%E5%AF%B9%E8%B0%83%E5%BA%A6%E8%AE%BE%E8%AE%A1%E7%9A%84%E5%BD%B1%E5%93%8D"><span class="toc-number">11.6.</span> <span class="toc-text">这对调度设计的影响</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A2%9E%E5%8A%A0-RDMA-%E6%8B%93%E6%89%91%E8%B5%84%E6%BA%90%E6%A8%A1%E5%9E%8B"><span class="toc-number">11.7.</span> <span class="toc-text">增加 RDMA 拓扑资源模型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B0%83%E5%BA%A6%E7%AD%96%E7%95%A5%E7%9A%84%E4%B8%89%E4%B8%AA%E5%B1%82%E6%AC%A1"><span class="toc-number">11.8.</span> <span class="toc-text">调度策略的三个层次</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#RoCEv2-%E4%B8%8E-IB-%E8%B7%A8-Rail-%E7%9A%84%E5%B7%AE%E5%88%AB"><span class="toc-number">11.9.</span> <span class="toc-text">RoCEv2 与 IB 跨 Rail 的差别</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%BA%8C%E3%80%81%E5%8A%A8%E6%89%8B%EF%BC%9A%E8%A7%82%E5%AF%9F%E3%80%81%E9%AA%8C%E8%AF%81%E3%80%81%E8%AF%BB%E6%BA%90%E7%A0%81"><span class="toc-number">12.</span> <span class="toc-text">十二、动手：观察、验证、读源码</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%A7%82%E5%AF%9F-RDMA-%E8%BF%90%E8%A1%8C%E6%97%B6%E8%B5%84%E6%BA%90"><span class="toc-number">12.1.</span> <span class="toc-text">观察 RDMA 运行时资源</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%A7%82%E5%AF%9F-NCCL-%E5%A6%82%E4%BD%95%E5%AE%8C%E6%88%90%E8%BF%99%E4%B8%80%E5%88%87"><span class="toc-number">12.2.</span> <span class="toc-text">观察 NCCL 如何完成这一切</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%AA%8C%E8%AF%81%E9%9B%86%E7%BE%A4%E6%9C%89%E6%B2%A1%E6%9C%89%E8%B7%A8-Rail-%E9%97%AE%E9%A2%98"><span class="toc-number">12.3.</span> <span class="toc-text">验证集群有没有跨 Rail 问题</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB%E9%A1%BA%E5%BA%8F"><span class="toc-number">12.4.</span> <span class="toc-text">源码阅读顺序</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%94%B6%E5%B0%BE"><span class="toc-number">13.</span> <span class="toc-text">收尾</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">14.</span> <span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/" title="一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度">一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度</a><time datetime="2026-11-23T16:00:00.000Z" title="发表于 2026-11-24 00:00:00">2026-11-24</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-cpp-extern-c-abi/" title="C++ 库为什么对外提供 C 接口（从 extern &quot;C&quot; 到 ABI）">C++ 库为什么对外提供 C 接口（从 extern &quot;C&quot; 到 ABI）</a><time datetime="2026-11-23T15:20:59.000Z" title="发表于 2026-11-23 23:20:59">2026-11-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-tls13-handshake-to-https/" title="TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）">TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）</a><time datetime="2026-11-23T15:11:13.000Z" title="发表于 2026-11-23 23:11:13">2026-11-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-ai-infra-tracking/" title="AI Infra 技术追踪｜2026-11-23">AI Infra 技术追踪｜2026-11-23</a><time datetime="2026-11-23T01:00:00.000Z" title="发表于 2026-11-23 09:00:00">2026-11-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/22/2026-11-22-ai-infra-tracking/" title="AI Infra 技术追踪｜2026-11-22">AI Infra 技术追踪｜2026-11-22</a><time datetime="2026-11-22T01:00:00.000Z" title="发表于 2026-11-22 09:00:00">2026-11-22</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
