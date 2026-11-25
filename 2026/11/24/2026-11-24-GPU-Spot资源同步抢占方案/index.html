@@ -1,0 +1,1318 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="常规 Spot 方案的回收链路是「检测到 Owner 活跃 → 下发驱逐 → 等 Spot 退出」，这个异步窗口里 Owner 可能已经 OOM。本方案把问题反过来解：阻塞 Owner 的新 GPU 请求，等 Spot 真正释放显存后再放行——用 GPU Reclaim Barrier 把异步驱逐变成同步资源准入。本文给出闲置感知、六级回归信号、GPU Lease 状态机、借出&#x2F;回收双屏障、并发竞">
+<meta property="og:type" content="article">
+<meta property="og:title" content="GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="常规 Spot 方案的回收链路是「检测到 Owner 活跃 → 下发驱逐 → 等 Spot 退出」，这个异步窗口里 Owner 可能已经 OOM。本方案把问题反过来解：阻塞 Owner 的新 GPU 请求，等 Spot 真正释放显存后再放行——用 GPU Reclaim Barrier 把异步驱逐变成同步资源准入。本文给出闲置感知、六级回归信号、GPU Lease 状态机、借出&#x2F;回收双屏障、并发竞">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-23T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-25T03:06:29.998Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="CUDA">
+<meta property="article:tag" content="Spot">
+<meta property="article:tag" content="eBPF">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="抢占">
+<meta property="article:tag" content="HAMi">
+<meta property="article:tag" content="Checkpoint">
+<meta property="article:tag" content="GPU复用">
+<meta property="article:tag" content="Hook">
+<meta property="article:tag" content="NVML">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接",
+  "url": "https://roger-lv.github.io/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-23T16:00:00.000Z",
+  "dateModified": "2026-11-25T03:06:29.998Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">340</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">557</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">80</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-23T16:00:00.000Z" title="发表于 2026-11-24 00:00:00">2026-11-24</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-25T03:06:29.998Z" title="更新于 2026-11-25 11:06:29">2026-11-25</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/" data-flag-title="GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>Kubernetes 里 GPU 的分配状态和实际使用状态常常对不上：用户申请了开发环境却几天不跑任务、训练卡在 CPU 预处理阶段、实验做完没释放、夜间和周末大量开发容器闲置、训练结束后还留着 CUDA Context 和部分显存。</p>
+<p>传统调度器只看<strong>申请量</strong>。只要资源已被 Pod 申请，哪怕 GPU 长期空转，其他任务也无法通过常规独占式调度拿到它。</p>
+<p>Spot 机制就是把这部分闲置算力转成可抢占资源。但常规实现有个绕不开的问题——<strong>回收是异步的</strong>。</p>
+<blockquote>
+<p>本文的方案与 <a href="/2025/07/13/2026-07-13-Spot%E8%B5%84%E6%BA%90%E5%AE%9E%E7%8E%B0%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90-%E4%BB%8E%E8%99%9A%E6%8B%9F%E8%AE%BE%E5%A4%87%E5%88%B0%E5%81%B7%E5%8D%A1%E8%B6%85%E5%8D%96%E7%9A%84%E5%AE%8C%E6%95%B4%E9%93%BE%E8%B7%AF/">Spot 资源实现深度解析：从虚拟设备到偷卡超卖的完整链路</a> 讲的是同一类问题的两个阶段：那篇拆的是<strong>已落地系统的异步实现</strong>（自定义 runtime + ioctl 劫持 + 低功耗检测），这篇讲的是一套<strong>同步交接的设计方案</strong>——把「检测到 Owner 活跃」到「Spot 真正让出 GPU」之间的时间窗口，从事后补偿变成事前阻塞。</p>
+</blockquote>
+<hr>
+<h2 id="一、异步回收的问题出在哪">一、异步回收的问题出在哪</h2>
+<p>只靠 NVML 利用率检测 Owner 回归，时间线是这样的：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">T0  Spot 正在执行训练任务</span><br><span class="line">T1  Owner 开始申请 GPU 显存          ← 冲突从这里开始</span><br><span class="line">T2  Owner 提交 GPU Kernel</span><br><span class="line">T3  NVML 采集到 Owner 活跃           ← 平台才「看见」</span><br><span class="line">T4  平台触发 Spot 驱逐</span><br><span class="line">T5  Spot 完成 GPU 资源释放           ← 冲突在这里才结束</span><br></pre></td></tr></table></figure>
+<p><strong>T1 到 T5 之间，Owner 可能已经发生显存 OOM、计算延迟或通信超时。</strong> 这就是被动式回收——平台在 Owner 已经受伤之后才开始补救。</p>
+<p>根因是：<strong>NVML 是采样指标，不是资源准入控制点。</strong> 它可以告诉你「GPU 好像空着」，但它无法在 Owner 即将申请显存的那一刻拦一下。</p>
+<p>方案的核心设计由此而来：<strong>GPU Reclaim Barrier（GPU 资源回收屏障）</strong>——Owner 恢复使用时，平台不是发一个驱逐事件就走，而是先<strong>阻塞 Owner 的新 GPU 请求</strong>，等 Spot 真正释放资源后，再放行进入真实 CUDA Driver。</p>
+<h3 id="SLA-边界要先说清">SLA 边界要先说清</h3>
+<p>这个方案的目标不是让 Owner 完全无感知、零延迟恢复，而是：</p>
+<ul>
+<li>避免因 Spot 占用显存导致 Owner 竞争性 OOM</li>
+<li>避免 Owner 恢复后与 Spot 持续争抢算力</li>
+<li>把 Owner 回归的额外等待控制在<strong>可观测、可管理</strong>的范围内</li>
+<li>资源无法安全回收时<strong>明确报故障</strong>，而不是破坏资源隔离</li>
+</ul>
+<blockquote>
+<p>⚠️ <strong>严格同步保障依赖两个前提</strong>：GPU 请求能够被可靠拦截，且 Spot 的 GPU 使用权能够被有效撤销。对于不受平台管理、可绕过 Hook 的工作负载，<strong>不承诺</strong>上述强保障。这一点后面「安全边界」一节会展开。</p>
+</blockquote>
+<hr>
+<h2 id="二、Spot-资源模型">二、Spot 资源模型</h2>
+<h3 id="三种-GPU-类型">三种 GPU 类型</h3>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>说明</th>
+<th>可抢占</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Free GPU</strong></td>
+<td>尚未分配给任何租户</td>
+<td>视分配策略而定</td>
+</tr>
+<tr>
+<td><strong>Owner GPU</strong></td>
+<td>已分配给正式租户</td>
+<td>否</td>
+</tr>
+<tr>
+<td><strong>Spot GPU</strong></td>
+<td>从闲置 Owner GPU 派生的<strong>临时使用权</strong></td>
+<td>是</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Spot GPU 不是新增的物理 GPU，而是基于现有物理 GPU 派生的逻辑资源使用权。</strong></p>
+<p>举个容易混淆的例子：一台节点 8 张物理 GPU 全部分配给正式租户，其中 3 张满足闲置复用条件——平台可以额外提供最多 <strong>3 个整卡型 Spot 使用权</strong>。<strong>但节点仍然只有 8 张物理 GPU，不能把它当成 11 张。</strong></p>
+<h3 id="Kubernetes-资源表达">Kubernetes 资源表达</h3>
+<p>普通 GPU 继续用 <code>nvidia.com/gpu</code>，Spot 工作负载申请独立的扩展资源：</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">resources:</span></span><br><span class="line">  <span class="attr">limits:</span></span><br><span class="line">    <span class="attr">platform.example.com/spot-gpu:</span> <span class="number">1</span></span><br></pre></td></tr></table></figure>
+<p>Spot Device Plugin 向 kubelet 注册逻辑设备 ID，并维护「逻辑设备 ↔ 物理 GPU UUID」的映射。</p>
+<blockquote>
+<p><strong>为什么必须用独立的资源类型</strong>：Kubernetes 原生扩展资源不支持直接超卖，Spot 资源只能通过独立逻辑资源表达，并由平台自行实现底层物理设备复用与使用权管理。</p>
+<p><strong>另一个关键约束</strong>：动态上报 Spot GPU 数量<strong>只能作为调度供给信息，不能作为实际资源使用权的最终依据</strong>。最终准入必须由节点侧 Lease Manager 确认。</p>
+</blockquote>
+<h3 id="四种复用模式与推进顺序">四种复用模式与推进顺序</h3>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>资源状态</th>
+<th>难度</th>
+<th>建议</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>整卡闲置复用</strong></td>
+<td>Owner 无存活 CUDA Context</td>
+<td>低</td>
+<td><strong>第一阶段</strong></td>
+</tr>
+<tr>
+<td>Context 保留复用</td>
+<td>保留 Context 和部分显存，但无计算</td>
+<td>中高</td>
+<td>第二阶段</td>
+</tr>
+<tr>
+<td>部分显存复用</td>
+<td>Owner 使用部分显存</td>
+<td>高</td>
+<td>后续</td>
+</tr>
+<tr>
+<td>部分算力复用</td>
+<td>Owner 持续使用少量算力</td>
+<td>高</td>
+<td>后续</td>
+</tr>
+<tr>
+<td>GPU 状态挂起复用</td>
+<td>Owner GPU 状态迁移至主机内存</td>
+<td>高</td>
+<td>实验性</td>
+</tr>
+</tbody>
+</table>
+<p><strong>第一阶段优先做整卡闲置复用</strong>，避免一开始就引入 GPU 时间片共享和动态显存切分。</p>
+<hr>
+<h2 id="三、闲置资源怎么发现：NVML-eBPF">三、闲置资源怎么发现：NVML + eBPF</h2>
+<h3 id="NVML：采样指标，不是证明">NVML：采样指标，不是证明</h3>
+<p>Agent 通过 NVML 采集节点 GPU 状态：</p>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nvmlDeviceGetUtilizationRates</code></td>
+<td>整卡 GPU 利用率</td>
+</tr>
+<tr>
+<td><code>nvmlDeviceGetMemoryInfo</code></td>
+<td>显存使用情况</td>
+</tr>
+<tr>
+<td><code>nvmlDeviceGetProcessUtilization</code></td>
+<td>进程级 GPU 利用率</td>
+</tr>
+<tr>
+<td><code>nvmlDeviceGetProcessesUtilizationInfo</code></td>
+<td>进程级利用率采样信息</td>
+</tr>
+<tr>
+<td><code>nvmlDeviceGetComputeRunningProcesses_v3</code></td>
+<td>GPU 计算进程与显存占用</td>
+</tr>
+<tr>
+<td><code>nvmlDeviceGetUUID</code></td>
+<td>物理 GPU 唯一标识</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>NVML 是采样，不能严格证明某个时刻不存在待执行的 GPU 工作</strong>，部分进程级查询在 MIG 模式下还有限制。所以它的定位是<strong>发现候选闲置资源、辅助确认状态</strong>，而不是排他性资源分配的唯一依据。</p>
+</blockquote>
+<h3 id="eBPF：观测-CUDA-行为">eBPF：观测 CUDA 行为</h3>
+<p>在宿主机侧部署 eBPF Collector，通过 Uprobe/Uretprobe 监控实际加载的 CUDA Driver Library：</p>
+<table>
+<thead>
+<tr>
+<th>API</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cuInit</code></td>
+<td>CUDA Driver 初始化</td>
+</tr>
+<tr>
+<td><code>cuDevicePrimaryCtxRetain</code></td>
+<td>获取 GPU 主上下文</td>
+</tr>
+<tr>
+<td><code>cuCtxCreate</code></td>
+<td>创建 CUDA Context</td>
+</tr>
+<tr>
+<td><code>cuMemAlloc_v2</code> / <code>cuMemAllocAsync</code></td>
+<td>显存申请</td>
+</tr>
+<tr>
+<td><code>cuMemCreate</code></td>
+<td>GPU 物理内存分配</td>
+</tr>
+<tr>
+<td><code>cuLaunchKernel</code> / <code>cuLaunchKernelEx</code></td>
+<td>Kernel 提交</td>
+</tr>
+<tr>
+<td><code>cuGraphLaunch</code></td>
+<td>CUDA Graph 提交</td>
+</tr>
+<tr>
+<td><code>cuMemcpyAsync</code></td>
+<td>异步数据传输</td>
+</tr>
+</tbody>
+</table>
+<p>记录字段包括 Timestamp、Host PID/TID、Process Start Time、Cgroup ID、CUDA API、API Return Code、GPU UUID。</p>
+<p>需要处理：不同驱动版本的符号差异、容器内动态库映射、<strong>通过函数指针调用 CUDA API</strong> 的情况。</p>
+<blockquote>
+<p><strong>一个实现上的坑</strong>：Kernel 提交可能经过用户态命令队列，<strong>不保证每次都产生 ioctl 系统调用</strong>。所以不建议直接以 ioctl 作为 GPU 活跃状态的主要判据。而且普通 ioctl 也无法区分 GPU 计算请求与 <code>nvidia-smi</code> 这类管理查询。</p>
+</blockquote>
+<h3 id="进程归属识别链路">进程归属识别链路</h3>
+<p>多租户场景必须区分 Owner 和 Spot 的行为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">Host PID + Process Start Time</span><br><span class="line">            ↓</span><br><span class="line">         Cgroup ID</span><br><span class="line">            ↓</span><br><span class="line">       Container ID</span><br><span class="line">            ↓</span><br><span class="line">          Pod UID</span><br><span class="line">            ↓</span><br><span class="line">     Tenant / Workload UID</span><br><span class="line">            ↓</span><br><span class="line">         GPU UUID</span><br></pre></td></tr></table></figure>
+<p>两个细节：</p>
+<ul>
+<li><strong>不能直接用容器内的 CUDA Device Index 当物理 GPU 标识</strong>——不同容器里的 <code>cuda:0</code> 可能映射到不同的物理 GPU。</li>
+<li><strong>PID 会复用</strong>，进程身份要结合启动时间或 <code>pidfd</code> 等机制识别。</li>
+</ul>
+<h3 id="闲置判定条件">闲置判定条件</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">IdleCandidate =</span><br><span class="line">    Owner SM Utilization &lt; Threshold</span><br><span class="line">    AND No Recent Owner CUDA Work Submission</span><br><span class="line">    AND Available Memory &gt;= Minimum Spot Memory</span><br><span class="line">    AND Idle Duration &gt;= Idle Window</span><br><span class="line">    AND GPU Healthy</span><br><span class="line">    AND No Unmanaged GPU Process</span><br><span class="line">    AND Owner Supports Reclaim Barrier</span><br></pre></td></tr></table></figure>
+<p>建议初始参数（<strong>需按真实用户行为与集群负载调优</strong>）：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>建议初始值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NVML 采样周期</td>
+<td>1 秒</td>
+</tr>
+<tr>
+<td>Owner 利用率阈值</td>
+<td>5%</td>
+</tr>
+<tr>
+<td>持续闲置时间</td>
+<td>300 秒</td>
+</tr>
+<tr>
+<td>CUDA 活跃事件静默时间</td>
+<td>300 秒</td>
+</tr>
+<tr>
+<td>最小剩余显存比例</td>
+<td>20%</td>
+</tr>
+<tr>
+<td>回收后冷却时间</td>
+<td>300 秒</td>
+</tr>
+</tbody>
+</table>
+<p>整卡 Spot 模式还应额外要求 Owner 不存在未受管理的 CUDA Context 和显存占用。<strong>最终，候选 GPU 必须经过同步借出屏障、确认能安全交接使用权后，才能进入可分配状态。</strong></p>
+<hr>
+<h2 id="四、Owner-回归的六级信号">四、Owner 回归的六级信号</h2>
+<p>把 Owner 的 CUDA API 调用按强度分级：</p>
+<table>
+<thead>
+<tr>
+<th>等级</th>
+<th>典型行为</th>
+<th>平台处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>L0 管理查询</strong></td>
+<td><code>nvidia-smi</code>、<code>nvmlInit</code></td>
+<td>不触发回收</td>
+</tr>
+<tr>
+<td><strong>L1 初始化意图</strong></td>
+<td><code>cuInit</code></td>
+<td>提高关注度</td>
+</tr>
+<tr>
+<td><strong>L2 Context 获取</strong></td>
+<td><code>cuCtxCreate</code>、<code>cuDevicePrimaryCtxRetain</code></td>
+<td>触发准入检查</td>
+</tr>
+<tr>
+<td><strong>L3 资源申请</strong></td>
+<td><code>cuMemAlloc</code>、<code>cuMemCreate</code></td>
+<td><strong>同步触发回收</strong></td>
+</tr>
+<tr>
+<td><strong>L4 工作提交</strong></td>
+<td><code>cuLaunchKernel</code>、<code>cuGraphLaunch</code>、实际数据传输</td>
+<td><strong>同步触发回收</strong></td>
+</tr>
+<tr>
+<td><strong>L5 实际计算</strong></td>
+<td>NVML 检测到 Owner GPU 活跃</td>
+<td>紧急兜底回收</td>
+</tr>
+</tbody>
+</table>
+<p><strong>几个必须注意的反直觉点</strong>：</p>
+<ul>
+<li>Context 创建是较早的<strong>使用意图</strong>，但不代表一定会执行计算。</li>
+<li>Kernel Launch 是较强的计算需求信号，<strong>但可能已经晚于显存申请</strong>。</li>
+<li><strong>Owner 如果一直保留 CUDA Context，可能不再触发初始化或 Context 创建。</strong></li>
+<li><strong>PyTorch 缓存分配器可能复用已有显存</strong>，不产生新的底层显存申请。</li>
+<li><strong>CUDA Graph 可能直接重复提交预构建的计算任务。</strong></li>
+</ul>
+<p>所以<strong>必须同时覆盖显存申请、Context 创建和 GPU 工作提交三条路径</strong>。</p>
+<h3 id="多信号融合：不做-AND">多信号融合：不做 AND</h3>
+<p>本方案<strong>不采用「CUDA API 调用 AND NVML 利用率升高」这种严格与条件</strong>。对于明确的 GPU 资源申请和计算提交请求，<strong>直接触发同步准入</strong>。</p>
+<p>四种手段各司其职：</p>
+<table>
+<thead>
+<tr>
+<th>手段</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>NVML</strong></td>
+<td>发现闲置资源</td>
+</tr>
+<tr>
+<td><strong>eBPF</strong></td>
+<td>感知 CUDA 行为、审计、异常检测</td>
+</tr>
+<tr>
+<td><strong>CUDA Hook</strong></td>
+<td><strong>同步阻塞及触发抢占</strong></td>
+</tr>
+<tr>
+<td><strong>Node Agent</strong></td>
+<td>完成实际资源回收</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="五、同步抢占怎么做：方案选型">五、同步抢占怎么做：方案选型</h2>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>同步阻塞</th>
+<th>覆盖能力</th>
+<th>主要问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>eBPF Uprobe</td>
+<td>❌</td>
+<td>CUDA 行为观测</td>
+<td>无法作为通用阻塞机制</td>
+</tr>
+<tr>
+<td>ioctl 追踪</td>
+<td>❌</td>
+<td>部分驱动请求</td>
+<td>语义弱、存在漏判</td>
+</tr>
+<tr>
+<td>Seccomp User Notification</td>
+<td>部分</td>
+<td>系统调用级</td>
+<td>无法覆盖所有 CUDA 提交路径</td>
+</tr>
+<tr>
+<td><strong>CUDA Hook</strong></td>
+<td>✅</td>
+<td>受管理的 CUDA API</td>
+<td>存在兼容性与绕过问题</td>
+</tr>
+<tr>
+<td>CUDA Checkpoint Lock</td>
+<td>✅</td>
+<td>已存在的 CUDA 进程</td>
+<td>进程级粒度、新进程问题</td>
+</tr>
+<tr>
+<td>CUDA Proxy</td>
+<td>✅</td>
+<td>经过代理的请求</td>
+<td>实现复杂、兼容成本高</td>
+</tr>
+<tr>
+<td>调度前置屏障</td>
+<td>✅</td>
+<td>平台创建的新任务</td>
+<td>无法覆盖已有容器内部行为</td>
+</tr>
+<tr>
+<td>内核驱动改造</td>
+<td>理论支持</td>
+<td>驱动级资源管理</td>
+<td>开发维护成本高</td>
+</tr>
+</tbody>
+</table>
+<p><strong>优先采用 CUDA Hook + Shared Memory + Futex + GPU Lease。</strong> 对于平台新建的 Owner 训练任务，优先用<strong>调度前置屏障</strong>，在进程启动前完成资源回收。</p>
+<h3 id="调用路径">调用路径</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">PyTorch / TensorFlow / CUDA Application</span><br><span class="line">                  ↓</span><br><span class="line">             CUDA Runtime</span><br><span class="line">                  ↓</span><br><span class="line">         libgpu-reclaim.so          ← 平台注入的准入层</span><br><span class="line">                  ↓</span><br><span class="line">          GPU Admission Gate</span><br><span class="line">                  ↓</span><br><span class="line">             libcuda.so</span><br><span class="line">                  ↓</span><br><span class="line">          NVIDIA GPU Driver</span><br><span class="line">                  ↓</span><br><span class="line">                 GPU</span><br></pre></td></tr></table></figure>
+<p>实现上可以借鉴 <a target="_blank" rel="noopener" href="https://github.com/Project-HAMi/HAMi-core">HAMi-core</a> 的 CUDA API 劫持、显存限制与 Kernel 提交限流机制（参见 <a href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/">K8s GPU 复用与 HAMi 异构架构全解</a>）。</p>
+<blockquote>
+<p><strong>区别在于</strong>：HAMi 做的是静态或动态<strong>配额控制</strong>，本方案做的是 Owner 与 Spot 之间的<strong>动态资源使用权交接</strong>。</p>
+</blockquote>
+<h3 id="同步抢占时序">同步抢占时序</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">Owner → CUDA Hook:  cuMemAlloc / cuLaunchKernel</span><br><span class="line">        │</span><br><span class="line">        ├─ 阻塞等待，不进入真实 CUDA API</span><br><span class="line">        │</span><br><span class="line">        ↓</span><br><span class="line">CUDA Hook → Agent:  Acquire GPU Lease</span><br><span class="line">Agent:              切换为 RECLAIMING</span><br><span class="line">Agent → Spot:       撤销租约并通知终止</span><br><span class="line">Spot:               尝试有限时长的安全退出</span><br><span class="line">Agent → Spot:       超时则强制终止</span><br><span class="line">Agent → Driver:     检查 GPU 资源释放</span><br><span class="line">Driver → Agent:     资源状态</span><br><span class="line">Agent:              验证并切换 Owner 租约</span><br><span class="line">Agent → CUDA Hook:  Grant Lease / Futex Wake</span><br><span class="line">        │</span><br><span class="line">        ↓</span><br><span class="line">CUDA Hook → Driver: 执行原始 CUDA 请求</span><br><span class="line">Driver → Owner:     返回实际执行结果</span><br></pre></td></tr></table></figure>
+<p><strong>关键点</strong>：Owner 的回归事件通过<strong>同步 Hook 直接触发回收</strong>，而不是依赖 eBPF 事件在用户态异步消费后再执行驱逐。eBPF 可以并行观测这个过程，用于审计、监控和覆盖率验证。</p>
+<h3 id="拦截范围">拦截范围</h3>
+<table>
+<thead>
+<tr>
+<th>分类</th>
+<th>代表接口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Context 管理</td>
+<td><code>cuCtxCreate</code>、<code>cuDevicePrimaryCtxRetain</code></td>
+</tr>
+<tr>
+<td>显存分配</td>
+<td><code>cuMemAlloc_v2</code>、<code>cuMemAllocAsync</code>、<code>cuMemAllocManaged</code></td>
+</tr>
+<tr>
+<td>虚拟显存管理</td>
+<td><code>cuMemCreate</code>、<code>cuMemMap</code></td>
+</tr>
+<tr>
+<td>内存池管理</td>
+<td><code>cuMemAllocFromPoolAsync</code></td>
+</tr>
+<tr>
+<td>计算提交</td>
+<td><code>cuLaunchKernel</code>、<code>cuLaunchKernelEx</code></td>
+</tr>
+<tr>
+<td>Graph 提交</td>
+<td><code>cuGraphLaunch</code></td>
+</tr>
+<tr>
+<td>数据操作</td>
+<td><code>cuMemcpyAsync</code>、<code>cuMemsetAsync</code> 及相关变体</td>
+</tr>
+<tr>
+<td><strong>动态入口获取</strong></td>
+<td><code>cuGetProcAddress</code>、<code>cudaGetDriverEntryPoint</code>、<code>dlsym</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>最后一行是重点</strong>：CUDA 提供 <code>cuGetProcAddress</code> 等接口动态获取 Driver API 函数指针，<strong>因此仅覆盖普通动态链接符号不足以保证全部调用被拦截</strong>。</p>
+<p>另外必须区分「会增加或提交 GPU 工作的 API」与「用于释放资源、查询状态、等待已有工作完成的 API」——<strong>避免在回收过程中阻塞必要的清理调用，造成死锁</strong>。</p>
+</blockquote>
+<h3 id="Hook-实现骨架">Hook 实现骨架</h3>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">CUresult <span class="title function_">cuMemAlloc_v2</span><span class="params">(CUdeviceptr *ptr, <span class="type">size_t</span> size)</span> &#123;</span><br><span class="line">    GPUUUID gpu = resolve_current_gpu();</span><br><span class="line">    AdmissionToken token;</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> rc = admission_enter(gpu, GPU_MEMORY_ALLOC, size, &amp;token);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (rc != ADMISSION_GRANTED) &#123;</span><br><span class="line">        <span class="keyword">return</span> map_admission_error(rc);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    CUresult result = real_cuMemAlloc_v2(ptr, size);</span><br><span class="line"></span><br><span class="line">    admission_exit(&amp;token);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> result;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>对于正常持有 GPU 租约的进程，<code>admission_enter</code> 直接通过共享内存完成快速检查。对于当前 GPU 使用权属于 Spot 的 Owner：</p>
+<ol>
+<li>登记 Owner 回归请求</li>
+<li>通知 Node Agent</li>
+<li><strong>阻塞当前线程</strong></li>
+<li>等待 GPU 租约恢复</li>
+<li>获得准入令牌后执行真实 CUDA API</li>
+</ol>
+<blockquote>
+<p>实际实现需要处理 API 嵌套、重入、异常退出、多线程并发、Context 与设备映射，以及<strong>阻塞超时后的 CUDA 错误语义</strong>。</p>
+</blockquote>
+<h3 id="IPC-三件套">IPC 三件套</h3>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Unix Domain Socket</strong></td>
+<td>进程注册、首次请求、控制消息（控制面）</td>
+</tr>
+<tr>
+<td><strong>Shared Memory</strong></td>
+<td>GPU 租约状态、版本号、快速准入（高频状态读取）</td>
+</tr>
+<tr>
+<td><strong>Futex</strong></td>
+<td>跨进程线程阻塞与唤醒（避免忙轮询）</td>
+</tr>
+</tbody>
+</table>
+<p>共享内存中的租约控制数据应由 Agent 管理，<strong>普通租户不能任意修改</strong>。Futex 等待必须与原子状态检查结合，处理<strong>虚假唤醒、状态版本变化和丢失唤醒</strong>等并发问题。</p>
+<h3 id="Fast-Path-与-Slow-Path">Fast Path 与 Slow Path</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">【正常运行】CUDA API → Atomic Admission Check → 持有有效租约 → 执行真实 CUDA API</span><br><span class="line"></span><br><span class="line">【Owner 回归】CUDA API → Atomic Admission Check → GPU 被 Spot 借用</span><br><span class="line">            → 通知 Agent → Futex Wait → Spot 资源释放确认</span><br><span class="line">            → Futex Wake → 重新校验租约 → 执行 CUDA API</span><br></pre></td></tr></table></figure>
+<p><strong>Fast Path 不依赖 Kubernetes API Server，也不需要每次 CUDA 调用都做 RPC</strong>——这是控制高频 Kernel Launch 性能开销的关键。</p>
+<hr>
+<h2 id="六、GPU-Lease-与并发一致性">六、GPU Lease 与并发一致性</h2>
+<h3 id="租约模型">租约模型</h3>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">type</span> GPULease <span class="keyword">struct</span> &#123;</span><br><span class="line">    GPUUUID       <span class="type">string</span></span><br><span class="line">    NodeUID       <span class="type">string</span></span><br><span class="line">    OwnerPodUID   <span class="type">string</span></span><br><span class="line">    SpotPodUID    <span class="type">string</span></span><br><span class="line"></span><br><span class="line">    State         LeaseState</span><br><span class="line">    Generation    <span class="type">uint64</span>      <span class="comment">// 识别过期租约</span></span><br><span class="line"></span><br><span class="line">    OwnerGateOpen <span class="type">bool</span></span><br><span class="line">    SpotGateOpen  <span class="type">bool</span></span><br><span class="line"></span><br><span class="line">    ReclaimID     <span class="type">string</span>      <span class="comment">// 保证回收操作幂等</span></span><br><span class="line">    LastActiveAt  time.Time</span><br><span class="line">    Deadline      time.Time</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>节点本地 Agent 是 GPU 实际使用权的权威管理者</strong>，Controller 负责集群级状态协调和持久化。</p>
+<h3 id="状态机">状态机</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">[*] → OWNER_ACTIVE</span><br><span class="line"></span><br><span class="line">OWNER_ACTIVE    → IDLE_CANDIDATE   持续闲置</span><br><span class="line">IDLE_CANDIDATE  → OWNER_ACTIVE     Owner 恢复</span><br><span class="line">IDLE_CANDIDATE  → LENDING          准备借出</span><br><span class="line"></span><br><span class="line">LENDING         → OWNER_ACTIVE     Owner 请求或借出失败</span><br><span class="line">LENDING         → SPOT_AVAILABLE   关闭 Owner 准入并确认安全</span><br><span class="line"></span><br><span class="line">SPOT_AVAILABLE  → SPOT_RUNNING     Spot 获得租约</span><br><span class="line">SPOT_AVAILABLE  → OWNER_ACTIVE     Owner 回归</span><br><span class="line"></span><br><span class="line">SPOT_RUNNING    → RECLAIMING       Owner 回归 / Spot 主动结束</span><br><span class="line"></span><br><span class="line">RECLAIMING      → OWNER_ACTIVE     释放确认</span><br><span class="line">RECLAIMING      → QUARANTINED      回收失败或状态未知</span><br><span class="line"></span><br><span class="line">QUARANTINED     → OWNER_ACTIVE     安全恢复并验证</span><br></pre></td></tr></table></figure>
+<h3 id="借出屏障（防-TOCTOU）">借出屏障（防 TOCTOU）</h3>
+<p>平台刚检测到 Owner 利用率为零、准备分配 Spot，此时 Owner 恰好开始新的 GPU 计算——这就是 TOCTOU 竞态。所以借出前必须：</p>
+<ol>
+<li>GPU Lease 切换至 <code>LENDING</code></li>
+<li><strong>原子关闭 Owner 新 GPU 工作的准入入口</strong></li>
+<li>等待此前已获得准入的相关 API 完成提交</li>
+<li>通过 Context 同步、应用协作或驱动支持的机制<strong>确认已有 GPU 工作完成</strong></li>
+<li>检查 Owner 保留显存及其他 GPU 资源</li>
+<li>如果期间出现 Owner 新请求，<strong>取消借出</strong></li>
+<li>验证通过后，授予 Spot 新版本租约</li>
+<li>开放 Spot GPU 准入入口</li>
+</ol>
+<blockquote>
+<p>⚠️ <strong>API 返回不代表异步提交的 GPU 工作已经执行完毕。</strong> 所以仅统计 Hook 中的在途 API 数量是不够的，还需要<strong>独立的 GPU 工作排空机制</strong>。对于无法确认已有 GPU 工作是否完成的进程，<strong>应放弃本次借出</strong>。</p>
+</blockquote>
+<h3 id="回收屏障">回收屏障</h3>
+<ol>
+<li>原子将 GPU Lease 切换至 <code>RECLAIMING</code></li>
+<li><strong>增加 Generation，使旧 Spot 租约失效</strong></li>
+<li>关闭普通 Spot GPU 请求的准入入口</li>
+<li>禁止调度新的 Spot Pod</li>
+<li><strong>保持 Owner GPU 请求阻塞</strong></li>
+<li>撤销 Spot 使用权并执行终止或挂起</li>
+<li>确认 Spot 进程和 GPU 资源状态</li>
+<li>原子切换至 <code>OWNER_ACTIVE</code></li>
+<li>开放 Owner 准入入口并唤醒等待线程</li>
+</ol>
+<p>如果选择优雅回收，可以为特定 Checkpoint 操作保留一个有明确截止时间的受控清理阶段，<strong>但 Owner 仍然保持阻塞</strong>。</p>
+<h3 id="准入检查的竞态">准入检查的竞态</h3>
+<p>下面这种实现是<strong>不安全</strong>的：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">读取租约状态为 GRANTED</span><br><span class="line">        ↓</span><br><span class="line">Agent 同时撤销租约          ← 竞态窗口</span><br><span class="line">        ↓</span><br><span class="line">线程仍然执行真实 CUDA API</span><br></pre></td></tr></table></figure>
+<p>准入检查与在途调用登记必须构成原子协议：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">Acquire Admission Token</span><br><span class="line">        ↓</span><br><span class="line">原子检查 State + Generation</span><br><span class="line">        ↓</span><br><span class="line">登记 In-flight Operation</span><br><span class="line">        ↓</span><br><span class="line">执行真实 CUDA API</span><br><span class="line">        ↓</span><br><span class="line">Release Admission Token</span><br></pre></td></tr></table></figure>
+<blockquote>
+<p><strong>不能仅依靠 Generation 数字本身实现资源隔离</strong>，因为已经取得许可的请求可能仍在执行。Lease Manager 切换使用权时，顺序必须是：<strong>先关闭新准入 → 再等待在途调用退出 → 最后完成 GPU 工作排空</strong>。</p>
+</blockquote>
+<h3 id="Agent-故障恢复">Agent 故障恢复</h3>
+<p>Node Agent 重启时：</p>
+<ul>
+<li><strong>不直接信任 CRD 中的历史 Spot 状态</strong></li>
+<li><strong>不自动开放状态未知的 GPU 准入</strong></li>
+<li>根据容器运行时、设备分配记录、NVML 和本地状态日志重建租约</li>
+<li>确认已有 Spot 资源安全释放后才恢复 Owner</li>
+<li><strong>禁止 Agent 失联期间新增 Spot 分配</strong></li>
+</ul>
+<p>必要时引入独立的节点 Watchdog，处理 Agent 崩溃导致 Owner 长时间阻塞的问题。</p>
+<hr>
+<h2 id="七、快速回收与释放确认">七、快速回收与释放确认</h2>
+<h3 id="三个回收等级">三个回收等级</h3>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th>行为</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Hard Reclaim</strong></td>
+<td>直接强制终止 Spot</td>
+<td>对 Owner 延迟敏感</td>
+</tr>
+<tr>
+<td><strong>Graceful Reclaim</strong></td>
+<td>给 Spot 有限时间保存状态后退出</td>
+<td>通用训练任务</td>
+</tr>
+<tr>
+<td><strong>Suspend Reclaim</strong></td>
+<td>保存 GPU 状态并挂起进程</td>
+<td>支持 CUDA Checkpoint 的任务</td>
+</tr>
+</tbody>
+</table>
+<p>初始实现建议以 Hard Reclaim 为基础，逐步增加有限时长的 Graceful Reclaim。</p>
+<h3 id="为什么回收路径要下沉到节点本地">为什么回收路径要下沉到节点本地</h3>
+<p><strong>不要</strong>只走这条链路：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Node Agent → Spot Controller → API Server → Kubelet → Container Runtime → Spot 终止</span><br></pre></td></tr></table></figure>
+<p>涉及多个异步组件，回收时延容易受控制面负载和网络状态影响。</p>
+<p><strong>应该</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Owner CUDA Hook → GPU Reclaim Agent → Node-local Runtime / Process Management</span><br><span class="line">                → Spot GPU Resource Release → Owner CUDA Hook Wakeup</span><br></pre></td></tr></table></figure>
+<p>Controller 异步完成 Kubernetes 对象状态协调、事件记录和 Spot 任务重新调度。</p>
+<blockquote>
+<p>节点本地终止操作应与 kubelet 生命周期协调，<strong>避免 Spot 容器在旧租约下自动重启并重新访问 GPU</strong>。对于 Job 类型的 Spot 负载，应结合 <code>restartPolicy</code>、任务控制器和启动准入检查避免旧任务被意外恢复。</p>
+</blockquote>
+<h3 id="各种停止方式的比较">各种停止方式的比较</h3>
+<table>
+<thead>
+<tr>
+<th>方式</th>
+<th>停止新增提交</th>
+<th>释放显存</th>
+<th>保留训练状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SIGSTOP</code></td>
+<td>暂停 CPU 提交线程</td>
+<td>❌</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Cgroup Freezer</td>
+<td>暂停容器进程</td>
+<td>❌</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>CUDA Lock</td>
+<td>阻塞受支持的 CUDA API</td>
+<td>❌</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>SIGKILL</code></td>
+<td>终止目标进程</td>
+<td>等待驱动清理</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>CUDA Checkpoint</td>
+<td>挂起并保存 GPU 状态</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>应用 CKPT 后退出</td>
+<td>✅</td>
+<td>等待驱动清理</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong><code>SIGSTOP</code> 或 Cgroup Freezer 无法直接释放 GPU 显存</strong>，也不代表已提交的 GPU 工作立即停止。<strong>因此不能单独作为资源回收的完成条件。</strong></p>
+</blockquote>
+<h3 id="释放确认">释放确认</h3>
+<p><strong>Kubernetes Pod 对象被删除，不代表容器进程已退出，也不代表 GPU Context 已释放。</strong></p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">ReleaseCompleted =</span><br><span class="line">      Spot Admission Closed</span><br><span class="line">  AND Spot Cannot Restart With Old Lease</span><br><span class="line">  AND Spot Process Terminated Or Safely Checkpointed</span><br><span class="line">  AND Spot GPU Context Released</span><br><span class="line">  AND Available GPU Memory Meets Owner Requirement</span><br><span class="line">  AND GPU Healthy</span><br></pre></td></tr></table></figure>
+<p>校验时要结合：容器运行时状态、Pod Cgroup 中的进程状态、GPU 计算进程及显存占用、驱动状态、资源归属记录、MPS 等共享模式的客户端状态。</p>
+<blockquote>
+<p><strong>资源状态不明确时应进入 <code>QUARANTINED</code>，禁止重新分配该 GPU，并保持准入保护。</strong></p>
+<p>NVML <strong>不提供覆盖所有驱动资源的强一致性事务证明</strong>，因此释放确认必须建立在实际撤销执行能力之上，不能仅依据单次 NVML 查询。</p>
+</blockquote>
+<hr>
+<h2 id="八、NVIDIA-CUDA-Checkpoint-原生能力">八、NVIDIA CUDA Checkpoint 原生能力</h2>
+<h3 id="官方接口">官方接口</h3>
+<p>✅ 已核实（来源：NVIDIA CUDA Driver API 官方文档 <em>CUDA Checkpointing</em> 章节）：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">cuCheckpointProcessLock(pid, args);</span><br><span class="line">cuCheckpointProcessCheckpoint(pid, args);</span><br><span class="line">cuCheckpointProcessRestore(pid, args);</span><br><span class="line">cuCheckpointProcessUnlock(pid, args);</span><br></pre></td></tr></table></figure>
+<p>官方状态模型是 <strong>RUNNING → LOCKED → CHECKPOINTED →（Restore）→ LOCKED →（Unlock）→ RUNNING</strong>。另有 <code>cuCheckpointProcessGetState</code> 与 <code>cuCheckpointProcessGetRestoreThreadId</code>。</p>
+<blockquote>
+<p><strong>三个官方文档里的实现细节</strong>（做方案评估时值得注意）：</p>
+<ol>
+<li><strong><code>cuCheckpointProcessLock</code> 支持可选的 <code>timeoutMs</code></strong>，超时返回 <code>CUDA_ERROR_NOT_READY</code>，进程保持 RUNNING——这给「有限时长的优雅锁」提供了原生支持。</li>
+<li><strong><code>cuCheckpointProcessRestore</code> 要求先启用 persistence mode 或已调用 <code>cuInit</code>。</strong></li>
+<li><strong>该能力目前仅 Linux 支持。</strong></li>
+</ol>
+</blockquote>
+<h3 id="Owner-侧应用">Owner 侧应用</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">检测 Owner 长时间闲置 → 锁定 Owner CUDA 进程 → 确认借出条件</span><br><span class="line">                     → 分配 GPU 给 Spot → 感知 Owner 新 GPU 使用请求</span><br><span class="line">                     → 完成 Spot 资源回收 → Unlock Owner</span><br></pre></td></tr></table></figure>
+<p>利用驱动原生能力建立进程级屏障，有望减少自行实现部分阻塞逻辑的复杂度。</p>
+<blockquote>
+<p><strong>但 CUDA Lock 不直接提供完整的 Owner 回归通知机制</strong>，平台仍然需要 CUDA Hook、eBPF 或应用侧信号感知新请求。同时需要处理 Owner 新建进程、多 Context、多 GPU 等问题。</p>
+</blockquote>
+<h3 id="Spot-侧应用与它的限制">Spot 侧应用与它的限制</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Spot Running → CUDA Process Lock → 等待在途工作完成 → GPU State Checkpoint</span><br><span class="line">             → 释放 GPU 资源 → Suspended</span><br></pre></td></tr></table></figure>
+<p>后续资源重新可用时再 Restore + Unlock + Resume。该方案有减少重新加载模型和优化器状态开销的潜力，但限制也很实在：</p>
+<ul>
+<li>GPU 显存迁移消耗 PCIe 带宽和主机内存</li>
+<li>Checkpoint 需要等待已提交的 GPU 工作完成，<strong>不保证在固定时间内完成</strong></li>
+<li>UVM、部分 CUDA IPC、分布式通信等场景存在兼容性限制</li>
+<li>不同驱动版本支持的能力有差异</li>
+<li><strong>完整的跨节点进程恢复还涉及 CPU 状态、文件描述符、网络连接等资源</strong></li>
+</ul>
+<p><strong>因此 CUDA Checkpoint 更适合作为后续实验性优化，而非第一阶段 Spot 容错的必要依赖。</strong></p>
+<h3 id="MPS-场景要单独处理">MPS 场景要单独处理</h3>
+<p>如果未来采用 MPS 实现 GPU 共享，<strong>不能直接复用普通 CUDA 进程的强制终止逻辑</strong>，否则可能影响共享 MPS Server 中的其他客户端。MPS 提供了 <code>terminate_client</code> 等客户端终止机制，可通过 MPS Server 终止指定客户端的 CUDA Context。</p>
+<p><strong>第一阶段建议暂不支持 MPS 共享模式。</strong></p>
+<hr>
+<h2 id="九、Spot-容错续训">九、Spot 容错续训</h2>
+<p>Spot 任务随时可能被抢占，每次驱逐都从头训练会造成大量算力浪费。</p>
+<h3 id="Checkpoint-保存完成的三个层次">Checkpoint 保存完成的三个层次</h3>
+<p>异步保存必须区分：</p>
+<ul>
+<li><strong>Staging Completion</strong>：训练状态已完成本地暂存</li>
+<li><strong>Upload/Save Completion</strong>：Checkpoint 写入流程已完成</li>
+<li><strong>Durable Completion</strong>：已满足底层存储持久化要求</li>
+</ul>
+<p>较新的 PyTorch Distributed Checkpoint 接口提供了区分 staging 与保存完成的 Future。</p>
+<blockquote>
+<p>⚠️ <strong>Sidecar 不应仅通过 inotify 检测文件关闭事件就判断整个分布式 Checkpoint 已保存完成。</strong> 建议由训练框架或 Coordinator 在<strong>全部 Rank 写入完成后</strong>生成 Manifest：</p>
+</blockquote>
+<figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">  <span class="attr">&quot;jobUID&quot;</span><span class="punctuation">:</span> <span class="string">&quot;training-job-001&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;checkpointID&quot;</span><span class="punctuation">:</span> <span class="string">&quot;step-10000&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;globalStep&quot;</span><span class="punctuation">:</span> <span class="number">10000</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;worldSize&quot;</span><span class="punctuation">:</span> <span class="number">8</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;status&quot;</span><span class="punctuation">:</span> <span class="string">&quot;COMMITTED&quot;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="attr">&quot;files&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span></span><br><span class="line">    <span class="punctuation">&#123;</span> <span class="attr">&quot;name&quot;</span><span class="punctuation">:</span> <span class="string">&quot;rank-0.distcp&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;checksum&quot;</span><span class="punctuation">:</span> <span class="string">&quot;sha256:...&quot;</span> <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">    <span class="punctuation">&#123;</span> <span class="attr">&quot;name&quot;</span><span class="punctuation">:</span> <span class="string">&quot;rank-1.distcp&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;checksum&quot;</span><span class="punctuation">:</span> <span class="string">&quot;sha256:...&quot;</span> <span class="punctuation">&#125;</span></span><br><span class="line">  <span class="punctuation">]</span></span><br><span class="line"><span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p><strong>只有全部分片和元数据满足对应提交条件后，该 Checkpoint 才能被标记为有效。</strong></p>
+<h3 id="三级存储">三级存储</h3>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>选型</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>L1</td>
+<td>节点本地 NVMe</td>
+<td>快速保存、同节点恢复</td>
+</tr>
+<tr>
+<td>L2</td>
+<td>P2P 分发及节点缓存</td>
+<td>跨节点快速恢复</td>
+</tr>
+<tr>
+<td>L3</td>
+<td>JuiceFS 及持久化后端</td>
+<td>持久化兜底</td>
+</tr>
+</tbody>
+</table>
+<p>P2P 分发可以评估 Dragonfly（参见 <a href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/">具身智能训练存储与数据管线</a>），但需要额外实现 Checkpoint 元数据管理、完整性校验、版本提交和恢复路由。<strong>P2P 缓存不能直接等同于可靠持久化。</strong></p>
+<h3 id="抢占与-Checkpoint-解耦（重要）">抢占与 Checkpoint 解耦（重要）</h3>
+<p><strong>不建议在 Owner 回归时才触发一次完整的分布式 Checkpoint，并等全部数据上传完再回收 GPU。</strong> 大模型训练的保存过程包含 GPU→CPU 复制、多 Rank 同步、本地磁盘写入、P2P 传播、远端持久化——这些会显著延长 Owner 的等待时间。</p>
+<p>正确做法是 <strong>周期性异步 Checkpoint + 有限时长的抢占保存窗口 + 后台数据传播</strong>：</p>
+<ol>
+<li>向 Spot 发送回收通知</li>
+<li>如果已有完成暂存的 Checkpoint，可在<strong>独立于训练 Pod 生命周期的节点缓存或后台进程</strong>中继续持久化</li>
+<li>如果正在保存且能在预算时间内完成，允许有限等待</li>
+<li><strong>超过预算立即回收 GPU</strong></li>
+<li>后续从最近已提交的有效 Checkpoint 恢复</li>
+</ol>
+<blockquote>
+<p><strong>Checkpoint Sidecar 与训练 Pod 同时被删除时，其后台任务也可能终止</strong>，因此需要由节点级组件承接尚未完成的数据持久化工作。</p>
+</blockquote>
+<h3 id="分布式训练要以-Job-为单位协调">分布式训练要以 Job 为单位协调</h3>
+<p>对于 FSDP、DDP、Megatron-LM 等框架，<strong>单个 Rank 被抢占可能导致整个通信组失效</strong>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">某个 Rank 所在 GPU 被抢占</span><br><span class="line">        ↓</span><br><span class="line">通知分布式任务控制器</span><br><span class="line">        ↓</span><br><span class="line">终止或协调暂停其余 Rank</span><br><span class="line">        ↓</span><br><span class="line">定位最新有效 Checkpoint</span><br><span class="line">        ↓</span><br><span class="line">重新申请满足拓扑要求的 GPU</span><br><span class="line">        ↓</span><br><span class="line">Gang Scheduling</span><br><span class="line">        ↓</span><br><span class="line">恢复整个训练任务</span><br></pre></td></tr></table></figure>
+<hr>
+<h2 id="十、安全边界：必须说清楚的事">十、安全边界：必须说清楚的事</h2>
+<h3 id="CUDA-Hook-不是安全边界">CUDA Hook 不是安全边界</h3>
+<p>基于 <code>LD_PRELOAD</code> 的 CUDA Hook 属于<strong>用户态拦截机制，不能天然作为不可绕过的多租户安全边界</strong>。潜在绕过路径：</p>
+<ul>
+<li>应用未加载平台 Hook Library</li>
+<li>应用使用未覆盖的 Driver API 入口</li>
+<li>应用通过函数指针绕过普通符号拦截</li>
+<li>应用使用不兼容的 CUDA Driver Library</li>
+<li>进程已持有 GPU Device FD 或 MMIO 映射</li>
+<li>用户具备修改容器运行环境的权限</li>
+</ul>
+<p><strong>因此必须明确区分「受管理的协作式资源复用」与「针对不可信租户的强制资源隔离」。第一阶段仅支持经过平台准入和兼容性验证的工作负载。</strong></p>
+<h3 id="多层保护">多层保护</h3>
+<table>
+<thead>
+<tr>
+<th>层级</th>
+<th>保护方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kubernetes Admission</td>
+<td>限制可参与 Spot 的工作负载</td>
+</tr>
+<tr>
+<td>Container Runtime</td>
+<td>注入受管理的 CUDA Hook</td>
+</tr>
+<tr>
+<td>Device Access</td>
+<td>限制未授权的设备访问</td>
+</tr>
+<tr>
+<td>Cgroup</td>
+<td>标识租户并辅助进程终止</td>
+</tr>
+<tr>
+<td><strong>GPU Lease</strong></td>
+<td><strong>控制资源使用权</strong></td>
+</tr>
+<tr>
+<td>eBPF</td>
+<td>监控异常 CUDA 或设备访问</td>
+</tr>
+<tr>
+<td>Node Agent</td>
+<td>撤销租约并确认资源释放</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ Linux Cgroup v2 的设备控制机制可通过 BPF 管理设备文件访问权限，<strong>但设备访问控制并不能直接撤销已经建立的 GPU 文件描述符、Context 或用户态映射</strong>，所以不能单独依赖它完成存量进程的 GPU 抢占。严格不可信租户隔离需要进一步评估驱动级机制、CUDA Proxy、硬件虚拟化等方案。</p>
+</blockquote>
+<h3 id="第一阶段应排除的场景">第一阶段应排除的场景</h3>
+<ul>
+<li>特权容器</li>
+<li>未受管理的宿主机 GPU 进程</li>
+<li>不支持 Hook 的 CUDA 应用</li>
+<li><strong>延迟敏感型在线推理服务</strong></li>
+<li>无法安全终止的训练任务</li>
+<li>GPU Direct RDMA、MPS 等未经验证的特殊模式</li>
+<li>GPU 健康状态异常</li>
+<li>对 GPU 使用权存在归属争议的设备</li>
+</ul>
+<h3 id="IPC-安全">IPC 安全</h3>
+<p>UDS 服务端应<strong>验证调用方进程身份及所属 Cgroup</strong>，不能信任客户端自行上报的 Pod UID、Owner 身份或 GPU UUID。Agent 的租约共享内存应采取最小权限设计。</p>
+<p>跨租户的 Checkpoint 缓存及 P2P 分发也需要独立的数据权限校验，<strong>防止不同租户之间读取训练状态、模型参数或数据</strong>。</p>
+<hr>
+<h2 id="十一、可观测性与验收">十一、可观测性与验收</h2>
+<h3 id="Owner-回归时延的分解">Owner 回归时延的分解</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">T_wait = T_detect + T_revoke + T_graceful + T_process_stop</span><br><span class="line">       + T_driver_cleanup + T_verify + T_wakeup</span><br></pre></td></tr></table></figure>
+<p>分别是：回归信号识别、租约撤销、可选优雅退出、Spot 进程终止、驱动资源清理、资源释放确认、Owner 唤醒。</p>
+<p>采用同步 CUDA Hook 后<strong>可以显著降低对 NVML 轮询周期的依赖</strong>，但整体回收时延仍受 GPU 在途工作、驱动状态、显存规模和进程终止行为影响。</p>
+<h3 id="回收策略分级">回收策略分级</h3>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th>示例目标</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>强制抢占</td>
+<td>1 秒</td>
+<td>不等待应用层 CKPT</td>
+</tr>
+<tr>
+<td>快速抢占</td>
+<td>5 秒</td>
+<td>允许有限清理</td>
+</tr>
+<tr>
+<td>优雅抢占</td>
+<td>30 秒</td>
+<td>允许尝试保存训练状态</td>
+</tr>
+<tr>
+<td>GPU 状态挂起</td>
+<td>动态</td>
+<td>取决于显存规模和传输能力</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>上述时间是设计预算或 POC 目标，不是未经测试即可承诺的硬性回收时延。</strong></p>
+</blockquote>
+<h3 id="显存余量预留">显存余量预留</h3>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">SpotMemoryLimit = TotalGPUMemory</span><br><span class="line">                - OwnerRetainedMemory</span><br><span class="line">                - DriverReservedMemory</span><br><span class="line">                - SafetyMargin</span><br></pre></td></tr></table></figure>
+<p>安全余量按 GPU 型号、驱动开销及实际训练负载配置。<strong>显存预留只能降低风险，不能替代同步准入屏障。</strong></p>
+<h3 id="关键指标">关键指标</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gpu_spot_available_total</code></td>
+<td>当前可分配 Spot GPU 数量</td>
+</tr>
+<tr>
+<td><code>gpu_spot_reclaim_duration_seconds</code></td>
+<td>资源回收时延</td>
+</tr>
+<tr>
+<td><code>gpu_owner_wait_duration_seconds</code></td>
+<td>Owner 同步等待时延</td>
+</tr>
+<tr>
+<td><code>gpu_owner_spot_induced_oom_total</code></td>
+<td><strong>可归因于 Spot 的 Owner OOM 次数</strong></td>
+</tr>
+<tr>
+<td><code>gpu_spot_gpu_hours_total</code></td>
+<td>Spot GPU 使用时长</td>
+</tr>
+<tr>
+<td><code>gpu_spot_effective_gpu_hours_total</code></td>
+<td><strong>有效</strong> Spot GPU 计算时长</td>
+</tr>
+<tr>
+<td><code>gpu_spot_checkpoint_cache_hit_ratio</code></td>
+<td>Checkpoint 缓存命中率</td>
+</tr>
+<tr>
+<td><code>gpu_admission_hook_duration_seconds</code></td>
+<td>CUDA Hook 准入开销</td>
+</tr>
+<tr>
+<td><code>gpu_lease_conflict_total</code></td>
+<td>GPU 租约冲突次数</td>
+</tr>
+</tbody>
+</table>
+<p><strong>业务指标</strong>：集群 GPU 利用率提升、闲置资源回收率、Spot 有效计算率、Owner SLA（回归时延 P50/P95/P99 + 归因于 Spot 的 OOM 次数 + 回收失败率）。</p>
+<blockquote>
+<p><strong>不能只用整卡 GPU 利用率提升来衡量收益</strong>，还要考虑被抢占后丢失的训练进度和资源复用造成的额外成本。</p>
+</blockquote>
+<h3 id="POC-验收目标">POC 验收目标</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>初始目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Owner 因 Spot 产生的竞争性 OOM</td>
+<td>支持范围内测试为 0</td>
+</tr>
+<tr>
+<td>CUDA Hook 对训练吞吐影响</td>
+<td><strong>小于 1%</strong>，实测验证</td>
+</tr>
+<tr>
+<td>Owner 回归信号处理</td>
+<td>毫秒级目标</td>
+</tr>
+<tr>
+<td>Hard Reclaim P99</td>
+<td>1～5 秒，待实测</td>
+</tr>
+<tr>
+<td>GPU 租约重复授权</td>
+<td>0</td>
+</tr>
+<tr>
+<td>关键 CUDA API 覆盖率</td>
+<td>支持矩阵内全部通过</td>
+</tr>
+<tr>
+<td>Spot 恢复成功率</td>
+<td>大于 99%，待实测</td>
+</tr>
+<tr>
+<td>Checkpoint 数据完整性错误</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="十二、分阶段实施与建议先做的三个-POC">十二、分阶段实施与建议先做的三个 POC</h2>
+<h3 id="五个阶段">五个阶段</h3>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>目标</th>
+<th>关键产出</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Phase 1</strong></td>
+<td>Spot 资源感知与基础调度</td>
+<td>NVML Collector、归属识别、闲置判定、Spot Device Plugin、基础调度插件、<strong>单卡</strong> Spot 任务</td>
+</tr>
+<tr>
+<td><strong>Phase 2</strong></td>
+<td>eBPF 回归感知</td>
+<td>CUDA API Uprobe、Owner/Spot 事件区分、Context 与 Kernel Launch 识别、误判漏判测试</td>
+</tr>
+<tr>
+<td><strong>Phase 3</strong></td>
+<td><strong>同步资源准入</strong></td>
+<td>CUDA Hook Library、UDS 协议、Shared Memory + Futex、Lease Manager、<strong>借出/回收双屏障</strong>、并发竞态测试</td>
+</tr>
+<tr>
+<td><strong>Phase 4</strong></td>
+<td>容错续训</td>
+<td>PyTorch DCP 接入、Checkpoint Sidecar/Controller、三级存储、P2P 分发、任务重新调度</td>
+</tr>
+<tr>
+<td><strong>Phase 5</strong></td>
+<td>高级复用</td>
+<td>Context 保留复用、部分显存复用、多卡跨节点、CUDA Checkpoint、状态挂起恢复、活跃时间预测</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Phase 1 只验证资源发现和逻辑资源管理，不宣称已具备透明的 Owner 同步抢占保障。</strong> 同步抢占能力在 Phase 3 完成、且经过兼容性验证后才成立。</p>
+</blockquote>
+<h3 id="建议先做的三个-POC">建议先做的三个 POC</h3>
+<p>如果准备落地，<strong>不要先投入大量时间开发 Controller 和调度插件</strong>——先在单台 GPU 节点验证三件事：</p>
+<p><strong>POC 1 · CUDA 同步拦截</strong><br>
+验证 PyTorch、FSDP、CUDA Graph 的关键 CUDA 调用能否被<strong>透明拦截</strong>，并通过 Futex 实现可靠的阻塞与恢复。</p>
+<p><strong>POC 2 · GPU 使用权安全交接</strong><br>
+让 Spot 占用大量显存，再启动 Owner 训练，验证同步回收能否<strong>避免竞争性 OOM</strong>，同时测量完整回收时延。</p>
+<p><strong>POC 3 · 抢占后的有效计算保留</strong><br>
+验证 FSDP 分布式 Checkpoint、强制抢占、跨节点数据恢复、重新训练之间的<strong>完整闭环</strong>。</p>
+<p>这三个 POC 跑通，方案的核心技术可行性就基本验证了。相比之下，CRD、Controller、Device Plugin 和 Scheduler Plugin 都有相对成熟的工程实现范式。</p>
+<h3 id="最值得深入的方向">最值得深入的方向</h3>
+<p><strong>GPU 资源的同步使用权交接机制（Synchronous GPU Ownership Handover）</strong> ——它不只是一个 Spot 调度功能，还涉及 CUDA Driver、Linux 进程同步、GPU 资源管理、并发一致性以及分布式训练容错，是整个方案中技术深度最高的部分。</p>
+<hr>
+<h2 id="核心链路回顾">核心链路回顾</h2>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line">GPU 闲置资源发现</span><br><span class="line">        ↓</span><br><span class="line">Owner 借出屏障</span><br><span class="line">        ↓</span><br><span class="line">Spot 资源池</span><br><span class="line">        ↓</span><br><span class="line">机会式调度</span><br><span class="line">        ↓</span><br><span class="line">Owner CUDA 请求</span><br><span class="line">        ↓</span><br><span class="line">同步准入阻塞</span><br><span class="line">        ↓</span><br><span class="line">Spot 租约撤销</span><br><span class="line">        ↓</span><br><span class="line">GPU 资源释放确认</span><br><span class="line">        ↓</span><br><span class="line">Owner 使用权恢复</span><br><span class="line">        ↓</span><br><span class="line">Spot 任务重新调度</span><br><span class="line">        ↓</span><br><span class="line">Checkpoint 容错续训</span><br></pre></td></tr></table></figure>
+<p>方案的核心不是简单地提高 GPU 利用率，而是在<strong>保障正式租户资源使用优先级</strong>的前提下，实现 GPU 资源的动态复用。五组机制各解决一个问题：</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>解决什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NVML</td>
+<td>闲置资源发现</td>
+</tr>
+<tr>
+<td>eBPF</td>
+<td>CUDA 行为观测</td>
+</tr>
+<tr>
+<td><strong>CUDA Hook</strong></td>
+<td><strong>同步准入</strong></td>
+</tr>
+<tr>
+<td><strong>GPU Lease</strong></td>
+<td><strong>资源使用权一致性</strong></td>
+</tr>
+<tr>
+<td>Node Agent</td>
+<td>快速资源回收</td>
+</tr>
+<tr>
+<td>Checkpoint 系统</td>
+<td>抢占后的计算进度恢复</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="参考资料">参考资料</h2>
+<ol>
+<li>Kubernetes — <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/">Device Plugins</a>（扩展资源与设备分配）</li>
+<li>Kubernetes — <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/">Scheduling Framework</a>（Reserve、Permit 扩展点）</li>
+<li>Kubernetes — <a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/">Pod Lifecycle / Termination</a>（容器终止与异步删除）</li>
+<li>NVIDIA — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/nvml-api/">NVML API Reference Guide</a>（GPU 进程级监控）</li>
+<li>NVIDIA — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__CHECKPOINT.html">CUDA Driver API: CUDA Checkpointing</a>（Lock / Checkpoint / Restore / Unlock）</li>
+<li>NVIDIA — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__DRIVER__ENTRY__POINT.html">CUDA Driver Entry Point Access</a>（<code>cuGetProcAddress</code>）</li>
+<li>NVIDIA — <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/mps/">Multi-Process Service</a>（MPS Client 终止机制）</li>
+<li><a target="_blank" rel="noopener" href="https://github.com/Project-HAMi/HAMi-core">Project-HAMi/HAMi-core</a>（CUDA Hook 与资源控制）</li>
+<li>PyTorch — <a target="_blank" rel="noopener" href="https://docs.pytorch.org/docs/stable/distributed.checkpoint.html">Distributed Checkpoint</a>（分布式异步 Checkpoint）</li>
+<li>Linux Kernel — <a target="_blank" rel="noopener" href="https://docs.kernel.org/admin-guide/cgroup-v2.html">Control Group v2: Device Controller</a>（BPF 设备访问控制）</li>
+</ol>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/">https://roger-lv.github.io/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/CUDA/">CUDA</a><a class="post-meta__tags" href="/tags/Spot/">Spot</a><a class="post-meta__tags" href="/tags/eBPF/">eBPF</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E6%8A%A2%E5%8D%A0/">抢占</a><a class="post-meta__tags" href="/tags/HAMi/">HAMi</a><a class="post-meta__tags" href="/tags/Checkpoint/">Checkpoint</a><a class="post-meta__tags" href="/tags/GPU%E5%A4%8D%E7%94%A8/">GPU复用</a><a class="post-meta__tags" href="/tags/Hook/">Hook</a><a class="post-meta__tags" href="/tags/NVML/">NVML</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/" title="一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度</div></div><div class="info-2"><div class="info-item-1">多个训练任务共享同一张物理 RDMA 网卡，网卡凭什么不串包？ 这是理解 RDMA 资源模型最好的入口。先把结论摆出来，四组概念各管一段，缺一层都不成立：    概念 解决什么问题     IP / GID / LID 数据发送到哪台机器、哪个网络端点   QP / QPN 数据属于哪个通信连接   CQ 通信操作完成后如何通知应用   PD / MR / lkey / rkey 哪些内存允许被访问、哪些不允许    RoCEv2 和 InfiniBand 在 QP、CQ、PD、MR 这些核心机制上基本一致，差别在底层网络寻址、报文封装、网络管理与隔离方式。  本文是 RDMA 系列的第五篇。前三篇讲承载 RDMA 的网络本身（技术手册、技术栈全解、全链路拆解），第四篇讲 RoCEv2 无损网络的三件套。这一篇往上一层：网卡内部有哪些资源、它们怎么隔离不同任务、NCCL 又是怎么用它们的。   一、六个核心对象    对象 全称 作用     QP Queue Pair 通信队列对   SQ Send Queue 存放发送操作   RQ Receive Queue 存放接收操作 ...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/08/23/2026-08-23-Kubernetes%E8%B7%A8%E8%B0%83%E5%BA%A6%E5%99%A8%E6%8A%A2%E5%8D%A0/" title="Kubernetes 跨调度器抢占:机制、冲突根因与选型实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-23</div><div class="info-item-2">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践</div></div><div class="info-2"><div class="info-item-1">Kubernetes 跨调度器抢占:机制、冲突根因与选型实践 Kubernetes 的 kube-scheduler 原生支持&quot;基于优先级的抢占&quot;,由调度框架的 PostFilter 扩展点和 DefaultPreemption 插件实现;但&quot;跨调度器抢占&quot;在社区中并没有统一标准——每个调度器只能基于全局(且往往是滞后的)资源视图独立决策,互相感知不到对方的优先级语义和绑定动作,多调度器并存时会出现决策冲突、重复抢占甚至资源超卖的问题。下面从机制、冲突根因、调度器对比和典型实例四个层面展开。  一、kube-scheduler 原生抢占机制回顾 调度框架把每个 Pod 的调度过程分为 scheduling cycle 和 binding cycle,而抢占发生在 Filter 失败之后的 PostFilter 扩展点。DefaultPreemption 插件的核心目标是:为一台节点找到一组&quot;最优受害者 Pod&quot;,它们被删除后能腾出足够资源让高优先级的抢占者调度成功,同时尽量不违反 PDB、优先级尽量低、造成的 Pod c...</div></div></div></a><a class="pagination-related" href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/" title="深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-24</div><div class="info-item-2">深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解</div></div><div class="info-2"><div class="info-item-1">深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解 在云原生 AI 时代,GPU 作为算力核心资产,其高昂的成本与常常不到 40% 的实际利用率,让&quot;显卡复用&quot;成为企业降本增效的必答题。本文将全景解析当前主流的 GPU 复用方案,并深度剖析国产开源项目 HAMi 如何通过底层 Hook 技术与云原生调度,实现多厂商异构 GPU 的精细化隔离。  一、 GPU 复用全景:8 大主流方案对比 当前主流的显卡复用方案可按技术层次划分为五大类,不同路线在隔离强度、性能损耗、硬件门槛和部署复杂度上呈现明显的梯度差异:从硬到软,灵活性递增、隔离性递减。    方案 技术层次 隔离级别 性能损耗 硬件门槛 典型场景     MIG 硬件分区 物理硬隔离 几乎无 仅 A100/A30/H100 等 多租户推理、确定 QoS   NVIDIA vGPU 驱动/Hypervisor 级 驱动级硬隔离 较低 VGX 系列卡 + IOMMU VDI、图形桌面云、虚机推理   SR-IOV PCIe 硬件虚拟化 硬件级 极低 Ampere 及以后数据中心卡 HPC/A...</div></div></div></a><a class="pagination-related" href="/2026/10/12/2026-10-12-%E4%BB%8E%E9%9B%B6%E6%90%9E%E6%87%82GPU%E9%9B%86%E7%BE%A4%E8%B0%83%E5%BA%A6K8s%E4%B8%87%E5%8D%A1%E6%B2%BB%E7%90%86%E8%B5%84%E6%BA%90%E6%B1%A0%E5%8C%96%E5%BC%B9%E6%80%A7%E4%BC%B8%E7%BC%A9%E5%88%B0vLLM-SGLang-Slurm%E5%AE%9E%E6%88%98/" title="从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-12</div><div class="info-item-2">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM&#x2F;SGLang&#x2F;Slurm 实战</div></div><div class="info-2"><div class="info-item-1">从零搞懂 GPU 集群调度:K8s、万卡治理、资源池化、弹性伸缩到 vLLM/SGLang/Slurm 实战 这篇长文写给算法工程师和平台工程师,从最基础的&quot;一张 GPU 卡怎么被 K8s 认识&quot;讲起,到&quot;一万张卡怎么不崩&quot;,再到&quot;大模型服务怎么在集群上跑起来&quot;,最后聊 Slurm。六大主题:K8s GPU 调度原理、万卡集群治理、资源池化、弹性伸缩、vLLM/SGLang 集群化部署、Slurm 实战。  一、开篇:为什么 GPU 调度比 CPU 调度难十倍 如果你做过 K8s 的 CPU/内存调度,可能觉得资源调度就是&quot;分配数字资源,加个 request/limit 完事&quot;。但当资源变成 GPU 之后,画风完全变了,原因有五个: 1. GPU 不可分割(默认情况下)。 CPU 可以按 0.1 核这样细粒度分配,内存可以按 MB 分配,但一张物理 GPU 卡,默认情况下,K8s 只能把它当作一个&quot;整数资源&quot;分配给一个容器——要么给你一整张卡,要么不给。这就导致一个尴尬场景:推理服...</div></div></div></a><a class="pagination-related" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-15</div><div class="info-item-2">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</div></div><div class="info-2"><div class="info-item-1">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析 本文以一次 AI Infra 岗位一面为线索,围绕 GPU 性能分析、分布式训练、RayJob 弹性伸缩、GPU 混部与调度可行性判断五大模块展开;再把面试中经常被追问的调度层作为独立章节补齐——抢占、队列、调度器框架、DRF、调度器与 Node 的解耦关系、多调度器冲突、backfill/preempt/reclaim 的跨队列语义,一次讲透。 核心观点先抛出来:Infra 面试考的不是名词背诵,而是&quot;瓶颈定位 → 决策依据 → 工程权衡&quot;这条完整链路的推理能力。调度层的所有机制,本质上都在&quot;分布式一致性&quot;和&quot;资源效率&quot;之间做权衡。 一、GPU 性能与分布式训练:Nsight 与并行策略 1.1 Nsight 是什么、怎么用 Nsight 是 NVIDIA 提供的 GPU 性能分析工具套件,其中最核心的是两把&quot;不同倍率的放大镜&quot;:    工具 定位 分析粒度 典型命令     Nsight Systems (nsys) 全系统时间...</div></div></div></a><a class="pagination-related" href="/2026/11/05/2026-11-05-Device-Plugin%E7%9A%84%E5%8D%81%E5%B9%B4%E4%BB%8E%E6%8E%A5%E5%85%A5%E6%9C%BA%E5%88%B6%E5%88%B0%E7%AE%97%E5%8A%9B%E8%B0%83%E5%BA%A6%E7%9A%84%E9%97%AE%E9%A2%98%E5%9F%9F/" title="Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-05</div><div class="info-item-2">Device Plugin 的十年：从「让 K8s 认识新硬件」到算力调度的问题域</div></div><div class="info-2"><div class="info-item-1"> 一句话结论：Device Plugin 的本质，是把「让 Kubernetes 认识一种新硬件」这件事，从改内核代码降维成了写一个 gRPC 服务。而它的边界与局限——只能表达整数、调度决策黑盒、无拓扑感知、无故障协同——恰好勾勒出了大模型时代算力调度的完整问题域。 今天做 AI Infra，大概率不会从零写一个 device plugin，但一定会在这套机制的边界上做选型：训练集群选 Volcano 还是 KAI、推理集群选 HAMi 还是 MIG、要不要切 DRA、边缘具身用 KubeEdge 还是裸 K8s。  本文的机制描述逐条核对自 Kubernetes 官方文档与 proto 源码、NVIDIA/昇腾/HAMi/KubeEdge 各项目仓库。核对中发现原稿有十余处需要更正，其中两处是硬伤，已在文中以 ⚠️ 标注。  一、设计动机：为什么要有 Device Plugin Kubernetes 原生只认识 CPU、内存和本地存储。让每一种硬件的枚举、健康检查、分配逻辑都进 kubelet 主干，在工程上是不可持续的——每出一个新硬件就要改一次核心代码。 设计提案里说得很...</div></div></div></a><a class="pagination-related" href="/2024/10/01/2024-10-01-CUDA%E5%AE%B9%E5%99%A8%E5%8C%96&Container-runtime%E7%9B%B8%E5%85%B3%E6%8A%80%E6%9C%AF%E6%A2%B3%E7%90%86/" title="CUDA容器化&amp;Container runtime相关技术梳理"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/cover/CUDA.png" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-10-01</div><div class="info-item-2">CUDA容器化&amp;Container runtime相关技术梳理</div></div><div class="info-2"><div class="info-item-1">CUDA容器化&amp;Container runtime相关技术梳理 整体结构 CUDA API体系  CUDA Driver API：GPU 设备的抽象层，通过一系列 API 直接操作 GPU 设备，性能好，但编程难度高（需要显式进行device初始化以及context管理等）； CUDA Runtime API: 对 CUDA Driver API 进行一定封装，简化编程过程，降低开发难度； CUDA Libraries: 更高层的封装，包含一些成熟的高效函数库。 因此要实现 NVIDIA 容器化，也就是要让应用程序可以在容器内调用 CUDA API 来操作 GPU，一般来讲，就要使容器内应用程序内可调用 CUDA Runtime API 和 CUDA Libraries，容器内可使用 CUDA Driver 相关库。 NVIDIA CONTAINER TOOLKIT 具体结构  GPU 容器底层实现 GPU 容器相关概念 一些背景知识  什么是运行时？什么是高级运行时（high-level runtime）和低级运行时(low-level runtime):  参考：ht...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">340</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">557</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">80</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%BC%82%E6%AD%A5%E5%9B%9E%E6%94%B6%E7%9A%84%E9%97%AE%E9%A2%98%E5%87%BA%E5%9C%A8%E5%93%AA"><span class="toc-number">1.</span> <span class="toc-text">一、异步回收的问题出在哪</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#SLA-%E8%BE%B9%E7%95%8C%E8%A6%81%E5%85%88%E8%AF%B4%E6%B8%85"><span class="toc-number">1.1.</span> <span class="toc-text">SLA 边界要先说清</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81Spot-%E8%B5%84%E6%BA%90%E6%A8%A1%E5%9E%8B"><span class="toc-number">2.</span> <span class="toc-text">二、Spot 资源模型</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E7%A7%8D-GPU-%E7%B1%BB%E5%9E%8B"><span class="toc-number">2.1.</span> <span class="toc-text">三种 GPU 类型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Kubernetes-%E8%B5%84%E6%BA%90%E8%A1%A8%E8%BE%BE"><span class="toc-number">2.2.</span> <span class="toc-text">Kubernetes 资源表达</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%9B%E7%A7%8D%E5%A4%8D%E7%94%A8%E6%A8%A1%E5%BC%8F%E4%B8%8E%E6%8E%A8%E8%BF%9B%E9%A1%BA%E5%BA%8F"><span class="toc-number">2.3.</span> <span class="toc-text">四种复用模式与推进顺序</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E9%97%B2%E7%BD%AE%E8%B5%84%E6%BA%90%E6%80%8E%E4%B9%88%E5%8F%91%E7%8E%B0%EF%BC%9ANVML-eBPF"><span class="toc-number">3.</span> <span class="toc-text">三、闲置资源怎么发现：NVML + eBPF</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#NVML%EF%BC%9A%E9%87%87%E6%A0%B7%E6%8C%87%E6%A0%87%EF%BC%8C%E4%B8%8D%E6%98%AF%E8%AF%81%E6%98%8E"><span class="toc-number">3.1.</span> <span class="toc-text">NVML：采样指标，不是证明</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#eBPF%EF%BC%9A%E8%A7%82%E6%B5%8B-CUDA-%E8%A1%8C%E4%B8%BA"><span class="toc-number">3.2.</span> <span class="toc-text">eBPF：观测 CUDA 行为</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%BF%9B%E7%A8%8B%E5%BD%92%E5%B1%9E%E8%AF%86%E5%88%AB%E9%93%BE%E8%B7%AF"><span class="toc-number">3.3.</span> <span class="toc-text">进程归属识别链路</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%97%B2%E7%BD%AE%E5%88%A4%E5%AE%9A%E6%9D%A1%E4%BB%B6"><span class="toc-number">3.4.</span> <span class="toc-text">闲置判定条件</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81Owner-%E5%9B%9E%E5%BD%92%E7%9A%84%E5%85%AD%E7%BA%A7%E4%BF%A1%E5%8F%B7"><span class="toc-number">4.</span> <span class="toc-text">四、Owner 回归的六级信号</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E4%BF%A1%E5%8F%B7%E8%9E%8D%E5%90%88%EF%BC%9A%E4%B8%8D%E5%81%9A-AND"><span class="toc-number">4.1.</span> <span class="toc-text">多信号融合：不做 AND</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%80%8E%E4%B9%88%E5%81%9A%EF%BC%9A%E6%96%B9%E6%A1%88%E9%80%89%E5%9E%8B"><span class="toc-number">5.</span> <span class="toc-text">五、同步抢占怎么做：方案选型</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B0%83%E7%94%A8%E8%B7%AF%E5%BE%84"><span class="toc-number">5.1.</span> <span class="toc-text">调用路径</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%97%B6%E5%BA%8F"><span class="toc-number">5.2.</span> <span class="toc-text">同步抢占时序</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8B%A6%E6%88%AA%E8%8C%83%E5%9B%B4"><span class="toc-number">5.3.</span> <span class="toc-text">拦截范围</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Hook-%E5%AE%9E%E7%8E%B0%E9%AA%A8%E6%9E%B6"><span class="toc-number">5.4.</span> <span class="toc-text">Hook 实现骨架</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#IPC-%E4%B8%89%E4%BB%B6%E5%A5%97"><span class="toc-number">5.5.</span> <span class="toc-text">IPC 三件套</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Fast-Path-%E4%B8%8E-Slow-Path"><span class="toc-number">5.6.</span> <span class="toc-text">Fast Path 与 Slow Path</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81GPU-Lease-%E4%B8%8E%E5%B9%B6%E5%8F%91%E4%B8%80%E8%87%B4%E6%80%A7"><span class="toc-number">6.</span> <span class="toc-text">六、GPU Lease 与并发一致性</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%A7%9F%E7%BA%A6%E6%A8%A1%E5%9E%8B"><span class="toc-number">6.1.</span> <span class="toc-text">租约模型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%8A%B6%E6%80%81%E6%9C%BA"><span class="toc-number">6.2.</span> <span class="toc-text">状态机</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%80%9F%E5%87%BA%E5%B1%8F%E9%9A%9C%EF%BC%88%E9%98%B2-TOCTOU%EF%BC%89"><span class="toc-number">6.3.</span> <span class="toc-text">借出屏障（防 TOCTOU）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%9E%E6%94%B6%E5%B1%8F%E9%9A%9C"><span class="toc-number">6.4.</span> <span class="toc-text">回收屏障</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%87%86%E5%85%A5%E6%A3%80%E6%9F%A5%E7%9A%84%E7%AB%9E%E6%80%81"><span class="toc-number">6.5.</span> <span class="toc-text">准入检查的竞态</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Agent-%E6%95%85%E9%9A%9C%E6%81%A2%E5%A4%8D"><span class="toc-number">6.6.</span> <span class="toc-text">Agent 故障恢复</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%83%E3%80%81%E5%BF%AB%E9%80%9F%E5%9B%9E%E6%94%B6%E4%B8%8E%E9%87%8A%E6%94%BE%E7%A1%AE%E8%AE%A4"><span class="toc-number">7.</span> <span class="toc-text">七、快速回收与释放确认</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E4%B8%AA%E5%9B%9E%E6%94%B6%E7%AD%89%E7%BA%A7"><span class="toc-number">7.1.</span> <span class="toc-text">三个回收等级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%BA%E4%BB%80%E4%B9%88%E5%9B%9E%E6%94%B6%E8%B7%AF%E5%BE%84%E8%A6%81%E4%B8%8B%E6%B2%89%E5%88%B0%E8%8A%82%E7%82%B9%E6%9C%AC%E5%9C%B0"><span class="toc-number">7.2.</span> <span class="toc-text">为什么回收路径要下沉到节点本地</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%90%84%E7%A7%8D%E5%81%9C%E6%AD%A2%E6%96%B9%E5%BC%8F%E7%9A%84%E6%AF%94%E8%BE%83"><span class="toc-number">7.3.</span> <span class="toc-text">各种停止方式的比较</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%87%8A%E6%94%BE%E7%A1%AE%E8%AE%A4"><span class="toc-number">7.4.</span> <span class="toc-text">释放确认</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AB%E3%80%81NVIDIA-CUDA-Checkpoint-%E5%8E%9F%E7%94%9F%E8%83%BD%E5%8A%9B"><span class="toc-number">8.</span> <span class="toc-text">八、NVIDIA CUDA Checkpoint 原生能力</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%AE%98%E6%96%B9%E6%8E%A5%E5%8F%A3"><span class="toc-number">8.1.</span> <span class="toc-text">官方接口</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Owner-%E4%BE%A7%E5%BA%94%E7%94%A8"><span class="toc-number">8.2.</span> <span class="toc-text">Owner 侧应用</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Spot-%E4%BE%A7%E5%BA%94%E7%94%A8%E4%B8%8E%E5%AE%83%E7%9A%84%E9%99%90%E5%88%B6"><span class="toc-number">8.3.</span> <span class="toc-text">Spot 侧应用与它的限制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#MPS-%E5%9C%BA%E6%99%AF%E8%A6%81%E5%8D%95%E7%8B%AC%E5%A4%84%E7%90%86"><span class="toc-number">8.4.</span> <span class="toc-text">MPS 场景要单独处理</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B9%9D%E3%80%81Spot-%E5%AE%B9%E9%94%99%E7%BB%AD%E8%AE%AD"><span class="toc-number">9.</span> <span class="toc-text">九、Spot 容错续训</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Checkpoint-%E4%BF%9D%E5%AD%98%E5%AE%8C%E6%88%90%E7%9A%84%E4%B8%89%E4%B8%AA%E5%B1%82%E6%AC%A1"><span class="toc-number">9.1.</span> <span class="toc-text">Checkpoint 保存完成的三个层次</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%B8%89%E7%BA%A7%E5%AD%98%E5%82%A8"><span class="toc-number">9.2.</span> <span class="toc-text">三级存储</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%8A%A2%E5%8D%A0%E4%B8%8E-Checkpoint-%E8%A7%A3%E8%80%A6%EF%BC%88%E9%87%8D%E8%A6%81%EF%BC%89"><span class="toc-number">9.3.</span> <span class="toc-text">抢占与 Checkpoint 解耦（重要）</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E8%A6%81%E4%BB%A5-Job-%E4%B8%BA%E5%8D%95%E4%BD%8D%E5%8D%8F%E8%B0%83"><span class="toc-number">9.4.</span> <span class="toc-text">分布式训练要以 Job 为单位协调</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E3%80%81%E5%AE%89%E5%85%A8%E8%BE%B9%E7%95%8C%EF%BC%9A%E5%BF%85%E9%A1%BB%E8%AF%B4%E6%B8%85%E6%A5%9A%E7%9A%84%E4%BA%8B"><span class="toc-number">10.</span> <span class="toc-text">十、安全边界：必须说清楚的事</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#CUDA-Hook-%E4%B8%8D%E6%98%AF%E5%AE%89%E5%85%A8%E8%BE%B9%E7%95%8C"><span class="toc-number">10.1.</span> <span class="toc-text">CUDA Hook 不是安全边界</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%A4%9A%E5%B1%82%E4%BF%9D%E6%8A%A4"><span class="toc-number">10.2.</span> <span class="toc-text">多层保护</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%AC%AC%E4%B8%80%E9%98%B6%E6%AE%B5%E5%BA%94%E6%8E%92%E9%99%A4%E7%9A%84%E5%9C%BA%E6%99%AF"><span class="toc-number">10.3.</span> <span class="toc-text">第一阶段应排除的场景</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#IPC-%E5%AE%89%E5%85%A8"><span class="toc-number">10.4.</span> <span class="toc-text">IPC 安全</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%B8%80%E3%80%81%E5%8F%AF%E8%A7%82%E6%B5%8B%E6%80%A7%E4%B8%8E%E9%AA%8C%E6%94%B6"><span class="toc-number">11.</span> <span class="toc-text">十一、可观测性与验收</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Owner-%E5%9B%9E%E5%BD%92%E6%97%B6%E5%BB%B6%E7%9A%84%E5%88%86%E8%A7%A3"><span class="toc-number">11.1.</span> <span class="toc-text">Owner 回归时延的分解</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%9B%9E%E6%94%B6%E7%AD%96%E7%95%A5%E5%88%86%E7%BA%A7"><span class="toc-number">11.2.</span> <span class="toc-text">回收策略分级</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%98%BE%E5%AD%98%E4%BD%99%E9%87%8F%E9%A2%84%E7%95%99"><span class="toc-number">11.3.</span> <span class="toc-text">显存余量预留</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%85%B3%E9%94%AE%E6%8C%87%E6%A0%87"><span class="toc-number">11.4.</span> <span class="toc-text">关键指标</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#POC-%E9%AA%8C%E6%94%B6%E7%9B%AE%E6%A0%87"><span class="toc-number">11.5.</span> <span class="toc-text">POC 验收目标</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%81%E4%BA%8C%E3%80%81%E5%88%86%E9%98%B6%E6%AE%B5%E5%AE%9E%E6%96%BD%E4%B8%8E%E5%BB%BA%E8%AE%AE%E5%85%88%E5%81%9A%E7%9A%84%E4%B8%89%E4%B8%AA-POC"><span class="toc-number">12.</span> <span class="toc-text">十二、分阶段实施与建议先做的三个 POC</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E4%BA%94%E4%B8%AA%E9%98%B6%E6%AE%B5"><span class="toc-number">12.1.</span> <span class="toc-text">五个阶段</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E5%BB%BA%E8%AE%AE%E5%85%88%E5%81%9A%E7%9A%84%E4%B8%89%E4%B8%AA-POC"><span class="toc-number">12.2.</span> <span class="toc-text">建议先做的三个 POC</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E6%9C%80%E5%80%BC%E5%BE%97%E6%B7%B1%E5%85%A5%E7%9A%84%E6%96%B9%E5%90%91"><span class="toc-number">12.3.</span> <span class="toc-text">最值得深入的方向</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E9%93%BE%E8%B7%AF%E5%9B%9E%E9%A1%BE"><span class="toc-number">13.</span> <span class="toc-text">核心链路回顾</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8F%82%E8%80%83%E8%B5%84%E6%96%99"><span class="toc-number">14.</span> <span class="toc-text">参考资料</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/" title="一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度">一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度</a><time datetime="2026-11-23T16:00:00.000Z" title="发表于 2026-11-24 00:00:00">2026-11-24</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/" title="GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接">GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接</a><time datetime="2026-11-23T16:00:00.000Z" title="发表于 2026-11-24 00:00:00">2026-11-24</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-cpp-extern-c-abi/" title="C++ 库为什么对外提供 C 接口（从 extern &quot;C&quot; 到 ABI）">C++ 库为什么对外提供 C 接口（从 extern &quot;C&quot; 到 ABI）</a><time datetime="2026-11-23T15:20:59.000Z" title="发表于 2026-11-23 23:20:59">2026-11-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-tls13-handshake-to-https/" title="TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）">TLS 1.3 完整通信过程（从 TCP 建连到 HTTPS 数据传输）</a><time datetime="2026-11-23T15:11:13.000Z" title="发表于 2026-11-23 23:11:13">2026-11-23</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-ai-infra-tracking/" title="AI Infra 技术追踪｜2026-11-23">AI Infra 技术追踪｜2026-11-23</a><time datetime="2026-11-23T01:00:00.000Z" title="发表于 2026-11-23 09:00:00">2026-11-23</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><canvas class="fireworks" mobile="false"></canvas><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/fireworks.min.js"></script><script id="canvas_nest" defer="defer" color="0,0,255" opacity="0.7" zIndex="-1" count="99" mobile="false" src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/canvas-nest.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/dist/activate-power-mode.min.js"></script><script>POWERMODE.colorful = true;
+POWERMODE.shake = false;
+POWERMODE.mobile = true;
+document.body.addEventListener('input', POWERMODE);
+</script><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
