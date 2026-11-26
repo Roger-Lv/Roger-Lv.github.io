@@ -35,6 +35,33 @@ function createMesh () {
   })
 }
 
+// A fixed set of samples lets the ink disperse continuously without flickering.
+function createGrains () {
+  let seed = 72891
+  function random () {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+    return seed / 4294967296
+  }
+  const bands = [[], [], [], []]
+  for (let i = 0; i < 8700; i++) {
+    const x = -1.95 + random() * 6.7
+    const y = -2.04 + random() * 4.03
+    const px = 716 + (x + 0.48 * y) * 140
+    const spread = Math.max(0, Math.min(1, (px - 780) / 620))
+    if (random() > 0.94 * spread ** 1.24) continue
+    const [a, b] = wave(x, y, -1.13, -0.63, 1.44)
+    const [c, d] = wave(x, y, 0.42, 0.52, 1.12)
+    const direction = random() * Math.PI * 2
+    const reach = spread ** 2.5 * (5 + 64 * random() ** 2)
+    const dx = reach * Math.cos(direction)
+    const dy = reach * Math.sin(direction)
+    const band = Math.floor(random() * bands.length)
+    bands[band].push({ x: px, base: 345 + (-0.095 * x + 0.60 * y) * 133,
+      a, b, c, d, dx, dy, size: 1.55 + 1.95 * random() })
+  }
+  return bands
+}
+
 function line (ctx, points, color, weight) {
   ctx.strokeStyle = color
   ctx.lineWidth = weight
@@ -44,7 +71,7 @@ function line (ctx, points, color, weight) {
   ctx.stroke()
 }
 
-function paint (ctx, mesh, seconds, dark, strokeScale) {
+function paint (ctx, mesh, grains, seconds, dark, strokeScale) {
   const palette = dark ? paper.dark : paper.light
   const phase = seconds * Math.PI / 5.8
   const ca = Math.cos(phase), sa = Math.sin(phase)
@@ -56,8 +83,7 @@ function paint (ctx, mesh, seconds, dark, strokeScale) {
     }
   }
   ctx.setTransform(ctx.canvas.width / width, 0, 0, ctx.canvas.height / height, 0, 0)
-  ctx.fillStyle = rgb(palette.ground)
-  ctx.fillRect(0, 0, width, height)
+  ctx.clearRect(0, 0, width, height)
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
   const pen = rgb(mix(palette.ground, palette.ink, dark ? 0.86 : 0.85))
@@ -98,6 +124,31 @@ function paint (ctx, mesh, seconds, dark, strokeScale) {
     line(ctx, front, i === section ? cut : (i % 4 ? finePen : pen), i === section ? 5.6 : (i % 4 ? 1.45 : 2.05) * strokeScale)
   }
 
+  // Erase the outgoing edge before depositing the loose grains on the same wave.
+  const fade = ctx.createLinearGradient(755, 0, 1410, 0)
+  fade.addColorStop(0, 'rgba(0,0,0,0)')
+  fade.addColorStop(0.28, 'rgba(0,0,0,.06)')
+  fade.addColorStop(0.54, 'rgba(0,0,0,.51)')
+  fade.addColorStop(0.82, 'rgba(0,0,0,.95)')
+  fade.addColorStop(1, '#000')
+  ctx.globalCompositeOperation = 'destination-out'
+  ctx.fillStyle = fade
+  ctx.fillRect(0, 0, width, height)
+  ctx.globalCompositeOperation = 'source-over'
+
+  const drift = 0.88 + 0.24 * Math.sin(phase * 0.5)
+  const lift = 1 + 0.32 * Math.cos(phase * 0.5)
+  grains.forEach((band, i) => {
+    ctx.fillStyle = rgb(i === 0 ? palette.ink : palette.pigments[i - 1])
+    ctx.globalAlpha = [0.73, 0.60, 0.67, 0.77][i]
+    for (const g of band) {
+      const z = g.a * ca + g.b * sa + g.c * cb + g.d * sb
+      const size = g.size * (0.85 + 0.20 * strokeScale)
+      ctx.fillRect(g.x + g.dx * drift, g.base - 161 * z + g.dy * lift, size, size)
+    }
+  })
+  ctx.globalAlpha = 1
+
   const base = 747, left = 139, right = width - left
   ctx.setLineDash([4, 8])
   line(ctx, [{ x: left, y: base }, { x: right, y: base }], finePen, 1.25)
@@ -116,16 +167,17 @@ function paint (ctx, mesh, seconds, dark, strokeScale) {
 
 function mount (figure) {
   const canvas = figure.querySelector('canvas')
-  const ctx = canvas.getContext('2d', { alpha: false })
+  const ctx = canvas.getContext('2d')
   if (!ctx) return
   const button = figure.querySelector('button')
   const motion = matchMedia('(prefers-reduced-motion: reduce)')
   const mesh = createMesh()
+  const grains = createGrains()
   let inView = false, paused = false
   let frame = 0, last = 0, elapsed = 0, strokeScale = 1
 
   function draw () {
-    paint(ctx, mesh, elapsed, document.documentElement.dataset.theme === 'dark', strokeScale)
+    paint(ctx, mesh, grains, elapsed, document.documentElement.dataset.theme === 'dark', strokeScale)
   }
   function tick (now) {
     if (last === 0 || now - last >= 1000 / 30 - 1) {
@@ -153,6 +205,7 @@ function mount (figure) {
   }
   canvas.hidden = false
   resize()
+  figure.classList.add('is-live')
   button.addEventListener('click', () => {
     paused = !paused
     button.setAttribute('aria-label', paused ? 'Play animation' : 'Pause animation')
