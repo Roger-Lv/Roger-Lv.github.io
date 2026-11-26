@@ -27,27 +27,26 @@ document.addEventListener('DOMContentLoaded', () => {
     open: () => {
       btf.overflowPaddingR.add()
       btf.animateIn(document.getElementById('menu-mask'), 'to_show 0.5s')
-      document.getElementById('sidebar-menus').classList.add('open')
+      const drawer = document.getElementById('sidebar-menus')
+      drawer.inert = false
+      drawer.classList.add('open')
+      document.getElementById('body-wrap').inert = true
+      document.getElementById('toggle-menu').setAttribute('aria-expanded', 'true')
+      drawer.querySelector('.sidebar-close').focus()
       mobileSidebarOpen = true
     },
     close: () => {
       btf.overflowPaddingR.remove()
       btf.animateOut(document.getElementById('menu-mask'), 'to_hide 0.5s')
-      document.getElementById('sidebar-menus').classList.remove('open')
+      const drawer = document.getElementById('sidebar-menus')
+      drawer.classList.remove('open')
+      drawer.inert = true
+      document.getElementById('body-wrap').inert = false
+      const toggle = document.getElementById('toggle-menu')
+      toggle.setAttribute('aria-expanded', 'false')
+      if (!btf.isHidden(toggle)) toggle.focus({ preventScroll: true })
       mobileSidebarOpen = false
     }
-  }
-
-  /**
-   * 首頁top_img底下的箭頭
-   */
-  const scrollDownInIndex = () => {
-    const handleScrollToDest = () => {
-      btf.scrollToDest(document.getElementById('content-inner').offsetTop, 300)
-    }
-
-    const $scrollDownEle = document.getElementById('scroll-down')
-    $scrollDownEle && btf.addEventListenerPjax($scrollDownEle, 'click', handleScrollToDest)
   }
 
   /**
@@ -676,10 +675,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const handleClickOfSubMenu = e => {
       const target = e.target.closest('.site-page.group')
       if (!target) return
-      target.classList.toggle('hide')
+      target.setAttribute('aria-expanded', String(!target.classList.toggle('hide')))
     }
 
     const menusItems = document.querySelector('#sidebar-menus .menus_items')
+    menusItems?.querySelectorAll('.group').forEach(button => button.setAttribute('aria-expanded', String(!button.classList.contains('hide'))))
     menusItems && menusItems.addEventListener('click', handleClickOfSubMenu)
   }
 
@@ -723,17 +723,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if ($runtimeCount) {
       const publishDate = $runtimeCount.getAttribute('data-publishDate')
       $runtimeCount.textContent = `${btf.diffDate(publishDate)} ${GLOBAL_CONFIG.runtime}`
-    }
-  }
-
-  /**
-   * 最後一次更新時間
-   */
-  const addLastPushDate = () => {
-    const $lastPushDateItem = document.getElementById('last-push-date')
-    if ($lastPushDateItem) {
-      const lastPushDate = $lastPushDateItem.getAttribute('data-lastPushDate')
-      $lastPushDateItem.textContent = btf.diffDate(lastPushDate, true)
     }
   }
 
@@ -870,6 +859,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const menuMask = document.getElementById('menu-mask')
     menuMask && menuMask.addEventListener('click', () => { sidebarFn.close() })
 
+    const drawer = document.getElementById('sidebar-menus')
+    drawer?.querySelector('.sidebar-close').addEventListener('click', sidebarFn.close)
+    drawer?.addEventListener('keydown', event => {
+      if (event.key === 'Escape') sidebarFn.close()
+      if (event.key !== 'Tab') return
+      const controls = [...drawer.querySelectorAll('button, a[href]')].filter(el => el.offsetWidth)
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    })
     clickFnOfSubMenu()
     GLOBAL_CONFIG.islazyloadPlugin && lazyloadImg()
     GLOBAL_CONFIG.copyright !== undefined && addCopyright()
@@ -903,15 +903,25 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       GLOBAL_CONFIG.relativeDate.homepage && relativeDate(document.querySelectorAll('#recent-posts time'))
       GLOBAL_CONFIG.runtime && addRuntime()
-      addLastPushDate()
-      toggleCardCategory()
+        toggleCardCategory()
     }
 
-    GLOBAL_CONFIG_SITE.pageType === 'home' && scrollDownInIndex()
     scrollFn()
 
     forPostFn()
     GLOBAL_CONFIG_SITE.pageType !== 'shuoshuo' && btf.switchComments(document)
+    document.querySelectorAll('#nav .menus_item > button.group').forEach(button => {
+      const item = button.parentElement
+      const setOpen = open => button.setAttribute('aria-expanded', String(open))
+      setOpen(false)
+      item.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') setOpen(true) })
+      item.addEventListener('pointerleave', () => { if (!item.contains(document.activeElement)) setOpen(false) })
+      item.addEventListener('focusout', event => { if (!item.contains(event.relatedTarget)) setOpen(false) })
+      button.addEventListener('click', event => setOpen(event.detail > 0 && matchMedia('(hover: hover)').matches || button.getAttribute('aria-expanded') !== 'true'))
+      item.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { setOpen(false); button.focus() }
+      })
+    })
     openMobileMenu()
   }
 

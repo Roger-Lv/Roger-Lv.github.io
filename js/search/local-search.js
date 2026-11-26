@@ -4,14 +4,14 @@
  * Modified by hexo-theme-butterfly
  */
 
+const escapeSearchText = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
 class LocalSearch {
   constructor ({
     path = '',
-    unescape = false,
     top_n_per_article = 1
   }) {
     this.path = path
-    this.unescape = unescape
     this.top_n_per_article = top_n_per_article
     this.isfetched = false
     this.datas = null
@@ -25,11 +25,6 @@ class LocalSearch {
       text = text.toLowerCase()
     }
     words.forEach(word => {
-      if (this.unescape) {
-        const div = document.createElement('div')
-        div.innerText = word
-        word = div.innerHTML
-      }
       const wordLen = word.length
       if (wordLen === 0) return
       let startPosition = 0
@@ -93,11 +88,11 @@ class LocalSearch {
     let result = ''
     let index = slice.start
     for (const { position, length } of slice.hits) {
-      result += val.substring(index, position)
+      result += escapeSearchText(val.substring(index, position))
       index = position + length
-      result += `<mark class="search-keyword">${val.substr(position, length)}</mark>`
+      result += `<mark class="search-keyword">${escapeSearchText(val.substr(position, length))}</mark>`
     }
-    result += val.substring(index, slice.end)
+    result += escapeSearchText(val.substring(index, slice.end))
     return result
   }
 
@@ -124,7 +119,7 @@ class LocalSearch {
         const { position } = item
         // Cut out 120 characters. The maxlength of .search-input is 80.
         const start = Math.max(0, position - 20)
-        const end = Math.min(content.length, position + 100)
+        const end = Math.min(content.length, position + Math.max(100, item.word.length))
         slicesOfContent.push(this.mergeIntoSlice(start, end, indexOfContent))
       }
 
@@ -149,20 +144,16 @@ class LocalSearch {
       url = new URL(url, location.origin)
       url.searchParams.append('highlight', keywords.join(' '))
 
-      if (slicesOfTitle.length !== 0) {
-        resultItem += `<li class="local-search-hit-item"><a href="${url.href}"><span class="search-result-title">${this.highlightKeyword(title, slicesOfTitle[0])}</span>`
-      } else {
-        resultItem += `<li class="local-search-hit-item"><a href="${url.href}"><span class="search-result-title">${title}</span>`
-      }
-
+      const displayedTitle = slicesOfTitle.length ? this.highlightKeyword(title, slicesOfTitle[0]) : escapeSearchText(title)
+      resultItem = `<li class="local-search-hit-item"><a href="${escapeSearchText(url.href)}"><span class="search-result-title">${displayedTitle}</span>`
       slicesOfContent.forEach(slice => {
-        resultItem += `<p class="search-result">${this.highlightKeyword(content, slice)}...</p></a>`
+        resultItem += `<p class="search-result">${this.highlightKeyword(content, slice)}…</p>`
       })
-
-      resultItem += '</li>'
+      resultItem += '</a></li>'
       resultItems.push({
         item: resultItem,
         id: resultItems.length,
+        titleHits: keysOfTitle.size,
         hitCount,
         includedCount
       })
@@ -170,30 +161,28 @@ class LocalSearch {
     return resultItems
   }
 
-  fetchData () {
-    const isXml = !this.path.endsWith('json')
-    fetch(this.path)
-      .then(response => response.text())
-      .then(res => {
-        // Get the contents from search data
-        this.isfetched = true
-        this.datas = isXml
-          ? [...new DOMParser().parseFromString(res, 'text/xml').querySelectorAll('entry')].map(element => ({
-              title: element.querySelector('title').textContent,
-              content: element.querySelector('content').textContent,
-              url: element.querySelector('url').textContent
-            }))
-          : JSON.parse(res)
-        // Only match articles with non-empty titles
-        this.datas = this.datas.filter(data => data.title).map(data => {
-          data.title = data.title.trim()
-          data.content = data.content ? data.content.trim().replace(/<[^>]+>/g, '') : ''
-          data.url = decodeURIComponent(data.url).replace(/\/{2,}/g, '/')
-          return data
-        })
-        // Remove loading animation
-        window.dispatchEvent(new Event('search:loaded'))
-      })
+  async fetchData () {
+    const response = await fetch(this.path)
+    if (!response.ok) throw new Error('Search index HTTP ' + response.status)
+    let entries
+    if (this.path.endsWith('.json')) {
+      entries = await response.json()
+    } else {
+      const xml = new DOMParser().parseFromString(await response.text(), 'application/xml')
+      if (xml.querySelector('parsererror')) throw new Error('Invalid search index')
+      entries = Array.from(xml.querySelectorAll('entry'), entry => ({
+        title: entry.querySelector('title').textContent,
+        url: entry.querySelector('url').textContent,
+        content: entry.querySelector('content')?.textContent || ''
+      }))
+    }
+    const decoder = document.createElement('textarea')
+    this.datas = entries.filter(entry => entry.title && entry.url).map(entry => {
+      // Existing HTML indexes and the compact text index use HTML entities for code.
+      decoder.innerHTML = (entry.content || '').replace(/<[^>]+>/g, ' ').replace(/</g, '&lt;')
+      return { title: entry.title.trim(), url: entry.url, content: decoder.value.trim() }
+    })
+    this.isfetched = true
   }
 
   // Highlight by wrapping node in mark elements with the given class name
@@ -223,7 +212,7 @@ class LocalSearch {
     const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null)
     const allNodes = []
     while (walk.nextNode()) {
-      if (!walk.currentNode.parentNode.matches('button, select, textarea, .mermaid')) allNodes.push(walk.currentNode)
+      if (!walk.currentNode.parentElement.closest('button, select, textarea, script, style, .mermaid-wrap, .katex, .search-keyword')) allNodes.push(walk.currentNode)
     }
     allNodes.forEach(node => {
       const [indexOfNode] = this.getIndexByWord(keywords, node.nodeValue)
@@ -234,127 +223,88 @@ class LocalSearch {
   }
 }
 
-window.addEventListener('load', () => {
-// Search
-  const { path, top_n_per_article, unescape, languages } = GLOBAL_CONFIG.localSearch
-  const localSearch = new LocalSearch({
-    path,
-    top_n_per_article,
-    unescape
-  })
+const initLocalSearch = () => {
+  const dialog = document.querySelector('#local-search dialog')
+  const trigger = document.querySelector('#search-button > .search')
+  if (!dialog || !trigger) return
+  const { path, top_n_per_article, languages, preload } = GLOBAL_CONFIG.localSearch
+  const search = new LocalSearch({ path, top_n_per_article })
+  const input = dialog.querySelector('input')
+  const results = dialog.querySelector('#local-search-results')
+  const stats = dialog.querySelector('#local-search-stats-wrap')
+  const status = dialog.querySelector('#loading-database')
+  const retry = dialog.querySelector('.search-retry')
+  const loadingText = status.textContent
+  let fetching
 
-  const input = document.querySelector('#local-search-input input')
-  const statsItem = document.getElementById('local-search-stats-wrap')
-  const $loadingStatus = document.getElementById('loading-status')
-  const isXml = !path.endsWith('json')
-
-  const inputEventFunction = () => {
-    if (!localSearch.isfetched) return
-    let searchText = input.value.trim().toLowerCase()
-    isXml && (searchText = searchText.replace(/</g, '&lt;').replace(/>/g, '&gt;'))
-    if (searchText !== '') $loadingStatus.innerHTML = '<i class="fas fa-spinner fa-pulse"></i>'
-    const keywords = searchText.split(/[-\s]+/)
-    const container = document.getElementById('local-search-results')
-    let resultItems = []
-    if (searchText.length > 0) {
-    // Perform local searching
-      resultItems = localSearch.getResultItems(keywords)
-    }
-    if (keywords.length === 1 && keywords[0] === '') {
-      container.textContent = ''
-      statsItem.textContent = ''
-    } else if (resultItems.length === 0) {
-      container.textContent = ''
-      const statsDiv = document.createElement('div')
-      statsDiv.className = 'search-result-stats'
-      statsDiv.textContent = languages.hits_empty.replace(/\$\{query}/, searchText)
-      statsItem.innerHTML = statsDiv.outerHTML
-    } else {
-      resultItems.sort((left, right) => {
-        if (left.includedCount !== right.includedCount) {
-          return right.includedCount - left.includedCount
-        } else if (left.hitCount !== right.hitCount) {
-          return right.hitCount - left.hitCount
-        }
-        return right.id - left.id
-      })
-
-      const stats = languages.hits_stats.replace(/\$\{hits}/, resultItems.length)
-
-      container.innerHTML = `<ol class="search-result-list">${resultItems.map(result => result.item).join('')}</ol>`
-      statsItem.innerHTML = `<hr><div class="search-result-stats">${stats}</div>`
-      window.pjax && window.pjax.refresh(container)
-    }
-
-    $loadingStatus.textContent = ''
+  const update = () => {
+    if (!search.isfetched) return
+    const query = input.value.trim()
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+    results.replaceChildren()
+    stats.textContent = ''
+    if (!words.length) return
+    const hits = search.getResultItems([...new Set(words)])
+    hits.sort((a, b) => b.includedCount - a.includedCount || b.titleHits - a.titleHits || b.hitCount - a.hitCount || a.id - b.id)
+    stats.textContent = hits.length
+      ? languages.hits_stats.replace('${hits}', hits.length)
+      : languages.hits_empty.replace('${query}', () => query)
+    if (hits.length) results.innerHTML = '<ol class="search-result-list">' + hits.map(hit => hit.item).join('') + '</ol>'
   }
 
-  let loadFlag = false
-  const $searchMask = document.getElementById('search-mask')
-  const $searchDialog = document.querySelector('#local-search .search-dialog')
-
-  // fix safari
-  const fixSafariHeight = () => {
-    if (window.innerWidth < 768) {
-      $searchDialog.style.setProperty('--search-height', window.innerHeight + 'px')
+  const load = async () => {
+    if (search.isfetched || fetching) return
+    status.hidden = false
+    status.textContent = loadingText
+    retry.hidden = true
+    fetching = search.fetchData()
+    try {
+      await fetching
+      status.hidden = true
+      update()
+    } catch {
+      status.textContent = 'The search index could not be loaded.'
+      retry.hidden = false
+    } finally {
+      fetching = null
     }
   }
 
-  const openSearch = () => {
+  const open = () => {
+    if (dialog.open) return
+    dialog.showModal()
     btf.overflowPaddingR.add()
-    btf.animateIn($searchMask, 'to_show 0.5s')
-    btf.animateIn($searchDialog, 'titleScale 0.5s')
-    setTimeout(() => { input.focus() }, 300)
-    if (!loadFlag) {
-      !localSearch.isfetched && localSearch.fetchData()
-      input.addEventListener('input', inputEventFunction)
-      loadFlag = true
-    }
-    // shortcut: ESC
-    document.addEventListener('keydown', function f (event) {
-      if (event.code === 'Escape') {
-        closeSearch()
-        document.removeEventListener('keydown', f)
-      }
-    })
-
-    fixSafariHeight()
-    window.addEventListener('resize', fixSafariHeight)
+    input.focus()
+    load()
   }
-
-  const closeSearch = () => {
+  const bindTrigger = () => btf.addEventListenerPjax(document.querySelector('#search-button > .search'), 'click', open)
+  bindTrigger()
+  input.addEventListener('input', update)
+  retry.addEventListener('click', load)
+  dialog.querySelector('.search-close-button').addEventListener('click', () => dialog.close())
+  dialog.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      dialog.close()
+    }
+  })
+  dialog.addEventListener('click', event => {
+    if (event.target !== dialog) return
+    const rect = dialog.getBoundingClientRect()
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close()
+  })
+  dialog.addEventListener('close', () => {
     btf.overflowPaddingR.remove()
-    btf.animateOut($searchDialog, 'search_close .5s')
-    btf.animateOut($searchMask, 'to_hide 0.5s')
-    window.removeEventListener('resize', fixSafariHeight)
-  }
-
-  const searchClickFn = () => {
-    btf.addEventListenerPjax(document.querySelector('#search-button > .search'), 'click', openSearch)
-  }
-
-  const searchFnOnce = () => {
-    document.querySelector('#local-search .search-close-button').addEventListener('click', closeSearch)
-    $searchMask.addEventListener('click', closeSearch)
-    if (GLOBAL_CONFIG.localSearch.preload) {
-      localSearch.fetchData()
-    }
-    localSearch.highlightSearchWords(document.getElementById('article-container'))
-  }
-
-  window.addEventListener('search:loaded', () => {
-    const $loadDataItem = document.getElementById('loading-database')
-    $loadDataItem.nextElementSibling.style.display = 'block'
-    $loadDataItem.remove()
+    document.querySelector('#search-button > .search')?.focus({ preventScroll: true })
   })
-
-  searchClickFn()
-  searchFnOnce()
-
-  // pjax
+  search.highlightSearchWords(document.getElementById('article-container'))
+  if (preload) load()
   window.addEventListener('pjax:complete', () => {
-    !btf.isHidden($searchMask) && closeSearch()
-    localSearch.highlightSearchWords(document.getElementById('article-container'))
-    searchClickFn()
+    if (dialog.open) dialog.close()
+    bindTrigger()
+    search.highlightSearchWords(document.getElementById('article-container'))
   })
-})
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initLocalSearch, { once: true })
+else initLocalSearch()
