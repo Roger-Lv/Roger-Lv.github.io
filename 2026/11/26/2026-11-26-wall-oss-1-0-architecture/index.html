@@ -1,0 +1,522 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="以抓取红杯子为例，拆解 WALL-OSS-1.0 的原生 VLA 预训练、X-Tokenizer、连续动作专家、实时分块和多机器人推理。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/26/2026-11-26-wall-oss-1-0-architecture/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="以抓取红杯子为例，拆解 WALL-OSS-1.0 的原生 VLA 预训练、X-Tokenizer、连续动作专家、实时分块和多机器人推理。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-26T02:49:34.000Z">
+<meta property="article:modified_time" content="2026-11-26T02:54:30.283Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="VLA">
+<meta property="article:tag" content="具身智能">
+<meta property="article:tag" content="推理优化">
+<meta property="article:tag" content="WALL-OSS">
+<meta property="article:tag" content="Flow Matching">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制",
+  "url": "https://roger-lv.github.io/2026/11/26/2026-11-26-wall-oss-1-0-architecture/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-26T02:49:34.000Z",
+  "dateModified": "2026-11-26T02:54:30.283Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/26/2026-11-26-wall-oss-1-0-architecture/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":true,"top_n_per_article":-1,"unescape":true,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css?v=20261125"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">342</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">559</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">80</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/img/default_top_img.jpg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于笔者</span></a></div><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fa fa-graduation-cap"></i><span> 博文</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/categories/"><i class="fa-fw fa fa-archive"></i><span> 分类</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fa fa-tags"></i><span> 标签</span></a></li><li><a class="site-page child" href="/archives/"><i class="fa-fw fa fa-folder-open"></i><span> 归档</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> 生活</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fa fa-link"></i><span> 友链</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fa fa-paper-plane"></i><span> 留言板</span></a></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-11-26T02:49:34.000Z" title="发表于 2026-11-26 10:49:34">2026-11-26</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-11-26T02:54:30.283Z" title="更新于 2026-11-26 10:54:30">2026-11-26</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/26/2026-11-26-wall-oss-1-0-architecture/" data-flag-title="WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><p>“把红杯子拿起来”，对机器人来说是一条带时间约束的指令。它需要先认出杯子，判断从哪里接近、怎样闭合夹爪，然后在手臂仍在运动时生成下一段控制指令。指令理解、连续轨迹生成和控制时序分别对应三个工程问题。</p>
+<p>自变量机器人于 2026 年 11 月 23 日发布的 WALL-OSS-1.0，把这三个问题放进一套两阶段架构。Stage 1 从 Qwen3.5 起步，用离散动作 Token 联合训练视觉、语言与动作。Stage 2 加入 Flow Matching 动作专家，把共享的视觉语言上下文变成连续动作块。部署时，Real-Time Chunking（RTC）让下一块动作的推理与当前执行重叠。本文从一个抓取例子出发，沿这条链路看训练、生成和执行如何衔接。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">WALL-OSS-1.0 官方技术报告</a></p>
+<span id="more"></span>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css" integrity="sha384-5TcZemv2l/9On385z///+d7MSYlvIEw9FuZTIdZ14vJLqWphw7e7ZPuOiCHJcFCP" crossorigin="anonymous">
+<style>
+#article-container .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: .2em 0;
+}
+#article-container .katex-display > .katex {
+  min-width: 100%;
+  width: max-content;
+}
+</style>
+<h2 id="1-两个阶段和两种动作表示">1. 两个阶段和两种动作表示</h2>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    accTitle: WALL-OSS-1.0 两阶段架构
+    accDescr: Stage 1 联合训练视觉、语言与离散动作。Stage 2 由动作专家生成连续动作，并通过 RTC 接入执行。
+    traj[&quot;连续轨迹&quot;] --&gt; tok[&quot;X-Tokenizer&quot;]
+    obs[&quot;视觉语言与执行上下文&quot;] --&gt; backbone[&quot;Stage 1 · Qwen3.5&quot;]
+    tok --&gt;|离散动作| backbone
+    backbone --&gt;|共享上下文| expert[&quot;Stage 2 · 动作专家&quot;]
+    expert --&gt;|Flow Matching| chunk[&quot;连续动作块&quot;]
+    chunk --&gt; rtc[&quot;RTC · 异步执行&quot;]
+    classDef core fill:#243e4e,stroke:#70899b,color:#f6f8fa
+    classDef io fill:#e7edf1,stroke:#70899b,color:#17232e
+    class backbone,expert core
+    class traj,tok,obs,chunk,rtc io</pre></div>
+<p>图中箭头表示训练与执行阶段的信息流。离散动作词表是 Stage 1 的训练接口。在主模型的执行路径上，Action Expert 直接生成连续动作块。在从 Stage 1 权重延伸出来的 AR 变体中，离散编码才重新承担在线动作输出的角色。这个区别会改变推理系统的瓶颈，后文再看各自的执行方式。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">两阶段架构与 AR 变体</a></p>
+<h2 id="2-Stage-1-如何让动作进入预训练">2. Stage 1 如何让动作进入预训练</h2>
+<h3 id="2-1-共享骨干和监督目标">2.1 共享骨干和监督目标</h3>
+<p>这里的「原生」描述的是 WALL-OSS-1.0 自身的联合预训练。模型用已有的 Qwen3.5 权重初始化，图像和视频通过视觉编码器、投影接口进入共享表征，指令、机器人状态、执行历史和参考示范提供上下文。连续动作则经改进版 X-Tokenizer 编成序列。联合训练更新视觉编码器、投影接口和骨干网络，动作 Tokenizer 保持冻结，使同一段动作的离散监督在这一阶段保持稳定。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">官方训练架构</a></p>
+<p>Qwen3.5 的公开配置可用于理解基座的结构。例如，Transformers 文档中列出的稠密变体，每三个 Gated DeltaNet 层配一个全量 Gated Attention 层。WALL-OSS-1.0 报告确认了初始化来源，逐层连接和参数配置仍以它自己的披露为准。<a target="_blank" rel="noopener" href="https://huggingface.co/docs/transformers/model_doc/qwen3_5">Qwen3.5 架构文档</a></p>
+<p>在序列训练中，设 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>x</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">x_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5806em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> 为第 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi></mrow><annotation encoding="application/x-tex">i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6595em;"></span><span class="mord mathnormal">i</span></span></span></span> 个预测目标，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="script">M</mi></mrow><annotation encoding="application/x-tex">\mathcal M</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathcal">M</span></span></span></span> 为参与监督的位置，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>c</mi></mrow><annotation encoding="application/x-tex">c</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">c</span></span></span></span> 为给定的视觉等条件。下一 Token 预测可写成：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi mathvariant="script">L</mi><mrow><mi mathvariant="normal">N</mi><mi mathvariant="normal">T</mi><mi mathvariant="normal">P</mi></mrow></msub><mo>=</mo><mo>−</mo><munder><mo>∑</mo><mrow><mi>i</mi><mo>∈</mo><mi mathvariant="script">M</mi></mrow></munder><mi>log</mi><mo>⁡</mo><msub><mi>p</mi><mi>θ</mi></msub><mo stretchy="false">(</mo><msub><mi>x</mi><mi>i</mi></msub><mo>∣</mo><msub><mi>x</mi><mrow><mo>&lt;</mo><mi>i</mi></mrow></msub><mo separator="true">,</mo><mi>c</mi><mo stretchy="false">)</mo><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">\mathcal L_{\mathrm{NTP}}
+=-\sum_{i\in\mathcal M}\log p_\theta(x_i\mid x_{&lt;i},c).
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathcal">L</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathrm mtight">NTP</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.3717em;vertical-align:-1.3217em;"></span><span class="mord">−</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.05em;"><span style="top:-1.8557em;margin-left:0em;"><span class="pstrut" style="height:3.05em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">i</span><span class="mrel mtight">∈</span><span class="mord mathcal mtight">M</span></span></span></span><span style="top:-3.05em;"><span class="pstrut" style="height:3.05em;"></span><span><span class="mop op-symbol large-op">∑</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.3217em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop">lo<span style="margin-right:0.01389em;">g</span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">θ</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∣</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal">x</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mrel mtight">&lt;</span><span class="mord mathnormal mtight">i</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.1774em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">c</span><span class="mclose">)</span><span class="mord">.</span></span></span></span></span></p>
+<p>同一种损失可以监督语言答案，也可以监督动作编码。任务变化体现在输入上下文和目标位置上。比如识别杯子时，目标可能是一段文字。给定观测和指令预测抓取轨迹时，目标是一段动作 Token。给定一条候选轨迹时，模型还可以学习描述、评价或纠正动作。</p>
+<table>
+<thead>
+<tr>
+<th>训练场景</th>
+<th>条件</th>
+<th>目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>视觉问答</td>
+<td>图像、问题</td>
+<td>文本答案</td>
+</tr>
+<tr>
+<td>动作预测</td>
+<td>观测、指令或执行历史</td>
+<td>动作 Token</td>
+</tr>
+<tr>
+<td>动作描述与识别</td>
+<td>编码轨迹或视频</td>
+<td>语言描述或动作语义</td>
+</tr>
+<tr>
+<td>动作评价与纠正</td>
+<td>观测、候选或受扰动轨迹</td>
+<td>动作评价或修正后的动作</td>
+</tr>
+<tr>
+<td>上下文学习</td>
+<td>参考示范、当前场景</td>
+<td>当前场景对应的动作</td>
+</tr>
+</tbody>
+</table>
+<p>报告把训练数据分为通用视觉语言、动作预测和关联动作与语义的数据。按报告采用的八项 VLM 基准及相同模板，Stage 1 的主指标等权平均为 79.2%，基座为 79.4%。这组对照说明联合训练后，在该评测口径下保留了大部分通用能力。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">训练任务与基准对照</a></p>
+<h3 id="2-2-X-Tokenizer-如何编码一段轨迹">2.2 X-Tokenizer 如何编码一段轨迹</h3>
+<p>把一段连续动作记为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>A</mi><mo>∈</mo><msup><mi mathvariant="double-struck">R</mi><mrow><mi>T</mi><mo>×</mo><mi>D</mi></mrow></msup></mrow><annotation encoding="application/x-tex">A\in\mathbb R^{T\times D}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7224em;vertical-align:-0.0391em;"></span><span class="mord mathnormal">A</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8413em;"></span><span class="mord"><span class="mord mathbb">R</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8413em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.13889em;">T</span><span class="mbin mtight">×</span><span class="mord mathnormal mtight" style="margin-right:0.02778em;">D</span></span></span></span></span></span></span></span></span></span></span></span>，其中 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi></mrow><annotation encoding="application/x-tex">T</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span></span></span></span> 是动作帧数，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>D</mi></mrow><annotation encoding="application/x-tex">D</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">D</span></span></span></span> 是每帧维度。编码器先沿时间轴压缩，再把短序列中的每个 latent 向量做残差向量量化。以一个向量 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>z</mi></mrow><annotation encoding="application/x-tex">z</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal" style="margin-right:0.04398em;">z</span></span></span></span> 为例，令初始残差 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>r</mi><mn>0</mn></msub><mo>=</mo><mi>z</mi></mrow><annotation encoding="application/x-tex">r_0=z</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5806em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal" style="margin-right:0.04398em;">z</span></span></span></span>，第 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>j</mi></mrow><annotation encoding="application/x-tex">j</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.854em;vertical-align:-0.1944em;"></span><span class="mord mathnormal" style="margin-right:0.05724em;">j</span></span></span></span> 层选出最接近当前残差的码本向量：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>q</mi><mi>j</mi></msub><mo>=</mo><mi>arg</mi><mo>⁡</mo><munder><mrow><mi>min</mi><mo>⁡</mo></mrow><mi>k</mi></munder><msubsup><mrow><mo fence="true">∥</mo><msub><mi>r</mi><mi>j</mi></msub><mo>−</mo><msub><mi>e</mi><mrow><mi>j</mi><mo separator="true">,</mo><mi>k</mi></mrow></msub><mo fence="true">∥</mo></mrow><mn>2</mn><mn>2</mn></msubsup><mo separator="true">,</mo><mspace width="2em"/><msub><mi>r</mi><mrow><mi>j</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>r</mi><mi>j</mi></msub><mo>−</mo><msub><mi>e</mi><mrow><mi>j</mi><mo separator="true">,</mo><msub><mi>q</mi><mi>j</mi></msub></mrow></msub><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">q_j=\arg\min_k \left\|r_j-e_{j,k}\right\|_2^2,
+\qquad r_{j+1}=r_j-e_{j,q_j}.
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03588em;">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.7061em;vertical-align:-0.7521em;"></span><span class="mop">ar<span style="margin-right:0.01389em;">g</span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mop op-limits"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.6679em;"><span style="top:-2.3479em;margin-left:0em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span></span></span><span style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span><span class="mop">min</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.7521em;"><span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner"><span class="minner"><span class="mopen delimcenter" style="top:0em;">∥</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord"><span class="mord mathnormal">e</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mpunct mtight">,</span><span class="mord mathnormal mtight" style="margin-right:0.03148em;">k</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mclose delimcenter" style="top:0em;">∥</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.954em;"><span style="top:-2.3642em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span><span style="top:-3.2029em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3358em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mpunct">,</span><span class="mspace" style="margin-right:2em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mbin mtight">+</span><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.7779em;vertical-align:-0.3473em;"></span><span class="mord"><span class="mord mathnormal">e</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mpunct mtight">,</span><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.03588em;">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3281em;"><span style="top:-2.357em;margin-left:-0.0359em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2819em;"><span></span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3473em;"><span></span></span></span></span></span></span><span class="mord">.</span></span></span></span></span></p>
+<p>四层码本的重建向量为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mover accent="true"><mi>z</mi><mo>^</mo></mover><mo>=</mo><msubsup><mo>∑</mo><mrow><mi>j</mi><mo>=</mo><mn>0</mn></mrow><mn>3</mn></msubsup><msub><mi>e</mi><mrow><mi>j</mi><mo separator="true">,</mo><msub><mi>q</mi><mi>j</mi></msub></mrow></msub></mrow><annotation encoding="application/x-tex">\hat z=\sum_{j=0}^{3}e_{j,q_j}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord accent"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.6944em;"><span style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="mord mathnormal" style="margin-right:0.04398em;">z</span></span><span style="top:-3em;"><span class="pstrut" style="height:3em;"></span><span class="accent-body" style="left:-0.1944em;"><span class="mord">^</span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.3898em;vertical-align:-0.4358em;"></span><span class="mop"><span class="mop op-symbol small-op" style="position:relative;top:0em;">∑</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.954em;"><span style="top:-2.4003em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mrel mtight">=</span><span class="mord mtight">0</span></span></span></span><span style="top:-3.2029em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">3</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.4358em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">e</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mpunct mtight">,</span><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.03588em;">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3281em;"><span style="top:-2.357em;margin-left:-0.0359em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2819em;"><span></span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3473em;"><span></span></span></span></span></span></span></span></span></span>。保存的是每层选中的索引 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>q</mi><mi>j</mi></msub></mrow><annotation encoding="application/x-tex">q_j</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03588em;">q</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span>，解码时再从码本查回向量并还原动作。每层只需处理上一层留下的误差，因此早期编码可以保留较粗的结构，后续编码继续补偿重建误差。</p>
+<p>X-Tokenizer 将这一过程设计成 Semantic Residual Quantizer（SRQ）。训练结合视觉语言特征对齐、动作重建和下一帧 VLM 特征预测。粗层编码因此可承载更多动作意图，后续层补足运动学差异。比如双臂与单臂都可能出现接近杯子的动作语义，原地转腕的幅度和末端轨迹仍需要各自的运动细节。这种分工由训练形成，码本索引本身没有人工命名的动作标签。<a target="_blank" rel="noopener" href="https://x-square-robot.github.io/X-Tokenizer_projectPage/">X-Tokenizer 方法说明</a></p>
+<table>
+<thead>
+<tr>
+<th>公开 X-Tokenizer 模型卡配置</th>
+<th>数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>时间压缩倍率</td>
+<td>4 倍</td>
+</tr>
+<tr>
+<td>残差量化层数</td>
+<td>4 层</td>
+</tr>
+<tr>
+<td>每层码本大小</td>
+<td>2,048 个向量</td>
+</tr>
+<tr>
+<td>统一动作布局</td>
+<td>26 维，覆盖双臂末端、底盘、升降和头部</td>
+</tr>
+<tr>
+<td>模型卡列出的机器人形态配置</td>
+<td>18 种</td>
+</tr>
+<tr>
+<td>推理支持的动作块长度</td>
+<td>8–64 帧</td>
+</tr>
+</tbody>
+</table>
+<p>在这个配置下，32 帧、26 维的轨迹有 832 个连续标量。时间轴压到 8 个 latent 位置，每个位置用 4 个量化索引，共 32 个离散索引。这里数的是表示元素，索引和连续标量的位宽、重建误差以及附加状态都需要另算。上述参数属于公开 X-Tokenizer checkpoint，WALL-OSS-1.0 使用的改进版以主模型接口披露为准。<a target="_blank" rel="noopener" href="https://huggingface.co/x-square-robot/X-Tokenizer">X-Tokenizer 模型卡</a> · <a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">WALL-OSS-1.0 技术报告</a></p>
+<h2 id="3-Stage-2-如何生成连续动作块">3. Stage 2 如何生成连续动作块</h2>
+<h3 id="3-1-MoT-和-Flow-Matching-的分工">3.1 MoT 和 Flow Matching 的分工</h3>
+<p>MoT（Mixture of Transformers）为不同处理路径提供专用 Transformer 参数，同时允许信息交互。作为对照，许多语言模型中的稀疏 MoE 主要是在 FFN 层把 Token 路由到专家。WALL-OSS-1.0 报告披露的接口是共享骨干向 Action Expert 提供视觉语言上下文，由专家生成连续控制轨迹。哪些层共享、QKV 怎么投影、具体注意力矩阵长什么样，公开报告未给出逐层配置。<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2411.04996">MoT 论文</a> · <a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">WALL-OSS-1.0 技术报告</a></p>
+<p>动作专家的目标是学习条件轨迹分布。用标准线性路径举例，给定训练轨迹 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>A</mi><mn>1</mn></msub></mrow><annotation encoding="application/x-tex">A_1</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，采样同形状的高斯噪声 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>A</mi><mn>0</mn></msub></mrow><annotation encoding="application/x-tex">A_0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，再沿生成时间 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>τ</mi><mo>∈</mo><mo stretchy="false">[</mo><mn>0</mn><mo separator="true">,</mo><mn>1</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">\tau\in[0,1]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5782em;vertical-align:-0.0391em;"></span><span class="mord mathnormal" style="margin-right:0.1132em;">τ</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">[</span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">1</span><span class="mclose">]</span></span></span></span> 插值。此时目标速度沿该样本路径为常数：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>A</mi><mi>τ</mi></msub><mo>=</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>τ</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mn>0</mn></msub><mo>+</mo><mi>τ</mi><msub><mi>A</mi><mn>1</mn></msub><mo separator="true">,</mo><mspace width="2em"/><mfrac><mrow><mi mathvariant="normal">d</mi><msub><mi>A</mi><mi>τ</mi></msub></mrow><mrow><mi mathvariant="normal">d</mi><mi>τ</mi></mrow></mfrac><mo>=</mo><msub><mi>A</mi><mn>1</mn></msub><mo>−</mo><msub><mi>A</mi><mn>0</mn></msub><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">A_\tau=(1-\tau)A_0+\tau A_1,
+\qquad \frac{\mathrm d A_\tau}{\mathrm d\tau}=A_1-A_0.
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.1132em;">τ</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.1132em;">τ</span><span class="mclose">)</span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:2.0574em;vertical-align:-0.686em;"></span><span class="mord mathnormal" style="margin-right:0.1132em;">τ</span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:2em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.3714em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathrm">d</span><span class="mord mathnormal" style="margin-right:0.1132em;">τ</span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord mathrm">d</span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.1132em;">τ</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.686em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord">.</span></span></span></span></span></p>
+<p>令 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>c</mi></mrow><annotation encoding="application/x-tex">c</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">c</span></span></span></span> 表示视觉语言上下文，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi></mrow><annotation encoding="application/x-tex">s</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">s</span></span></span></span> 表示可用的机器人状态。专家回归给定位置和条件的速度场：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi mathvariant="script">L</mi><mrow><mi mathvariant="normal">F</mi><mi mathvariant="normal">M</mi></mrow></msub><mo>=</mo><mi mathvariant="double-struck">E</mi><mrow><mo fence="true">[</mo><msubsup><mrow><mo fence="true">∥</mo><msub><mi>v</mi><mi>θ</mi></msub><mo stretchy="false">(</mo><msub><mi>A</mi><mi>τ</mi></msub><mo separator="true">,</mo><mi>τ</mi><mo separator="true">,</mo><mi>c</mi><mo separator="true">,</mo><mi>s</mi><mo stretchy="false">)</mo><mo>−</mo><mo stretchy="false">(</mo><msub><mi>A</mi><mn>1</mn></msub><mo>−</mo><msub><mi>A</mi><mn>0</mn></msub><mo stretchy="false">)</mo><mo fence="true">∥</mo></mrow><mn>2</mn><mn>2</mn></msubsup><mo fence="true">]</mo></mrow><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">\mathcal L_{\mathrm{FM}}=
+\mathbb E\left[\left\|v_\theta(A_\tau,\tau,c,s)-(A_1-A_0)\right\|_2^2\right].
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathcal">L</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3283em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathrm mtight">FM</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.8em;vertical-align:-0.65em;"></span><span class="mord mathbb">E</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner"><span class="mopen delimcenter" style="top:0em;"><span class="delimsizing size2">[</span></span><span class="minner"><span class="minner"><span class="mopen delimcenter" style="top:0em;">∥</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03588em;">v</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.02778em;">θ</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.1132em;">τ</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.1132em;">τ</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">c</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">s</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mclose delimcenter" style="top:0em;">∥</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.954em;"><span style="top:-2.4003em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span><span style="top:-3.2029em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2997em;"><span></span></span></span></span></span></span><span class="mclose delimcenter" style="top:0em;"><span class="delimsizing size2">]</span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">.</span></span></span></span></span></p>
+<p>推理从噪声开始，沿学习到的速度场数值积分，得到一段连续动作。<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>τ</mi></mrow><annotation encoding="application/x-tex">\tau</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal" style="margin-right:0.1132em;">τ</span></span></span></span> 走的是生成过程，动作块的 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>H</mi></mrow><annotation encoding="application/x-tex">H</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.08125em;">H</span></span></span></span> 个时间步走的是真机控制时钟。以 50 Hz、<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>H</mi><mo>=</mo><mn>50</mn></mrow><annotation encoding="application/x-tex">H=50</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.08125em;">H</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">50</span></span></span></span> 为例，输出覆盖 1 秒的计划动作，机器人可以在收到下一次推理结果前执行其中一部分。这里的线性插值、控制频率和动作时域用于解释原理，主模型的积分器和步数未在报告中完整公开。<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2210.02747">Flow Matching 论文</a> · <a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">动作专家官方说明</a></p>
+<h3 id="3-2-同一段轨迹里的状态与指令">3.2 同一段轨迹里的状态与指令</h3>
+<p>控制命令和测得的运动是两条相互关联的数据流。命令可以要求夹爪移到指定位置，传感器记录的实际轨迹还会受到接触、负载、控制器和机械约束影响。将两条流分开，训练就可以改变哪些数据给模型当条件、哪些数据作为预测目标。模型还可以接收参考位姿、控制频率等硬件上下文。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">官方轨迹建模说明</a></p>
+<table>
+<thead>
+<tr>
+<th>任务</th>
+<th>典型条件</th>
+<th>预测目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>策略学习</td>
+<td>观测、指令、历史状态</td>
+<td>未来控制指令</td>
+</tr>
+<tr>
+<td>状态预测</td>
+<td>历史运动状态</td>
+<td>未来运动状态</td>
+</tr>
+<tr>
+<td>联合预测</td>
+<td>观测和历史轨迹</td>
+<td>未来状态及控制指令</td>
+</tr>
+<tr>
+<td>正向动力学</td>
+<td>当前状态、控制指令</td>
+<td>指令作用后的状态</td>
+</tr>
+<tr>
+<td>逆向动力学</td>
+<td>当前状态、目标状态</td>
+<td>达到目标的控制指令</td>
+</tr>
+</tbody>
+</table>
+<p>UMI 用手持夹具采集示范，能带来更多运动轨迹。原始轨迹可以监督状态预测，经过对齐且具备可靠动作标签的数据亦可提供策略监督，真机轨迹则可直接记录控制命令。正向与逆向任务学习的是运动状态和控制之间的关系，其覆盖范围取决于实际提供给模型的状态变量。<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2402.10329">UMI 论文</a> · <a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">官方轨迹建模说明</a></p>
+<h3 id="3-3-一次视觉语言前向，多份动作监督">3.3 一次视觉语言前向，多份动作监督</h3>
+<p>一份图像和指令可以配多个轨迹训练块。每个块各自采样任务、历史长度、预测时域、动作前缀和 Flow Matching 噪声。模型只计算一次公共视觉语言上下文，并让多个块共享 Action Expert 权重。Attention Mask 允许各块读公共上下文，同时隔开不同块的轨迹 Token，避免某个块从另一个块的条件或目标里得到答案。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">共享上下文训练</a></p>
+<p>假设公共前向的成本为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>C</mi><mi>v</mi></msub></mrow><annotation encoding="application/x-tex">C_v</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03588em;">v</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，每个动作块成本为 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>C</mi><mi>a</mi></msub></mrow><annotation encoding="application/x-tex">C_a</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">a</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>，共有 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span></span></span></span> 个训练块。这部分前向的粗略预算为：</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>C</mi><mrow><mi mathvariant="normal">i</mi><mi mathvariant="normal">n</mi><mi mathvariant="normal">d</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">p</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">n</mi><mi mathvariant="normal">d</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">n</mi><mi mathvariant="normal">t</mi></mrow></msub><mo>=</mo><mi>N</mi><mo stretchy="false">(</mo><msub><mi>C</mi><mi>v</mi></msub><mo>+</mo><msub><mi>C</mi><mi>a</mi></msub><mo stretchy="false">)</mo><mo separator="true">,</mo><mspace width="2em"/><msub><mi>C</mi><mrow><mi mathvariant="normal">s</mi><mi mathvariant="normal">h</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">d</mi></mrow></msub><mo>=</mo><msub><mi>C</mi><mi>v</mi></msub><mo>+</mo><mi>N</mi><msub><mi>C</mi><mi>a</mi></msub><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">C_{\mathrm{independent}}=N(C_v+C_a),
+\qquad C_{\mathrm{shared}}=C_v+NC_a.
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathrm mtight">independent</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03588em;">v</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">a</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mpunct">,</span><span class="mspace" style="margin-right:2em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathrm mtight">shared</span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03588em;">v</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">a</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord">.</span></span></span></span></span></p>
+<p>若 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>N</mi><mo>=</mo><mn>4</mn></mrow><annotation encoding="application/x-tex">N=4</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">4</span></span></span></span>、<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>C</mi><mi>v</mi></msub><mo>=</mo><mn>80</mn></mrow><annotation encoding="application/x-tex">C_v=80</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight" style="margin-right:0.03588em;">v</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">80</span></span></span></span>、<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>C</mi><mi>a</mi></msub><mo>=</mo><mn>20</mn></mrow><annotation encoding="application/x-tex">C_a=20</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">a</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">20</span></span></span></span>，预算由 400 降至 160，理论上少算 60%，成本比为 2.5 倍。这只计算可复用的前向份额。实际训练还取决于块掩码能否被内核有效执行、激活显存、反向传播和通信。这个优化发生在同一训练前向中，复用对象是共享上下文；推理服务的 Prefix KV Cache 则复用历史计算得到的键值缓存。</p>
+<h2 id="4-RTC-如何让推理和控制并行">4. RTC 如何让推理和控制并行</h2>
+<p>动作分块解决了高频控制下的推理调用频率。实际执行还有一个时序问题。假设机器人正在执行动作块 A，等 A 播完才开始算 B，控制队列可能断供。提前算 B 可以减少等待，但 B 也要从 A 在推理期间能到达的位置继续，才能减轻换块时的轨迹跳变。</p>
+<p>WALL-OSS-1.0 训练时把长度可变的一段未来指令保留为无噪声前缀，Flow Matching 负责生成其后尚未确定的部分。部署时，以当前已经承诺执行的动作作为该前缀。模型计算后缀的同时，机器人继续消费旧队列里的指令。RTC 文献还讨论了推理阶段的动作补全和在训练阶段直接学习前缀条件两条路径。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">WALL-OSS-1.0 的 RTC 说明</a> · <a target="_blank" rel="noopener" href="https://arxiv.org/abs/2506.07339">推理期 RTC 论文</a> · <a target="_blank" rel="noopener" href="https://arxiv.org/abs/2512.05964">训练期动作条件论文</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">机器人执行  已提交的动作前缀 ──────────────► 接上新后缀</span><br><span class="line">模型推理    读取观测和已提交前缀 ─► 生成后缀 ─┘</span><br></pre></td></tr></table></figure>
+<p>作为量级示例，若控制周期为 20 ms，而发起请求到控制器拿到结果用时约 100 ms，这段时间内大约要消费 5 个动作时间步。服务端排队、网络往返和控制器调度都会影响真正要覆盖的前缀长度。RTC 的收益来自让这段时间有动作可执行，部署时仍要测动作队列耗尽、超时和控制连续性。</p>
+<h2 id="5-Gen-和-AR-分别改了什么">5. Gen 和 AR 分别改了什么</h2>
+<h3 id="Gen-把更多视频纳入训练">Gen 把更多视频纳入训练</h3>
+<p>第一视角视频能显示手怎样使用工具、接触后物体如何变化，通常无法直接提供适配目标机器人的精确控制标签。Gen 保留共享 VLM 和 Action Expert，再加入 Generation Expert。精确的机器人数据和对齐后的 UMI 仍提供直接的策略监督。生成分支根据数据质量利用动作和未来视觉状态，缺少动作标签的视频也能用于视觉预测。生成监督通过反向传播影响共享表征。官方报告说明，推理部署保留 VLM 和两个专家，外部生成模型 WAM 只在训练期间使用。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">WALL-OSS-1.0-Gen</a></p>
+<h3 id="AR-等一段编码就开始解码">AR 等一段编码就开始解码</h3>
+<p>AR 从 Stage 1 权重扩展，直接自回归输出残差编码，再由因果 Action Decoder 还原连续指令。它采用 <code>time_major</code> 顺序。第一个时间段的各层残差码先全部到齐，然后才进入第二段。因此解码器可以先交付第一段，机器人执行时模型继续生成后续 Token。模型与解码器各自维护缓存，RTC 再把解码输出接入异步动作队列。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">WALL-OSS-1.0-AR</a> · <a target="_blank" rel="noopener" href="https://huggingface.co/x-square-robot/X-Tokenizer">公开 Tokenizer 的序列布局</a></p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">时间优先顺序    [t0 的 q0, q1, q2, q3] → [t1 的 q0, q1, q2, q3] → …</span><br><span class="line">执行交付        └─ 解码并交付 t0        └─ 解码并交付 t1</span><br></pre></td></tr></table></figure>
+<p>图中四层码本沿用公开 Tokenizer 的例子。两条生成路线对应不同的服务指标。Flow Matching 路线需要关注整块动作和迭代计算的延迟；AR 路线还要同时看首段可执行动作延迟、后续段的供给速率和解码成本。文本模型常用的每秒 Token 数只覆盖其中一部分。</p>
+<table>
+<thead>
+<tr>
+<th>模型或训练产物</th>
+<th>主要机制</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stage 1</td>
+<td>Qwen3.5 与离散动作 Token 联合预训练</td>
+<td>初始化连续动作主模型与 AR 路线</td>
+</tr>
+<tr>
+<td>WALL-OSS-1.0</td>
+<td>MoT 与 Flow Matching Action Expert</td>
+<td>通用连续动作生成</td>
+</tr>
+<tr>
+<td>Lite / Nano</td>
+<td>官方标称分别为 4B / 2B</td>
+<td>降低微调或部署的算力开销</td>
+</tr>
+<tr>
+<td>Gen</td>
+<td>Action Expert、Generation Expert 与训练期 WAM</td>
+<td>引入第一视角视频等生成式监督</td>
+</tr>
+<tr>
+<td>AR</td>
+<td>自回归动作 Token、因果增量解码与 RTC</td>
+<td>流式交付可执行动作</td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-放进真实系统后，模型和服务各管什么">6. 放进真实系统后，模型和服务各管什么</h2>
+<p>在 XR Harness 的分层里，System 2 根据观测和执行反馈规划、分解并修订任务。System 1 用 WALL-OSS-1.0 把当前子任务转成动作。System 0 用 RAP（Robot Agent Protocol）接传感器和控制器。比如原本计划从杯子外侧把勺子放进碗里，检测到遮挡之后，上层可发出新的绕行子任务，动作专家根据当前场景生成后续轨迹。<a target="_blank" rel="noopener" href="https://github.com/X-Square-Robot/xr-harness">XR Harness 源码</a> · <a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">官方闭环案例</a></p>
+<p>在多机器人场景里，请求的截止时间来自物理执行进度。两个请求即使同时到达，手上只剩一小段已提交动作的机器人也往往更急。视觉编码、骨干前向与动作生成对 GPU 的占用不同，把它们重叠执行既可能提高吞吐，也可能拖慢临近截止时间的请求。XInfer 论文从阶段级重叠、并发干扰和按时返回的有效容量衡量这个问题。<a target="_blank" rel="noopener" href="https://arxiv.org/abs/2611.14969">XInfer 论文</a> · <a target="_blank" rel="noopener" href="https://github.com/X-Square-Robot/XInfer">XInfer 源码</a></p>
+<p>官方报告给出的案例是 WALL-OSS-1.0-Nano 在单张消费级 Blackwell GPU 上达到 18 台机器人的有效容量。XInfer 论文里的这项比较使用生产场景衍生工作负载和 95% SLO 达标口径，这个数字应当和模型、硬件、负载及服务目标一起读。部署评估时，同时观察端到端延迟分位数、截止时间达标率和动作队列余量，更容易看到控制端的停顿从哪里来。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">模型家族报告</a> · <a target="_blank" rel="noopener" href="https://arxiv.org/abs/2611.14969">XInfer 评测口径</a></p>
+<h2 id="7-公开评测能说明什么">7. 公开评测能说明什么</h2>
+<table>
+<thead>
+<tr>
+<th>评测</th>
+<th>官方报告结果</th>
+<th>口径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ManipArena 真机固定任务</td>
+<td>1,101 / 1,500 分，成功率 50.67%</td>
+<td>15 项任务，每项 10 次。得分计入部分完成，成功率单独计算</td>
+</tr>
+<tr>
+<td>开放式真机任务</td>
+<td>55.1% 零样本成功率，平均 6.45 / 10 分</td>
+<td>377 次评测按相同任务指令聚合为 312 个独立任务，模型未经任务专属微调</td>
+</tr>
+<tr>
+<td>RoboDojo 仿真</td>
+<td>Lite 总分 42.59</td>
+<td>2026 年 11 月 5 日官方报告采用的榜单快照，在无 Agent 系统的策略组中居首</td>
+</tr>
+</tbody>
+</table>
+<p>开放式真机评测关注任务覆盖，ManipArena 便于在固定协议下比较，RoboDojo 则是 Lite 的仿真结果。三组数字回答不同问题，也分别受任务选择、执行硬件和计分口径影响。理解 WALL-OSS-1.0 的价值，可以沿三个独立的问题读这些结果：离散监督是否改善了动作语义，连续专家是否给出可执行轨迹，整个控制链路能否准时把轨迹送到机器人。<a target="_blank" rel="noopener" href="https://x2robot.com/blogs/wall-oss-1/">WALL-OSS-1.0 官方评测</a></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/26/2026-11-26-wall-oss-1-0-architecture/">https://roger-lv.github.io/2026/11/26/2026-11-26-wall-oss-1-0-architecture/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/VLA/">VLA</a><a class="post-meta__tags" href="/tags/%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD/">具身智能</a><a class="post-meta__tags" href="/tags/%E6%8E%A8%E7%90%86%E4%BC%98%E5%8C%96/">推理优化</a><a class="post-meta__tags" href="/tags/WALL-OSS/">WALL-OSS</a><a class="post-meta__tags" href="/tags/Flow-Matching/">Flow Matching</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/25/2026-11-25-karmada-multi-cluster-scheduling/" title="Karmada 多集群调度实战：一个 Deployment 如何分发到两个集群"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Karmada 多集群调度实战：一个 Deployment 如何分发到两个集群</div></div><div class="info-2"><div class="info-item-1">假设一套 Nginx 服务需要运行在两个 Kubernetes 集群，总共六个副本。平台希望 member1 跑两个，member2 跑四个，还希望 member2 使用单独的资源请求。用 Karmada 可以把这三个决定分别写进 Deployment、PropagationPolicy 和 OverridePolicy，在一个 API 入口提交，再沿着 ResourceBinding 和 Work 查清每个集群收到了什么。 这里有两次调度。Karmada 选择集群并分配副本，成员集群的调度器再为每个 Pod 选择节点。这个分工也决定了如何排障。一个跨集群调度成功的 Deployment，仍然可能因为成员集群的配额、镜像或节点约束而无法提供服务。  1. 从资源模板到成员集群 Karmada 有自己的 Kubernetes API 入口和存储。在这个入口创建的 Deployment 是待分发的资源模板。部署 Karmada 控制平面的宿主集群、提供 Karmada API 的控制平面，以及实际运行应用的成员集群，各有自己的职责。使用 kubectl 时要先确认连接的是哪一个 AP...</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/19/2026-11-19-embodied-vla-infrastructure-primer/" title="从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-19</div><div class="info-item-2">从视觉 Token 到机器人动作：具身智能 VLA 与基础设施入门</div></div><div class="info-2"><div class="info-item-1"> 面向读者：理解基本深度学习或软件工程，希望读懂具身模型论文、训练代码和推理系统的工程师。 本文围绕“把蓝色盘子左边的红杯子拿起来”展开，解释模型怎样获得视觉能力、怎样理解指令、怎样生成动作，以及基础设施怎样支撑这条链路。默认读者了解 loss、梯度和优化器，不重复通用机器学习入门。 资料核对日期：2026 年 11 月 19 日。OpenVLA、ACT、原版 π₀ 等用于说明代表性的设计，并非所有 VLA 的统一规范。除明确引用的模型配置外，文中的维度、时域和频率均为教学示例。     #article-container .katex-display {   overflow-x: auto;   overflow-y: hidden;   padding: .2em 0; } #article-container .katex-display > .katex {   min-width: 100%;   width: max-content; }  阅读导航    想弄清的问题 对应章节     机器人到底观察什么、输出什么？ 第 1 章   视觉编码器最开始怎样训练？ ...</div></div></div></a><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%B8%BA%E4%BB%80%E4%B9%88VLA%E8%AE%AD%E7%BB%83%E9%80%89FSDP%E8%80%8C%E4%B8%8D%E6%98%AFMegatron/" title="为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立</div></div><div class="info-2"><div class="info-item-1">为什么 VLA 训练选 FSDP 而不是 Megatron:四个约束同时成立  本文是 从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 的姊妹篇——那篇给出了&quot;VLA 训练用 FSDP 而非 Megatron&quot;的结论,这篇把背后的逻辑彻底拆透。  核心原因一句话:VLA 模型的参数规模(1B-34B)刚好落在 FSDP 的&quot;甜点区&quot;,加上它基于 HuggingFace 生态的异构多模态结构让 Megatron 类框架难以适配,而科研社区主导的开源生态天然偏向 PyTorch 原生方案。下面把逻辑拆开讲。  一、先看 VLA 训练的真实规模和场景 VLA 训练的参数量和你熟悉的 LLM 预训练完全不是一个量级:    场景 参数规模 典型硬件 训练方式     VLA 预训练 7B(OpenVLA)/ 3B(π0) 64 张 A100 × 15 天 全量   VLA 微调(主流场景) 7B 单节点 8 张 A100 LoRA 或全量   VLA-RL 后训练 7B 单节点到多节点 FSDP 管理  ...</div></div></div></a><a class="pagination-related" href="/2026/08/29/2026-08-29-%E4%BB%8ELLM-Infra%E5%88%B0%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BDInfra/" title="从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-29</div><div class="info-item-2">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析</div></div><div class="info-2"><div class="info-item-1">从 LLM Infra 到具身智能 Infra:仿真集群、VLA 训练栈与数据管线全景解析 写给一位即将从大模型 Infra 转向具身智能 Infra 的工程师,也写给所有关注这个方向的人。  引言:一次心智模型的切换 过去三年做大模型 Infra 的人,心智模型基本是稳定的:海量文本 token 进、GPU 集群算、ckpt 出、推理服务化。但具身智能完全不同——它训练的不是&quot;下一个 token&quot;,而是&quot;机器人在物理世界里的下一步动作&quot;;它的数据不是从互联网爬来的,而是真机遥操作、仿真合成、人类视频多源混合出来的;它的基础设施不仅要支撑训练,还要支撑大规模并行仿真和真机数据回流这两个 LLM 时代从未存在过的环节。 如果你从 LLM Infra 背景切入这个领域,大约 60-70% 的工程经验可以直接平移,剩下 30-40% 需要新建心智模型。本文拆解其中三个最核心的新模块:仿真集群的算力形态、VLA 训练栈的真实结构、以及数据管线的工程全貌。  一、仿真集群:GPU 上的&quot;平行世界&quot; 1.1 它到底是什么 具身智能训...</div></div></div></a><a class="pagination-related" href="/2026/11/02/2026-11-02-%E4%BB%8ELLM%E5%88%B0%E5%85%B7%E8%BA%AB-%E6%B3%A8%E6%84%8F%E5%8A%9B%E6%9E%B6%E6%9E%84VLA%E4%B8%96%E7%95%8C%E6%A8%A1%E5%9E%8B%E4%B8%8E%E4%BA%91Infra%E5%85%A8%E6%99%AF%E8%B0%83%E7%A0%94/" title="从 LLM 到具身：注意力架构、VLA&#x2F;世界模型与云 Infra 的全景调研"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-02</div><div class="info-item-2">从 LLM 到具身：注意力架构、VLA&#x2F;世界模型与云 Infra 的全景调研</div></div><div class="info-2"><div class="info-item-1">从 LLM 到具身：注意力架构、VLA/世界模型与云 Infra 的全景调研  一句话导览：本文沿三条主线展开——(1) LLM 侧注意力与 MoE 架构的最新演进（MLA、FlashAttention-3、Ring/Ulysses、线性注意力、MoE）；(2) 具身侧 VLA 与世界模型的代表架构（RT-2、OpenVLA、π0.7、GR00T N1/N1.5、RDT-1B、Genie 3/4、DreamerV3、UniSim）；(3) 从训练 Infra（混合并行、RLHF 流水线）到推理 Infra（vLLM/SGLang）以及具身特有 Infra（遥操作数据飞轮、sim2real、边缘部署、3D/空间存储、RL rollout）的全链路挑战。文末给出面向未来 12 个月的技术选型判断。   一、LLM 侧注意力架构：从&quot;算得快&quot;到&quot;装得下&quot; 1.1 注意力机制演进的三条主线 Transformer 注意力架构在过去两年沿着三条相对独立的路线并行演进： 第一条是算子层优化——以 FlashAttention 系列为代表，核心问题是如何...</div></div></div></a><a class="pagination-related" href="/2026/10/22/2026-10-22-%E5%85%B7%E8%BA%AB%E6%99%BA%E8%83%BD%E8%AE%AD%E7%BB%83%E5%AD%98%E5%82%A8%E4%B8%8E%E6%95%B0%E6%8D%AE%E7%AE%A1%E7%BA%BFJuiceFS-Lance%E6%B7%B1%E5%BA%A6%E5%AE%9E%E8%B7%B5/" title="具身智能训练存储与数据管线:JuiceFS + Lance 深度实践"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-22</div><div class="info-item-2">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践</div></div><div class="info-2"><div class="info-item-1">具身智能训练存储与数据管线:JuiceFS + Lance 深度实践 具身智能的存储问题,难点不在&quot;存得下&quot;,而在&quot;读得随机、写得突发、流得动&quot;——一段双臂叠衣 episode 里藏着 3 路 30Hz 相机视频、100Hz 关节状态、未来 50 步的 action chunk,训练时 DataLoader 要从数万条 episode 里随机抽 timestep 并把这几路异频流对齐成同一行。 招商局狮岩 AI Lab 的实测给出了量化答案:用 Lance 把长视频切成 GOP 尺度 blob 后,随机读吞吐相对 LeRobot 提升 1.7–6×、存储降低 42%;而地瓜机器人的集群数据则验证了另一端:JuiceFS 多云 + 分布式缓存把训练任务启动从 20 分钟压到 3 分钟、缓存命中率从 45% 提到 92%。本文把这两套栈拼成具身训练的完整存储底座。  一、具身训练的 I/O 画像:与 LLM/CV 根本不是一回事 先明确负载形态,后面所有选型推理都从这里出发。 具身数据的最小单元是 episode,不是 token,也不是单张图...</div></div></div></a><a class="pagination-related" href="/2026/08/31/2026-08-31-%E5%85%B7%E8%BA%AB%E6%95%B0%E6%8D%AE%E5%B9%B3%E5%8F%B0%E4%B8%89%E5%A4%A7%E4%BB%B6%E6%B8%85%E6%B4%97%E6%95%B0%E6%8D%AE%E9%9B%86%E7%AE%A1%E7%90%86%E4%B8%8E%E8%AF%84%E6%B5%8B%E5%88%86%E6%9E%90/" title="具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-31</div><div class="info-item-2">具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地</div></div><div class="info-2"><div class="info-item-1">具身智能数据平台三大件:清洗、数据集管理与评测分析怎么落地  本文是 具身智能的数据地基:从传感器带宽到湖仓、清洗、评测与回流闭环 的落地实操篇——那篇讲全景与选型,这篇把三大件怎么写代码、怎么衔接拆透。  具身智能的数据工程,说到底就是三件事:把脏数据洗干净(Spark + Daft)、把干净数据管起来(Iceberg + LeRobotDataset)、让数据可查可分析(Doris / StarRocks)。这三个环节分别对应数据生命周期的不同阶段,解决的是完全不同性质的问题——如果混淆了层次,很容易在选型上踩坑:比如试图用 Spark 直接管理数据集版本,或者让 OLAP 引擎承担数据清洗的重活。 这篇文章把这三个模块逐一拆开,讲清楚每个工具在具身场景下的定位、用法和它们之间的衔接方式。  一、Spark + Daft:具身数据清洗管线怎么写 1.1 为什么需要 Daft,Spark 自己不够吗 Spark 擅长海量结构化数据的 ETL,但具身智能的数据主体是多模态非结构化数据——视频、图像、点云、张量。用原生 Spark 处理视频,你需要自己写 UDF 管理解码器、处理分...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">Roger-Lv</div><div class="author-info-description">Send a flare and light the way.</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">342</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">559</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">80</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/Roger-Lv"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/Roger-Lv" target="_blank" title="Github"><i class="fab fa-github" style="color: #24292e;"></i></a><a class="social-icon" href="mailto:1150568956@qq.com" target="_blank" title="Email"><i class="fas fa-envelope-open-text" style="color: #4a7dbe;"></i></a><a class="social-icon" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/" target="_blank" title="LinkedIn"><i class="iconfont icon-linkedin-fill"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">Welcome!</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#1-%E4%B8%A4%E4%B8%AA%E9%98%B6%E6%AE%B5%E5%92%8C%E4%B8%A4%E7%A7%8D%E5%8A%A8%E4%BD%9C%E8%A1%A8%E7%A4%BA"><span class="toc-text">1. 两个阶段和两种动作表示</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#2-Stage-1-%E5%A6%82%E4%BD%95%E8%AE%A9%E5%8A%A8%E4%BD%9C%E8%BF%9B%E5%85%A5%E9%A2%84%E8%AE%AD%E7%BB%83"><span class="toc-text">2. Stage 1 如何让动作进入预训练</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#2-1-%E5%85%B1%E4%BA%AB%E9%AA%A8%E5%B9%B2%E5%92%8C%E7%9B%91%E7%9D%A3%E7%9B%AE%E6%A0%87"><span class="toc-text">2.1 共享骨干和监督目标</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-2-X-Tokenizer-%E5%A6%82%E4%BD%95%E7%BC%96%E7%A0%81%E4%B8%80%E6%AE%B5%E8%BD%A8%E8%BF%B9"><span class="toc-text">2.2 X-Tokenizer 如何编码一段轨迹</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#3-Stage-2-%E5%A6%82%E4%BD%95%E7%94%9F%E6%88%90%E8%BF%9E%E7%BB%AD%E5%8A%A8%E4%BD%9C%E5%9D%97"><span class="toc-text">3. Stage 2 如何生成连续动作块</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#3-1-MoT-%E5%92%8C-Flow-Matching-%E7%9A%84%E5%88%86%E5%B7%A5"><span class="toc-text">3.1 MoT 和 Flow Matching 的分工</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-2-%E5%90%8C%E4%B8%80%E6%AE%B5%E8%BD%A8%E8%BF%B9%E9%87%8C%E7%9A%84%E7%8A%B6%E6%80%81%E4%B8%8E%E6%8C%87%E4%BB%A4"><span class="toc-text">3.2 同一段轨迹里的状态与指令</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-3-%E4%B8%80%E6%AC%A1%E8%A7%86%E8%A7%89%E8%AF%AD%E8%A8%80%E5%89%8D%E5%90%91%EF%BC%8C%E5%A4%9A%E4%BB%BD%E5%8A%A8%E4%BD%9C%E7%9B%91%E7%9D%A3"><span class="toc-text">3.3 一次视觉语言前向，多份动作监督</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#4-RTC-%E5%A6%82%E4%BD%95%E8%AE%A9%E6%8E%A8%E7%90%86%E5%92%8C%E6%8E%A7%E5%88%B6%E5%B9%B6%E8%A1%8C"><span class="toc-text">4. RTC 如何让推理和控制并行</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#5-Gen-%E5%92%8C-AR-%E5%88%86%E5%88%AB%E6%94%B9%E4%BA%86%E4%BB%80%E4%B9%88"><span class="toc-text">5. Gen 和 AR 分别改了什么</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Gen-%E6%8A%8A%E6%9B%B4%E5%A4%9A%E8%A7%86%E9%A2%91%E7%BA%B3%E5%85%A5%E8%AE%AD%E7%BB%83"><span class="toc-text">Gen 把更多视频纳入训练</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#AR-%E7%AD%89%E4%B8%80%E6%AE%B5%E7%BC%96%E7%A0%81%E5%B0%B1%E5%BC%80%E5%A7%8B%E8%A7%A3%E7%A0%81"><span class="toc-text">AR 等一段编码就开始解码</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#6-%E6%94%BE%E8%BF%9B%E7%9C%9F%E5%AE%9E%E7%B3%BB%E7%BB%9F%E5%90%8E%EF%BC%8C%E6%A8%A1%E5%9E%8B%E5%92%8C%E6%9C%8D%E5%8A%A1%E5%90%84%E7%AE%A1%E4%BB%80%E4%B9%88"><span class="toc-text">6. 放进真实系统后，模型和服务各管什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#7-%E5%85%AC%E5%BC%80%E8%AF%84%E6%B5%8B%E8%83%BD%E8%AF%B4%E6%98%8E%E4%BB%80%E4%B9%88"><span class="toc-text">7. 公开评测能说明什么</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/26/2026-11-26-wall-oss-1-0-architecture/" title="WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制">WALL-OSS-1.0 架构解析：从离散动作 Token 到实时连续控制</a><time datetime="2026-11-26T02:49:34.000Z" title="发表于 2026-11-26 10:49:34">2026-11-26</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/25/2026-11-25-karmada-multi-cluster-scheduling/" title="Karmada 多集群调度实战：一个 Deployment 如何分发到两个集群">Karmada 多集群调度实战：一个 Deployment 如何分发到两个集群</a><time datetime="2026-11-25T11:28:01.000Z" title="发表于 2026-11-25 19:28:01">2026-11-25</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/24/2026-11-24-GPU-Spot%E8%B5%84%E6%BA%90%E5%90%8C%E6%AD%A5%E6%8A%A2%E5%8D%A0%E6%96%B9%E6%A1%88/" title="GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接">GPU Spot 资源同步抢占方案：把异步驱逐升级为同步使用权交接</a><time datetime="2026-11-23T16:00:00.000Z" title="发表于 2026-11-24 00:00:00">2026-11-24</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/" title="一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度">一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度</a><time datetime="2026-11-23T16:00:00.000Z" title="发表于 2026-11-24 00:00:00">2026-11-24</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/11/23/2026-11-23-cpp-extern-c-abi/" title="C++ 库为什么对外提供 C 接口（从 extern &quot;C&quot; 到 ABI）">C++ 库为什么对外提供 C 接口（从 extern &quot;C&quot; 到 ABI）</a><time datetime="2026-11-23T15:20:59.000Z" title="发表于 2026-11-23 23:20:59">2026-11-23</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=5.4.2"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js?v=5.4.2"></script></div></div></body></html>
