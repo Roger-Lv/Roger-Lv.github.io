@@ -478,13 +478,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // toc元素點擊
       const tocItemClickFn = e => {
-        const target = e.target.closest('.toc-link')
+        const target = e.target.closest('.toc-link[href]')
         if (!target) return
 
-        e.preventDefault()
-        btf.scrollToDest(btf.getEleTop(document.getElementById(decodeURI(target.getAttribute('href')).replace('#', ''))), 300)
-        if (window.innerWidth < 900) {
+        if (!target.closest('.reading-spread')) {
+          e.preventDefault()
+          btf.scrollToDest(btf.getEleTop(document.getElementById(decodeURI(target.hash.slice(1)))), 300)
+        }
+        if (window.innerWidth <= 900) {
           $cardTocLayout.classList.remove('open')
+          document.getElementById('mobile-toc-button')?.setAttribute('aria-expanded', 'false')
         }
       }
 
@@ -535,11 +538,13 @@ document.addEventListener('DOMContentLoaded', () => {
       detectItem = currentIndex
 
       if (isToc) {
+        $cardToc.querySelector('[aria-current]')?.removeAttribute('aria-current')
         $cardToc.querySelectorAll('.active').forEach(i => i.classList.remove('active'))
 
         if (currentId) {
           const currentActive = $tocLink[currentIndex]
           currentActive.classList.add('active')
+          currentActive.setAttribute('aria-current', 'location')
 
           setTimeout(() => autoScrollToc(currentActive), 0)
 
@@ -647,7 +652,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tocEle.style.transformOrigin = `right ${tocEleHeight - tocEleBottom - btData.height / 2}px`
       }
 
-      tocEle.classList.toggle('open')
+      item.setAttribute('aria-expanded', String(tocEle.classList.toggle('open')))
       tocEle.addEventListener('transitionend', () => {
         tocEle.style.cssText = ''
       }, { once: true })
