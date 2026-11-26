@@ -1,0 +1,462 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>不使用 Karmada，怎样调度多集群 GPU 作业 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="用一份 32 卡训练作业串起集群注册、拓扑库存、选址评分、原子预留和成员准入，并比较自研 Agent、OCM、MultiKueue 与 Karmada。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="不使用 Karmada，怎样调度多集群 GPU 作业">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/26/2026-11-26-multi-cluster-gpu-scheduling/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="用一份 32 卡训练作业串起集群注册、拓扑库存、选址评分、原子预留和成员准入，并比较自研 Agent、OCM、MultiKueue 与 Karmada。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-26T06:56:00.000Z">
+<meta property="article:modified_time" content="2026-11-26T07:00:37.904Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="GPU">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="调度">
+<meta property="article:tag" content="多集群">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "不使用 Karmada，怎样调度多集群 GPU 作业",
+  "url": "https://roger-lv.github.io/2026/11/26/2026-11-26-multi-cluster-gpu-scheduling/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-26T06:56:00.000Z",
+  "dateModified": "2026-11-26T07:00:37.904Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/26/2026-11-26-multi-cluster-gpu-scheduling/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":false,"top_n_per_article":2,"unescape":false,"languages":{"hits_empty":"No results for “${query}”","hits_stats":"Articles found · ${hits}"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '不使用 Karmada，怎样调度多集群 GPU 作业',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css?v=20261126-3"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><a class="skip-content" href="#content-inner">Skip to main content</a><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus" inert="inert" tabindex="-1" aria-label="Mobile navigation" role="dialog" aria-modal="true"><button class="sidebar-close" type="button" aria-label="Close navigation menu">×</button><div class="avatar-img text-center"><img src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">Articles</div><div class="length-num">346</div></a><a href="/tags/"><div class="headline">Tags</div><div class="length-num">565</div></a><a href="/categories/"><div class="headline">Categories</div><div class="length-num">69</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><button class="site-page group" type="button"><i class="fa-fw fas fa-book-open"></i><span> Articles</span><i class="fas fa-chevron-down"></i></button><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-folder-open"></i><span> Archives</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-archive"></i><span> Categories</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> About</span></a></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> Life</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> Links</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-paper-plane"></i><span> Guestbook</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">不使用 Karmada，怎样调度多集群 GPU 作业</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  Back to home</span></span></a></span><div id="menus"><div id="search-button"><button class="site-page social-icon search" type="button" aria-label="Search articles" aria-haspopup="dialog"><i class="fas fa-search fa-fw"></i><span> Search</span></button></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><button class="site-page group" type="button"><i class="fa-fw fas fa-book-open"></i><span> Articles</span><i class="fas fa-chevron-down"></i></button><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-folder-open"></i><span> Archives</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-archive"></i><span> Categories</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> About</span></a></div><div class="menus_item"><a class="site-page" href="/categories/life/"><i class="fa-fw fas fa-coffee"></i><span> Life</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> Links</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-paper-plane"></i><span> Guestbook</span></a></div></div><button id="toggle-menu" type="button" aria-label="Open navigation menu" aria-controls="sidebar-menus" aria-expanded="false"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></button></div></nav><div id="post-info"><h1 class="post-title">不使用 Karmada，怎样调度多集群 GPU 作业</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">Published</span><time class="post-meta-date-created" datetime="2026-11-26T06:56:00.000Z" title="Published 2026-11-26 14:56:00">2026-11-26</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">Updated</span><time class="post-meta-date-updated" datetime="2026-11-26T07:00:37.904Z" title="Updated 2026-11-26 15:00:37">2026-11-26</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infra</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="leancloud_visitors" id="/2026/11/26/2026-11-26-multi-cluster-gpu-scheduling/" data-flag-title="不使用 Karmada，怎样调度多集群 GPU 作业"><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">Views:</span><span class="leancloud-visitors-count"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner" tabindex="-1"><div id="post"><article class="container post-content" id="article-container"><p>训练团队提交一个任务，需要四台各有八张 H100 的机器，四台还要位于同一个 RDMA 域。集群 B 报告有 64 张空卡，却只凑得出两台完整八卡机。即使中心正确地选中了另一座集群 A，两个并发任务仍可能同时拿走账面上最后 16 张卡。<strong>选得到集群、占得到资源、把作业送到成员，是三个独立的承诺。</strong></p>
+<p>假设一个训练作业的所有 Worker 都跑在同一成员集群，各集群保留自己的调度器，成员 Agent 能主动连到中心。下文用已有的 Kubernetes API、etcd 和 Agent 设计一条链路。示例中的 <code>ClusterInventory</code>、<code>Reservation</code>、<code>Work</code> 都是平台拟定的 CRD，容量、评分和超时都是演算值。</p>
+<span id="more"></span>
+<h2 id="四个控制器各自写什么">四个控制器各自写什么</h2>
+<table>
+<thead>
+<tr>
+<th>逻辑模块</th>
+<th>读取什么</th>
+<th>有权写什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cluster Manager</td>
+<td>已注册的身份、成员 Lease、维护计划</td>
+<td><code>Cluster</code> 的就绪条件，准入新任务与排空策略</td>
+</tr>
+<tr>
+<td>Resource Manager</td>
+<td>成员汇总的节点、Pod 请求与分配、设备、配额、拓扑</td>
+<td>带采样时间和版本的 <code>ClusterInventory</code></td>
+</tr>
+<tr>
+<td>Global Scheduler</td>
+<td>作业需求、租户配额、库存、已有预留</td>
+<td>有版本的集群选择和资源账本，驱动预留状态</td>
+</tr>
+<tr>
+<td>Work Distributor</td>
+<td>已获准执行的绑定、对象 UID 和代次</td>
+<td>每成员的 Work；成员 Agent 负责同步本地 CR 及回报</td>
+</tr>
+</tbody>
+</table>
+<p>初期四个协调循环可以放进同一个 Controller Manager。它们共用平台现有 API，但有各自管理的字段、队列和指标。中心决定把作业交给 A，A 的 kube-scheduler 或 Volcano 再给每个 Pod 找节点。平台可以从成员得到失败原因，重新排队或更换候选。</p>
+<div class="mermaid-wrap"><pre class="mermaid-src" hidden>flowchart TD
+    agent[&quot;成员 Agent：身份、心跳、本地资源观测&quot;] --&gt; cluster[&quot;Cluster &#x2F; Lease&quot;]
+    agent --&gt; inv[&quot;ClusterInventory&quot;]
+    job[&quot;TrainingJob&quot;] --&gt; global[&quot;Global Scheduler&quot;]
+    cluster --&gt; global
+    inv --&gt; global
+    global --&gt; book[&quot;原子预留账本&quot;]
+    book --&gt; admission[&quot;成员本地准入确认&quot;]
+    admission --&gt;|确认相同代次| work[&quot;绑定与 Work&quot;]
+    work --&gt; operator[&quot;成员 Agent → Training Operator&quot;]
+    operator --&gt; local[&quot;本地调度器 → 4 台八卡节点&quot;]
+    operator -.状态回传.-&gt; work</pre></div>
+<h2 id="集群健康和-GPU-库存分开记">集群健康和 GPU 库存分开记</h2>
+<p>每个成员用独立凭证注册。中心分配集群身份、工作命名空间和最小 RBAC。Agent 续对应的 <code>coordination.k8s.io/v1 Lease</code>，并上报版本和容量。管理员决定 <code>spec.schedulable</code>；成员无权自行取消维护状态。假设每 10 秒续租一次、30 秒未收到续租就标记 <code>Unknown</code>，这个阈值要用跨地域延迟和丢包数据校准。失联时先暂停新调度；存量工作是否停下，需要独立的执行权证据。退役时先停止接单，再排空，最后撤销凭证。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/architecture/leases/">Kubernetes Lease</a></p>
+<p>成员 Agent 用 Informer 观察 Node、Pod、ResourceQuota、启用 DRA 时的 ResourceClaim，以及设备插件或业务系统维护的 GPU 与网络拓扑。先在成员侧去重汇总，再上传快照，附采样时间、序号、库存口径和拓扑域标识。中心只对足够新的库存进行选址；库存过期时触发刷新。下表假设三个集群 GPU 都是 H100，且暂时没有尚未记入分配数的预留。</p>
+<table>
+<thead>
+<tr>
+<th>集群</th>
+<th style="text-align:right">可分配总数</th>
+<th style="text-align:right">已分配</th>
+<th style="text-align:right">余量</th>
+<th style="text-align:right">完整八卡节点</th>
+<th style="text-align:right">同一 RDMA 域内最多可用完整节点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td style="text-align:right">128</td>
+<td style="text-align:right">80</td>
+<td style="text-align:right">48</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">4</td>
+</tr>
+<tr>
+<td>B</td>
+<td style="text-align:right">256</td>
+<td style="text-align:right">192</td>
+<td style="text-align:right">64</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">2</td>
+</tr>
+<tr>
+<td>C</td>
+<td style="text-align:right">512</td>
+<td style="text-align:right">160</td>
+<td style="text-align:right">352</td>
+<td style="text-align:right">32</td>
+<td style="text-align:right">8</td>
+</tr>
+<tr>
+<td>合计</td>
+<td style="text-align:right">896</td>
+<td style="text-align:right">432</td>
+<td style="text-align:right">464</td>
+<td style="text-align:right">—</td>
+<td style="text-align:right">—</td>
+</tr>
+</tbody>
+</table>
+<p>分配要按设备或实际申请量计账。某租户占用的 GPU 在一分钟内利用率为零，可能正在等数据，所有权仍在租户手上。Prometheus 的利用率适合识别热点、调优打分。控制面计算还能承诺多少资源时，要扣除已分配资源和<strong>尚未计入已分配数</strong>的有效预留。二者通过 workload UID 和执行代次去重。</p>
+<h2 id="四台八卡机怎样选出一个集群">四台八卡机怎样选出一个集群</h2>
+<p>可以借鉴 Kubernetes Scheduling Framework 的扩展点，在平台调度器内实现以下流程。队列按租户与作业优先级取任务；PreFilter 把业务 CR 解析成四台完整八卡机和同域约束；Filter 检查健康、新鲜度、SKU、拓扑、配额、数据集与存储可达性；Score 只比较留下来的候选。之后 Reserve 尝试预留，Permit 等成员准入，Bind 固化结果，失败由 Unreserve 释放。每个阶段都应留下可查询的拒绝原因。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/">Kubernetes Scheduling Framework</a></p>
+<p>用上表的数据，B 在 Filter 阶段出局。A 余卡较少，但刚好能把四台机器装在一个域里；C 也满足硬约束。假设 A 已缓存这份作业的 checkpoint，C 的单位 GPU 成本更低。给每项指标先归一到 0–100 分，并统一为越高越好；最后用“各项权重乘分数之和 ÷ 权重总和”比较。权重只改变 A、C 的先后，不能让 B 凭便宜重新入围。</p>
+<h3 id="调整权重，比较-A-与-C">调整权重，比较 A 与 C</h3>
+<p>表里的分数和权重可以复算，也可以直接拖动。把其余项归零、只保留成本，会得到和默认策略相反的选择。</p>
+<form id="gpu-cluster-score">
+<table aria-label="候选集群的评分因子和调节权重"><thead><tr><th>因子</th><th>A</th><th>C</th><th>权重</th></tr></thead><tbody>
+<tr><th scope="row"><label for="gpu-w-pack">GPU 装箱</label></th><td>90</td><td>60</td><td><input id="gpu-w-pack" type="range" min="0" max="100" value="35" style="width:6em;max-width:100%"> <output for="gpu-w-pack">35</output></td></tr>
+<tr><th scope="row"><label for="gpu-w-data">Checkpoint 亲和</label></th><td>100</td><td>60</td><td><input id="gpu-w-data" type="range" min="0" max="100" value="25" style="width:6em;max-width:100%"> <output for="gpu-w-data">25</output></td></tr>
+<tr><th scope="row"><label for="gpu-w-cost">资源成本</label></th><td>75</td><td>95</td><td><input id="gpu-w-cost" type="range" min="0" max="100" value="20" style="width:6em;max-width:100%"> <output for="gpu-w-cost">20</output></td></tr>
+<tr><th scope="row"><label for="gpu-w-net">域内网络</label></th><td>90</td><td>90</td><td><input id="gpu-w-net" type="range" min="0" max="100" value="10" style="width:6em;max-width:100%"> <output for="gpu-w-net">10</output></td></tr>
+<tr><th scope="row"><label for="gpu-w-health">稳定性</label></th><td>80</td><td>80</td><td><input id="gpu-w-health" type="range" min="0" max="100" value="10" style="width:6em;max-width:100%"> <output for="gpu-w-health">10</output></td></tr>
+</tbody></table>
+<p><output id="gpu-score-result" aria-live="polite">A 88.5 分，C 72.0 分。优先选择 A。</output></p>
+<button type="reset">恢复默认权重</button>
+</form>
+<script defer src="/js/gpu-cluster-score.js"></script>
+<h2 id="最后-16-张卡，只能承诺一次">最后 16 张卡，只能承诺一次</h2>
+<p>中心看到 A 还有 16 张卡。任务甲和乙各要 16 张，都读到同一份快照，也都能成功创建名字不同的 <code>Reservation</code>。此时 API 只保证创建了两个不同对象；没人对同一份余额做过互斥更新。</p>
+<p>我的做法是给每个独占资源池设一个权威账本，在<strong>同一个 Kubernetes 对象</strong>里记录可用预算、按任务 UID 与尝试代次索引的活动预留，以及它们对应的拓扑份额。用带原始 <code>metadata.resourceVersion</code> 的 Update 条件写入。下面的伪代码只描述单账本上的一次扣减。</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">reserve(pool, key, request):</span><br><span class="line">  在有上限和退避的重试中：</span><br><span class="line">    ledger = 从 API 读取当前账本(pool)</span><br><span class="line">    如果 key 已存在：核对请求摘要，再返回原预留</span><br><span class="line">    如果账本无法满足所需节点形状、拓扑域或卡数：返回容量不足</span><br><span class="line">    把 key、请求摘要、资源份额、截止时间写入这份 ledger</span><br><span class="line">    以读取时的 resourceVersion 更新 ledger</span><br><span class="line">    写入成功：返回预留记录</span><br><span class="line">    遇到 409 Conflict：重新读账本并重新计算</span><br><span class="line">    遇到结果不明的超时：重读并按同一 key 查询是否已提交</span><br><span class="line">    其他错误：返回错误给协调循环</span><br></pre></td></tr></table></figure>
+<p>若甲先写成功，乙用旧版本更新会收到 <code>409 Conflict</code>；重读后余额为零。进程若在扣账成功、写 <code>Reservation.status</code> 前崩溃，新副本能按同一 key 找回预留。租户配额跨池时，还要对其权威账本单独取得额度，再明确补偿责任；任一额度没拿齐都不能执行。Kubernetes API 的这个保证止于<strong>单对象</strong>，不会替 Reservation、业务 CR 和 Work 做跨对象事务。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/using-api/api-concepts/#updates-to-existing-resources">Kubernetes API 更新与资源版本</a></p>
+<p><strong>成员还要真正占住资源。</strong> 中心发一份带 UID、代次和期限的准入请求，成员的队列或准入控制器将它和本地提交的作业一起计账。带物理拓扑要求时，还要能约束后续的整组节点分配。Agent 再查一次余卡只能得到一次观测；查完到启动之间，本地任务照样可能把卡拿走。使用 Kueue 时要区分逻辑配额预留与拓扑感知准入，并验证所有竞争负载都受同一机制约束。<a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/admission/">Kueue 作业准入</a></p>
+<table>
+<thead>
+<tr>
+<th>中断位置</th>
+<th>恢复时的处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>中心已扣账，成员拒绝准入</td>
+<td>核对 UID 和代次，撤销对应预留并重排</td>
+</tr>
+<tr>
+<td>成员已准入，确认消息丢失</td>
+<td>用同一 key 查询已有准入，重发确认；进入待核实状态期间保留份额</td>
+</tr>
+<tr>
+<td>中心等待超时，旧成员仍可能执行</td>
+<td>停止签发旧代次的新 Work；先确认撤销，或让执行端强制拒绝旧令牌，再释放或重派</td>
+</tr>
+<tr>
+<td>预留转为实际占用，库存随后上报</td>
+<td>用同一身份将账本条目转为已分配，和新快照对齐，避免重复扣卡</td>
+</tr>
+<tr>
+<td>作业取消或完成</td>
+<td>先确认本地占用已释放，再幂等归还份额；重复回调不重复入账</td>
+</tr>
+</tbody>
+</table>
+<h2 id="用-Work-交付通过准入的作业">用 Work 交付通过准入的作业</h2>
+<p>下面是平台自己的 Work 协议示例。生产协议还需定义版本、准入凭据的校验和成员可执行的资源范围。已通过准入的作业要引用同一份预留；成员只能兑现仍有效的执行代次。</p>
+<figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">apiVersion:</span> <span class="string">platform.example.com/v1alpha1</span></span><br><span class="line"><span class="attr">kind:</span> <span class="string">Work</span></span><br><span class="line"><span class="attr">metadata:</span></span><br><span class="line">  <span class="attr">name:</span> <span class="string">train-001-attempt-1</span></span><br><span class="line">  <span class="attr">namespace:</span> <span class="string">gpu-cluster-a</span></span><br><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">reservationRef:</span> <span class="string">train-001-attempt-1</span></span><br><span class="line">  <span class="attr">workloadUID:</span> <span class="string">demo-train-001</span></span><br><span class="line">  <span class="attr">attempt:</span> <span class="number">1</span></span><br><span class="line">  <span class="attr">manifests:</span></span><br><span class="line">    <span class="bullet">-</span> <span class="attr">apiVersion:</span> <span class="string">training.example.com/v1</span></span><br><span class="line">      <span class="attr">kind:</span> <span class="string">TrainingJob</span></span><br><span class="line">      <span class="attr">metadata:</span></span><br><span class="line">        <span class="attr">name:</span> <span class="string">train-001</span></span><br><span class="line">        <span class="attr">namespace:</span> <span class="string">tenant-a</span></span><br><span class="line">      <span class="attr">spec:</span></span><br><span class="line">        <span class="attr">workerReplicas:</span> <span class="number">4</span></span><br><span class="line">        <span class="attr">gpuPerWorker:</span> <span class="number">8</span></span><br></pre></td></tr></table></figure>
+<p>Agent 用 Informer 监听本集群命名空间的 Work，WorkQueue 按键退避重试。RESTMapper 将 GVK 映射到 GVR，Dynamic Client 通过 Server-Side Apply 写入平台负责的字段。平台还需验证允许的资源类型和目标租户命名空间，用受限身份执行，防止一份 Work 越过成员授权边界。已有同名对象先核对归属 UID，遇到字段冲突让负责人决策。成员业务 Operator 负责把 TrainingJob 翻译成实际工作负载。<a target="_blank" rel="noopener" href="https://kubernetes.io/docs/reference/using-api/server-side-apply/">Server-Side Apply 字段所有权</a></p>
+<p>API 至少公开三个不同条件：<strong>Scheduled</strong> 表示已有集群绑定，<strong>Applied</strong> 表示成员 API 已接受相应代次的 CR，<strong>Running</strong> 表示业务 Operator 观察到实际训练启动。它们各自带目标集群、尝试号和观测代次，过期回报不能覆盖新一轮状态。删除时使用 Finalizer 等待成员确认清理；断线重连先 List 再 Watch，对丢失和重复事件均按当前期望收敛。多副本 Agent 可以选主，重试和所有权检查仍应保持幂等。</p>
+<h2 id="哪些部分可以直接采用开源实现">哪些部分可以直接采用开源实现</h2>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>能直接接走什么</th>
+<th>平台还要负责什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自研 Work + Agent</td>
+<td>复用现有 API、etcd 与成员主动出站连接</td>
+<td>注册、授权、分发、状态和清理协议，以及 GPU 决策</td>
+</tr>
+<tr>
+<td>OCM</td>
+<td>Hub 上的 ManagedCluster、Placement/PlacementDecision、ManifestWork，成员侧注册与 Work Agent</td>
+<td>GPU 权威账本、原子预留、资源兑现和业务字段解释</td>
+</tr>
+<tr>
+<td>MultiKueue</td>
+<td>Manager/Worker 作业派发、本地队列准入和作业状态同步</td>
+<td>对接支持的 Job 类型，配置队列、网络、拓扑和物理容量保证</td>
+</tr>
+<tr>
+<td>Karmada</td>
+<td>独立控制面上的通用分发策略、差异覆盖、多集群编排与故障转移机制</td>
+<td>GPU 准入、拓扑约束、checkpoint 与执行权隔离，以及新增控制面运维</td>
+</tr>
+</tbody>
+</table>
+<p><strong>OCM</strong> 适合以现有 Kubernetes 集群作 Hub。Placement 产生 PlacementDecision，可引入 AddOnPlacementScore 参与评分；平台根据选中的成员创建 ManifestWork，Work Agent 执行，并可通过 JSONPaths 只回传关注的业务字段。选中了集群只是一个决策结果，GPU 份额仍要落在账本和成员准入上。<a target="_blank" rel="noopener" href="https://open-cluster-management.io/docs/concepts/cluster-inventory/managedcluster/">OCM 集群注册</a> · <a target="_blank" rel="noopener" href="https://open-cluster-management.io/docs/concepts/content-placement/placement/">Placement</a> · <a target="_blank" rel="noopener" href="https://open-cluster-management.io/docs/concepts/work-distribution/manifestwork/">ManifestWork</a></p>
+<p><strong>MultiKueue</strong> 更适合已经采用 Kueue 的批作业。Manager 上的 Workload 获得逻辑配额后，dispatcher 将候选 Workload 送往一个或多个 Worker。某个 Worker 准入后，Manager 在入选集群创建对应 Job，清理其他候选，并同步作业状态。可以用 external dispatcher 定制候选选择。常规连接由 Manager 访问 Worker API，网络规划要单独验证，开发机等自定义类型也要确认是否有对应的 Job 集成。<a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/concepts/multikueue/">MultiKueue 调度流程</a> · <a target="_blank" rel="noopener" href="https://kueue.sigs.k8s.io/docs/tasks/manage/setup_multikueue/">多集群拓扑配置</a></p>
+<h2 id="怎样分阶段落地">怎样分阶段落地</h2>
+<ol>
+<li><strong>先验证指定集群下发。</strong> 交付 Cluster、Inventory、Work 和成员 Agent；用断线期间更新再删除的开发机检验能否收敛。验收看对象实际状态、归属和清理结果。</li>
+<li><strong>再打开自动选址和预留。</strong> 实现 Filter、Score、单账本扣减与成员准入。用两个并发请求争最后 16 张卡，分别在扣账前后、成员确认前后重启控制器；验收看最多一个作业取得有效执行权，账本最终对平。</li>
+<li><strong>最后接 Spot、跨集群抢占和容错续训。</strong> 在旧成员仍能写 checkpoint 的网络分区里演练迁移，验证旧代次被写入端拒绝，再测恢复耗时。账本竞争、库存时效、准入延迟和因 GPU 碎片导致的拒绝次数，都会影响下一步该优化哪里。</li>
+</ol>
+<p>对已有 Agent 的团队，我会把第一轮研发投入留给<strong>拓扑库存、原子预留和本地准入</strong>。若团队的反复故障主要出在 CR 分发，就先评估 OCM 等现成实现。决定引入完整多集群编排前，可以沿一份真实 Job 算清研发和长期运维责任。<a href="/2026/11/25/2026-11-25-karmada-multi-cluster-scheduling/">AI 算力平台该不该引入 Karmada？</a></p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/26/2026-11-26-multi-cluster-gpu-scheduling/">https://roger-lv.github.io/2026/11/26/2026-11-26-multi-cluster-gpu-scheduling/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/GPU/">GPU</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E8%B0%83%E5%BA%A6/">调度</a><a class="post-meta__tags" href="/tags/%E5%A4%9A%E9%9B%86%E7%BE%A4/">多集群</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/26/2026-11-26-macau-trip/" title="在澳门，晚饭回珠海吃"><img class="cover" src= "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/life/macau/coloane-stop.webp" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">在澳门，晚饭回珠海吃</div></div><div class="info-2"><div class="info-item-1">十一月十四日，我们在横琴口岸等一个朋友办签注，去路环找一碗面。下午我把永利报成了美高梅。到了晚上，吃饭的地方倒记得很准。</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/11/25/2026-11-25-karmada-multi-cluster-scheduling/" title="AI 算力平台该不该引入 Karmada？从一次 GPU 作业下发算起"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-25</div><div class="info-item-2">AI 算力平台该不该引入 Karmada？从一次 GPU 作业下发算起</div></div><div class="info-2"><div class="info-item-1">沿一份八卡 Job 追到成员集群，分析 Karmada 的分发链路、自研 Agent 的替换成本、控制面故障影响，以及 GPU 调度和断点续训的责任边界。</div></div></div></a><a class="pagination-related" href="/2026/08/24/2026-08-24-K8s-GPU%E5%A4%8D%E7%94%A8%E4%B8%8EHAMi%E5%BC%82%E6%9E%84%E6%9E%B6%E6%9E%84%E5%85%A8%E8%A7%A3/" title="深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-24</div><div class="info-item-2">深入解析 K8s GPU 复用:从通用方案到 HAMi 异构架构全解</div></div><div class="info-2"><div class="info-item-1">全景解析 K8s GPU 复用八大方案,深度剖析 HAMi 如何用 LD_PRELOAD/dlsym 的 API Hook 实现零侵入显存隔离,并用拓扑图讲清 Device Plugin 异构调度五步链路与 DRA 模式。</div></div></div></a><a class="pagination-related" href="/2026/10/15/2026-10-15-AI-Infra-%E5%85%A8%E6%99%AF%E5%A4%8D%E7%9B%98GPU-%E6%80%A7%E8%83%BD%E3%80%81%E5%88%86%E5%B8%83%E5%BC%8F%E8%AE%AD%E7%BB%83%E4%B8%8E%E8%B0%83%E5%BA%A6%E5%B1%82%E6%B7%B1%E5%BA%A6%E8%A7%A3%E6%9E%90/" title="AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-15</div><div class="info-item-2">AI Infra 全景复盘:GPU 性能、分布式训练与调度层深度解析</div></div><div class="info-2"><div class="info-item-1">从一次 AI Infra 面试复盘切入,完整梳理 GPU 性能分析、分布式训练并行策略、RayJob 弹性伸缩、GPU 混部与扩容可行性判断;再深入调度层,拆解 PriorityClass 抢占、kube-scheduler 三队列模型与 13 个扩展点、Volcano/Kueue/YuniKorn 三大批处理调度器、DRF 主资源公平算法、调度器与 Node 的解耦本质、多调度器冲突的三层兜底,以及 backfill/preempt/reclaim 跨队列语义的精确边界。</div></div></div></a><a class="pagination-related" href="/2026/11/09/2026-11-09-%E6%8E%A8%E7%90%86%E6%9C%8D%E5%8A%A1%E8%B0%83%E5%BA%A6%E7%9A%84%E4%BA%94%E5%B1%82%E8%B4%A3%E4%BB%BB%E8%BE%B9%E7%95%8C%E4%BB%8EK8s%E5%88%B0vLLM/" title="推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-09</div><div class="info-item-2">推理服务调度的五层责任边界：一次请求从 K8s 走到 vLLM</div></div><div class="info-2"><div class="info-item-1">把「推理调度」当成一个整体来谈，几乎一定会谈糊。它其实是五层各自独立、彼此看不见的决策：K8s 调度器只看得见整数设备、Gang 层保证多卡一起上车、拓扑层约束落点、路由器是唯一能看见「请求」的一层、引擎内部再决定请求进哪个 batch。本文按这五层拆开，逐层给出「它看得见什么、看不见什么」，并以 Kthena 的源码为对照说明每个决策为什么必须放在那一层——附对一篇流传较广的公众号文章的六处事实更正。</div></div></div></a><a class="pagination-related" href="/2026/08/13/2026-08-13-MCP%E6%B2%99%E7%AE%B1%E8%B7%AF%E7%94%B1%E6%A1%86%E6%9E%B6%E5%88%86%E6%9E%90/" title="一个 MCP 沙箱路由调度框架的架构分析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-08-13</div><div class="info-item-2">一个 MCP 沙箱路由调度框架的架构分析</div></div><div class="info-2"><div class="info-item-1">本文拆解一个面向 MCP 的 Go 沙箱路由与调度框架,从引擎抽象、确定性调度、二层网络高可用路由、沙箱管理器、MCP 代理与 SDK、参数渲染与密钥引用等维度分析其架构与关键代码。</div></div></div></a><a class="pagination-related" href="/2026/11/20/2026-11-20-ai-infra-hybrid-cloud-network/" title="AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-11-20</div><div class="info-item-2">AI Infra 混合云网络建设方案（多 IDC、多云、多集群与 GPU RDMA）</div></div><div class="info-2"><div class="info-item-1">以各站点独立训练为前提，给出企业 WAN、云 Transit、Kubernetes 多集群、GPU RDMA 和数据同步的分工，以及 CIDR 规划、路由矩阵与分层验收方法。</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>Contents</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E4%B8%AA%E6%8E%A7%E5%88%B6%E5%99%A8%E5%90%84%E8%87%AA%E5%86%99%E4%BB%80%E4%B9%88"><span class="toc-text">四个控制器各自写什么</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9B%86%E7%BE%A4%E5%81%A5%E5%BA%B7%E5%92%8C-GPU-%E5%BA%93%E5%AD%98%E5%88%86%E5%BC%80%E8%AE%B0"><span class="toc-text">集群健康和 GPU 库存分开记</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E5%8F%B0%E5%85%AB%E5%8D%A1%E6%9C%BA%E6%80%8E%E6%A0%B7%E9%80%89%E5%87%BA%E4%B8%80%E4%B8%AA%E9%9B%86%E7%BE%A4"><span class="toc-text">四台八卡机怎样选出一个集群</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%B0%83%E6%95%B4%E6%9D%83%E9%87%8D%EF%BC%8C%E6%AF%94%E8%BE%83-A-%E4%B8%8E-C"><span class="toc-text">调整权重，比较 A 与 C</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%9C%80%E5%90%8E-16-%E5%BC%A0%E5%8D%A1%EF%BC%8C%E5%8F%AA%E8%83%BD%E6%89%BF%E8%AF%BA%E4%B8%80%E6%AC%A1"><span class="toc-text">最后 16 张卡，只能承诺一次</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%94%A8-Work-%E4%BA%A4%E4%BB%98%E9%80%9A%E8%BF%87%E5%87%86%E5%85%A5%E7%9A%84%E4%BD%9C%E4%B8%9A"><span class="toc-text">用 Work 交付通过准入的作业</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%93%AA%E4%BA%9B%E9%83%A8%E5%88%86%E5%8F%AF%E4%BB%A5%E7%9B%B4%E6%8E%A5%E9%87%87%E7%94%A8%E5%BC%80%E6%BA%90%E5%AE%9E%E7%8E%B0"><span class="toc-text">哪些部分可以直接采用开源实现</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%8E%E6%A0%B7%E5%88%86%E9%98%B6%E6%AE%B5%E8%90%BD%E5%9C%B0"><span class="toc-text">怎样分阶段落地</span></a></li></ol></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;2024 - 2026 By Roger-Lv</span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=20261126"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: true,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><dialog class="search-dialog" aria-labelledby="local-search-heading"><div class="search-nav"><span class="search-dialog-title" id="local-search-heading">Search</span><button class="search-close-button" type="button" aria-label="Close search">×</button></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" aria-label="Search articles" placeholder="Search articles" type="search" maxlength="80" autofocus="autofocus"/></div></div><div id="loading-database" role="status" hidden="hidden">Loading the search index…</div><button class="search-retry" type="button" hidden="hidden">Try again</button><div id="local-search-stats-wrap" role="status" aria-live="polite"></div><div id="local-search-results"></div></div></dialog><script src="/js/search/local-search.js?v=20261126" defer="defer"></script></div></div></body></html>
