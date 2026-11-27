@@ -9,10 +9,10 @@ const escapeSearchText = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;
 class LocalSearch {
   constructor ({
     path = '',
-    top_n_per_article = 1
+    topicNames = {}
   }) {
     this.path = path
-    this.top_n_per_article = top_n_per_article
+    this.topicNames = topicNames
     this.isfetched = false
     this.datas = null
   }
@@ -96,9 +96,41 @@ class LocalSearch {
     return result
   }
 
+  // Prefer a complete sentence with the query near its beginning. Repeated terms
+  // in a table of contents should not outweigh the first explanatory passage.
+  excerpt (content, hits, distinctWords) {
+    if (!hits.length) return escapeSearchText(content.slice(0, 120)) + (content.length > 120 ? '…' : '')
+    let best = null, cursor = 0, start = 0
+    const ends = /[。！？]+[”’」]?|[.!?]+(?=\s|$)|\n+|$/gu
+    for (const match of content.matchAll(ends)) {
+      const end = match.index + match[0].length
+      const first = cursor
+      while (cursor < hits.length && hits[cursor].position < end) cursor++
+      if (first !== cursor) {
+        while (start < end && /\s/.test(content[start])) start++
+        const hit = hits[first]
+        let left = hit.position - start <= 36 ? start : hit.position - 16
+        // Keep a Latin word intact when the window starts in the middle of it.
+        while (left > start && hit.position - left < 34 && /[a-z\d]/i.test(content[left - 1]) && /[a-z\d]/i.test(content[left])) left--
+        const right = Math.max(hit.position + hit.word.length, Math.min(end, left + 120))
+        const words = new Set()
+        for (let i = first; i < cursor && hits[i].position + hits[i].word.length <= right; i++) words.add(hits[i].word)
+        const whole = left === start && right === end && end - start >= 16
+        const score = words.size * 4 + (whole ? 2 : 0) + (left === start ? 1 : 0)
+        if (!best || score > best.score) best = { left, right, hit, score, clippedStart: left > start, clippedEnd: right < end }
+        if (score === distinctWords * 4 + 3) break
+      }
+      if (cursor === hits.length) break
+      start = end
+    }
+    const { left, right, hit, clippedStart, clippedEnd } = best
+    const text = this.highlightKeyword(content, { start: left, end: right, hits: [{ position: hit.position, length: hit.word.length }] })
+    return (clippedStart ? '…' : '') + text + (clippedEnd ? '…' : '')
+  }
+
   getResultItems (keywords) {
     const resultItems = []
-    this.datas.forEach(({ title, content, url }) => {
+    this.datas.forEach(({ title, content, url, categories, date }) => {
       // The number of different keywords included in the article.
       const [indexOfTitle, keysOfTitle] = this.getIndexByWord(keywords, title)
       const [indexOfContent, keysOfContent] = this.getIndexByWord(keywords, content)
@@ -108,48 +140,12 @@ class LocalSearch {
       const hitCount = indexOfTitle.length + indexOfContent.length
       if (hitCount === 0) return
 
-      const slicesOfTitle = []
-      if (indexOfTitle.length !== 0) {
-        slicesOfTitle.push(this.mergeIntoSlice(0, title.length, indexOfTitle))
-      }
-
-      let slicesOfContent = []
-      while (indexOfContent.length !== 0) {
-        const item = indexOfContent[0]
-        const { position } = item
-        // Cut out 120 characters. The maxlength of .search-input is 80.
-        const start = Math.max(0, position - 20)
-        const end = Math.min(content.length, position + Math.max(100, item.word.length))
-        slicesOfContent.push(this.mergeIntoSlice(start, end, indexOfContent))
-      }
-
-      // Sort slices in content by included keywords' count and hits' count
-      slicesOfContent.sort((left, right) => {
-        if (left.count !== right.count) {
-          return right.count - left.count
-        } else if (left.hits.length !== right.hits.length) {
-          return right.hits.length - left.hits.length
-        }
-        return left.start - right.start
-      })
-
-      // Select top N slices in content
-      const upperBound = parseInt(this.top_n_per_article, 10)
-      if (upperBound >= 0) {
-        slicesOfContent = slicesOfContent.slice(0, upperBound)
-      }
-
-      let resultItem = ''
-
+      const excerpt = this.excerpt(content, indexOfContent, keysOfContent.size)
       url = new URL(url, location.origin)
-      url.searchParams.append('highlight', keywords.join(' '))
-
-      const displayedTitle = slicesOfTitle.length ? this.highlightKeyword(title, slicesOfTitle[0]) : escapeSearchText(title)
-      resultItem = `<li class="local-search-hit-item"><a href="${escapeSearchText(url.href)}"><span class="search-result-title">${displayedTitle}</span>`
-      slicesOfContent.forEach(slice => {
-        resultItem += `<p class="search-result">${this.highlightKeyword(content, slice)}…</p>`
-      })
-      resultItem += '</a></li>'
+      url.searchParams.set('highlight', keywords.join(' '))
+      const names = categories.map(name => this.topicNames[name] || name)
+      const meta = [escapeSearchText(names.join(' / ')), date && `<time datetime="${escapeSearchText(date)}">${escapeSearchText(date)}</time>`].filter(Boolean)
+      const resultItem = `<li class="local-search-hit-item"><a href="${escapeSearchText(url.href)}"><span class="search-result-title">${escapeSearchText(title)}</span>${excerpt ? '<p class="search-result">' + excerpt + '</p>' : ''}<span class="search-result-meta">${meta.join(' · ')}</span></a></li>`
       resultItems.push({
         item: resultItem,
         id: resultItems.length,
@@ -165,7 +161,7 @@ class LocalSearch {
     const response = await fetch(this.path)
     if (!response.ok) throw new Error('Search index HTTP ' + response.status)
     let entries
-    if (this.path.endsWith('.json')) {
+    if (new URL(this.path, location.href).pathname.endsWith('.json')) {
       entries = await response.json()
     } else {
       const xml = new DOMParser().parseFromString(await response.text(), 'application/xml')
@@ -173,6 +169,8 @@ class LocalSearch {
       entries = Array.from(xml.querySelectorAll('entry'), entry => ({
         title: entry.querySelector('title').textContent,
         url: entry.querySelector('url').textContent,
+        categories: Array.from(entry.querySelectorAll('categories > category'), el => el.textContent),
+        date: entry.querySelector('date')?.textContent || '',
         content: entry.querySelector('content')?.textContent || ''
       }))
     }
@@ -180,7 +178,9 @@ class LocalSearch {
     this.datas = entries.filter(entry => entry.title && entry.url).map(entry => {
       // Existing HTML indexes and the compact text index use HTML entities for code.
       decoder.innerHTML = (entry.content || '').replace(/<[^>]+>/g, ' ').replace(/</g, '&lt;')
-      return { title: entry.title.trim(), url: entry.url, content: decoder.value.trim() }
+      return { title: entry.title.trim(), url: entry.url, content: decoder.value.trim(),
+        categories: Array.isArray(entry.categories) ? entry.categories.map(c => typeof c === 'string' ? c : c?.name).filter(Boolean) : [],
+        date: typeof entry.date === 'string' ? entry.date.slice(0, 10) : '' }
     })
     this.isfetched = true
   }
@@ -227,8 +227,8 @@ const initLocalSearch = () => {
   const dialog = document.querySelector('#local-search dialog')
   const trigger = document.querySelector('#search-button > .search')
   if (!dialog || !trigger) return
-  const { path, top_n_per_article, languages, preload } = GLOBAL_CONFIG.localSearch
-  const search = new LocalSearch({ path, top_n_per_article })
+  const { path, topicNames, languages, preload } = GLOBAL_CONFIG.localSearch
+  const search = new LocalSearch({ path, topicNames })
   const input = dialog.querySelector('input')
   const results = dialog.querySelector('#local-search-results')
   const stats = dialog.querySelector('#local-search-stats-wrap')

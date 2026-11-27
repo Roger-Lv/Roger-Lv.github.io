@@ -6,13 +6,14 @@
   const counter = directory.querySelector('.directory-count')
   const empty = directory.querySelector('.directory-empty')
   const initialCount = counter.textContent
+  const normalize = value => value.normalize('NFKC').toLowerCase().replace(/[\s_-]+/g, '')
   const items = Array.from(directory.querySelectorAll('li'), element => ({
     element,
-    name: element.querySelector('.directory-name').textContent.toLocaleLowerCase()
+    name: normalize(element.dataset.search)
   }))
 
   function update () {
-    const query = input.value.trim().toLocaleLowerCase()
+    const query = normalize(input.value.trim())
     let matches = 0
     for (const { element, name } of items) {
       element.hidden = !name.includes(query)

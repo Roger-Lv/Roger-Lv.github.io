@@ -71,7 +71,11 @@ function line (ctx, points, color, weight) {
   ctx.stroke()
 }
 
-function paint (ctx, mesh, grains, seconds, dark, strokeScale) {
+const traceLeft = 139
+const traceWidth = width - 2 * traceLeft
+const traceY = point => 747 - 70 * point.z
+
+function paint (ctx, mesh, grains, seconds, dark, strokeScale, sample) {
   const palette = dark ? paper.dark : paper.light
   const phase = seconds * Math.PI / 5.8
   const ca = Math.cos(phase), sa = Math.sin(phase)
@@ -149,11 +153,11 @@ function paint (ctx, mesh, grains, seconds, dark, strokeScale) {
   })
   ctx.globalAlpha = 1
 
-  const base = 747, left = 139, right = width - left
+  const base = 747, left = traceLeft, right = left + traceWidth
   ctx.setLineDash([4, 8])
   line(ctx, [{ x: left, y: base }, { x: right, y: base }], finePen, 1.25)
   ctx.setLineDash([])
-  const trace = mesh[section].map((p, j) => ({ x: left + (right - left) * j / columns, y: base - 70 * p.z }))
+  const trace = mesh[section].map((p, j) => ({ x: left + (right - left) * j / columns, y: traceY(p) }))
   line(ctx, trace, cut, 4.5)
   ctx.fillStyle = pen
   ctx.font = 'italic 26px Georgia, serif'
@@ -162,6 +166,20 @@ function paint (ctx, mesh, grains, seconds, dark, strokeScale) {
     ctx.fillText('A', profile[0].x - 12, profile[0].y + 8)
     ctx.textAlign = 'left'
     ctx.fillText('A′', profile[columns].x + 12, profile[columns].y + 8)
+  }
+  if (sample !== null) {
+    const j = Math.min(columns - 1, Math.floor(sample))
+    const t = sample - j
+    ctx.fillStyle = rgb(palette.ink)
+    ctx.strokeStyle = rgb(palette.face)
+    ctx.lineWidth = 3 * strokeScale
+    for (const profile of [trace, mesh[section]]) {
+      const a = profile[j], b = profile[j + 1]
+      ctx.beginPath()
+      ctx.arc(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 7 * strokeScale, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.stroke()
+    }
   }
 }
 
@@ -176,8 +194,10 @@ function mount (figure) {
   let inView = false, paused = false
   let frame = 0, last = 0, elapsed = 0, strokeScale = 1
 
+  let sample = null
+
   function draw () {
-    paint(ctx, mesh, grains, elapsed, document.documentElement.dataset.theme === 'dark', strokeScale)
+    paint(ctx, mesh, grains, elapsed, document.documentElement.dataset.theme === 'dark', strokeScale, sample)
   }
   function tick (now) {
     if (last === 0 || now - last >= 1000 / 30 - 1) {
@@ -206,6 +226,23 @@ function mount (figure) {
   canvas.hidden = false
   resize()
   figure.classList.add('is-live')
+  function select (next) {
+    if (sample === next) return
+    sample = next
+    if (paused || motion.matches || !inView) draw()
+  }
+  figure.addEventListener('pointermove', event => {
+    if (event.pointerType === 'touch' || event.target === button) return select(null)
+    const rect = canvas.getBoundingClientRect()
+    const x = (event.clientX - rect.left) * width / rect.width
+    const position = (x - traceLeft) / traceWidth * columns
+    if (position < 0 || position > columns) return select(null)
+    const j = Math.min(columns - 1, Math.floor(position))
+    const y0 = traceY(mesh[section][j]), y1 = traceY(mesh[section][j + 1])
+    const curveY = (y0 + (y1 - y0) * (position - j)) * rect.height / height
+    select(Math.abs(event.clientY - rect.top - curveY) <= 16 ? position : null)
+  })
+  figure.addEventListener('pointerleave', () => select(null))
   button.addEventListener('click', () => {
     paused = !paused
     button.setAttribute('aria-label', paused ? 'Play animation' : 'Pause animation')

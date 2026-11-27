@@ -681,6 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  document.getElementById('footer-theme')?.addEventListener('click', rightSideFn.darkmode)
   document.getElementById('rightside').addEventListener('click', e => {
     const $target = e.target.closest('[id]')
     if ($target && rightSideFn[$target.id]) {
