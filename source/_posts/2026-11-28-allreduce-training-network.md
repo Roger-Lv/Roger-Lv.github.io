@@ -2,6 +2,7 @@
 title: "AllReduce 为什么多了 80 毫秒？从 rank 时间线查到交换机端口"
 lead_title_break_after: "？"
 date: 2026-11-28 01:21:00
+updated: 2026-11-28 01:40:12
 categories: AI Infra
 tags: [NCCL, RDMA, InfiniBand, RoCEv2]
 description: "两次 AllReduce 都用了 106 ms，一次要查晚到的 rank，一次要查跨机路径。用时间线、端口计数和对照实验定位训练慢步，再给 IB 与 RoCEv2 定验收条件。"
@@ -44,6 +45,38 @@ toc_number: false
 
 一次操作可以同时经过前两段。两台服务器先各自在域内交换梯度，再经后端网完成跨节点通信，任何一段变慢，都可能出现在同一条 AllReduce 记录里。还要记下实际算法和卸载配置。例如 NCCL 2.27 在支持的 NVLink SHARP 与 IB SHARP 组合上扩展了 AllGather 和 ReduceScatter 卸载。对比两组结果前，应核实本次操作有没有走这条路径。[NVIDIA 对 NCCL 2.27 卸载路径的说明][sharp]
 
+## 看一份梯度怎样经过两台机器
+
+上面的时间线用了两机十六卡。为了能逐张卡读数，下面三幅动态图把它缩成**两机四卡**，只跟踪梯度桶里同一位置的一个元素。A 的 GPU 0、GPU 1 分别贡献 1、2，B 的两张卡分别贡献 4、8。这里做求和，因此操作完成时，四张卡上的这个位置都应等于 **15**。图中的毫秒数沿用前文的示意值。[NCCL 对 AllReduce 结果的定义][collectives]
+
+三幅图采用同一种分层做法。每台机器先把这一元素归约到本机 GPU 0，两台 GPU 0 交换局部和、各自做最后一次加法，再把结果送回本机 GPU 1。节点内走 NVLink，跨机走支持 GPUDirect RDMA 的网卡。发送侧网卡经 PCIe 读取已注册的 GPU 缓冲区，接收侧网卡把数据写入对端 GPU 的接收缓冲区。图里做加法的是 GPU，交换机只转发。实际 NCCL 可能按拓扑选择环、树或卸载算法，也会把多个分片流水传输。[GPUDirect RDMA 的设备访问机制][gdr-doc]
+
+### 图一　正常传输，3 和 12 在哪里相遇？
+
+<div><allreduce-flow scenario="normal">正常路径：A 的两个输入合成 3，B 的两个输入合成 12。双方交换局部和，四张 GPU 最终都得到 15。</allreduce-flow></div>
+
+**从 A 发出的青色 3，最终要落到 B 的 GPU 0 显存。** 顺着它看一遍：A 的 GPU 1 把 2 送给本机 GPU 0，与 1 相加。网卡 A 随后读取 3，经交换机送到网卡 B，再由网卡 B 写入 GPU 0 的接收缓冲区。与此同时，蓝色的 12 从 B 沿反方向抵达 A。因而两台 GPU 0 都有了做加法所需的两个数。
+
+拖到 **18 ms**，两台 GPU 0 已各自得到 15，两台 GPU 1 还在等本机结果。继续到 **26 ms**，四张卡才全部完成。即使端口字节数已停止增长，节点内的分发仍可能占据最后一段时间。
+
+### 图二　B 的 GPU 1 晚到，A 已经能做什么？
+
+<div><allreduce-flow scenario="late">晚到路径：A 的局部和 3 在 16 ms 到达 B，B 的 GPU 1 到 82 ms 才产出 8。B 随后合成 12 并回传，至 106 ms 四卡收齐。</allreduce-flow></div>
+
+先停在 **16 ms**。A 发来的 3 已经到达 B 的接收缓冲区。此时 B 的 GPU 0 手里有自己的 4，GPU 1 的 8 却还没算完。B 可以保留收到的 3，但按图中选定的算法，还不能把完整的本地归约结果发给 A。你会看到这条双向连接只有一个方向先传了有效数据。
+
+到 **82 ms**，8 才就绪。B 先形成 12，再把 12 发到 A。B 自己早已收到 3，所以本机可以先算出 15，不必等 A 确认算完。**最值得取 trace 的是 B 的 GPU 1**：把这个 rank 的输入准备、前序计算和梯度就绪标记对齐。A 的通信 kernel 即使持续很久，也可能正等着 B 产出可发送的数据。
+
+### 图三　四张卡准时就绪，为什么只有 A 先拿到结果？
+
+<div><allreduce-flow scenario="queue">排队路径：A 的 3 在 10 ms 进入面向 B 的拥堵出口，90 ms 才离开；B 发出的 12 正常到达 A。26 ms 时仅 A 的两张卡完成，106 ms 时四卡完成。</allreduce-flow></div>
+
+这次让另一项检查点回写占用与 **A → B** 相同的物理出口，并假设训练分片在此多等了 80 ms。图中把出口到网卡 B 的下游网络折叠成一段。训练和回写共用上联，回写流量在下游转向存储端，B → A 的反向出口仍有余量。停在 **26 ms**，你会看到一个很有辨识度的现象：A 的两张卡都有 15，B 的 GPU 0 仍只有局部和 12。缺的那个 3 正停在交换机面向 B 的出口。到 **90 ms** 它才能离开，随后经过网卡 B 写入显存，B 完成加法和节点内分发。
+
+**同样在 26 ms 给任务截一张图，两个慢例的下一步完全不同。** 图二此刻连 B 的局部和 12 都还不存在，应查 B 的上游计算。图三里 12 已经越过网络抵达 A，应沿相反方向追踪迟到的 3。现场能直接看到的是各 rank 的完成事件和端口计数。要验证图三的排队假设，还得找到面向 B 的实际出口，在慢步窗口内对照队列水位、拥塞反馈，以及错开回写后的重测结果。
+
+<script defer src="/js/allreduce-flow.js"></script>
+
 ## 慢步 B 应该看哪一个端口？
 
 沿用上面的例子。假设单机运行正常，两台服务器一起跑时偶发慢步，且慢步集中在另一个作业写检查点的时段。存储流量走 TCP，训练走 RoCEv2。为了判断它们是否互相影响，先把两条流的物理出口画出来：如果它们经由不同网卡、不同交换路径，还要继续找共享的 PCIe、主机内存或存储资源。仅凭时间重合，无法把拥塞归给训练网。
@@ -81,3 +114,6 @@ toc_number: false
 [ibwait]: https://docs.nvidia.com/ibdiagnet-infiniband-fabric-diagnostic-tool-user-manual-v2-13-0.pdf
 [gdr]: /2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/
 [perf]: https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md
+
+[collectives]: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html
+[gdr-doc]: https://docs.nvidia.com/cuda/gpudirect-rdma/
