@@ -1,0 +1,375 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>从 runc 到 microVM：容器里的内核失守后，宿主机为什么还能守住？ | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="从一次 socket() 调用和一个真实的容器逃逸漏洞，理解 runc、Kata Containers 与 Firecracker 的隔离边界，以及 KVM、二级页表和虚拟设备各自承担的职责。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="从 runc 到 microVM：容器里的内核失守后，宿主机为什么还能守住？">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/27/2026-11-27-runc-microvm-kernel-isolation/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="从一次 socket() 调用和一个真实的容器逃逸漏洞，理解 runc、Kata Containers 与 Firecracker 的隔离边界，以及 KVM、二级页表和虚拟设备各自承担的职责。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-26T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-11-27T10:04:30.940Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="Linux">
+<meta property="article:tag" content="虚拟化">
+<meta property="article:tag" content="Kubernetes">
+<meta property="article:tag" content="容器运行时">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "从 runc 到 microVM：容器里的内核失守后，宿主机为什么还能守住？",
+  "url": "https://roger-lv.github.io/2026/11/27/2026-11-27-runc-microvm-kernel-isolation/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-26T16:00:00.000Z",
+  "dateModified": "2026-11-27T10:04:30.940Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/27/2026-11-27-runc-microvm-kernel-isolation/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml?v=20261127-excerpt","topicNames":{"AI Infra":"AI Infrastructure","云原生":"Cloud Native","Agent":"AI Agents","大模型":"Language Models"},"preload":false,"unescape":false,"languages":{"hits_empty":"No results for “${query}”","hits_stats":"Articles found · ${hits}"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '从 runc 到 microVM：容器里的内核失守后，宿主机为什么还能守住？',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css?v=20261127-author"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><a class="skip-content" href="#content-inner">Skip to main content</a><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus" inert="inert" tabindex="-1" aria-label="Mobile navigation" role="dialog" aria-modal="true"><button class="sidebar-close" type="button" aria-label="Close navigation menu">×</button><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">Articles</div><div class="length-num">343</div></a><a href="/tags/"><div class="headline">Tags</div><div class="length-num">529</div></a><a href="/categories/"><div class="headline">Categories</div><div class="length-num">68</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><button class="site-page group" type="button"><i class="fa-fw fas fa-book-open"></i><span> Articles</span><i class="fas fa-chevron-down"></i></button><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-folder-open"></i><span> Archives</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-archive"></i><span> Categories</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> About</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> Links</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-paper-plane"></i><span> Guestbook</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">从 runc 到 microVM：容器里的内核失守后，宿主机为什么还能守住？</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  Back to home</span></span></a></span><div id="menus"><div id="search-button"><button class="site-page social-icon search" type="button" aria-label="Search articles" aria-haspopup="dialog"><i class="fas fa-search fa-fw"></i><span> Search</span></button></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><button class="site-page group" type="button"><i class="fa-fw fas fa-book-open"></i><span> Articles</span><i class="fas fa-chevron-down"></i></button><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-folder-open"></i><span> Archives</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-archive"></i><span> Categories</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> About</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> Links</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-paper-plane"></i><span> Guestbook</span></a></div></div><button id="toggle-menu" type="button" aria-label="Open navigation menu" aria-controls="sidebar-menus" aria-expanded="false"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></button></div></nav><div id="post-info"><h1 class="post-title">从 runc 到 microVM：容器里的内核失守后，宿主机为什么还能守住？</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">Published</span><time class="post-meta-date-created" datetime="2026-11-26T16:00:00.000Z" title="Published 2026-11-27 00:00:00">2026-11-27</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">Updated</span><time class="post-meta-date-updated" datetime="2026-11-27T10:04:30.940Z" title="Updated 2026-11-27 18:04:30">2026-11-27</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E5%AE%B9%E5%99%A8%E4%B8%8E%E8%99%9A%E6%8B%9F%E5%8C%96/">容器与虚拟化</a></span></div><div class="meta-secondline"></div></div></div></header><main class="layout reading-spread" id="content-inner" tabindex="-1"><div id="post"><article class="container post-content" id="article-container"><p>假设你在做一个多租户开发机平台。Alice 和 Bob 的开发机调度到了同一台 Kubernetes 节点，两个人都可以在自己的环境里运行任意代码。现在，Alice 触发了一个 Linux 内核漏洞，导致内核崩溃。Bob 正在跑的训练任务会不会跟着掉？</p>
+<p>用 runc 运行两个 Pod 时，崩溃的是节点内核，Bob 的任务会随节点一起中断。用 Kata 给两个 Pod 分别创建虚拟机时，如果崩溃的是 Alice 的虚拟机内核，Bob 的任务通常还能继续。即使三处运行的是同一版本的 Linux，这个区别依然成立。</p>
+<p>“有独立内核更安全”说的就是这件事。要理解它，需要分清两个问题：<strong>谁执行租户的系统调用？当这个内核已经失守，谁还在执行租户之间的隔离？</strong></p>
+<span id="more"></span>
+<h2 id="从一次-socket-调用看起">从一次 socket() 调用看起</h2>
+<p>Alice 的程序调用 <code>socket(AF_INET, SOCK_STREAM, 0)</code> 创建一个 TCP socket。此时甚至还没连接远端，也没有任何网络包需要发出去。</p>
+<p>在普通 runc 容器里，这次调用直接进入<strong>宿主机 Linux 内核</strong>。runc 启动容器时设置好 namespace、资源限制和权限，之后应用像其他 Linux 进程一样发起系统调用，无需经 runc 转发。内核根据 Alice 进程所在的 network namespace 创建 socket。Alice 和 Bob 可以各有自己的路由表，也可以分别监听同一个端口，因为这些网络状态彼此隔离。处理两个租户 TCP 请求的，仍然是同一个内核实例。<a target="_blank" rel="noopener" href="https://github.com/opencontainers/runc">runc 项目文档</a> · <a target="_blank" rel="noopener" href="https://man7.org/linux/man-pages/man7/network_namespaces.7.html">Linux network namespace 手册</a></p>
+<p>在 Firecracker microVM 里，同一次调用进入 <strong>Alice 的虚拟机内核</strong>，下文简称 guest 内核。它可以在自己的内存里创建 socket，整个过程无需宿主机替 Alice 建立一个对应的 TCP socket。等到真正向外发包，guest 的网络驱动才把数据交给虚拟网卡。在 Firecracker 的常见配置中，宿主侧后端从 virtio-net 接收数据，再交给 TAP 设备。<strong>跨过虚拟机边界的是网络帧，创建 socket 的系统调用早已在 guest 内完成。</strong> <a target="_blank" rel="noopener" href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md">Firecracker 架构设计</a></p>
+<p>Kata 和 Firecracker 在这里承担的职责也各不相同。</p>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>承担的职责</th>
+<th>在这个例子里的隔离粒度</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>runc</td>
+<td>按 OCI 规范在现有 Linux 内核上启动容器进程</td>
+<td>容器进程受 namespace、权限和系统调用策略约束，同一节点上的普通容器共享节点内核</td>
+</tr>
+<tr>
+<td>Kata Containers</td>
+<td>为容器运行时接入轻量虚拟机，在 guest 内创建容器</td>
+<td>Kubernetes 下通常一个 Pod 对应一台 VM，同一 Pod 的主容器与 sidecar 共享 guest 内核</td>
+</tr>
+<tr>
+<td>Firecracker</td>
+<td>作为虚拟机监控器（VMM），借助宿主机的 KVM 运行 microVM 并提供虚拟设备</td>
+<td>每台 microVM 运行独立的 guest 内核。平台决定哪些工作负载进入同一台 VM</td>
+</tr>
+</tbody>
+</table>
+<p>所以，只有当 Alice 和 Bob 被放进<strong>不同的 VM</strong>，两人才获得虚拟机级别的隔离。如果把两个工作负载放进同一个 Kata Pod，它们仍要共同信任那个 Pod 的 guest 内核。<a target="_blank" rel="noopener" href="https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/README.md">Kata Containers 架构</a> · <a target="_blank" rel="noopener" href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md">Firecracker 架构设计</a></p>
+<h2 id="一个真实的内核漏洞，能波及谁？">一个真实的内核漏洞，能波及谁？</h2>
+<p>2022 年披露的 <strong>CVE-2022-0185</strong> 出现在 Linux 文件系统代码中。内核检查挂载参数长度时存在缺陷，可能造成内核堆内存越界写入。阿里云 ACK 的安全公告记录了两类可能后果：节点内核崩溃，或者容器中的进程逃逸并获得宿主机 root 权限。能否触发取决于内核是否已修补，以及容器的权限、user namespace 和 seccomp 等配置是否允许进程触达相关接口。<a target="_blank" rel="noopener" href="https://access.redhat.com/security/cve/cve-2022-0185">Red Hat 漏洞说明</a> · <a target="_blank" rel="noopener" href="https://help.aliyun.com/zh/ack/product-overview/vulnerability-cve-2022-0185">阿里云 ACK 安全公告</a></p>
+<p>把这个真实漏洞放回两台开发机的假设场景。我们让 Alice 面对同样有缺陷的内核，并假设已经满足漏洞的触发条件。</p>
+<table>
+<thead>
+<tr>
+<th>同一次越界写入</th>
+<th>Alice 的开发机用 runc</th>
+<th>Alice 的开发机独占一台 VM</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>谁解析挂载参数？</td>
+<td>节点内核</td>
+<td>Alice 的 guest 内核</td>
+</tr>
+<tr>
+<td>哪块内存被破坏？</td>
+<td>节点内核的堆内存</td>
+<td>Alice 的 guest 内核的堆内存</td>
+</tr>
+<tr>
+<td>如果内核崩溃</td>
+<td>整个节点上的工作负载受影响</td>
+<td>通常只有 Alice 的 VM 及其中的工作负载中断</td>
+</tr>
+<tr>
+<td>如果 Alice 获得该内核的执行能力</td>
+<td>管理节点和其他租户的内核已失守</td>
+<td>她能控制自己的 VM，宿主机仍在 VM 外实施隔离</td>
+</tr>
+</tbody>
+</table>
+<p>在 runc 下，mount namespace 可以决定 Alice 能看到哪些挂载点，seccomp 可以阻止某些系统调用。一旦允许的调用进入有缺陷的代码，负责解析参数的正是维护这些 namespace 的节点内核。在 VM 下，即便同样的缺陷让 Alice 完全控制了 guest 内核，<strong>宿主机还掌握着两项她需要的权力：决定她的 CPU 指令能访问哪些物理内存，以及决定她的虚拟设备实际连到什么资源。</strong></p>
+<h2 id="即使知道-Bob-的物理地址，Alice-能直接读吗？">即使知道 Bob 的物理地址，Alice 能直接读吗？</h2>
+<p>假设 Alice 已经可以修改 guest 内核，甚至知道 Bob 的某一页内存在宿主机上的物理地址。她能不能改一下自己的页表，让一个指针指向那一页？</p>
+<p>以启用 EPT（Extended Page Tables）的 Intel x86 主机为例，CPU 执行一次内存访问时，最终地址由两级映射共同决定。</p>
+<table>
+<thead>
+<tr>
+<th>地址转换</th>
+<th>谁建立映射</th>
+<th>它回答的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Guest 虚拟地址 → Guest 物理地址</td>
+<td>Guest 内核管理自己的页表</td>
+<td>这个指针指向 VM 里的哪一页？</td>
+</tr>
+<tr>
+<td>Guest 物理地址 → 宿主机物理地址</td>
+<td>宿主侧 KVM 管理 EPT，由 CPU 执行转换和权限检查</td>
+<td>这台 VM 的这一页落在机器的哪一页？允许读写吗？</td>
+</tr>
+</tbody>
+</table>
+<p>举个数字例子。假设 Alice 的 VM 和 Bob 的 VM 都有一个 guest 物理地址 <code>0x4000</code>。宿主机可以把 Alice 的 <code>0x4000</code> 映射到物理页 A，把 Bob 的 <code>0x4000</code> 映射到物理页 B。两个人在各自的 VM 里读同一个地址，CPU 最终读取的是不同的内存。</p>
+<p>现在 Alice 把<strong>物理页 B 的宿主机地址</strong>填进自己的页表。CPU 取到这个数以后，仍会把它当作 <strong>Alice 的 guest 物理地址</strong>，继续查 Alice 的 EPT。只有宿主侧已向 Alice 授权映射到 B，她的这次访问才可能落到 B 上。知道地址的数值，不能替她建立这条映射。<a target="_blank" rel="noopener" href="https://docs.kernel.org/virt/kvm/x86/mmu.html">Linux KVM 内存管理文档</a></p>
+<p>这也解释了为什么连“已经控制 guest 内核”都不够。在 Intel 的虚拟化机制下，guest 内核可以运行在自己系统的最高特权级 Ring 0，同时 CPU 仍处于受虚拟化限制的 VMX non-root 模式。普通指令可以直接执行；遇到被配置为需要宿主侧处理的事件，CPU 会发生 <strong>VM exit</strong>，把控制权交回宿主侧。宿主侧处理程序及其权限由宿主机决定。guest 内核可以更换自己的页表，却无权更换宿主机为它选定的 EPT。<a target="_blank" rel="noopener" href="https://cdrdv2-public.intel.com/774497/326019-sdm-vol-3c.pdf">Intel 软件开发者手册，第 3C 卷</a></p>
+<h2 id="VM-总要读磁盘，为什么这条通路也有边界？">VM 总要读磁盘，为什么这条通路也有边界？</h2>
+<p>假设平台在宿主机上准备了两个磁盘镜像 <code>alice.img</code> 和 <code>bob.img</code>，只把前者配置成 Alice 的 Firecracker 虚拟块设备。Alice 在开发机里读取 <code>/etc/passwd</code>，一次未命中缓存的读取大致这样完成。</p>
+<ol>
+<li><strong>Guest 内核解析路径。</strong> 它在 Alice 的根文件系统里查找 <code>/etc/passwd</code>，由 guest 文件系统确定需要读取哪些磁盘块。</li>
+<li><strong>虚拟块设备接收请求。</strong> Guest 的 virtio-blk 驱动提交读请求，其中包含扇区位置、长度和接收数据的缓冲区。</li>
+<li><strong>宿主侧设备后端完成读取。</strong> Firecracker 从这块虚拟盘绑定的后端 <code>alice.img</code> 读取相应数据，交还给 guest。<a target="_blank" rel="noopener" href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/block.md">Firecracker 块设备文档</a></li>
+</ol>
+<p>这里有个很实际的区别。Alice 拿到 guest root 后，可以绕过自己 VM 内的文件权限，直接读取整块虚拟盘。但整块盘对应的仍是 <code>alice.img</code>。即使她自己写一个块设备驱动，接口提供的也是“读这块盘的第 N 个扇区”。选择宿主机上哪个文件作为这块盘后端的配置权，仍在平台手里。</p>
+<p>这也说明 VM 边界可能在哪里失效。<strong>如果平台误把 <code>bob.img</code> 挂给 Alice，她通过正常读盘接口就能访问 Bob 的数据。</strong> 另一种情况是虚拟设备后端或 KVM 自身存在安全缺陷，使 guest 的请求产生了超出接口授权的效果。这属于虚拟化边界自身的问题，需要与前面那个发生在 guest 文件系统里的漏洞分别分析。Firecracker 采用精简的设备模型，并支持用 jailer 降低 VMM 进程权限、用 seccomp 限制其系统调用，正是为了减少宿主侧暴露的代码和权限。<a target="_blank" rel="noopener" href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md">Firecracker 架构设计</a></p>
+<h2 id="回到多租户开发机">回到多租户开发机</h2>
+<p>评审这类平台时，我会追着一个故障问到底：<strong>假设某个租户的内核已经完全失守，现在还有谁能阻止它读另一个租户的内存和磁盘？</strong></p>
+<p>如果两个租户共享节点内核，失守的恰好是执行这项隔离的内核。如果每个租户独占 VM，即使租户控制了自己的内核，CPU 仍执行宿主侧设定的内存映射，设备后端仍按平台配置选择磁盘。而如果两个租户共用一个 Kata Pod，或平台把同一份敏感存储授权给两台 VM，这些资源就落在共同的信任范围内。对开发机而言，“每租户一台 VM”的价值，最终体现在一个具体结果上：Alice 可以把自己的内核弄崩，Bob 的训练仍然继续。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/27/2026-11-27-runc-microvm-kernel-isolation/">https://roger-lv.github.io/2026/11/27/2026-11-27-runc-microvm-kernel-isolation/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Linux/">Linux</a><a class="post-meta__tags" href="/tags/%E8%99%9A%E6%8B%9F%E5%8C%96/">虚拟化</a><a class="post-meta__tags" href="/tags/Kubernetes/">Kubernetes</a><a class="post-meta__tags" href="/tags/%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6/">容器运行时</a></div><div class="post-share"><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/11/26/2026-11-26-multi-cluster-gpu-scheduling/" title="不使用 Karmada，怎样调度多集群 GPU 作业"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">不使用 Karmada，怎样调度多集群 GPU 作业</div></div><div class="info-2"><div class="info-item-1">用一份 32 卡训练作业串起集群注册、拓扑库存、选址评分、原子预留和成员准入，并比较自研 Agent、OCM、MultiKueue 与 Karmada。</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2024/07/19/2024-07-19-Linux%E7%B3%BB%E7%BB%9F%E4%B8%AD%E5%8D%B8%E8%BD%BDanaconda/" title="Linux系统中卸载anaconda"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2024-07-19</div><div class="info-item-2">Linux系统中卸载anaconda</div></div><div class="info-2"><div class="info-item-1">Linux系统中卸载anaconda 要在Linux系统中卸载Anaconda，你需要执行一系列的命令。这里是一个通用的步骤指南：   找到Anaconda安装脚本： 在安装Anaconda时，它会在你的主目录中创建一个名为anaconda3的文件夹（默认情...</div></div></div></a><a class="pagination-related" href="/2025/09/01/2025-09-01-Linux-%E4%BA%91%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%A0%B9%E5%88%86%E5%8C%BA%E6%89%A9%E5%AE%B9%E6%B5%81%E7%A8%8B(ext4-%E7%A4%BA%E4%BE%8B)/" title="Linux 云服务器根分区扩容流程(ext4 示例)"><img class="cover" src="&#x2F;img&#x2F;cover&#x2F;df.png" loading="lazy" alt=""><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-01</div><div class="info-item-2">Linux 云服务器根分区扩容流程(ext4 示例)</div></div><div class="info-2"><div class="info-item-1">Linux 云服务器根分区扩容流程（ext4 示例） 1. 云厂商控制台扩容磁盘  登录云服务商（AWS、阿里云、腾讯云等） 找到对应实例的 系统盘 / 数据盘 修改磁盘大小，例如从 40G → 80G 这一步完成后，虚拟磁盘 /dev/vda 就会变大，但...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-k8s-informer%E9%80%9A%E4%BF%97%E6%98%93%E6%87%82%E8%AF%A6%E8%A7%A3/" title="k8s informer通俗易懂详解"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">k8s informer通俗易懂详解</div></div><div class="info-2"><div class="info-item-1">Kubernetes Informer 机制详解 核心概念 Informer 是 Kubernetes 中用于监听和缓存资源对象的核心机制，它通过 ListAndWatch 机制实现高效的资源监控。 核心组件及作用 1. Reflector（反射器）  作用...</div></div></div></a><a class="pagination-related" href="/2025/09/16/2025-09-16-%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6%E6%89%A9%E5%B1%95%E6%96%B9%E6%A1%88%E6%8A%80%E6%9C%AF%E8%A7%A3%E6%9E%90/" title="容器运行时扩展方案技术解析"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-16</div><div class="info-item-2">容器运行时扩展方案技术解析</div></div><div class="info-2"><div class="info-item-1">容器运行时扩展方案技术解析 基于对某容器运行时扩展项目的代码分析，现从架构层面提炼其核心技术实现，聚焦三大核心能力：运行时接入机制、容器根文件系统云端持久化、Docker-in-Docker 安全实现方案。  1. 如何接入 Containerd 运行时生态...</div></div></div></a><a class="pagination-related" href="/2025/09/16/2025-09-16-sandbox%E5%92%8Ccontainer%E5%AF%B9%E6%AF%94/" title="sandbox和container对比"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-16</div><div class="info-item-2">sandbox和container对比</div></div><div class="info-2"><div class="info-item-1">sandbox和container对比 Sandbox 和 Container 的区别 基本概念 Sandbox（沙箱）  定义：一种隔离环境，用于安全地运行程序，限制其对系统资源的访问 目的：提供安全隔离，防止恶意代码影响主机系统 范围：通常针对单个应用程...</div></div></div></a><a class="pagination-related" href="/2025/09/15/2025-09-15-%E5%A6%82%E4%BD%95%E9%80%9A%E8%BF%87Pod%E8%BF%9B%E5%85%A5%E5%88%B0%E5%AE%BF%E4%B8%BB%E6%9C%BA%EF%BC%9F/" title="如何通过Pod进入到宿主机?"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2025-09-15</div><div class="info-item-2">如何通过Pod进入到宿主机?</div></div><div class="info-2"><div class="info-item-1">如何通过Pod进入到宿主机? nsenter -a -t 1 bash 命令的作用是让你在一个新的 shell 会话中，进入 PID 为 1 的进程所在的全部命名空间（Namespace）。 通过这种方式，可以从pod中进入到宿主机（全部的namespace...</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>Contents</span><span class="toc-percentage"></span></div><nav class="toc-content" aria-label="Contents"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BB%8E%E4%B8%80%E6%AC%A1-socket-%E8%B0%83%E7%94%A8%E7%9C%8B%E8%B5%B7"><span class="toc-text">从一次 socket() 调用看起</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E4%B8%AA%E7%9C%9F%E5%AE%9E%E7%9A%84%E5%86%85%E6%A0%B8%E6%BC%8F%E6%B4%9E%EF%BC%8C%E8%83%BD%E6%B3%A2%E5%8F%8A%E8%B0%81%EF%BC%9F"><span class="toc-text">一个真实的内核漏洞，能波及谁？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%8D%B3%E4%BD%BF%E7%9F%A5%E9%81%93-Bob-%E7%9A%84%E7%89%A9%E7%90%86%E5%9C%B0%E5%9D%80%EF%BC%8CAlice-%E8%83%BD%E7%9B%B4%E6%8E%A5%E8%AF%BB%E5%90%97%EF%BC%9F"><span class="toc-text">即使知道 Bob 的物理地址，Alice 能直接读吗？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#VM-%E6%80%BB%E8%A6%81%E8%AF%BB%E7%A3%81%E7%9B%98%EF%BC%8C%E4%B8%BA%E4%BB%80%E4%B9%88%E8%BF%99%E6%9D%A1%E9%80%9A%E8%B7%AF%E4%B9%9F%E6%9C%89%E8%BE%B9%E7%95%8C%EF%BC%9F"><span class="toc-text">VM 总要读磁盘，为什么这条通路也有边界？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9E%E5%88%B0%E5%A4%9A%E7%A7%9F%E6%88%B7%E5%BC%80%E5%8F%91%E6%9C%BA"><span class="toc-text">回到多租户开发机</span></a></li></ol></nav></div></div></div></main><footer id="footer"><nav class="colophon" aria-label="Site footer"><div class="colophon-owner"><a href="/">Roger-Lv's space</a><span>© 2024–2026</span></div><div class="colophon-links"><a target="_blank" rel="noopener" href="https://github.com/Roger-Lv">GitHub</a><a href="mailto:1150568956@qq.com">Email</a><a target="_blank" rel="noopener" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/">LinkedIn</a><button id="footer-theme" type="button" aria-label="切换明暗主题">切换主题</button><a href="#body-wrap">返回顶部 ↑</a></div></nav></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" aria-controls="card-toc" aria-expanded="false" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=20261127-index"></script><script defer src="/js/editorial-motion.js?v=20261127-reading"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: false,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><dialog class="search-dialog" aria-labelledby="local-search-heading"><div class="search-nav"><span class="search-dialog-title" id="local-search-heading">Search</span><button class="search-close-button" type="button" aria-label="Close search">×</button></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" aria-label="Search articles" placeholder="Search articles" type="search" maxlength="80" autofocus="autofocus"/></div></div><div id="loading-database" role="status" hidden="hidden">Loading the search index…</div><button class="search-retry" type="button" hidden="hidden">Try again</button><div id="local-search-stats-wrap" role="status" aria-live="polite"></div><div id="local-search-results"></div></div></dialog><script src="/js/search/local-search.js?v=20261127-excerpt" defer="defer"></script></div></div></body></html>
