@@ -115,7 +115,8 @@
 
   function revealHeadings () {
     if (!window.IntersectionObserver || !Element.prototype.animate) return () => {}
-    const headings = document.querySelectorAll('.index-heading h2, .recent-post-info > .article-title, #post #article-container > h2')
+    const headings = document.querySelectorAll('.topic-atlas .index-heading h2, #post #article-container > h2')
+    if (!headings.length) return () => {}
     const active = new Set()
     function reveal (el) {
       const node = Array.from(el.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim())
