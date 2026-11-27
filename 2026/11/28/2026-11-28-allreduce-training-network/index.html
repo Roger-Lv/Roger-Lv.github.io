@@ -1,0 +1,357 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>AllReduce 为什么多了 80 毫秒？从 rank 时间线查到交换机端口 | Roger-Lv's space</title><meta name="author" content="Roger-Lv"><meta name="copyright" content="Roger-Lv"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="两次 AllReduce 都用了 106 ms，一次要查晚到的 rank，一次要查跨机路径。用时间线、端口计数和对照实验定位训练慢步，再给 IB 与 RoCEv2 定验收条件。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="AllReduce 为什么多了 80 毫秒？从 rank 时间线查到交换机端口">
+<meta property="og:url" content="https://roger-lv.github.io/2026/11/28/2026-11-28-allreduce-training-network/index.html">
+<meta property="og:site_name" content="Roger-Lv&#39;s space">
+<meta property="og:description" content="两次 AllReduce 都用了 106 ms，一次要查晚到的 rank，一次要查跨机路径。用时间线、端口计数和对照实验定位训练慢步，再给 IB 与 RoCEv2 定验收条件。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://roger-lv.github.io/img/avatar.jpg">
+<meta property="article:published_time" content="2026-11-27T17:21:00.000Z">
+<meta property="article:modified_time" content="2026-11-27T17:22:36.354Z">
+<meta property="article:author" content="Roger-Lv">
+<meta property="article:tag" content="NCCL">
+<meta property="article:tag" content="RDMA">
+<meta property="article:tag" content="InfiniBand">
+<meta property="article:tag" content="RoCEv2">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://roger-lv.github.io/img/avatar.jpg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "AllReduce 为什么多了 80 毫秒？从 rank 时间线查到交换机端口",
+  "url": "https://roger-lv.github.io/2026/11/28/2026-11-28-allreduce-training-network/",
+  "image": "https://roger-lv.github.io/img/avatar.jpg",
+  "datePublished": "2026-11-27T17:21:00.000Z",
+  "dateModified": "2026-11-27T17:22:36.354Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Roger-Lv",
+      "url": "https://Roger-Lv.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/avatar.jpg"><link rel="canonical" href="https://roger-lv.github.io/2026/11/28/2026-11-28-allreduce-training-network/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="stylesheet" href="/css/index.css?v=5.4.2"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.7.2/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', 'undefined')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml?v=20261127-excerpt","topicNames":{"AI Infra":"AI Infrastructure","云原生":"Cloud Native","Agent":"AI Agents","大模型":"Language Models"},"preload":false,"unescape":false,"languages":{"hits_empty":"No results for “${query}”","hits_stats":"Articles found · ${hits}"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: true,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'AllReduce 为什么多了 80 毫秒？从 rank 时间线查到交换机端口',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css?v=20261127-reading-end"><link rel="preconnect" href="https://events.vercount.one" crossorigin><meta name="generator" content="Hexo 7.3.0"></head><body><a class="skip-content" href="#content-inner">Skip to main content</a><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus" inert="inert" tabindex="-1" aria-label="Mobile navigation" role="dialog" aria-modal="true"><button class="sidebar-close" type="button" aria-label="Close navigation menu">×</button><div class="avatar-img text-center"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/avatar.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">Articles</div><div class="length-num">345</div></a><a href="/tags/"><div class="headline">Tags</div><div class="length-num">530</div></a><a href="/categories/"><div class="headline">Categories</div><div class="length-num">68</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><button class="site-page group" type="button"><i class="fa-fw fas fa-book-open"></i><span> Articles</span><i class="fas fa-chevron-down"></i></button><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-folder-open"></i><span> Archives</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-archive"></i><span> Categories</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> About</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> Links</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-paper-plane"></i><span> Guestbook</span></a></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">Roger-Lv's space</span></a><a class="nav-page-title" href="/"><span class="site-name">AllReduce 为什么多了 80 毫秒？从 rank 时间线查到交换机端口</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  Back to home</span></span></a></span><div id="menus"><div id="search-button"><button class="site-page social-icon search" type="button" aria-label="Search articles" aria-haspopup="dialog"><i class="fas fa-search fa-fw"></i><span> Search</span></button></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> Home</span></a></div><div class="menus_item"><button class="site-page group" type="button"><i class="fa-fw fas fa-book-open"></i><span> Articles</span><i class="fas fa-chevron-down"></i></button><ul class="menus_item_child"><li><a class="site-page child" href="/archives/"><i class="fa-fw fas fa-folder-open"></i><span> Archives</span></a></li><li><a class="site-page child" href="/categories/"><i class="fa-fw fas fa-archive"></i><span> Categories</span></a></li><li><a class="site-page child" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> Tags</span></a></li></ul></div><div class="menus_item"><a class="site-page" href="/about/"><i class="fa-fw fas fa-user"></i><span> About</span></a></div><div class="menus_item"><a class="site-page" href="/link/"><i class="fa-fw fas fa-link"></i><span> Links</span></a></div><div class="menus_item"><a class="site-page" href="/messageboard/"><i class="fa-fw fas fa-paper-plane"></i><span> Guestbook</span></a></div></div><button id="toggle-menu" type="button" aria-label="Open navigation menu" aria-controls="sidebar-menus" aria-expanded="false"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></button></div></nav><div id="post-info"><h1 class="post-title">AllReduce 为什么多了 80 毫秒？从 rank 时间线查到交换机端口</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">Published</span><time class="post-meta-date-created" datetime="2026-11-27T17:21:00.000Z" title="Published 2026-11-28 01:21:00">2026-11-28</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">Updated</span><time class="post-meta-date-updated" datetime="2026-11-27T17:22:36.354Z" title="Updated 2026-11-28 01:22:36">2026-11-28</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/AI-Infra/">AI Infrastructure</a></span></div><div class="meta-secondline"></div></div></div></header><main class="layout reading-spread" id="content-inner" tabindex="-1"><div id="post"><article class="container post-content" id="article-container"><p>假设两台服务器各有 8 张 GPU，16 个训练进程（rank）在反向传播中对同一个梯度桶做 AllReduce。平时从第一张卡准备好这桶梯度，到最后一张卡拿到归约结果，要 26 ms。今天，同一桶用了 106 ms。多出来的 80 ms 花在哪儿？</p>
+<p>如果只能多采一项数据，我会先取<strong>最后一个 rank 的梯度就绪时刻</strong>。假如它晚了 80 ms，值得先翻的是这张卡前面的计算和取数记录。如果它准时就绪，取证范围就变了。下面用两组示意时间线走一遍这个判断，数字仅用于说明推理过程。</p>
+<span id="more"></span>
+<h2 id="同样的-106-ms，两条不同的时间线">同样的 106 ms，两条不同的时间线</h2>
+<p>把同一通信组、同一序号、同一大小的 AllReduce 配对。每一轮都以最早就绪的 rank 为 0 ms。“就绪”指本 rank 的梯度桶在 GPU 上已准备好，可以交给通信流；“全组完成”取所有 rank 中最晚的设备侧完成时刻。实际采集时，可以用梯度桶的就绪标记配合 GPU trace，并先校准跨主机时间线。单看 Python 调用返回的时刻，会把异步提交和 GPU 执行混在一起。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/nsight-systems/UserGuide/">Nsight Systems 跟踪指南</a> · <a target="_blank" rel="noopener" href="https://docs.pytorch.org/tutorials/prototype/flight_recorder_tutorial.html">PyTorch Flight Recorder</a></p>
+<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-lazy-src="/img/collective-ready-window.svg" alt="三条示意时间线。平时最后一个 rank 在 2 ms 就绪，全组在 26 ms 完成。慢步 A 的两个时刻分别为 82 和 106 ms，慢步 B 分别为 2 和 106 ms。"></p>
+<p><strong>慢步 A</strong> 中，最后一个 rank 到 82 ms 才备好梯度。此后全组又用 24 ms 完成，和平时相同。值得展开的是晚到 rank 的前一段轨迹：相同算子是否拿到了更长的样本？输入批次什么时候准备好？其他 rank 可以早早进入 NCCL 内核，等它们所依赖的数据。只看早到者的长条，很容易把 80 ms 都记到网络头上。</p>
+<p><strong>慢步 B</strong> 中，所有 rank 在 2 ms 内都准备好了，全组却又过了 104 ms 才完成。下一步可以逐项核对通信流何时获得 GPU 执行机会、数据走了哪张网卡、哪一跳出现排队。图中深色区间也包括调度和协议开销。各 rank 还能在最后一份梯度就绪前传送部分数据，所以单凭这两个时间点算不出线上的传输耗时。</p>
+<p>最后回到训练本身。沿时间线找到<strong>第一个必须消费归约结果的算子</strong>。如果它仍能按时启动，这次 AllReduce 的延长被其他计算覆盖了。如果它也推迟了 80 ms，这个梯度桶才值得作为慢步的重点追踪对象。</p>
+<h2 id="把这桶梯度放到实际路径上">把这桶梯度放到实际路径上</h2>
+<p>先记下这次通信的 rank、节点、GPU 和网卡端口。节点内的 <code>nvidia-smi topo -m</code> 能显示 GPU 与 GPU、GPU 与网卡的拓扑关系。短时复现时，可以打开 <code>NCCL_DEBUG=INFO</code>，用 <code>NCCL_DEBUG_SUBSYS=INIT,GRAPH,NET</code> 看初始化、拓扑和网络选择，并用 <code>NCCL_DEBUG_FILE=/tmp/nccl.%h.%p.log</code> 将不同节点和进程的日志分开。例如，日志里出现一张用于建立初始连接的以太网接口，还得继续看承载梯度的通道用了哪个网络后端。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/deploy/nvidia-smi/">NVIDIA 拓扑命令手册</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-debug-subsys">NCCL 日志选项</a></p>
+<table>
+<thead>
+<tr>
+<th>网络段</th>
+<th>可能遇到的连接</th>
+<th>与当前慢步有关的证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU 互联域内</td>
+<td>NVLink / NVSwitch</td>
+<td>并行组实际落在哪个互联域？单域内、同消息大小的测试能否复现？域边界随平台而变，可以跨越机箱。</td>
+</tr>
+<tr>
+<td>跨节点后端</td>
+<td>InfiniBand（IB）</td>
+<td>找到 HCA 端口和经过的交换机，核对路径、协商速率与宽度，再看出方向的发送等待和错误增量。</td>
+</tr>
+<tr>
+<td>跨节点后端</td>
+<td>RoCEv2</td>
+<td>找到承载 RDMA 的以太网优先级和实际出口，对齐队列水位、拥塞标记、端侧反馈与暂停时长。</td>
+</tr>
+<tr>
+<td>跨节点后端</td>
+<td>TCP/IP 以太网</td>
+<td>若本次通信使用 Socket 传输，查对应接口、TCP 重传、队列和主机 CPU。TCP 也可能单独承担存储或管理流量。</td>
+</tr>
+<tr>
+<td>前端与广域</td>
+<td>算力专线 / 数据中心互联（DCI）</td>
+<td>查并行组是否跨中心。逐步同步涉及往返时延（RTT）和抖动；异步检查点还要看它是否在本地与训练争用了出口。</td>
+</tr>
+<tr>
+<td>前端与广域</td>
+<td>多云 / 边缘接入</td>
+<td>追踪样本、模型或请求的到达时间。若远端输入已缓存，查看这批数据实际何时读入，比查看跨云平均时延更有解释力。</td>
+</tr>
+</tbody>
+</table>
+<p>一次操作可以同时经过前两段。两台服务器先各自在域内交换梯度，再经后端网完成跨节点通信，任何一段变慢，都可能出现在同一条 AllReduce 记录里。还要记下实际算法和卸载配置。例如 NCCL 2.27 在支持的 NVLink SHARP 与 IB SHARP 组合上扩展了 AllGather 和 ReduceScatter 卸载。对比两组结果前，应核实本次操作有没有走这条路径。<a target="_blank" rel="noopener" href="https://developer.nvidia.com/blog/enabling-fast-inference-and-resilient-training-with-nccl-2-27/">NVIDIA 对 NCCL 2.27 卸载路径的说明</a></p>
+<h2 id="慢步-B-应该看哪一个端口？">慢步 B 应该看哪一个端口？</h2>
+<p>沿用上面的例子。假设单机运行正常，两台服务器一起跑时偶发慢步，且慢步集中在另一个作业写检查点的时段。存储流量走 TCP，训练走 RoCEv2。为了判断它们是否互相影响，先把两条流的物理出口画出来：如果它们经由不同网卡、不同交换路径，还要继续找共享的 PCIe、主机内存或存储资源。仅凭时间重合，无法把拥塞归给训练网。</p>
+<p>如果两条流确实经过同一个上联口，我会沿着这个方向取三份记录：</p>
+<ol>
+<li><strong>交换机出口。</strong> 取慢步前后同一采样窗的各队列水位峰值、ECN 标记包数增量和发送包数增量。两个队列即使共享一个物理端口，划到的优先级也可能不同。一分钟平均吞吐很平，仍可能掩盖短时排队。</li>
+<li><strong>接收、发送两端的网卡。</strong> 在使用 DCQCN 的部署里，接收端可以针对带 ECN 拥塞标记的流量发回 CNP，发送端据此调节速率。对照接收端发送的 CNP 和发送端收到的 CNP，再看哪个方向出现吞吐变化。若启用了 PFC，另取同一优先级的收发暂停时长；一次暂停可以影响这条链路上同优先级的其他流。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking-ethernet-software/cumulus-linux-50/Layer-1-and-Switch-Ports/Quality-of-Service/RDMA-over-Converged-Ethernet-RoCE/">Cumulus Linux 的 RoCE 模式说明</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking-ethernet-software/cumulus-netq-51/Manage-Events-and-Notifications/TCA-Events-Reference/">NVIDIA 的 RoCE 端口与队列指标</a></li>
+<li><strong>错开一次回写再测。</strong> 在受控环境中，固定节点、GPU 映射、梯度桶大小和软件版本。交替重复“训练独占”“同一出口并发回写”两种条件。如果只有并发组反复出现同一出口水位上升、拥塞反馈增加、全组完成变晚，而 rank 就绪时间分布基本不变，就有了把原因缩小到共享出口的依据。若移开回写后仍慢，继续查 GPU 到网卡的本地路径。<a href="/2026/11/20/2026-11-20-gpudirect-rdma-numa-topology/">站内的 GPUDirect RDMA 与 NUMA 拓扑实测思路</a></li>
+</ol>
+<p><strong>换成 IB，沿用这组对照，只换采集的证据。</strong> 先确认子网管理器（SM）看到的链路和算路结果，再沿实际路径看端口宽度、速率、错误及 <code>PortXmitWait</code> 的增量。这个计数表示端口有数据待发、却在相应计数周期内没有发出；信用不足和仲裁等待都可能使它增长。比较时记录设备的计数单位，并结合相邻端口的流量和错误。仅看到某个运行数月的端口累计值很大，还不足以解释今天的 80 ms。<a target="_blank" rel="noopener" href="https://docs.nvidia.com/networking/display/infiniband-cluster-bring-up-procedure-v1-0.0.pdf">NVIDIA IB 集群验收指南</a> · <a target="_blank" rel="noopener" href="https://docs.nvidia.com/ibdiagnet-infiniband-fabric-diagnostic-tool-user-manual-v2-13-0.pdf">ibdiagnet 对发送等待的定义</a></p>
+<h2 id="用训练任务的口径验收-IB-与-RoCEv2">用训练任务的口径验收 IB 与 RoCEv2</h2>
+<p>两套后端网都先跑同一套负载。先从生产 trace 抽出常见的集合操作、参与 rank 数和消息大小。梯度同步重就测 AllReduce，参数分片还要覆盖 AllGather、ReduceScatter；专家并行则要加入 All-to-All，以及专家负载不均时的真实流量分布。均匀的合成测试可作为基线，热点要靠回放或实际训练补上。</p>
+<table>
+<thead>
+<tr>
+<th>实验</th>
+<th>固定和改变什么</th>
+<th>保留什么结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单域、跨节点、跨机架</td>
+<td>尽量固定总 rank 数、消息大小和每个 rank 的数据量，记录每次放置造成的拓扑与算法变化</td>
+<td>各消息大小的耗时、正确性、算法带宽，以及实际使用的端口</td>
+</tr>
+<tr>
+<td>独占、并发、突发回写</td>
+<td>保持训练配置，分别加入第二个训练作业和可重复的存储回写</td>
+<td>预热后逐步记录 p50 / p95 / p99 step 时间、样本数及统计窗口；同时保留最慢若干步的 trace 与端口计数</td>
+</tr>
+<tr>
+<td>长稳与恢复</td>
+<td>覆盖多个检查点周期，并在测试集群安排一次约定的链路切换</td>
+<td>检测和恢复耗时、任务是否重启、恢复后的吞吐与结果正确性</td>
+</tr>
+</tbody>
+</table>
+<p>读 <code>nccl-tests</code> 时，要分清 <code>algbw</code> 和 <code>busbw</code>。对 AllReduce，前者是每个 rank 的消息大小除以操作耗时；后者按 rank 数乘上系数 <code>2 × (n − 1) / n</code>。这里有 16 个 rank，系数为 1.875。它帮助比较集合通信效率；想知道两台服务器之间那条上联到底过了多少字节，应读取对应端口的字节计数。测试工具打印的平均耗时也无法给出真实训练的 p99，后者要从逐步样本另算。<a target="_blank" rel="noopener" href="https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md">NVIDIA nccl-tests 指标定义</a></p>
+<p>如果要据此选型，我会让两套候选网络都回答同一个验收问题：<strong>在约定的并行组和回写并发下，多少个训练 step 超过了业务给出的时间预算，最慢的那些步又能解释到哪一跳？</strong> IB 团队需要能查算路、信用和端口状态，RoCEv2 团队需要能串起端到端 QoS、队列和拥塞反馈。对这 16 张卡，真正影响选择的是训练能获得的尾延迟、异常后的恢复时间，以及当班的人手里有没有足够的证据解释下一次掉速。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://Roger-Lv.github.io">Roger-Lv</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://roger-lv.github.io/2026/11/28/2026-11-28-allreduce-training-network/">https://roger-lv.github.io/2026/11/28/2026-11-28-allreduce-training-network/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://Roger-Lv.github.io" target="_blank">Roger-Lv's space</a>！</span></div></div><div class="post-tools"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/NCCL/">NCCL</a><a class="post-meta__tags" href="/tags/RDMA/">RDMA</a><a class="post-meta__tags" href="/tags/InfiniBand/">InfiniBand</a><a class="post-meta__tags" href="/tags/RoCEv2/">RoCEv2</a></div><details class="post-share"><summary>分享文章</summary><div class="social-share" data-image="/img/avatar.jpg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.4/sharejs/dist/js/social-share.min.js" defer></script></details></div><nav class="post-neighbors" id="pagination" aria-label="前后篇文章"><a class="post-index-row" href="/2026/11/27/2026-11-27-virtio-net-sriov-packet-path/" rel="next"><span class="post-index-label">下一篇</span><span class="post-index-title">virtio-net 与 SR-IOV 各管哪一层？沿着一张网卡看发包路径</span></a></nav><section class="post-recommendations" aria-labelledby="related-posts-title"><h2 id="related-posts-title">相关推荐</h2><ul><li><a class="post-index-row" href="/2026/11/24/2026-11-24-RDMA%E7%BD%91%E5%8D%A1%E5%A6%82%E4%BD%95%E5%8C%BA%E5%88%86%E4%B8%8D%E5%90%8C%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1/"><time class="post-index-label" datetime="2026-11-23T16:00:00.000Z">2026-11-24</time><span class="post-index-title">一张 RDMA 网卡怎么区分不同的训练任务：从 QP/PD/MR 到 Rail 感知调度</span></a></li><li><a class="post-index-row" href="/2026/09/11/2026-09-11-RDMA%E5%85%A8%E9%93%BE%E8%B7%AF%E6%8B%86%E8%A7%A3%E4%BB%8Everbs%E5%88%B0%E7%A1%AC%E4%BB%B6%E5%86%8D%E5%88%B0%E8%AE%AD%E7%BB%83%E5%B9%B3%E5%8F%B0%E8%90%BD%E7%82%B9/"><time class="post-index-label" datetime="2026-09-10T16:00:00.000Z">2026-09-11</time><span class="post-index-title">RDMA 全链路拆解:从 ibv_reg_mr 到硬件,再到 AI 训练平台的实战落点</span></a></li><li><a class="post-index-row" href="/2026/11/10/2026-11-10-RoCEv2%E6%97%A0%E6%8D%9F%E7%BD%91%E7%BB%9CPFC-ECN-DCQCN%E4%B8%8E%E9%85%8D%E7%BD%AE%E4%B8%80%E8%87%B4%E6%80%A7/"><time class="post-index-label" datetime="2026-11-09T16:00:00.000Z">2026-11-10</time><span class="post-index-title">RoCEv2 无损网络：PFC、ECN、DCQCN 三件套，与那条必须处处对齐的优先级链</span></a></li><li><a class="post-index-row" href="/2026/09/11/2026-09-11-RDMATracer13%E4%B8%AAeBPF%E6%8E%A2%E9%92%88%E8%A1%A5%E4%B8%8AAI%E9%9B%86%E7%BE%A4%E5%86%85%E6%A0%B8%E7%9B%B2%E5%8C%BA/"><time class="post-index-label" datetime="2026-09-10T16:00:00.000Z">2026-09-11</time><span class="post-index-title">RDMATracer 拆解:13 个 eBPF 探针如何补上 AI 集群的内核盲区</span></a></li><li><a class="post-index-row" href="/2026/10/09/2026-10-09-Macvlan%E5%9C%A8%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%AE%AD%E7%BB%83%E4%B8%AD%E7%9A%84%E8%A7%92%E8%89%B2%E4%B8%BAPod%E6%8F%90%E4%BE%9B%E5%85%B1%E4%BA%ABRDMA%E9%80%9A%E9%81%93/"><time class="post-index-label" datetime="2026-10-08T16:00:00.000Z">2026-10-09</time><span class="post-index-title">Macvlan 在大模型训练中的角色:为 Pod 提供共享 RDMA 通道</span></a></li><li><a class="post-index-row" href="/2026/11/04/2026-11-04-K8s%E5%BE%88%E7%86%9F%E4%B8%BA%E4%BB%80%E4%B9%88%E6%9C%88%E8%96%AA%E5%8D%A1%E5%9C%A8%E4%B8%89%E4%B8%87%E4%BB%8E%E6%8E%A7%E5%88%B6%E9%9D%A2%E8%B5%B0%E5%90%91AI-Infra%E6%95%B0%E6%8D%AE%E9%9D%A2/"><time class="post-index-label" datetime="2026-11-03T16:00:00.000Z">2026-11-04</time><span class="post-index-title">K8s 很熟，为什么月薪卡在三万？从控制面走向 AI Infra 数据面</span></a></li></ul></section><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div class="vcomment" id="vcomment"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>Contents</span><span class="toc-percentage"></span></div><nav class="toc-content" aria-label="Contents"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%90%8C%E6%A0%B7%E7%9A%84-106-ms%EF%BC%8C%E4%B8%A4%E6%9D%A1%E4%B8%8D%E5%90%8C%E7%9A%84%E6%97%B6%E9%97%B4%E7%BA%BF"><span class="toc-text">同样的 106 ms，两条不同的时间线</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8A%8A%E8%BF%99%E6%A1%B6%E6%A2%AF%E5%BA%A6%E6%94%BE%E5%88%B0%E5%AE%9E%E9%99%85%E8%B7%AF%E5%BE%84%E4%B8%8A"><span class="toc-text">把这桶梯度放到实际路径上</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%85%A2%E6%AD%A5-B-%E5%BA%94%E8%AF%A5%E7%9C%8B%E5%93%AA%E4%B8%80%E4%B8%AA%E7%AB%AF%E5%8F%A3%EF%BC%9F"><span class="toc-text">慢步 B 应该看哪一个端口？</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E7%94%A8%E8%AE%AD%E7%BB%83%E4%BB%BB%E5%8A%A1%E7%9A%84%E5%8F%A3%E5%BE%84%E9%AA%8C%E6%94%B6-IB-%E4%B8%8E-RoCEv2"><span class="toc-text">用训练任务的口径验收 IB 与 RoCEv2</span></a></li></ol></nav></div></div></div></main><footer id="footer"><nav class="colophon" aria-label="Site footer"><div class="colophon-owner"><a href="/">Roger-Lv's space</a><span>© 2024–2026</span></div><div class="colophon-links"><a target="_blank" rel="noopener" href="https://github.com/Roger-Lv">GitHub</a><a href="mailto:1150568956@qq.com">Email</a><a target="_blank" rel="noopener" href="https://www.linkedin.com/in/zhongrenjie-lv-5588a928a/">LinkedIn</a><button id="footer-theme" type="button" aria-label="切换明暗主题">切换主题</button><a href="#body-wrap">返回顶部 ↑</a></div></nav></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" aria-controls="card-toc" aria-expanded="false" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.4.2"></script><script src="/js/main.js?v=20261127-index"></script><script defer src="/js/editorial-motion.js?v=20261127-reading"></script><script src="https://cdn.jsdelivr.net/npm/vanilla-lazyload@19.1.3/dist/lazyload.iife.min.js"></script><div class="js-pjax"><script>(() => {
+  const runMermaid = ele => {
+    window.loadMermaid = true
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'
+
+    ele.forEach((item, index) => {
+      const mermaidSrc = item.firstElementChild
+      const mermaidThemeConfig = `%%{init:{ 'theme':'${theme}'}}%%\n`
+      const mermaidID = `mermaid-${index}`
+      const mermaidDefinition = mermaidThemeConfig + mermaidSrc.textContent
+
+      const renderFn = mermaid.render(mermaidID, mermaidDefinition)
+      const renderMermaid = svg => {
+        mermaidSrc.insertAdjacentHTML('afterend', svg)
+      }
+
+      // mermaid v9 and v10 compatibility
+      typeof renderFn === 'string' ? renderMermaid(renderFn) : renderFn.then(({ svg }) => renderMermaid(svg))
+    })
+  }
+
+  const codeToMermaid = () => {
+    const codeMermaidEle = document.querySelectorAll('pre > code.mermaid')
+    if (codeMermaidEle.length === 0) return
+
+    codeMermaidEle.forEach(ele => {
+      const preEle = document.createElement('pre')
+      preEle.className = 'mermaid-src'
+      preEle.hidden = true
+      preEle.textContent = ele.textContent
+      const newEle = document.createElement('div')
+      newEle.className = 'mermaid-wrap'
+      newEle.appendChild(preEle)
+      ele.parentNode.replaceWith(newEle)
+    })
+  }
+
+  const loadMermaid = () => {
+    if (true) codeToMermaid()
+    const $mermaid = document.querySelectorAll('#article-container .mermaid-wrap')
+    if ($mermaid.length === 0) return
+
+    const runMermaidFn = () => runMermaid($mermaid)
+    btf.addGlobalFn('themeChange', runMermaidFn, 'mermaid')
+    window.loadMermaid ? runMermaidFn() : btf.getScript('https://cdn.jsdelivr.net/npm/mermaid@11.8.0/dist/mermaid.min.js').then(runMermaidFn)
+  }
+
+  btf.addGlobalFn('encrypt', loadMermaid, 'mermaid')
+  window.pjax ? loadMermaid() : document.addEventListener('DOMContentLoaded', loadMermaid)
+})()</script><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const initValine = (el, path) => {
+    if (isShuoshuo) {
+      window.shuoshuoComment.destroyValine = () => {
+        if (el.children.length) {
+          el.innerHTML = ''
+          el.classList.add('no-comment')
+        }
+      }
+    }
+
+    const valineConfig = {
+      el: '#vcomment',
+      appId: 'smA3tZdRGodG2VgnMubBQjLm-gzGzoHsz',
+      appKey: 'biCDxj0lSBtZTMie2kNIKErd',
+      avatar: 'monsterid',
+      serverURLs: '',
+      emojiMaps: "",
+      visitor: false,
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || window.location.pathname
+    }
+
+    new Valine(valineConfig)
+  }
+
+  const loadValine = async (el, path) => {
+    if (typeof Valine === 'function') {
+      initValine(el, path)
+    } else {
+      await btf.getScript('https://cdn.jsdelivr.net/npm/valine@1.5.3/dist/Valine.min.js')
+      initValine(el, path)
+    }
+  }
+
+  if (isShuoshuo) {
+    'Valine' === 'Valine'
+      ? window.shuoshuoComment = { loadComment: loadValine }
+      : window.loadOtherComment = loadValine
+    return
+  }
+
+  if ('Valine' === 'Valine' || !false) {
+    if (false) btf.loadComment(document.getElementById('vcomment'),loadValine)
+    else setTimeout(loadValine, 0)
+  } else {
+    window.loadOtherComment = loadValine
+  }
+})()</script></div><div class="aplayer no-destroy" data-id="8674547170" data-server="netease" data-type="playlist" data-fixed="true" data-autoplay="true" data-lrcType="-1"> </div><script async data-pjax src="https://events.vercount.one/js"></script><div id="local-search"><dialog class="search-dialog" aria-labelledby="local-search-heading"><div class="search-nav"><span class="search-dialog-title" id="local-search-heading">Search</span><button class="search-close-button" type="button" aria-label="Close search">×</button></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" aria-label="Search articles" placeholder="Search articles" type="search" maxlength="80" autofocus="autofocus"/></div></div><div id="loading-database" role="status" hidden="hidden">Loading the search index…</div><button class="search-retry" type="button" hidden="hidden">Try again</button><div id="local-search-stats-wrap" role="status" aria-live="polite"></div><div id="local-search-results"></div></div></dialog><script src="/js/search/local-search.js?v=20261127-excerpt" defer="defer"></script></div></div></body></html>
