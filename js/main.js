@@ -19,6 +19,22 @@ document.addEventListener('DOMContentLoaded', () => {
   // 初始化header
   const initAdjust = () => {
     adjustMenu(true)
+    const cover = $nav.closest('.home-cover')
+    if (cover) {
+      const title = cover.querySelector('#site-title')
+      const navHeight = $nav.offsetHeight
+      const syncTitle = () => cover.classList.toggle('past-cover-title', title.getBoundingClientRect().bottom <= navHeight)
+      syncTitle()
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver(syncTitle, { rootMargin: `-${navHeight}px 0px 0px` })
+        observer.observe(title)
+        btf.addGlobalFn('pjaxSendOnce', () => observer.disconnect())
+      } else {
+        btf.addEventListenerPjax(window, 'scroll', syncTitle, { passive: true })
+        btf.addEventListenerPjax(window, 'resize', syncTitle)
+      }
+      btf.addEventListenerPjax(window, 'pageshow', syncTitle)
+    }
     $nav.classList.add('show')
   }
 
