@@ -98,10 +98,21 @@ class LocalSearch {
 
   // Prefer a complete sentence with the query near its beginning. Repeated terms
   // in a table of contents should not outweigh the first explanatory passage.
-  excerpt (content, hits, distinctWords) {
-    if (!hits.length) return escapeSearchText(content.slice(0, 120)) + (content.length > 120 ? '…' : '')
-    let best = null, cursor = 0, start = 0
+  excerpt (content, hits, distinctWords, bodyStart) {
     const ends = /[。！？]+[”’」]?|[.!?]+(?=\s|$)|\n+|$/gu
+    const openingExcerpt = () => {
+      const body = content.slice(bodyStart).trimStart()
+      const offset = content.length - body.length
+      const sentence = bodyStart && body.matchAll(ends).next().value
+      const end = Math.min(120, sentence ? sentence.index + sentence[0].length : body.length)
+      const hit = hits.find(hit => hit.position >= offset && hit.position + hit.word.length <= offset + end)
+      const text = this.highlightKeyword(content, {
+        start: offset, end: offset + end, hits: hit ? [{ position: hit.position, length: hit.word.length }] : []
+      })
+      return text + (end === 120 && end < body.length ? '…' : '')
+    }
+    if (!hits.length) return openingExcerpt()
+    let best = null, cursor = 0, start = 0
     for (const match of content.matchAll(ends)) {
       const end = match.index + match[0].length
       const first = cursor
@@ -124,13 +135,14 @@ class LocalSearch {
       start = end
     }
     const { left, right, hit, clippedStart, clippedEnd } = best
+    if (left < bodyStart) return openingExcerpt()
     const text = this.highlightKeyword(content, { start: left, end: right, hits: [{ position: hit.position, length: hit.word.length }] })
     return (clippedStart ? '…' : '') + text + (clippedEnd ? '…' : '')
   }
 
   getResultItems (keywords) {
     const resultItems = []
-    this.datas.forEach(({ title, content, url, categories, date }) => {
+    this.datas.forEach(({ title, content, excerptStart, url, categories, date }) => {
       // The number of different keywords included in the article.
       const [indexOfTitle, keysOfTitle] = this.getIndexByWord(keywords, title)
       const [indexOfContent, keysOfContent] = this.getIndexByWord(keywords, content)
@@ -140,7 +152,7 @@ class LocalSearch {
       const hitCount = indexOfTitle.length + indexOfContent.length
       if (hitCount === 0) return
 
-      const excerpt = this.excerpt(content, indexOfContent, keysOfContent.size)
+      const excerpt = this.excerpt(content, indexOfContent, keysOfContent.size, excerptStart)
       url = new URL(url, location.origin)
       url.searchParams.set('highlight', keywords.join(' '))
       const names = categories.map(name => this.topicNames[name] || name)
@@ -171,14 +183,23 @@ class LocalSearch {
         url: entry.querySelector('url').textContent,
         categories: Array.from(entry.querySelectorAll('categories > category'), el => el.textContent),
         date: entry.querySelector('date')?.textContent || '',
+        opening: entry.querySelector('opening')?.textContent || '',
         content: entry.querySelector('content')?.textContent || ''
       }))
     }
     const decoder = document.createElement('textarea')
+    const decode = text => {
+      decoder.innerHTML = (text || '').replace(/<[^>]+>/g, ' ').replace(/</g, '&lt;')
+      return decoder.value.trim()
+    }
+    const normalize = text => text.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase()
     this.datas = entries.filter(entry => entry.title && entry.url).map(entry => {
-      // Existing HTML indexes and the compact text index use HTML entities for code.
-      decoder.innerHTML = (entry.content || '').replace(/<[^>]+>/g, ' ').replace(/</g, '&lt;')
-      return { title: entry.title.trim(), url: entry.url, content: decoder.value.trim(),
+      const title = entry.title.trim()
+      const content = decode(entry.content)
+      const opening = decode(entry.opening)
+      // Omit only a standalone title block. Keep its hits for result ranking.
+      const excerptStart = opening && normalize(opening) === normalize(title) && content.startsWith(opening) ? opening.length : 0
+      return { title, url: entry.url, content, excerptStart,
         categories: Array.isArray(entry.categories) ? entry.categories.map(c => typeof c === 'string' ? c : c?.name).filter(Boolean) : [],
         date: typeof entry.date === 'string' ? entry.date.slice(0, 10) : '' }
     })
